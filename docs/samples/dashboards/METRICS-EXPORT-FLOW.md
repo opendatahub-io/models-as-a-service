@@ -131,6 +131,7 @@ limited_calls{model="facebook-opt-125m-simulated",user="tgitelma-redhat-com-dd26
 **Note**: Latency histogram metrics are **lazy-initialized** and only appear after traffic is generated.
 
 **Token Metric Compatibility:**
+
 | Metric Type | Real vLLM | Simulator |
 | ----------- | --------- | --------- |
 | Prompt tokens | `vllm:prompt_tokens_total` | `vllm:request_prompt_tokens_sum` |

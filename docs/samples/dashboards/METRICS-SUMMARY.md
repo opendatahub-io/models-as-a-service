@@ -13,7 +13,7 @@
 
 **Example metrics (verified on cluster):**
 
-```
+```text
 authorized_hits{model="facebook-opt-125m-simulated",tier="free",user="tgitelma-redhat-com-dd264a84",limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"} 376
 authorized_calls{user="ahadas-redhat-com-1e8bdd56",tier="free",model="facebook-opt-125m-simulated",limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"} 19
 limited_calls{model="facebook-opt-125m-simulated",user="tgitelma-redhat-com-dd264a84",tier="free",limitador_namespace="llm/facebook-opt-125m-simulated-kserve-route"} 20
@@ -188,7 +188,7 @@ histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) 
 
 **Verified Output:**
 
-```
+```text
 authorized_hits{model="facebook-opt-125m-simulated", tier="free", user="tgitelma-redhat-com-dd264a84", limitador_namespace="llm/..."}
 ```
 
