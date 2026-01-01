@@ -182,7 +182,7 @@ Dashboard queries use `OR` operator to support both naming conventions automatic
 | Missing Feature | Why | Blocked By |
 |-----------------|-----|------------|
 | **Latency per API Key/User** | Istio metrics don't include user labels | Would need custom Envoy filter |
-| **Model Resource Allocation** | CPU/GPU/Memory per model | RHOAIENG-12528 - Resource metrics |
+| **Model Resource Allocation** | CPU/GPU/Memory per model | Requires DCGM Exporter |
 | ~~Per-Request Token Counts~~ | ~~Token counts not exposed by simulators~~ | ✅ RESOLVED - Simulator exposes `vllm:request_*_tokens_sum` |
 
 **Resolved:**

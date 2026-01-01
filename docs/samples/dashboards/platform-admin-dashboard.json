@@ -1664,7 +1664,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "${datasource}"},
-      "description": "ℹ️ Required changes to enable blocked features:\n\n**Latency per User:**\n- Add EnvoyFilter to extract 'user' from JWT/header\n- Configure Istio Telemetry to include custom dimensions\n\n**Token per User:**\n- Modify llm-d/vLLM to accept X-User-ID header\n- Label token metrics with user context\n\n**Related Jira:** RHOAIENG-12528",
+      "description": "ℹ️ Required changes to enable blocked features:\n\n**Latency per User:**\n- Add EnvoyFilter to extract 'user' from JWT/header\n- Configure Istio Telemetry to include custom dimensions\n\n**Token per User:**\n- Modify llm-d/vLLM to accept X-User-ID header\n- Label token metrics with user context\n\n**Related Jira:** TBD - User story to be identified",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
