@@ -41,11 +41,11 @@ graph TB
 
 ### Benefits
 
-. **Flexibility**: Different models can have different security and access requirements
-. **Progressive Adoption**: Teams can adopt MaaS features incrementally
-. **Production Control**: Production models get full policy enforcement if needed
-. **Multi-Tenancy**: Different teams can use different gateways in the same cluster
-. **Blast Radius Containment**: Issues with one gateway don't affect the other
+- **Flexibility**: Different models can have different security and access requirements
+- **Progressive Adoption**: Teams can adopt MaaS features incrementally
+- **Production Control**: Production models get full policy enforcement if needed
+- **Multi-Tenancy**: Different teams can use different gateways in the same cluster
+- **Blast Radius Containment**: Issues with one gateway don't affect the other
 
 ## Prerequisites
 
