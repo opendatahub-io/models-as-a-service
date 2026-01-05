@@ -9,3 +9,15 @@ resources:
   - ../odh
   - ../../base/policies/usage-policies
   - ../../base/observability
+
+# Deploy tier-to-group-mapping ConfigMap to maas-api namespace
+# This is required because kserve's LLMInferenceService webhook validates
+# tier annotations against the ConfigMap in the maas-api namespace
+patches:
+  - target:
+      kind: ConfigMap
+      name: tier-to-group-mapping
+    patch: |-
+      - op: replace
+        path: /metadata/namespace
+        value: maas-api
