@@ -402,13 +402,6 @@ kustomize build deployment/base/policies | sed "s/maas-api\.maas-api\.svc/maas-a
 
 echo ""
 echo "1️⃣2️⃣ Patching AuthPolicy with correct audience..."
-# Cross-platform base64 decode (macOS uses -D, Linux uses -d)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    BASE64_DECODE="base64 -D"
-else
-    BASE64_DECODE="base64 -d"
-fi
-
 echo "   Attempting to detect audience..."
 TOKEN=$(kubectl create token default --duration=10m 2>/dev/null || echo "")
 if [ -z "$TOKEN" ]; then
@@ -422,7 +415,7 @@ else
         AUD=""
     else
         echo "   JWT payload extracted"
-        DECODED_PAYLOAD=$(echo "$JWT_PAYLOAD" | $BASE64_DECODE 2>/dev/null || echo "")
+        DECODED_PAYLOAD=$(echo "$JWT_PAYLOAD" | jq -Rr '@base64d | fromjson' || echo "")
         if [ -z "$DECODED_PAYLOAD" ]; then
             echo "   ⚠️  Could not decode base64 payload, skipping audience detection"
             AUD=""

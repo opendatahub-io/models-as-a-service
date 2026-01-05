@@ -101,8 +101,7 @@ Patch `AuthPolicy` with the correct audience for Openshift Identities:
 ```shell
 AUD="$(kubectl create token default --duration=10m \
   | cut -d. -f2 \
-  | base64 -d 2>/dev/null \
-  | jq -r '.aud[0]')"
+  | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
 
 echo "Patching AuthPolicy with audience: $AUD"
 
