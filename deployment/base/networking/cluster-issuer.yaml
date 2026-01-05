@@ -1,0 +1,13 @@
+# Self-signed ClusterIssuer for cert-manager
+# Used to generate TLS certificates for model serving
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+  labels:
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/component: cert-manager
+spec:
+  selfSigned: {}
+

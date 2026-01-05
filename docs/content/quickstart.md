@@ -19,6 +19,7 @@ This guide provides quickstart instructions for deploying the MaaS Platform infr
       - `oc` (OpenShift CLI)
       - `kubectl`
       - `jq`
+      - `yq` (v4.50.1+)
       - `kustomize` (v5.7.0+)
       - `gsed` (GNU sed) - **macOS only**: `brew install gnu-sed`
 
@@ -27,6 +28,24 @@ This guide provides quickstart instructions for deploying the MaaS Platform infr
 ### Automated OpenShift Deployment (Recommended)
 
 For OpenShift clusters, use the automated deployment script:
+
+```bash
+# Basic deployment (interactive, prompts for observability)
+./scripts/deploy-openshift.sh
+
+# Deploy with observability stack
+./scripts/deploy-openshift.sh --with-observability
+
+# Deploy without observability
+./scripts/deploy-openshift.sh --skip-observability
+
+# Use custom namespace
+./scripts/deploy-openshift.sh --namespace my-namespace
+```
+
+**Alternative: RHOAI Stable Deployment**
+
+For Red Hat OpenShift AI (RHOAI) v3 deployments:
 
 ```bash
 export MAAS_REF="main"
@@ -42,6 +61,8 @@ The deployment script creates the following core resources:
 - **Policies**: `AuthPolicy`, `TokenRateLimitPolicy`, `RateLimitPolicy`, `TelemetryPolicy`
 - **MaaS API**: Deployment and service in `maas-api` namespace
 - **Operators**: Cert-manager, LWS, Red Hat Connectivity Link and Red Hat OpenShift AI.
+- **Observability** (optional): Grafana instance with dashboards and Prometheus datasource.
+- **ServiceMonitors**: Automatically deployed to configure Prometheus metric scraping (deployed even without observability stack).
 
 Check deployment status:
 

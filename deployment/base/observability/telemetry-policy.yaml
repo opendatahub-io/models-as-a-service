@@ -7,7 +7,10 @@ spec:
   metrics:
     default:
       labels:
-        model: responseBodyJSON("/model")
+        # Extract model from request path: /llm/{model}/v1/...
+        # Only extract model name if path starts with /llm/ and model is non-empty, otherwise "unknown"
+        model: 'request.path.split("/").size() > 2 && request.path.split("/")[1] == "llm" && request.path.split("/")[2] != "" ? request.path.split("/")[2] : "unknown"'
+        # Extract tier and user from authenticated identity
         tier: auth.identity.tier
         user: auth.identity.userid
   targetRef:

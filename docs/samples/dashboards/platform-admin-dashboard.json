@@ -1,0 +1,1767 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "🏥 Component Health",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "id": 10,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "limitador_up",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "💚 Limitador",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "id": 11,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "count(kube_pod_status_phase{namespace=\"kuadrant-system\", pod=~\"authorino.*\", phase=\"Running\"}) OR vector(0)",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "🔐 Authorino",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "id": 12,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "count(kube_pod_status_phase{namespace=~\"${maas_namespace}\", pod=~\"maas-api.*\", phase=\"Running\"} == 1) OR on() vector(0)",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "🌐 MaaS API Pods",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "id": 13,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "count(kube_pod_status_phase{namespace=\"openshift-ingress\", pod=~\"maas-default-gateway.*\", phase=\"Running\"} == 1) OR on() vector(0)",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "🚪 Gateway Pods",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "No Alerts"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "id": 200,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "count(ALERTS{alertstate=\"firing\", alertname!=\"Watchdog\", namespace=~\"llm|kuadrant-system|maas-api|envoy-gateway-system\"}) OR vector(0)",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "🚨 Firing Alerts",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "✅ No active alerts"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alertname"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Alert"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "severity"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Severity"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "namespace"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Namespace"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 18,
+        "x": 6,
+        "y": 5
+      },
+      "id": 201,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "ALERTS{alertstate=\"firing\", alertname!=\"Watchdog\", namespace=~\"llm|kuadrant-system|maas-api|envoy-gateway-system\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "📋 Active Alerts",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "alertstate": true
+            },
+            "indexByName": {
+              "alertname": 0,
+              "severity": 1,
+              "namespace": 2
+            },
+            "renameByName": {}
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "id": 101,
+      "panels": [],
+      "title": "📊 Key Metrics",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 0,
+        "y": 12
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "sum(authorized_hits)",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "📊 Total Authorized Hits",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 5,
+        "y": 12
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "sum(rate(authorized_hits[5m]))",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "⚡ Current Rate (5m avg)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.9
+              },
+              {
+                "color": "red",
+                "value": 0.95
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 10,
+        "y": 12
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "sum(authorized_hits) / (sum(authorized_hits) + sum(limited_calls))",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "✅ Success Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 15,
+        "y": 12
+      },
+      "id": 14,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "count(count by (user) (authorized_hits))",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "👥 Active Users",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 19,
+        "y": 12
+      },
+      "id": 17,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket[5m])) by (le))",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "⏱️ P50 Response Latency",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 102,
+      "panels": [],
+      "title": "📈 Traffic Analysis",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "mean"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "sum by (model) (rate(authorized_hits[5m]))",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ],
+      "title": "📈 Request Rate by Model",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "mean"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "sum(rate(istio_requests_total{response_code=~\"4..\"}[5m])) OR vector(0)",
+          "legendFormat": "4xx Errors",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(istio_requests_total{response_code=~\"5..\"}[5m])) OR vector(0)",
+          "legendFormat": "5xx Errors",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(limited_calls[5m])) OR vector(0)",
+          "legendFormat": "Rate Limited (Limitador)",
+          "refId": "C"
+        }
+      ],
+      "title": "❌ Overall Error Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "mean"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "sum by (tier) (rate(authorized_hits[5m]))",
+          "legendFormat": "{{tier}}",
+          "refId": "A"
+        }
+      ],
+      "title": "📊 Request Rate by Tier",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "{{destination_service_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "⏱️ P95 Latency by Service",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "id": 103,
+      "panels": [],
+      "title": "🏆 Top Users",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "id": 19,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "📊 Hits"
+          }
+        ]
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (user) (authorized_hits))",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "🏆 Top 10 Users by Hits",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "id": 104,
+      "panels": [],
+      "title": "📋 Detailed Breakdown",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "mean"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "sum by (user) (rate(authorized_hits[5m]))",
+          "legendFormat": "{{user}}",
+          "refId": "A"
+        }
+      ],
+      "title": "👥 Request Rate by User",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "user"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "👤 User"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "model"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "🤖 Model"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tier"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "🏷️ Tier"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "📊 Hits"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "id": 9,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": true
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "📊 Hits"
+          }
+        ]
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
+          "expr": "sum by (user, model, tier) (authorized_hits)",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "📋 Request Volume by User, Model & Tier",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 59},
+      "id": 106,
+      "panels": [],
+      "title": "🤖 Model Metrics",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 10}]},
+          "unit": "short",
+          "noValue": "No Data - Generate traffic first"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 60},
+      "id": 21,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "sum(vllm:num_requests_running)", "instant": true, "refId": "A"}],
+      "title": "🔄 Requests Running",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "red", "value": 50}]},
+          "unit": "short",
+          "noValue": "No Data - Generate traffic first"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 60},
+      "id": 22,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "sum(vllm:num_requests_waiting)", "instant": true, "refId": "A"}],
+      "title": "⏳ Requests Waiting",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.7}, {"color": "red", "value": 0.9}]},
+          "unit": "percentunit",
+          "noValue": "No Data - Generate traffic first"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 60},
+      "id": 23,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "avg(vllm:gpu_cache_usage_perc)", "instant": true, "refId": "A"}],
+      "title": "💾 GPU Cache Usage",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]},
+          "unit": "short",
+          "noValue": "No Data - Generate traffic first"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 60},
+      "id": 24,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "sum(increase(vllm:e2e_request_latency_seconds_count{model_name=~\"$model\"}[$__range]))", "instant": true, "refId": "A"}],
+      "title": "📊 Total Requests",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short",
+          "noValue": "No Data - Generate traffic first"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 65},
+      "id": 25,
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {"expr": "sum by (model_name) (vllm:num_requests_running{model_name=~\"$model\"})", "legendFormat": "{{model_name}} running", "refId": "A"},
+        {"expr": "sum by (model_name) (vllm:num_requests_waiting{model_name=~\"$model\"})", "legendFormat": "{{model_name}} waiting", "refId": "B"}
+      ],
+      "title": "📊 Model Queue Depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "s",
+          "noValue": "No Data - Generate traffic first"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 65},
+      "id": 26,
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {"expr": "histogram_quantile(0.5, sum(rate(vllm:e2e_request_latency_seconds_bucket{model_name=~\"$model\"}[5m])) by (le, model_name))", "legendFormat": "{{model_name}} P50", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket{model_name=~\"$model\"}[5m])) by (le, model_name))", "legendFormat": "{{model_name}} P95", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum(rate(vllm:e2e_request_latency_seconds_bucket{model_name=~\"$model\"}[5m])) by (le, model_name))", "legendFormat": "{{model_name}} P99", "refId": "C"}
+      ],
+      "title": "⏱️ Model Inference Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short",
+          "noValue": "No Data\nDeploy vLLM/llm-d"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 73},
+      "id": 27,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "(sum(increase(vllm:prompt_tokens_total{model_name=~\"$model\"}[1h])) + sum(increase(vllm:generation_tokens_total{model_name=~\"$model\"}[1h]))) or (sum(increase(vllm:request_prompt_tokens_sum{model_name=~\"$model\"}[1h])) + sum(increase(vllm:request_generation_tokens_sum{model_name=~\"$model\"}[1h])))", "instant": true, "refId": "A"}],
+      "title": "🔤 Tokens (1h)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short",
+          "noValue": "No Data\nDeploy vLLM/llm-d"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 18, "x": 6, "y": 73},
+      "id": 28,
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {"expr": "sum(rate(vllm:prompt_tokens_total{model_name=~\"$model\"}[5m])) or sum(rate(vllm:request_prompt_tokens_sum{model_name=~\"$model\"}[5m]))", "legendFormat": "Prompt tokens/s", "refId": "A"},
+        {"expr": "sum(rate(vllm:generation_tokens_total{model_name=~\"$model\"}[5m])) or sum(rate(vllm:request_generation_tokens_sum{model_name=~\"$model\"}[5m]))", "legendFormat": "Generation tokens/s", "refId": "B"}
+      ],
+      "title": "🔤 Token Throughput",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 78},
+      "id": 107,
+      "panels": [],
+      "title": "📦 Resource Allocation",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "pod"}, "properties": [{"id": "displayName", "value": "🤖 Model Pod"}]},
+          {"matcher": {"id": "byName", "options": "CPU Requests"}, "properties": [{"id": "unit", "value": "short"}, {"id": "custom.width", "value": 120}]},
+          {"matcher": {"id": "byName", "options": "CPU Limits"}, "properties": [{"id": "unit", "value": "short"}, {"id": "custom.width", "value": 120}]},
+          {"matcher": {"id": "byName", "options": "Memory Requests"}, "properties": [{"id": "unit", "value": "bytes"}, {"id": "custom.width", "value": 150}]},
+          {"matcher": {"id": "byName", "options": "Memory Limits"}, "properties": [{"id": "unit", "value": "bytes"}, {"id": "custom.width", "value": 150}]}
+        ]
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 79},
+      "id": 29,
+      "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Memory Requests"}]},
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {"expr": "kube_pod_container_resource_requests{namespace=\"llm\", resource=\"cpu\", container=\"main\"}", "format": "table", "instant": true, "refId": "A"},
+        {"expr": "kube_pod_container_resource_limits{namespace=\"llm\", resource=\"cpu\", container=\"main\"}", "format": "table", "instant": true, "refId": "B"},
+        {"expr": "kube_pod_container_resource_requests{namespace=\"llm\", resource=\"memory\", container=\"main\"}", "format": "table", "instant": true, "refId": "C"},
+        {"expr": "kube_pod_container_resource_limits{namespace=\"llm\", resource=\"memory\", container=\"main\"}", "format": "table", "instant": true, "refId": "D"}
+      ],
+      "title": "📦 Resource Allocation per Model",
+      "type": "table",
+      "transformations": [
+        {"id": "merge", "options": {}},
+        {"id": "filterFieldsByName", "options": {"include": {"names": ["pod", "Value #A", "Value #B", "Value #C", "Value #D"]}}},
+        {"id": "organize", "options": {"renameByName": {"Value #A": "CPU Requests", "Value #B": "CPU Limits", "Value #C": "Memory Requests", "Value #D": "Memory Limits"}}}
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 87},
+      "id": 109,
+      "panels": [],
+      "title": "👤 User Tracking",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 88},
+      "id": 30,
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {"expr": "sum by (user) (rate(authorized_calls[5m]))", "legendFormat": "{{user}} ✅", "refId": "A"},
+        {"expr": "sum by (user) (rate(limited_calls[5m]))", "legendFormat": "{{user}} 🚫 rate-limited", "refId": "B"}
+      ],
+      "title": "👤 Requests & Errors per User",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 96},
+      "id": 108,
+      "panels": [],
+      "title": "🔮 Blocked Features (Placeholders)",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "⚠️ BLOCKED: Requires EnvoyFilter to inject 'user' label into Istio metrics.\n\nExpected metric: istio_request_duration_milliseconds{user=\"$user\"}\n\nCurrently Istio metrics only have service-level labels, not user context.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "dark-yellow", "value": null}]},
+          "unit": "ms",
+          "noValue": "Blocked\nRequires EnvoyFilter"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 97},
+      "id": 31,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!=\"\"}[5m])))", "instant": true, "refId": "A"}],
+      "title": "⏱️ P95 Latency per User",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "⚠️ BLOCKED: Requires vLLM to accept and label metrics with 'user' context.\n\nExpected metrics:\n- vllm:prompt_tokens_total{user=\"$user\"}\n- vllm:generation_tokens_total{user=\"$user\"}\n\nCurrently vLLM only labels by model_name, not by user.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "dark-yellow", "value": null}]},
+          "unit": "short",
+          "noValue": "Blocked\nRequires vLLM changes"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 97},
+      "id": 32,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "sum by (user) (increase(vllm:prompt_tokens_total{user!=\"\"}[1h]))", "instant": true, "refId": "A"}],
+      "title": "🔤 Token Consumption per User",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "ℹ️ Required changes to enable blocked features:\n\n**Latency per User:**\n- Add EnvoyFilter to extract 'user' from JWT/header\n- Configure Istio Telemetry to include custom dimensions\n\n**Token per User:**\n- Modify llm-d/vLLM to accept X-User-ID header\n- Label token metrics with user context\n\n**Related Jira:** TBD - User story to be identified",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "dark-blue", "value": null}]},
+          "noValue": "See panel description\nfor implementation notes"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 97},
+      "id": 33,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "vector(0)", "instant": true, "refId": "A"}],
+      "title": "📝 Implementation Notes",
+      "type": "stat"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 40,
+  "tags": ["maas", "platform-admin", "observability"],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)",
+        "description": "Auto-detected namespace where MaaS API is deployed",
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "MaaS Namespace",
+        "multi": false,
+        "name": "maas_namespace",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "datasource": {"type": "prometheus", "uid": "${datasource}"},
+        "definition": "label_values(vllm:num_requests_running, model_name)",
+        "description": "Filter by model",
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "label": "Model",
+        "multi": true,
+        "name": "model",
+        "options": [],
+        "query": {"qryType": 1, "query": "label_values(vllm:num_requests_running, model_name)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "🔷 Platform Admin Dashboard",
+  "uid": "platform-admin",
+  "version": 1,
+  "weekStart": ""
+}

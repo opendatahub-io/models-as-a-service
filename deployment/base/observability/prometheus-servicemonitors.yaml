@@ -1,0 +1,72 @@
+# ServiceMonitors for OpenShift Prometheus
+# These tell OpenShift's built-in Prometheus what metrics to scrape
+# Note: The custom Prometheus instance is NOT deployed on OpenShift - we use the platform Prometheus
+# ServiceMonitors are deployed in maas-api namespace (which is labeled for monitoring)
+# and use namespaceSelector to discover services in other namespaces
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: models-aas-observability-self
+  namespace: maas-api
+  labels:
+    app: models-aas-observability
+spec:
+  endpoints:
+  - interval: 30s
+    port: web
+  selector:
+    matchLabels:
+      app: models-aas-observability
+  namespaceSelector:
+    matchNames:
+    - maas-api
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: authorino-runtime
+  namespace: maas-api
+  labels:
+    environment: base
+    project: models-aas-observability
+spec:
+  namespaceSelector:
+    matchNames:
+      - kuadrant-system
+  selector:
+    matchLabels:
+      authorino-resource: authorino
+      control-plane: controller-manager
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+    - port: http
+      path: /server-metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: limitador-runtime
+  namespace: maas-api
+  labels:
+    environment: base
+    project: models-aas-observability
+spec:
+  namespaceSelector:
+    matchNames:
+      - kuadrant-system
+  selector:
+    matchLabels:
+      app: limitador
+      limitador-resource: limitador
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+

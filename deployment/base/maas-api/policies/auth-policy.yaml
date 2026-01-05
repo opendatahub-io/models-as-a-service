@@ -13,7 +13,10 @@ spec:
       openshift-identities:
         kubernetesTokenReview:
           audiences:
-            - https://kubernetes.default.svc
+            # MAAS_AUTH_AUDIENCE is dynamically detected from the cluster's OIDC issuer
+            # On ROSA: https://rh-oidc.s3.us-east-1.amazonaws.com/...
+            # On OCP/OSD: https://kubernetes.default.svc
+            - ${MAAS_AUTH_AUDIENCE}
             - maas-default-gateway-sa
     response:
       success:

@@ -15,7 +15,8 @@ spec:
       matchedTier:
         http:
           # TODO: network policy to limit access to this endpoint
-          url: http://maas-api.maas-api.svc.cluster.local:8080/v1/tiers/lookup
+          # Note: ${MAAS_API_NAMESPACE} is substituted by deploy-openshift.sh
+          url: http://maas-api.${MAAS_API_NAMESPACE}.svc.cluster.local:8080/v1/tiers/lookup
           contentType: application/json
           method: POST
           body:
@@ -63,7 +64,7 @@ spec:
               expression: |
                 request.path.split("/")[2]
             verb:
-              value: post
+              value: get
     response:
       success:
         filters:

@@ -7,3 +7,5 @@ metadata:
 resources:
 - odh
 - maas
+# ClusterIssuer for cert-manager (model TLS certificates)
+- cluster-issuer.yaml

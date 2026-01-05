@@ -101,7 +101,6 @@ install_component() {
         # Ensure kuadrant-system namespace exists
         kubectl create namespace kuadrant-system 2>/dev/null || echo "✅ Namespace kuadrant-system already exists"
 
-
         echo "🚀 Creating Kuadrant OperatorGroup..."
         kubectl apply -f - <<EOF
 apiVersion: operators.coreos.com/v1
@@ -112,12 +111,40 @@ metadata:
 spec: {}
 EOF
 
-        # Check if the CatalogSource already exists before applying
-        if kubectl get catalogsource kuadrant-operator-catalog -n kuadrant-system &>/dev/null; then
-            echo "✅ Kuadrant CatalogSource already exists in namespace kuadrant-system, skipping creation."
-        else
-            echo "🚀 Creating Kuadrant CatalogSource..."
+        # Check if RHCL (Red Hat Connectivity Link) is available in Red Hat Operators catalog
+        # RHCL bundles stable v1.x operators (Authorino v1.2.4, Limitador v1.2.0)
+        # Upstream Kuadrant v1.3.0 bundles unstable v0.x operators that have bugs
+        if kubectl get packagemanifest -n openshift-marketplace rhcl-operator &>/dev/null 2>&1; then
+            echo "✅ RHCL found in Red Hat Operators catalog - using stable v1.x operators"
+            
+            # Clean up any existing upstream Kuadrant installation
+            kubectl delete subscription kuadrant-operator -n kuadrant-system --ignore-not-found 2>/dev/null
+            kubectl delete catalogsource kuadrant-operator-catalog -n kuadrant-system --ignore-not-found 2>/dev/null
+            
+            echo "🚀 Installing RHCL (Red Hat Connectivity Link) via OLM..."
             kubectl apply -f - <<EOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: rhcl-operator
+  namespace: kuadrant-system
+spec:
+  channel: stable
+  installPlanApproval: Automatic
+  name: rhcl-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+EOF
+        else
+            echo "⚠️  RHCL not available in Red Hat Operators catalog"
+            echo "   Falling back to upstream Kuadrant (v0.x operators - some features may not work)"
+            
+            # Check if the CatalogSource already exists before applying
+            if kubectl get catalogsource kuadrant-operator-catalog -n kuadrant-system &>/dev/null; then
+                echo "✅ Kuadrant CatalogSource already exists in namespace kuadrant-system, skipping creation."
+            else
+                echo "🚀 Creating Kuadrant CatalogSource..."
+                kubectl apply -f - <<EOF
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
@@ -131,28 +158,28 @@ spec:
   publisher: grpc
   sourceType: grpc
 EOF
+            fi
+
+            echo "🚀 Installing kuadrant (via OLM Subscription)..."
+            kubectl apply -f - <<EOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: kuadrant-operator
+  namespace: kuadrant-system
+spec:
+  channel: stable
+  installPlanApproval: Automatic
+  name: kuadrant-operator
+  source: kuadrant-operator-catalog
+  sourceNamespace: kuadrant-system
+EOF
         fi
 
-
-        echo "🚀 Installing kuadrant (via OLM Subscription)..."
-        kubectl apply -f - <<EOF
-  apiVersion: operators.coreos.com/v1alpha1
-  kind: Subscription
-  metadata:
-    name: kuadrant-operator
-    namespace: kuadrant-system
-  spec:
-    channel: stable
-    installPlanApproval: Automatic
-    name: kuadrant-operator
-    source: kuadrant-operator-catalog
-    sourceNamespace: kuadrant-system
-EOF
-        # Wait for kuadrant-operator-controller-manager deployment to exist before waiting for Available condition
+        # Wait for kuadrant-operator-controller-manager deployment to exist
         ATTEMPTS=0
-        MAX_ATTEMPTS=7
+        MAX_ATTEMPTS=10
         while true; do
-
             if kubectl get deployment/kuadrant-operator-controller-manager -n kuadrant-system &>/dev/null; then
                 break
             else
@@ -162,7 +189,7 @@ EOF
                     return 1
                 fi
                 echo "⏳ Waiting for kuadrant-operator-controller-manager deployment to be created... (attempt $ATTEMPTS/$MAX_ATTEMPTS)"
-                sleep $((10 + 10 * $ATTEMPTS))
+                sleep $((10 + 5 * $ATTEMPTS))
             fi
         done
 
@@ -173,23 +200,31 @@ EOF
 
         sleep 5
 
-        # Patch Kuadrant for OpenShift Gateway Controller
-        echo "   Patching Kuadrant operator..."
+        # Patch Kuadrant for OpenShift Gateway Controller (only needed for upstream, RHCL may handle this)
+        echo "   Checking if Kuadrant operator needs patching for OpenShift Gateway Controller..."
         if ! kubectl -n kuadrant-system get deployment kuadrant-operator-controller-manager -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ISTIO_GATEWAY_CONTROLLER_NAMES")]}' | grep -q "ISTIO_GATEWAY_CONTROLLER_NAMES"; then
-          kubectl patch csv kuadrant-operator.v1.3.1 -n kuadrant-system --type='json' -p='[
-            {
-              "op": "add",
-              "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-",
-              "value": {
-                "name": "ISTIO_GATEWAY_CONTROLLER_NAMES",
-                "value": "istio.io/gateway-controller,openshift.io/gateway-controller/v1"
+          # Try to patch - get the actual CSV name dynamically
+          CSV_NAME=$(kubectl get csv -n kuadrant-system -o name 2>/dev/null | grep -E "(kuadrant-operator|rhcl-operator)" | head -1 | cut -d'/' -f2)
+          if [[ -n "$CSV_NAME" ]]; then
+            kubectl patch csv "$CSV_NAME" -n kuadrant-system --type='json' -p='[
+              {
+                "op": "add",
+                "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-",
+                "value": {
+                  "name": "ISTIO_GATEWAY_CONTROLLER_NAMES",
+                  "value": "istio.io/gateway-controller,openshift.io/gateway-controller/v1"
+                }
               }
-            }
-          ]'
-          echo "   ✅ Kuadrant operator patched"
+            ]' 2>/dev/null && echo "   ✅ Kuadrant operator patched" || echo "   ⚠️  Could not patch CSV (may not be needed for RHCL)"
+          fi
         else
           echo "   ✅ Kuadrant operator already configured"
         fi
+
+        # Verify operator versions
+        echo ""
+        echo "📋 Installed operator versions:"
+        kubectl get csv -n kuadrant-system -o custom-columns="NAME:.metadata.name,VERSION:.spec.version" 2>/dev/null | grep -iE "(kuadrant|rhcl|authorino|limitador)" || true
 
         echo "✅ Successfully installed kuadrant"
         echo ""
@@ -331,6 +366,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --kuadrant)
             install_component "kuadrant"
+            COMPONENT_SELECTED=true
             ;;
         -h|--help)
             usage

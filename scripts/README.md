@@ -9,26 +9,48 @@ Complete automated deployment script for OpenShift clusters.
 
 **Usage:**
 ```bash
+# Interactive mode (prompts for observability)
 ./scripts/deploy-openshift.sh
+
+# Install with observability stack
+./scripts/deploy-openshift.sh --with-observability
+
+# Install without observability
+./scripts/deploy-openshift.sh --skip-observability
+
+# Use custom namespace
+./scripts/deploy-openshift.sh --namespace my-namespace
+
+# Show help
+./scripts/deploy-openshift.sh --help
 ```
 
+**Options:**
+- `--with-observability`: Install observability stack (Grafana + dashboards) without prompting
+- `--skip-observability`: Skip observability installation (no prompt)
+- `--namespace NAMESPACE`: MaaS API namespace (default: `maas-api`)
+- `-h, --help`: Show help message
+
 **What it does:**
-- Checks OpenShift version and applies necessary feature gates
+- Checks OpenShift version and Gateway API requirements
 - Creates required namespaces
-- Installs dependencies (Kuadrant)
+- Installs dependencies (Kuadrant, cert-manager)
 - Deploys Gateway infrastructure
 - Deploys KServe components (if not already present)
 - Configures MaaS API
-- Applies policies (AuthPolicy, RateLimitPolicy, TelemetryPolicy)
+- Applies policies (AuthPolicy, RateLimitPolicy, TokenRateLimitPolicy)
+- Deploys base observability (TelemetryPolicy, ServiceMonitors for metrics collection)
 - Creates OpenShift Routes
-- Applies temporary workarounds for known issues
+- Optionally installs full observability stack (Grafana + dashboards)
+- Runs deployment validation
 
 **Requirements:**
-- OpenShift cluster (4.16+)
+- OpenShift cluster (4.20+)
 - `oc` CLI installed and logged in
 - `kubectl` installed
 - `jq` installed
 - `kustomize` installed
+- `yq` installed (for YAML processing)
 
 ---
 
@@ -120,9 +142,48 @@ Installs individual dependencies (Kuadrant, ODH, etc.).
 
 **Options:**
 - `--kuadrant`: Install Kuadrant operator and dependencies
-- `--istio`: Install Istio
-- `--grafana`: Install Grafana
-- `--prometheus`: Install Prometheus
+- `--istio`: Install Istio (for vanilla Kubernetes)
+- `--grafana`: Install Grafana operator
+- `--prometheus`: Install Prometheus (for vanilla Kubernetes; validates on OpenShift)
+- `--odh`: Install OpenDataHub operator (OpenShift only)
+- `--kserve`: Install KServe (validates on OpenShift)
+- `--ocp`: Use OpenShift-specific handling (validates instead of installs)
+- `--all`: Install all components
+
+**Note:** On OpenShift, some components (Istio, Prometheus) are provided by the platform. The script validates their presence instead of installing them.
+
+---
+
+### `install-observability.sh`
+Installs the observability stack (Grafana instance, dashboards, and Prometheus datasource).
+
+**Usage:**
+```bash
+# Install to default namespace (maas-api)
+./scripts/install-observability.sh
+
+# Install to custom namespace
+./scripts/install-observability.sh --namespace my-namespace
+```
+
+**What it does:**
+- Enables user-workload-monitoring
+- Labels namespaces for monitoring (`kuadrant-system`, `maas-api`, `llm`)
+- Deploys TelemetryPolicy (for user/tier/model labels in metrics)
+- Deploys ServiceMonitors (Limitador, Authorino, Istio Gateway, LLM models)
+- Installs Grafana operator (if not present)
+- Deploys Grafana instance
+- Configures Prometheus datasource with authentication
+- Deploys dashboards (Platform Admin, AI Engineer)
+
+**Note:** This script can run standalone or as part of `deploy-openshift.sh`. When run standalone, it deploys all necessary observability components including TelemetryPolicy and ServiceMonitors.
+
+**Requirements:**
+- Grafana operator installed (installed automatically if missing)
+- User-workload-monitoring enabled
+- OpenShift cluster with monitoring stack
+
+**Note:** The Grafana datasource is created dynamically with proper authentication token injection. The static `grafana-datasource.yaml` file is not used.
 
 ---
 

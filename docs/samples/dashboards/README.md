@@ -2,95 +2,165 @@
 
 This directory contains Grafana dashboard samples for the MaaS platform.
 
-## 🚀 MaaS Token Metrics Dashboard
+## 📁 Dashboard Files
 
-**File:** `maas-token-metrics-dashboard.json`
+| File | Description |
+| ---- | ----------- |
+| `platform-admin-dashboard.json` | Unified view for platform administrators |
+| `ai-engineer-dashboard.json` | API key-filtered view for AI engineers |
+| `maas-token-metrics-dashboard.json` | Legacy token metrics dashboard |
 
-### 📋 Overview
+## 📖 Documentation Files
 
-This dashboard provides comprehensive monitoring of token usage, rate limiting, and tier-based analytics for the MaaS platform using Kuadrant/Limitador metrics.
+| File | Description |
+| ---- | ----------- |
+| `METRICS-SUMMARY.md` | **Main reference** - Complete metrics documentation, queries, and limitations |
+| `METRICS-EXPORT-FLOW.md` | Architecture flow showing how metrics are exported |
+| `PROMETHEUS-COUNTER-BEHAVIOR.md` | Educational guide on Prometheus counter behavior |
 
-### 🎯 Key Metrics
+## 🎯 Available Metrics
 
-- **`authorized_hits`** - Total successful API calls with tier/user/model information
-- **`authorized_calls`** - Rate limiting success metrics  
-- **`limited_calls`** - Rate limiting block metrics
-- **`tier` labels** - Free/Premium/Enterprise tier information
-- **`model` labels** - Model-specific usage tracking
-- **`limitador_namespace`** - Namespace filtering
+### ✅ All Metrics Working!
 
-### 📊 Dashboard Panels
+| Category | Metrics | Labels |
+| -------- | ------- | ------ |
+| **Limitador** | `authorized_hits`, `authorized_calls`, `limited_calls`, `limitador_up` | ✅ `user`, `tier`, `model`, `limitador_namespace` |
+| **Istio Gateway** | `istio_requests_total`, `istio_request_duration_milliseconds_bucket` | ✅ `response_code`, `destination_service_name` |
+| **vLLM/KServe** | `vllm:num_requests_running`, `vllm:num_requests_waiting`, `vllm:gpu_cache_usage_perc`, `vllm:e2e_request_latency_seconds`, `vllm:request_inference_time_seconds` | ✅ `model_name` |
+| **Kubernetes** | `kube_pod_status_phase`, `ALERTS` | ✅ `namespace`, `pod`, `alertname` |
+| **Authorino** | `controller_runtime_reconcile_*` | ⚠️ Operator metrics only |
 
-1. **🎯 Total Authorized Hits** - Main success metric
-2. **📈 Authorized Hits Rate by Tier** - Tier-based performance
-3. **👥 Authorized Hits by User & Tier** - User activity
-4. **🏆 Top 10 Users by Hits** - Usage leaders
-5. **⏰ Hourly Authorized Hits by User** - Time-based analysis
-6. **📊 Total Authorized Hits by Tier** - Tier comparison
-7. **👥 Active Users** - User count
-8. **💰 Top 5 Users by Cost** - Cost analysis with tier pricing
-9. **📋 Detailed Metrics Table** - Complete data view
+**Verified on cluster:**
 
-### 🔧 How to Use
+```text
+authorized_hits{model="facebook-opt-125m-simulated",tier="free",user="tgitelma-redhat-com-dd264a84",...} 376
+istio_requests_total{response_code="200",destination_service_name="facebook-opt-125m-simulated-kserve-workload-svc",...} 55
+```
 
-1. **Import into Grafana:**
+See `METRICS-SUMMARY.md` for full details and query examples.
+
+## 🔧 How to Use
+
+1. **Automated Deployment (Recommended):**
+   ```bash
+   ./scripts/install-observability.sh
+   ```
+   This script installs Grafana, configures Prometheus datasource, and deploys all dashboards.
+
+2. **Manual Import:**
    - Go to Grafana → Dashboards → Import
-   - Upload `maas-token-metrics-dashboard.json`
-   - Configure Prometheus datasource (DS_PROMETHEUS)
+   - Upload the desired dashboard JSON file
+   - Configure Prometheus datasource
 
-2. **Prerequisites:**
-   - Prometheus configured to scrape Limitador metrics
-   - ServiceMonitor for `limitador-limitador` service deployed
-   - Kuadrant policies generating metrics
+3. **Prerequisites:**
+   - User-workload-monitoring enabled in OpenShift
+   - ServiceMonitors deployed for Limitador, Istio Gateway, and KServe models
+   - Kuadrant policies configured with TelemetryPolicy
 
-3. **Features:**
-   - **Tier-based filtering** - Free vs Premium vs Enterprise
-   - **User activity tracking** - Individual user usage patterns
-   - **Model usage analytics** - Which models are used most
-   - **Rate limiting monitoring** - Success vs blocked requests
-   - **Cost analysis** - Revenue tracking by tier and user
-   - **Namespace filtering** - Multi-tenant scenarios
+## 📈 Working Queries
 
-### 💰 Cost Analysis
+```promql
+# Requests per user
+sum by (user) (authorized_hits)
 
-The dashboard includes cost calculations:
-- **Free Tier:** $0.005 per authorized hit
-- **Premium Tier:** $0.008 per authorized hit
-- **Enterprise Tier:** Custom pricing (configurable)
+# Requests per model
+sum by (model) (authorized_hits)
 
-### 🎨 Visual Features
+# Top 10 users
+topk(10, sum by (user) (authorized_hits))
 
-- **Emojis** for better visual appeal
-- **Color coding** by tier (Free=Green, Premium=Blue, Enterprise=Gold)
-- **Modern layout** with better spacing
-- **Interactive filtering** and grouping
-- **Real-time updates** (30s refresh)
+# Success rate per user
+sum by (user) (authorized_calls) / (sum by (user) (authorized_calls) + sum by (user) (limited_calls))
 
-### 📈 Key Insights
+# P95 latency by service (Istio)
+histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
 
-Monitor these important metrics:
-- **Success Rate:** `authorized_calls / (authorized_calls + limited_calls)`
-- **Tier Distribution:** Usage by Free/Premium/Enterprise
-- **Model Popularity:** Which models are used most
-- **User Activity:** Top users and their tier usage
-- **Cost Analysis:** Revenue by tier and user
+# Unauthorized requests (401)
+sum(rate(istio_requests_total{response_code="401"}[5m]))
 
-### 🔗 Related Documentation
+# Overall error rate (4xx + 5xx)
+sum(rate(istio_requests_total{response_code=~"4.."}[5m])) + sum(rate(istio_requests_total{response_code=~"5.."}[5m]))
 
-- [Deployment Guide](../../README.md)
-- [Token Metrics Guide](../../token-metrics.md)
-- [Observability Setup](../../deployment/base/observability/)
+# Firing alerts in MaaS namespaces
+count(ALERTS{alertstate="firing", namespace=~"llm|kuadrant-system|maas-api"})
 
-### 🛠️ Customization
+# Model inference P95 latency (vLLM)
+histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le, model_name))
+
+# Total model requests (scales with dashboard time range)
+sum(increase(vllm:e2e_request_latency_seconds_count[$__range]))
+
+# Token throughput (works with both real vLLM and simulator)
+# Uses OR to support both metric naming conventions
+sum(rate(vllm:prompt_tokens_total[5m])) or sum(rate(vllm:request_prompt_tokens_sum[5m]))  # Prompt tokens/s
+sum(rate(vllm:generation_tokens_total[5m]))  # Generation tokens/s
+
+# Resource allocation per model pod (CPU requests/limits)
+kube_pod_container_resource_requests{namespace="llm", resource="cpu", container="main"}
+kube_pod_container_resource_limits{namespace="llm", resource="cpu", container="main"}
+
+# Resource allocation per model pod (Memory requests/limits)
+kube_pod_container_resource_requests{namespace="llm", resource="memory", container="main"}
+kube_pod_container_resource_limits{namespace="llm", resource="memory", container="main"}
+
+# Requests & errors per user (authorized vs rate-limited)
+sum by (user) (rate(authorized_calls[5m]))
+sum by (user) (rate(limited_calls[5m]))
+```
+
+## 🔗 Related Files
+
+- **TelemetryPolicy**: `deployment/base/observability/telemetry-policy.yaml`
+- **ServiceMonitors**: `deployment/components/observability/prometheus/`
+
+## 📊 Dashboard Panels
+
+### Platform Admin Dashboard
+
+**Variables (dropdown selectors):**
+- `Datasource` - Prometheus datasource
+- `MaaS Namespace` - Filter by namespace (default: All)
+- `Model` - Filter model metrics by model name (default: All)
+
+**Sections:**
+
+| Section | Panels |
+| ------- | ------ |
+| **🏥 Component Health** | Limitador status, Authorino status, MaaS API pods, Gateway pods |
+| **🚨 Alerts** | Firing alerts count, Active alerts table (MaaS namespaces only) |
+| **📊 Key Metrics** | Total authorized hits, Current rate, Success rate, Active users, P50 latency |
+| **📈 Traffic Analysis** | Request rate by model, Overall error rate (4xx/5xx/rate-limited), Request rate by tier, P95 latency by service |
+| **🏆 Top Users** | Top 10 by hits, Top 10 by declined requests |
+| **🤖 Model Metrics** | Requests running, Requests waiting, GPU cache usage, Total requests, Model queue depth, Model inference latency (P50/P95/P99) |
+| **🔤 Token Metrics** | Tokens (1h), Token throughput (works with simulator and real vLLM) |
+| **📦 Resource Allocation** | Resource allocation per model table (CPU/Memory requests/limits) |
+| **👤 User Tracking** | Requests & errors per user (authorized vs rate-limited) |
+| **📋 Detailed Breakdown** | Request rate by user, Request volume by user/model/tier |
+| **🔮 Blocked Features** | Latency per user (placeholder), Token consumption per user (placeholder), Implementation notes |
+
+### AI Engineer Dashboard
+- **User-filtered views**: Per-user request volumes and rate limiting
+
+## 📝 Notes
+
+- Dashboards are compatible with Kuadrant v1.2.0+ (with custom Limitador build)
+- ✅ Per-user, per-model, per-tier filtering is fully working
+- ✅ P50/P95/P99 latency from Istio gateway histograms
+- ✅ Error tracking (401, 429, 5xx) from Istio + Limitador
+- ✅ Alert integration (MaaS-filtered firing alerts)
+- ✅ vLLM/KServe model metrics (queue depth, GPU cache, inference latency)
+- ✅ Model selector dropdown to filter model metrics
+- ✅ **Resource allocation per model** - CPU/Memory requests/limits from kube-state-metrics
+- ✅ **Requests & errors per user** - authorized vs rate-limited from Limitador
+- ✅ Token metrics work with both real vLLM (`vllm:prompt_tokens_total`) and simulator (`vllm:request_prompt_tokens_sum`) - dashboards use `OR` queries for compatibility
+- ⚠️ Model latency histograms only appear after traffic is generated (lazy-initialized)
+- ❌ **Latency per user** - Blocked: Istio metrics don't include `user` label (requires EnvoyFilter)
+- ❌ **Token consumption per user** - Blocked: vLLM doesn't label metrics with `user` (requires vLLM changes)
+- Requires Prometheus Operator for ServiceMonitor support
+- Dashboard auto-refreshes every 30 seconds
 
 To customize the dashboard:
 1. Import into Grafana
 2. Edit panels as needed
 3. Export updated JSON
 4. Replace this file with your custom version
-
-### 📝 Notes
-
-- Requires Prometheus Operator for ServiceMonitor support
-- Metrics are generated by Limitador with TelemetryPolicy
-- Dashboard auto-refreshes every 30 seconds

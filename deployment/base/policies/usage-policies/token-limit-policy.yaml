@@ -18,8 +18,8 @@ spec:
         - limit: 100
           window: 1m
       when:
-        - predicate: |
-            auth.identity.tier == "free"
+        # Use auth.identity.tier - set by AuthPolicy response filter from metadata
+        - predicate: auth.identity.tier == "free"
       counters:
         - expression: auth.identity.userid
     
@@ -28,8 +28,7 @@ spec:
         - limit: 50000
           window: 1m
       when:
-        - predicate: |
-            auth.identity.tier == "premium"
+        - predicate: auth.identity.tier == "premium"
       counters:
         - expression: auth.identity.userid
     enterprise-user-tokens:
@@ -37,8 +36,7 @@ spec:
         - limit: 100000
           window: 1m
       when:
-        - predicate: |
-            auth.identity.tier == "enterprise"
+        - predicate: auth.identity.tier == "enterprise"
       counters:
         - expression: auth.identity.userid
 

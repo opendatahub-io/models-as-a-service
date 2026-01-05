@@ -1,0 +1,38 @@
+# RBAC for MaaS tier ServiceAccounts
+# Tier ServiceAccounts need access to LLMInferenceServices for SubjectAccessReview authorization
+# This allows the AuthPolicy to verify that users have access to specific models
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-llm-access
+  labels:
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: ["serving.kserve.io"]
+  resources: ["llminferenceservices"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: maas-tier-llm-access
+  labels:
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/component: rbac
+subjects:
+- kind: Group
+  name: system:serviceaccounts:maas-default-gateway-tier-free
+  apiGroup: rbac.authorization.k8s.io
+- kind: Group
+  name: system:serviceaccounts:maas-default-gateway-tier-premium
+  apiGroup: rbac.authorization.k8s.io
+- kind: Group
+  name: system:serviceaccounts:maas-default-gateway-tier-enterprise
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: maas-llm-access
+  apiGroup: rbac.authorization.k8s.io
+

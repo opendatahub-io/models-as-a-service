@@ -19,7 +19,7 @@ spec:
   template:
     containers:
       - name: main
-        image: "ghcr.io/llm-d/llm-d-inference-sim:v0.5.1"
+        image: "ghcr.io/llm-d/llm-d-inference-sim:v0.6.1"
         imagePullPolicy: Always
         command: ["/app/llm-d-inference-sim"]
         args:
@@ -58,3 +58,10 @@ spec:
             path: /ready
             port: https
             scheme: HTTPS
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
