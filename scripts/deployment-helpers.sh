@@ -47,16 +47,28 @@ set_maas_api_image() {
     return 0
   fi
 
-  local project_root="$(find_project_root)"
+  local project_root
+  project_root="$(find_project_root)" || {
+    echo "Error: failed to find project root" >&2
+    return 1
+  }
+
   # Exported so cleanup_maas_api_image can access them
   export _MAAS_API_KUSTOMIZATION="$project_root/deployment/base/maas-api/kustomization.yaml"
   export _MAAS_API_BACKUP="${_MAAS_API_KUSTOMIZATION}.backup"
 
   echo "   Setting MaaS API image: ${MAAS_API_IMAGE}"
   
-  cp "$_MAAS_API_KUSTOMIZATION" "$_MAAS_API_BACKUP"
+  cp "$_MAAS_API_KUSTOMIZATION" "$_MAAS_API_BACKUP" || {
+    echo "Error: failed to create backup of kustomization.yaml" >&2
+    return 1
+  }
   
-  (cd "$(dirname "$_MAAS_API_KUSTOMIZATION")" && kustomize edit set image "maas-api=${MAAS_API_IMAGE}")
+  (cd "$(dirname "$_MAAS_API_KUSTOMIZATION")" && kustomize edit set image "maas-api=${MAAS_API_IMAGE}") || {
+    echo "Error: failed to set image in kustomization.yaml" >&2
+    mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
+    return 1
+  }
 }
 
 # cleanup_maas_api_image
