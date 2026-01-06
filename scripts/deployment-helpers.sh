@@ -32,35 +32,40 @@ find_project_root() {
 # set_maas_api_image
 #   Sets the MaaS API container image in kustomization using MAAS_API_IMAGE env var.
 #   If MAAS_API_IMAGE is not set, does nothing (uses default from kustomization.yaml).
-#   Creates a backup and restores it after the calling script exits.
+#   Creates a backup that must be restored by calling cleanup_maas_api_image.
 #
 # Environment:
 #   MAAS_API_IMAGE - Container image to use (e.g., quay.io/opendatahub/maas-api:pr-123)
+#
+# Usage:
+#   set_maas_api_image
+#   trap cleanup_maas_api_image EXIT INT TERM
+#   # ... do deployment ...
 set_maas_api_image() {
   # Skip if MAAS_API_IMAGE is not set
-    if [ -z "${MAAS_API_IMAGE:-}" ]; then
-      return 0
-    fi
+  if [ -z "${MAAS_API_IMAGE:-}" ]; then
+    return 0
+  fi
+
+  local project_root="$(find_project_root)"
+  # Exported so cleanup_maas_api_image can access them
+  export _MAAS_API_KUSTOMIZATION="$project_root/deployment/base/maas-api/kustomization.yaml"
+  export _MAAS_API_BACKUP="${_MAAS_API_KUSTOMIZATION}.backup"
+
+  echo "   Setting MaaS API image: ${MAAS_API_IMAGE}"
   
-    local project_root base_kustomization backup_file restored=false
-    project_root="$(find_project_root)"
-    base_kustomization="$project_root/deployment/base/maas-api/kustomization.yaml"
-    backup_file="${base_kustomization}.backup"
+  cp "$_MAAS_API_KUSTOMIZATION" "$_MAAS_API_BACKUP"
   
-    echo "   Setting MaaS API image: ${MAAS_API_IMAGE}"
-  
-    cp "$base_kustomization" "$backup_file"
-  
-    restore() {
-      $restored && return 0
-      restored=true
-      mv -f -- "$backup_file" "$base_kustomization" 2>/dev/null || true
-    }
-  
-    trap restore RETURN EXIT INT TERM
-  
-    (cd "$(dirname "$base_kustomization")" && \
-      kustomize edit set image "maas-api=${MAAS_API_IMAGE}")
+  (cd "$(dirname "$_MAAS_API_KUSTOMIZATION")" && kustomize edit set image "maas-api=${MAAS_API_IMAGE}")
+}
+
+# cleanup_maas_api_image
+#   Restores the original kustomization.yaml from backup.
+#   Safe to call even if set_maas_api_image was not called or MAAS_API_IMAGE was not set.
+cleanup_maas_api_image() {
+  if [ -n "${_MAAS_API_BACKUP:-}" ] && [ -f "$_MAAS_API_BACKUP" ]; then
+    mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
+  fi
 }
 
 # Helper function to wait for CRD to be established

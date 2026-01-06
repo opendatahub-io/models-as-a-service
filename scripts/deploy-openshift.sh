@@ -228,7 +228,7 @@ echo "8️⃣ Deploying MaaS API..."
 cd "$PROJECT_ROOT"
 # Process kustomization.yaml to replace hardcoded namespace, then build
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap 'rm -rf "$TMP_DIR"; cleanup_maas_api_image' EXIT
 
 cp -r "$PROJECT_ROOT/deployment/base/maas-api/." "$TMP_DIR"
 
