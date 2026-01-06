@@ -29,13 +29,18 @@ func main() {
 	cfg := config.Load()
 	flag.Parse()
 
-	// Initialize structured logger aligned with KServe conventions
 	appLogger := logger.New(cfg.DebugMode)
 	defer func() {
-		_ = appLogger.Sync() // Ignore sync errors on close, as per zap documentation
+		_ = appLogger.Sync()
 	}()
 
-	gin.SetMode(gin.ReleaseMode) // Explicitly set release mode
+	cfg.PrintDeprecationWarnings(appLogger)
+
+	if err := cfg.Validate(); err != nil {
+		appLogger.Fatal("Configuration validation failed", "error", err)
+	}
+
+	gin.SetMode(gin.ReleaseMode)
 	if cfg.DebugMode {
 		gin.SetMode(gin.DebugMode)
 	}
@@ -60,39 +65,25 @@ func main() {
 
 	store, err := initStore(ctx, appLogger, cfg)
 	if err != nil {
-		appLogger.Fatal("Failed to initialize token store",
-			"error", err,
-		)
+		appLogger.Fatal("Failed to initialize token store", "error", err)
 	}
 	defer func() {
 		if err := store.Close(); err != nil {
-			appLogger.Error("Failed to close token store",
-				"error", err,
-			)
+			appLogger.Error("Failed to close token store", "error", err)
 		}
 	}()
 
 	registerHandlers(ctx, appLogger, router, cfg, store)
 
-	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           router,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+	srv, err := newServer(cfg, router)
+	if err != nil {
+		appLogger.Fatal("Failed to create server", "error", err)
 	}
 
 	go func() {
-		appLogger.Info("Server starting",
-			"port", cfg.Port,
-			"debug_mode", cfg.DebugMode,
-		)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			appLogger.Fatal("Server failed to start",
-				"error", err,
-			)
+		appLogger.Info("Server starting", "address", cfg.Address, "secure", cfg.Secure)
+		if err := listenAndServe(srv); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			appLogger.Fatal("Server failed to start", "error", err)
 		}
 	}()
 
@@ -106,9 +97,7 @@ func main() {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelShutdown()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		appLogger.Fatal("Server forced to shutdown",
-			"error", err,
-		)
+		appLogger.Fatal("Server forced to shutdown", "error", err)
 	}
 
 	appLogger.Info("Server exited gracefully")
@@ -155,9 +144,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	cluster, err := config.NewClusterConfig(cfg.Namespace, constant.DefaultResyncPeriod)
 	if err != nil {
-		log.Fatal("Failed to create cluster config",
-			"error", err,
-		)
+		log.Fatal("Failed to create cluster config", "error", err)
 	}
 
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
@@ -178,9 +165,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	)
 
 	if errMgr != nil {
-		log.Fatal("Failed to create model manager",
-			"error", errMgr,
-		)
+		log.Fatal("Failed to create model manager", "error", errMgr)
 	}
 
 	modelsHandler := handlers.NewModelsHandler(log, modelMgr)
@@ -198,7 +183,6 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	apiKeyService := api_keys.NewService(tokenManager, store)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService)
 
-	// Model listing endpoint (v1Routes is grouped under /v1, so this creates /v1/models)
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 
 	tokenRoutes := v1Routes.Group("/tokens", tokenHandler.ExtractUserInfo())
@@ -209,5 +193,4 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)
 	apiKeyRoutes.GET("", apiKeyHandler.ListAPIKeys)
 	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)
-	// Note: Single key deletion removed for initial release - use DELETE /v1/tokens to revoke all tokens
 }

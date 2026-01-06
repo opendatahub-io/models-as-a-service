@@ -9,8 +9,3 @@ resources:
 
 patches:
 - path: patches/debug-mode.yaml
-
-images:
-- name: maas-api
-  newName: quay.io/opendatahub/maas-api
-  newTag: latest

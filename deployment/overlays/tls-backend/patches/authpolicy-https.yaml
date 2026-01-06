@@ -1,0 +1,4 @@
+---
+- op: replace
+  path: /spec/rules/metadata/matchedTier/http/url
+  value: https://maas-api.maas-api.svc.cluster.local:8443/v1/tiers/lookup

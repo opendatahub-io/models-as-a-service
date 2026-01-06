@@ -4,10 +4,13 @@ kind: Kustomization
 metadata:
   name: maas-odh-overlay
 
+# ODH overlay: maas-api with TLS + auth policies
+# For full deployment including rate limits, use openshift overlay
+
 namespace: opendatahub
 resources:
-  - ../../base/policies/auth-policies
-  - ../../base/maas-api
+  - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule)
+  - ../../base/policies/auth-policies  # Gateway auth policies only
 
 configMapGenerator:
 - envs:

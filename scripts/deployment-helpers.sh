@@ -1,13 +1,60 @@
 #!/bin/bash
 
-# Deployment Helper Functions
-# This file contains reusable helper functions for MaaS platform deployment scripts
-
 # Minimum version requirements for operators
 export KUADRANT_MIN_VERSION="1.3.1"
 export AUTHORINO_MIN_VERSION="0.22.0"
 export LIMITADOR_MIN_VERSION="0.16.0"
 export DNS_OPERATOR_MIN_VERSION="0.15.0"
+
+# Deployment helper functions for MaaS Platform
+# Source this file in deployment scripts: source "$(dirname "$0")/deployment-helpers.sh"
+
+# find_project_root [start_dir] [marker]
+#   Walks up the directory tree to find the project root.
+#   Returns the path containing the marker (default: .git)
+find_project_root() {
+  local start_dir="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+  local marker="${2:-.git}"
+  local dir="$start_dir"
+
+  while [[ "$dir" != "/" && ! -e "$dir/$marker" ]]; do
+    dir="$(dirname "$dir")"
+  done
+
+  if [[ -e "$dir/$marker" ]]; then
+    printf '%s\n' "$dir"
+  else
+    echo "Error: couldn't find '$marker' in any parent of '$start_dir'" >&2
+    return 1
+  fi
+}
+
+# set_maas_api_image
+#   Sets the MaaS API container image in kustomization using MAAS_API_IMAGE env var.
+#   If MAAS_API_IMAGE is not set, does nothing (uses default from core/kustomization.yaml).
+#   Creates a backup and restores it after the calling script exits.
+#
+# Environment:
+#   MAAS_API_IMAGE - Container image to use (e.g., quay.io/opendatahub/maas-api:pr-123)
+set_maas_api_image() {
+  # Skip if MAAS_API_IMAGE is not set
+  if [ -z "${MAAS_API_IMAGE:-}" ]; then
+    return 0
+  fi
+
+  local project_root="$(find_project_root)"
+  local core_kustomization="$project_root/deployment/base/maas-api/core/kustomization.yaml"
+  local backup_file="${core_kustomization}.backup"
+
+  echo "   Setting MaaS API image: ${MAAS_API_IMAGE}"
+  
+  # Backup and set trap to restore on exit (use double quotes to expand paths now)
+  cp "$core_kustomization" "$backup_file"
+  trap "mv '$backup_file' '$core_kustomization' 2>/dev/null || true" EXIT INT TERM
+  
+  # Update the image
+  (cd "$(dirname "$core_kustomization")" && kustomize edit set image "maas-api=${MAAS_API_IMAGE}")
+}
 
 # Helper function to wait for CRD to be established
 wait_for_crd() {
@@ -157,5 +204,95 @@ wait_for_csv() {
 
   echo "❌ Timed out after ${timeout}s waiting for CSV ${csv_name}" >&2
   return 1
+}
+
+# Helper function to wait for pods in a namespace to be ready
+wait_for_pods() {
+  local namespace="$1"
+  local timeout="${2:-120}"
+  
+  kubectl get namespace "$namespace" &>/dev/null || return 0
+  
+  echo "⏳ Waiting for pods in $namespace to be ready..."
+  local end=$((SECONDS + timeout))
+  local not_ready
+  while [ $SECONDS -lt $end ]; do
+    not_ready=$(kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -v -E 'Running|Completed|Succeeded' | wc -l)
+    [ "$not_ready" -eq 0 ] && return 0
+    sleep 5
+  done
+  echo "⚠️  Timeout waiting for pods in $namespace" >&2
+  return 1
+}
+
+# Helper function to wait for a resource to exist
+# Usage: wait_for_resource <resource_type> <resource_name> <namespace> [timeout]
+wait_for_resource() {
+  local resource_type="$1"
+  local resource_name="$2"
+  local namespace="$3"
+  local timeout="${4:-60}"
+  local interval=2
+  local elapsed=0
+
+  echo "⏳ Waiting for ${resource_type}/${resource_name} in ${namespace} (timeout: ${timeout}s)..."
+  while [ $elapsed -lt $timeout ]; do
+    if kubectl get "$resource_type" "$resource_name" -n "$namespace" &>/dev/null; then
+      echo "✅ ${resource_type}/${resource_name} exists"
+      return 0
+    fi
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "⚠️  Timed out waiting for ${resource_type}/${resource_name}" >&2
+  return 1
+}
+
+wait_for_validating_webhooks() {
+    local namespace="$1"
+    local timeout="${2:-60}"
+    local interval=2
+    local end=$((SECONDS+timeout))
+
+    echo "⏳ Waiting for validating webhooks in namespace $namespace (timeout: $timeout sec)..."
+
+    while [ $SECONDS -lt $end ]; do
+        local not_ready=0
+
+        local services
+        services=$(kubectl get validatingwebhookconfigurations \
+          -o jsonpath='{range .items[*].webhooks[*].clientConfig.service}{.namespace}/{.name}{"\n"}{end}' \
+          | grep "^$namespace/" | sort -u)
+
+        if [ -z "$services" ]; then
+            echo "⚠️  No validating webhooks found in namespace $namespace"
+            return 0
+        fi
+
+        for svc in $services; do
+            local ns name ready
+            ns=$(echo "$svc" | cut -d/ -f1)
+            name=$(echo "$svc" | cut -d/ -f2)
+
+            ready=$(kubectl get endpoints -n "$ns" "$name" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
+            if [ -z "$ready" ]; then
+                echo "🔴 Webhook service $ns/$name not ready"
+                not_ready=1
+            else
+                echo "✅ Webhook service $ns/$name has ready endpoints"
+            fi
+        done
+
+        if [ "$not_ready" -eq 0 ]; then
+            echo "🎉 All validating webhook services in $namespace are ready"
+            return 0
+        fi
+
+        sleep $interval
+    done
+
+    echo "❌ Timed out waiting for validating webhooks in $namespace"
+    return 1
 }
 
