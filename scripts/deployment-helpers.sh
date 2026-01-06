@@ -9,6 +9,60 @@ export AUTHORINO_MIN_VERSION="0.22.0"
 export LIMITADOR_MIN_VERSION="0.16.0"
 export DNS_OPERATOR_MIN_VERSION="0.15.0"
 
+# find_project_root [start_dir] [marker]
+#   Walks up the directory tree to find the project root.
+#   Returns the path containing the marker (default: .git)
+find_project_root() {
+  local start_dir="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+  local marker="${2:-.git}"
+  local dir="$start_dir"
+
+  while [[ "$dir" != "/" && ! -e "$dir/$marker" ]]; do
+    dir="$(dirname "$dir")"
+  done
+
+  if [[ -e "$dir/$marker" ]]; then
+    printf '%s\n' "$dir"
+  else
+    echo "Error: couldn't find '$marker' in any parent of '$start_dir'" >&2
+    return 1
+  fi
+}
+
+# set_maas_api_image
+#   Sets the MaaS API container image in kustomization using MAAS_API_IMAGE env var.
+#   If MAAS_API_IMAGE is not set, does nothing (uses default from kustomization.yaml).
+#   Creates a backup and restores it after the calling script exits.
+#
+# Environment:
+#   MAAS_API_IMAGE - Container image to use (e.g., quay.io/opendatahub/maas-api:pr-123)
+set_maas_api_image() {
+  # Skip if MAAS_API_IMAGE is not set
+    if [ -z "${MAAS_API_IMAGE:-}" ]; then
+      return 0
+    fi
+  
+    local project_root base_kustomization backup_file restored=false
+    project_root="$(find_project_root)"
+    base_kustomization="$project_root/deployment/base/maas-api/kustomization.yaml"
+    backup_file="${base_kustomization}.backup"
+  
+    echo "   Setting MaaS API image: ${MAAS_API_IMAGE}"
+  
+    cp "$base_kustomization" "$backup_file"
+  
+    restore() {
+      $restored && return 0
+      restored=true
+      mv -f -- "$backup_file" "$base_kustomization" 2>/dev/null || true
+    }
+  
+    trap restore RETURN EXIT INT TERM
+  
+    (cd "$(dirname "$base_kustomization")" && \
+      kustomize edit set image "maas-api=${MAAS_API_IMAGE}")
+}
+
 # Helper function to wait for CRD to be established
 wait_for_crd() {
   local crd="$1"
