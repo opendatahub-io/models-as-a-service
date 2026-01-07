@@ -254,3 +254,10 @@ kubectl delete pod -l control-plane=controller-manager -n kuadrant-system
     - Rate limiting continuing at the old tier
     - Service Account persistence after group removal
     - Recommended practices for group membership changes
+
+!!!info "Model Tier Access Changes"
+    Removing a model from a tier's access list (by updating the `alpha.maas.opendatahub.io/tiers` annotation) takes effect immediately. See [Model Tier Access Behavior](./model-access-behavior.md#model-tier-access-changes-during-active-usage) for details on:
+
+    - Expected behaviors when access is revoked
+    - RBAC propagation timing
+    - Recommended practices for tier access changes
