@@ -95,6 +95,7 @@ sequenceDiagram
 For step-by-step instructions on obtaining and using tokens to access models, including practical examples and troubleshooting, see the [Self-Service Model Access Guide](../user-guide/self-service-model-access.md).
 
 That guide provides:
+
 - Complete walkthrough for getting your OpenShift token
 - How to request an access token from the API
 - Examples of making inference requests with your token
@@ -117,6 +118,7 @@ When a token expires, any API request using it will fail with an `HTTP 401 Unaut
 To continue, you must request a new token using the process described above.
 
 **Tips:**
+
 - For interactive use, request tokens with a lifetime that covers your session (e.g., 4h).
 - For automated scripts or applications, implement logic to refresh the token proactively before it expires.
 

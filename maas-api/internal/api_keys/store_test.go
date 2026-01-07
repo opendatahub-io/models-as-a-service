@@ -12,8 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-//nolint:ireturn // Returns MetadataStore interface for test flexibility.
-func createTestStore(t *testing.T) api_keys.MetadataStore {
+func createTestStore(t *testing.T) *api_keys.SQLStore {
 	t.Helper()
 	ctx := context.Background()
 	testLogger := logger.Development()

@@ -300,7 +300,7 @@ echo
 echo "## Installing Models-as-a-Service"
 
 export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-export AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | base64 -d 2>/dev/null | jq -r '.aud[0]' 2>/dev/null)"
+export AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
 
 echo "* Cluster domain: ${CLUSTER_DOMAIN}"
 echo "* Cluster audience: ${AUD}"
@@ -311,6 +311,19 @@ kind: Namespace
 metadata:
   name: maas-api
 EOF
+
+if kubectl get namespace opendatahub >/dev/null 2>&1; then
+  kubectl wait namespace/opendatahub --for=jsonpath='{.status.phase}'=Active --timeout=60s
+else
+  echo "* Waiting for opendatahub namespace to be created by the operator..."
+  for i in {1..30}; do
+    if kubectl get namespace opendatahub >/dev/null 2>&1; then
+      kubectl wait namespace/opendatahub --for=jsonpath='{.status.phase}'=Active --timeout=60s
+      break
+    fi
+    sleep 5
+  done
+fi
 
 : "${MAAS_REF:=main}"
 kubectl apply --server-side=true \

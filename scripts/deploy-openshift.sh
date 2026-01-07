@@ -5,144 +5,13 @@
 
 set -e
 
-# Helper function to wait for CRD to be established
-wait_for_crd() {
-  local crd="$1"
-  local timeout="${2:-60}"  # timeout in seconds
-  local interval=2
-  local elapsed=0
+# Source helper functions
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "$SCRIPT_DIR/deployment-helpers.sh"
 
-  echo "⏳ Waiting for CRD ${crd} to appear (timeout: ${timeout}s)…"
-  while [ $elapsed -lt $timeout ]; do
-    if kubectl get crd "$crd" &>/dev/null; then
-      echo "✅ CRD ${crd} detected, waiting for it to become Established..."
-      kubectl wait --for=condition=Established --timeout="${timeout}s" "crd/$crd" 2>/dev/null
-      return 0
-    fi
-    sleep $interval
-    elapsed=$((elapsed + interval))
-  done
 
-  echo "❌ Timed out after ${timeout}s waiting for CRD $crd to appear." >&2
-  return 1
-}
-
-# Helper function to wait for CSV to reach Succeeded state
-wait_for_csv() {
-  local csv_name="$1"
-  local namespace="${2:-kuadrant-system}"
-  local timeout="${3:-180}"  # timeout in seconds
-  local interval=5
-  local elapsed=0
-  local last_status_print=0
-
-  echo "⏳ Waiting for CSV ${csv_name} to succeed (timeout: ${timeout}s)..."
-  while [ $elapsed -lt $timeout ]; do
-    local phase=$(kubectl get csv -n "$namespace" "$csv_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-
-    case "$phase" in
-      "Succeeded")
-        echo "✅ CSV ${csv_name} succeeded"
-        return 0
-        ;;
-      "Failed")
-        echo "❌ CSV ${csv_name} failed" >&2
-        kubectl get csv -n "$namespace" "$csv_name" -o jsonpath='{.status.message}' 2>/dev/null
-        return 1
-        ;;
-      *)
-        if [ $((elapsed - last_status_print)) -ge 30 ]; then
-          echo "   CSV ${csv_name} status: ${phase} (${elapsed}s elapsed)"
-          last_status_print=$elapsed
-        fi
-        ;;
-    esac
-
-    sleep $interval
-    elapsed=$((elapsed + interval))
-  done
-
-  echo "❌ Timed out after ${timeout}s waiting for CSV ${csv_name}" >&2
-  return 1
-}
-
-# Helper function to wait for pods in a namespace to be ready
-wait_for_pods() {
-  local namespace="$1"
-  local timeout="${2:-120}"
-  
-  kubectl get namespace "$namespace" &>/dev/null || return 0
-  
-  echo "⏳ Waiting for pods in $namespace to be ready..."
-  local end=$((SECONDS + timeout))
-  while [ $SECONDS -lt $end ]; do
-    local not_ready=$(kubectl get pods -n "$namespace" --no-headers 2>/dev/null | grep -v -E 'Running|Completed|Succeeded' | wc -l)
-    [ "$not_ready" -eq 0 ] && return 0
-    sleep 5
-  done
-  echo "⚠️  Timeout waiting for pods in $namespace" >&2
-  return 1
-}
-
-# version_compare <version1> <version2>
-#   Compares two version strings in semantic version format (e.g., "4.19.9")
-#   Returns 0 if version1 >= version2, 1 otherwise
-version_compare() {
-  local version1="$1"
-  local version2="$2"
-  
-  local v1=$(echo "$version1" | awk -F. '{printf "%d%03d%03d", $1, $2, $3}')
-  local v2=$(echo "$version2" | awk -F. '{printf "%d%03d%03d", $1, $2, $3}')
-  
-  [ "$v1" -ge "$v2" ]
-}
-
-wait_for_validating_webhooks() {
-    local namespace="$1"
-    local timeout="${2:-60}"
-    local interval=2
-    local end=$((SECONDS+timeout))
-
-    echo "⏳ Waiting for validating webhooks in namespace $namespace (timeout: $timeout sec)..."
-
-    while [ $SECONDS -lt $end ]; do
-        local not_ready=0
-
-        local services
-        services=$(kubectl get validatingwebhookconfigurations \
-          -o jsonpath='{range .items[*].webhooks[*].clientConfig.service}{.namespace}/{.name}{"\n"}{end}' \
-          | grep "^$namespace/" | sort -u)
-
-        if [ -z "$services" ]; then
-            echo "⚠️  No validating webhooks found in namespace $namespace"
-            return 0
-        fi
-
-        for svc in $services; do
-            local ns name ready
-            ns=$(echo "$svc" | cut -d/ -f1)
-            name=$(echo "$svc" | cut -d/ -f2)
-
-            ready=$(kubectl get endpoints -n "$ns" "$name" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
-            if [ -z "$ready" ]; then
-                echo "🔴 Webhook service $ns/$name not ready"
-                not_ready=1
-            else
-                echo "✅ Webhook service $ns/$name has ready endpoints"
-            fi
-        done
-
-        if [ "$not_ready" -eq 0 ]; then
-            echo "🎉 All validating webhook services in $namespace are ready"
-            return 0
-        fi
-
-        sleep $interval
-    done
-
-    echo "❌ Timed out waiting for validating webhooks in $namespace"
-    return 1
-}
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "========================================="
 echo "🚀 MaaS Platform OpenShift Deployment"
@@ -168,6 +37,9 @@ echo ""
 echo "ℹ️  Note: OpenShift Service Mesh should be automatically installed when GatewayClass is created."
 echo "   If the Gateway gets stuck in 'Waiting for controller', you may need to manually"
 echo "   install the Red Hat OpenShift Service Mesh operator from OperatorHub."
+
+# Set custom MaaS API image if MAAS_API_IMAGE env var is provided
+set_maas_api_image
 
 echo ""
 echo "1️⃣ Checking OpenShift version and Gateway API requirements..."
@@ -198,8 +70,6 @@ echo "2️⃣ Creating namespaces..."
 echo "   ℹ️  Note: If ODH/RHOAI is already installed, some namespaces may already exist"
 
 # Determine MaaS API namespace: use MAAS_API_NAMESPACE env var if set, otherwise default to maas-api
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MAAS_API_NAMESPACE=${MAAS_API_NAMESPACE:-maas-api}
 export MAAS_API_NAMESPACE
 echo "   MaaS API namespace: $MAAS_API_NAMESPACE (set MAAS_API_NAMESPACE env var to override)"
@@ -213,7 +83,8 @@ echo "3️⃣ Installing dependencies..."
 
 # Only clean up leftover CRDs if Kuadrant operators are NOT already installed
 echo "   Checking for existing Kuadrant installation..."
-if ! kubectl get csv -n kuadrant-system kuadrant-operator.v1.3.1 &>/dev/null 2>&1; then
+EXISTING_KUADRANT_CSV=$(find_csv_with_min_version "kuadrant-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" || echo "")
+if [ -z "$EXISTING_KUADRANT_CSV" ]; then
     echo "   No existing installation found, checking for leftover CRDs..."
     LEFTOVER_CRDS=$(kubectl get crd 2>/dev/null | grep -E "kuadrant|authorino|limitador" | awk '{print $1}')
     if [ -n "$LEFTOVER_CRDS" ]; then
@@ -222,7 +93,7 @@ if ! kubectl get csv -n kuadrant-system kuadrant-operator.v1.3.1 &>/dev/null 2>&
         sleep 5  # Brief wait for cleanup to complete
     fi
 else
-    echo "   ✅ Kuadrant operator already installed, skipping CRD cleanup"
+    echo "   ✅ Kuadrant operator already installed ($EXISTING_KUADRANT_CSV), skipping CRD cleanup"
 fi
 
 echo "   Installing Kuadrant..."
@@ -328,16 +199,16 @@ fi
 echo ""
 echo "6️⃣ Waiting for Kuadrant operators to be installed by OLM..."
 # Wait for CSVs to reach Succeeded state (this ensures CRDs are created and deployments are ready)
-wait_for_csv "kuadrant-operator.v1.3.1" "kuadrant-system" 300 || \
+wait_for_csv_with_min_version "kuadrant-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" 300 || \
     echo "   ⚠️  Kuadrant operator CSV did not succeed, continuing anyway..."
 
-wait_for_csv "authorino-operator.v0.22.0" "kuadrant-system" 60 || \
+wait_for_csv_with_min_version "authorino-operator" "$AUTHORINO_MIN_VERSION" "kuadrant-system" 60 || \
     echo "   ⚠️  Authorino operator CSV did not succeed"
 
-wait_for_csv "limitador-operator.v0.16.0" "kuadrant-system" 60 || \
+wait_for_csv_with_min_version "limitador-operator" "$LIMITADOR_MIN_VERSION" "kuadrant-system" 60 || \
     echo "   ⚠️  Limitador operator CSV did not succeed"
 
-wait_for_csv "dns-operator.v0.15.0" "kuadrant-system" 60 || \
+wait_for_csv_with_min_version "dns-operator" "$DNS_OPERATOR_MIN_VERSION" "kuadrant-system" 60 || \
     echo "   ⚠️  DNS operator CSV did not succeed"
 
 # Verify CRDs are present
@@ -357,7 +228,7 @@ echo "8️⃣ Deploying MaaS API..."
 cd "$PROJECT_ROOT"
 # Process kustomization.yaml to replace hardcoded namespace, then build
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap 'rm -rf "$TMP_DIR"; cleanup_maas_api_image' EXIT
 
 cp -r "$PROJECT_ROOT/deployment/base/maas-api/." "$TMP_DIR"
 
@@ -402,13 +273,6 @@ kustomize build deployment/base/policies | sed "s/maas-api\.maas-api\.svc/maas-a
 
 echo ""
 echo "1️⃣2️⃣ Patching AuthPolicy with correct audience..."
-# Cross-platform base64 decode (macOS uses -D, Linux uses -d)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    BASE64_DECODE="base64 -D"
-else
-    BASE64_DECODE="base64 -d"
-fi
-
 echo "   Attempting to detect audience..."
 TOKEN=$(kubectl create token default --duration=10m 2>/dev/null || echo "")
 if [ -z "$TOKEN" ]; then
@@ -422,7 +286,7 @@ else
         AUD=""
     else
         echo "   JWT payload extracted"
-        DECODED_PAYLOAD=$(echo "$JWT_PAYLOAD" | $BASE64_DECODE 2>/dev/null || echo "")
+        DECODED_PAYLOAD=$(echo "$JWT_PAYLOAD" | jq -Rr '@base64d | fromjson' || echo "")
         if [ -z "$DECODED_PAYLOAD" ]; then
             echo "   ⚠️  Could not decode base64 payload, skipping audience detection"
             AUD=""

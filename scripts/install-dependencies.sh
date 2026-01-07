@@ -17,6 +17,9 @@ KUADRANT_VERSION="v1.3.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALLERS_DIR="$SCRIPT_DIR/installers"
 
+# Source helper functions
+source "$SCRIPT_DIR/deployment-helpers.sh"
+
 get_component_description() {
     case "$1" in
         istio) echo "Service mesh and Gateway API configuration" ;;
@@ -176,17 +179,23 @@ EOF
         # Patch Kuadrant for OpenShift Gateway Controller
         echo "   Patching Kuadrant operator..."
         if ! kubectl -n kuadrant-system get deployment kuadrant-operator-controller-manager -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ISTIO_GATEWAY_CONTROLLER_NAMES")]}' | grep -q "ISTIO_GATEWAY_CONTROLLER_NAMES"; then
-          kubectl patch csv kuadrant-operator.v1.3.1 -n kuadrant-system --type='json' -p='[
-            {
-              "op": "add",
-              "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-",
-              "value": {
-                "name": "ISTIO_GATEWAY_CONTROLLER_NAMES",
-                "value": "istio.io/gateway-controller,openshift.io/gateway-controller/v1"
+          # Find the actual CSV name instead of hardcoding it
+          KUADRANT_CSV=$(find_csv_with_min_version "kuadrant-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" || echo "")
+          if [ -n "$KUADRANT_CSV" ]; then
+            kubectl patch csv "$KUADRANT_CSV" -n kuadrant-system --type='json' -p='[
+              {
+                "op": "add",
+                "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-",
+                "value": {
+                  "name": "ISTIO_GATEWAY_CONTROLLER_NAMES",
+                  "value": "istio.io/gateway-controller,openshift.io/gateway-controller/v1"
+                }
               }
-            }
-          ]'
-          echo "   ✅ Kuadrant operator patched"
+            ]'
+            echo "   ✅ Kuadrant operator patched ($KUADRANT_CSV)"
+          else
+            echo "   ⚠️  Kuadrant CSV not found, skipping patch"
+          fi
         else
           echo "   ✅ Kuadrant operator already configured"
         fi

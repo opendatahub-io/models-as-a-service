@@ -42,7 +42,7 @@ find_project_root() {
   if [[ -e "$dir/$marker" ]]; then
     printf '%s\n' "$dir"
   else
-    echo "Error: couldn’t find '$marker' in any parent of '$start_dir'" >&2
+    echo "Error: couldn't find '$marker' in any parent of '$start_dir'" >&2
     return 1
   fi
 }
@@ -88,13 +88,6 @@ check_prerequisites() {
 }
 
 deploy_maas_platform() {
-    # Set custom MaaS API image
-    : "${MAAS_API_IMAGE:=quay.io/opendatahub/maas-api:latest}"
-    echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
-    pushd "$PROJECT_ROOT/deployment/base/maas-api" > /dev/null
-    kustomize edit set image maas-api="${MAAS_API_IMAGE}"
-    popd > /dev/null
-
     echo "Deploying MaaS platform on OpenShift..."
     if ! "$PROJECT_ROOT/scripts/deploy-openshift.sh"; then
         echo "❌ ERROR: MaaS platform deployment failed"

@@ -10,12 +10,12 @@ import (
 	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 )
 
-//nolint:ireturn // test helper
+//nolint:nolintlint,ireturn // test helper returning external interface
 func newIndexer() cache.Indexer {
 	return cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
 }
 
-//nolint:ireturn // test helper
+//nolint:nolintlint,ireturn // test helper returning external interface
 func NewLLMInferenceServiceLister(items ...runtime.Object) kservelistersv1alpha1.LLMInferenceServiceLister {
 	indexer := newIndexer()
 	for _, item := range items {
@@ -24,7 +24,7 @@ func NewLLMInferenceServiceLister(items ...runtime.Object) kservelistersv1alpha1
 	return kservelistersv1alpha1.NewLLMInferenceServiceLister(indexer)
 }
 
-//nolint:ireturn // test helper
+//nolint:nolintlint,ireturn // test helper returning external interface
 func NewInferenceServiceLister(items ...runtime.Object) kservelistersv1beta1.InferenceServiceLister {
 	indexer := newIndexer()
 	for _, item := range items {
@@ -33,7 +33,7 @@ func NewInferenceServiceLister(items ...runtime.Object) kservelistersv1beta1.Inf
 	return kservelistersv1beta1.NewInferenceServiceLister(indexer)
 }
 
-//nolint:ireturn // test helper
+//nolint:nolintlint,ireturn // test helper returning external interface
 func NewConfigMapLister(items ...*corev1.ConfigMap) corelisters.ConfigMapLister {
 	indexer := newIndexer()
 	for _, item := range items {
@@ -42,7 +42,7 @@ func NewConfigMapLister(items ...*corev1.ConfigMap) corelisters.ConfigMapLister 
 	return corelisters.NewConfigMapLister(indexer)
 }
 
-//nolint:ireturn // test helper
+//nolint:nolintlint,ireturn // test helper returning external interface
 func NewHTTPRouteLister(items ...runtime.Object) gatewaylisters.HTTPRouteLister {
 	indexer := newIndexer()
 	for _, item := range items {
