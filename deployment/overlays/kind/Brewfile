@@ -1,0 +1,22 @@
+# Brewfile for MaaS Local Development (Mac)
+# Install with: brew bundle --file=deployment/overlays/kind/Brewfile
+
+# Kubernetes and container tools
+brew "kubectl"
+brew "kind"
+brew "helm"
+
+# Container engines
+brew "podman"
+
+# Service mesh
+brew "istioctl"
+
+# Optional but recommended
+brew "kustomize"
+brew "jq"
+brew "yq"
+
+# Required by scripts
+# Note: Docker Desktop must be installed separately (GUI application)
+# Download from: https://www.docker.com/products/docker-desktop

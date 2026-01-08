@@ -1,0 +1,24 @@
+# Self-signed certificate for local development
+# This creates a certificate for the maas-gateway
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gateway-cert
+  namespace: maas-api
+spec:
+  secretName: default-gateway-tls
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+  dnsNames:
+  - localhost
+  - maas.local
+  - "*.maas.local"
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}

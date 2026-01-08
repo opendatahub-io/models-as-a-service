@@ -1,0 +1,57 @@
+# Kind Cluster Configuration for MaaS Local Development
+# Supports Mac (Intel/ARM) and Linux (x86_64/ARM64)
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: maas-local
+
+# Single control-plane node (sufficient for local development)
+nodes:
+- role: control-plane
+  # Port mappings for Gateway access via NodePort
+  # Maps host ports to the Gateway service NodePorts
+  extraPortMappings:
+  # HTTP - maps to maas-gateway-istio NodePort
+  - containerPort: 30080
+    hostPort: 80
+    protocol: TCP
+  # HTTPS - maps to maas-gateway-istio NodePort
+  - containerPort: 30443
+    hostPort: 443
+    protocol: TCP
+
+  # Node labels for ingress readiness
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+
+  # Optional: Increase resource limits if needed
+  # extraMounts:
+  # - hostPath: /var/run/docker.sock
+  #   containerPath: /var/run/docker.sock
+
+# Networking configuration
+networking:
+  # Keep default CNI enabled for Kind cluster networking
+  disableDefaultCNI: false
+
+  # Pod and service subnets
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"
+
+  # Enable IPv6 (optional, set to true if needed)
+  ipFamily: ipv4
+  # ipFamily: dual  # Uncomment for dual-stack
+
+# Feature gates (optional)
+# featureGates:
+#   "GRPCContainerProbe": true
+
+# Runtime configuration
+# containerdConfigPatches:
+# - |-
+#   [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5000"]
+#     endpoint = ["http://localhost:5000"]

@@ -1,0 +1,73 @@
+---
+# Free tier - can access model-a only
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: free-user-model-a-access
+  namespace: llm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: model-a-access
+subjects:
+- kind: ServiceAccount
+  name: free-user
+  namespace: maas-api
+---
+# Premium tier - can access both model-a and model-b
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: premium-user-model-a-access
+  namespace: llm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: model-a-access
+subjects:
+- kind: ServiceAccount
+  name: premium-user
+  namespace: maas-api
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: premium-user-model-b-access
+  namespace: llm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: model-b-access
+subjects:
+- kind: ServiceAccount
+  name: premium-user
+  namespace: maas-api
+---
+# Enterprise tier - can access both model-a and model-b
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: enterprise-user-model-a-access
+  namespace: llm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: model-a-access
+subjects:
+- kind: ServiceAccount
+  name: enterprise-user
+  namespace: maas-api
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: enterprise-user-model-b-access
+  namespace: llm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: model-b-access
+subjects:
+- kind: ServiceAccount
+  name: enterprise-user
+  namespace: maas-api

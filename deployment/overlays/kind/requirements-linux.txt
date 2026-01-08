@@ -1,0 +1,21 @@
+# Requirements for MaaS Local Development on Linux
+# This file lists the required tools and their installation methods
+
+# Container Runtime
+docker             # Install via: curl -fsSL https://get.docker.com | sh
+
+# Kubernetes Tools
+kubectl>=1.28      # Install via: curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+kind>=0.20         # Install via: curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+helm>=3.12         # Install via: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Service Mesh
+istioctl>=1.20     # Install via: curl -L https://istio.io/downloadIstio | sh -
+
+# Optional Tools
+kustomize>=5.0     # Install via: curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+jq                 # Install via: apt-get install jq (Debian/Ubuntu) or dnf install jq (Fedora/RHEL)
+yq                 # Install via: go install github.com/mikefarah/yq/v4@latest
+
+# Auto-install script available at:
+# ./deployment/scripts/kind/install-prerequisites.sh

@@ -1,0 +1,163 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: maas-kind-overlay
+
+# Inherit base configuration
+resources:
+  # Namespaces (must be first)
+  - namespaces.yaml
+
+  # Core MaaS API components
+  - ../../base/maas-api
+
+  # Policies (but not base networking which includes Gateway)
+  - ../../base/policies
+
+  # Gateway API resources (Kind-specific - replaces base/networking)
+  - gateway-class.yaml
+  - gateway-certificate.yaml
+  - gateway.yaml  # Kind-specific Gateway in istio-system
+  - kuadrant.yaml  # Kuadrant instance (required for policies)
+
+  # RBAC for 3-tier access control
+  - rbac
+
+# Patches for Kind-specific customizations
+patches:
+  # Patch maas-api deployment to use Never for local images
+  - target:
+      kind: Deployment
+      name: maas-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+
+  # Patch HTTPRoute to point to the Gateway in istio-system
+  - target:
+      kind: HTTPRoute
+      name: maas-api-route
+    patch: |-
+      - op: replace
+        path: /spec/parentRefs/0/name
+        value: maas-gateway
+      - op: replace
+        path: /spec/parentRefs/0/namespace
+        value: istio-system
+      - op: add
+        path: /spec/hostnames
+        value: ["localhost", "maas.local"]
+
+  # Patch Gateway auth policy namespace and target to istio-system/maas-gateway
+  # Keep authorization section for per-model RBAC (like production OpenShift)
+  - target:
+      kind: AuthPolicy
+      name: gateway-auth-policy
+    patch: |-
+      - op: replace
+        path: /metadata/namespace
+        value: istio-system
+      - op: replace
+        path: /spec/targetRef/name
+        value: maas-gateway
+      - op: replace
+        path: /spec/rules/authorization/tier-access/kubernetesSubjectAccessReview/resourceAttributes/verb/value
+        value: create
+
+  # Patch Gateway rate limit policies namespace and target to istio-system/maas-gateway
+  - target:
+      kind: RateLimitPolicy
+      name: gateway-rate-limits
+    patch: |-
+      - op: replace
+        path: /metadata/namespace
+        value: istio-system
+      - op: replace
+        path: /spec/targetRef/name
+        value: maas-gateway
+
+  - target:
+      kind: TokenRateLimitPolicy
+      name: gateway-token-rate-limits
+    patch: |-
+      - op: replace
+        path: /metadata/namespace
+        value: istio-system
+      - op: replace
+        path: /spec/targetRef/name
+        value: maas-gateway
+
+  # Patch tier mapping to use ServiceAccount groups for Kind
+  - target:
+      kind: ConfigMap
+      name: tier-to-group-mapping
+    patch: |-
+      - op: replace
+        path: /data/tiers
+        value: |
+          # Free tier - maps to free-user ServiceAccount
+          - name: free
+            level: 0
+            groups:
+              - system:serviceaccount:maas-api:free-user
+              - system:serviceaccount:maas-api:demo-user
+              - tier-free-users
+              - system:authenticated
+
+          # Premium tier - maps to premium-user ServiceAccount
+          - name: premium
+            level: 1
+            groups:
+              - system:serviceaccount:maas-api:premium-user
+              - tier-premium-users
+              - premium-group
+
+          # Enterprise tier - maps to enterprise-user ServiceAccount
+          - name: enterprise
+            level: 2
+            groups:
+              - system:serviceaccount:maas-api:enterprise-user
+              - tier-enterprise-users
+              - enterprise-group
+              - admin-group
+
+  # TODO: Add more patches as needed
+  # - patch: |-
+  #     apiVersion: apps/v1
+  #     kind: Deployment
+  #     metadata:
+  #       name: maas-api
+  #     spec:
+  #       template:
+  #         spec:
+  #           containers:
+  #           - name: maas-api
+  #             env:
+  #             - name: CLUSTER_DOMAIN
+  #               value: "localhost"
+
+# ConfigMap generators (if needed for Kind-specific config)
+# configMapGenerator:
+# - name: kind-config
+#   literals:
+#   - PLATFORM=kind
+#   - CLUSTER_DOMAIN=localhost
+
+# Images - use local build with fallback fix
+images:
+- name: quay.io/opendatahub/maas-api
+  newName: localhost/maas-api
+  newTag: dev
+
+# Labels to add to all resources
+labels:
+  - pairs:
+      platform: kind
+      environment: local-dev
+
+# Annotations to add to all resources
+commonAnnotations:
+  managed-by: kustomize
+  platform: kind

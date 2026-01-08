@@ -1,0 +1,19 @@
+# Namespaces required for MaaS on Kind
+# These replace OpenShift-specific namespaces
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: maas-api
+  labels:
+    app.kubernetes.io/part-of: model-as-a-service
+    platform: kind
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm
+  labels:
+    app.kubernetes.io/part-of: model-as-a-service
+    platform: kind
+    purpose: model-serving
