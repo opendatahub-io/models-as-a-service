@@ -175,6 +175,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 		cluster.LLMInferenceServiceLister,
 		cluster.HTTPRouteLister,
 		models.GatewayRef{Name: cfg.GatewayName, Namespace: cfg.GatewayNamespace},
+		cfg.AuthCheckEndpoint,
 	)
 
 	if errMgr != nil {

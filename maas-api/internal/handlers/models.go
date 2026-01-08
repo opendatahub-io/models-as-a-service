@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go/v2/packages/pagination"
@@ -46,7 +47,38 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 
 // ListLLMs handles GET /v1/models.
 func (h *ModelsHandler) ListLLMs(c *gin.Context) {
-	modelList, err := h.modelMgr.ListAvailableLLMs()
+	// Extract service account token for authorization as recommended in PR feedback
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		h.logger.Error("Authorization header missing")
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": gin.H{
+				"message": "Authorization token required",
+				"type":    "authentication_error",
+			}})
+		return
+	}
+
+	// Use strings.TrimSpace and strings.CutPrefix as suggested in PR feedback
+	saToken := strings.TrimSpace(authHeader)
+	saToken, hasBearerPrefix := strings.CutPrefix(saToken, "Bearer ")
+	saToken = strings.TrimSpace(saToken)
+
+	// Validate token is non-empty after processing
+	if saToken == "" {
+		h.logger.Error("Empty token after processing authorization header",
+			"authHeader", authHeader,
+			"hasBearerPrefix", hasBearerPrefix,
+		)
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": gin.H{
+				"message": "Valid authorization token required",
+				"type":    "authentication_error",
+			}})
+		return
+	}
+
+	modelList, err := h.modelMgr.ListAvailableLLMsForUser(c.Request.Context(), saToken)
 	if err != nil {
 		h.logger.Error("Failed to get available LLM models",
 			"error", err,

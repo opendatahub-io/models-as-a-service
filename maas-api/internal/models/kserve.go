@@ -17,11 +17,12 @@ import (
 )
 
 type Manager struct {
-	isvcLister      kservelistersv1beta1.InferenceServiceLister
-	llmIsvcLister   kservelistersv1alpha1.LLMInferenceServiceLister
-	httpRouteLister gatewaylisters.HTTPRouteLister
-	gatewayRef      GatewayRef
-	logger          *logger.Logger
+	isvcLister        kservelistersv1beta1.InferenceServiceLister
+	llmIsvcLister     kservelistersv1alpha1.LLMInferenceServiceLister
+	httpRouteLister   gatewaylisters.HTTPRouteLister
+	gatewayRef        GatewayRef
+	logger            *logger.Logger
+	authCheckEndpoint string
 }
 
 func NewManager(
@@ -30,6 +31,7 @@ func NewManager(
 	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister,
 	httpRouteLister gatewaylisters.HTTPRouteLister,
 	gatewayRef GatewayRef,
+	authCheckEndpoint string,
 ) (*Manager, error) {
 	if isvcLister == nil {
 		return nil, errors.New("isvcLister is required")
@@ -42,11 +44,12 @@ func NewManager(
 	}
 
 	return &Manager{
-		isvcLister:      isvcLister,
-		llmIsvcLister:   llmIsvcLister,
-		httpRouteLister: httpRouteLister,
-		gatewayRef:      gatewayRef,
-		logger:          log,
+		isvcLister:        isvcLister,
+		llmIsvcLister:     llmIsvcLister,
+		httpRouteLister:   httpRouteLister,
+		gatewayRef:        gatewayRef,
+		logger:            log,
+		authCheckEndpoint: authCheckEndpoint,
 	}, nil
 }
 

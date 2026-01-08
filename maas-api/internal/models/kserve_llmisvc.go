@@ -1,7 +1,11 @@
 package models
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"strings"
+	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	"github.com/openai/openai-go/v2"
@@ -32,6 +36,167 @@ func (m *Manager) ListAvailableLLMs() ([]Model, error) {
 	}
 
 	return m.llmInferenceServicesToModels(instanceLLMs)
+}
+
+// ListAvailableLLMsForUser lists LLM models that the user has access to based on authorization checks.
+func (m *Manager) ListAvailableLLMsForUser(ctx context.Context, saToken string) ([]Model, error) {
+	list, err := m.llmIsvcLister.List(labels.Everything())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list LLMInferenceServices: %w", err)
+	}
+
+	var instanceLLMs []*kservev1alpha1.LLMInferenceService
+	for _, llmIsvc := range list {
+		if m.partOfMaaSInstance(llmIsvc) {
+			instanceLLMs = append(instanceLLMs, llmIsvc)
+		}
+	}
+
+	// Convert to models first, then filter based on authorization
+	allModels, err := m.llmInferenceServicesToModels(instanceLLMs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter models based on user authorization
+	var authorizedModels []Model
+	for _, model := range allModels {
+		if m.userCanAccessModel(ctx, model, saToken) {
+			authorizedModels = append(authorizedModels, model)
+		}
+	}
+
+	return authorizedModels, nil
+}
+
+// userCanAccessModel checks if the user can access a specific model by making an authorization request.
+// Uses HEAD request with retry logic as recommended in PR feedback for production resilience.
+func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken string) bool {
+	if model.URL == nil {
+		m.logger.Debug("Model URL is nil, denying access",
+			"modelID", model.ID,
+		)
+		return false
+	}
+
+	modelURLStr := model.URL.String()
+	// Append configured endpoint to the base model URL for authorization check
+	authCheckURL := modelURLStr
+	if !strings.HasSuffix(modelURLStr, "/") {
+		authCheckURL += "/"
+	}
+	authCheckURL += m.authCheckEndpoint
+
+	// Retry logic with exponential backoff as specified in PR feedback
+	retryDelays := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond}
+
+	for attempt := range retryDelays {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(retryDelays[attempt-1]):
+				// Continue with retry
+			}
+		}
+
+		// Create HTTP HEAD request for lightweight authorization check
+		// HEAD aligns with gateway policies while avoiding POST issues on inference endpoints
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, authCheckURL, nil)
+		if err != nil {
+			m.logger.Debug("Failed to create authorization request",
+				"modelURL", authCheckURL,
+				"attempt", attempt+1,
+				"error", err,
+			)
+			continue
+		}
+
+		// Add authorization header
+		req.Header.Set("Authorization", "Bearer "+saToken)
+
+		// Set a reasonable timeout for the authorization check
+		client := &http.Client{
+			Timeout: 3 * time.Second,
+		}
+
+		// Perform the authorization check
+		resp, err := client.Do(req)
+		if err != nil {
+			m.logger.Debug("Authorization request failed",
+				"modelURL", authCheckURL,
+				"attempt", attempt+1,
+				"error", err,
+			)
+			// Continue to next retry
+			continue
+		}
+		resp.Body.Close()
+
+		// Debug log the status code for all responses
+		m.logger.Debug("Authorization check response",
+			"modelID", model.ID,
+			"statusCode", resp.StatusCode,
+			"attempt", attempt+1,
+			"url", authCheckURL,
+		)
+
+		// Check if the user has access (2xx status codes indicate success)
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			m.logger.Debug("User authorized for model",
+				"modelID", model.ID,
+				"statusCode", resp.StatusCode,
+				"attempt", attempt+1,
+			)
+			return true
+		}
+
+		// Handle specific HTTP status codes
+		switch resp.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			// Clear authorization failure - user is not authorized
+			m.logger.Debug("User not authorized for model",
+				"modelID", model.ID,
+				"statusCode", resp.StatusCode,
+				"attempt", attempt+1,
+			)
+			return false
+		case http.StatusNotFound:
+			// 404 is not a failure - endpoint might not exist but that's okay, allow access
+			m.logger.Debug("Model endpoint returned 404, allowing access (not a denial)",
+				"modelID", model.ID,
+				"statusCode", resp.StatusCode,
+				"attempt", attempt+1,
+			)
+			return true
+		case http.StatusMethodNotAllowed:
+			// 405 Method Not Allowed - this should not happen, something is misconfigured
+			// Deny access as we cannot verify authorization
+			m.logger.Debug("UNEXPECTED: Model endpoint returned 405 Method Not Allowed - this indicates a configuration issue. "+
+				"HEAD requests should be supported by the gateway. Denying access as authorization cannot be verified",
+				"modelID", model.ID,
+				"statusCode", resp.StatusCode,
+				"attempt", attempt+1,
+				"url", authCheckURL,
+			)
+			return false
+		default:
+			// Retry on server errors (5xx) or other unexpected codes
+			m.logger.Debug("Unexpected status code, retrying",
+				"modelID", model.ID,
+				"statusCode", resp.StatusCode,
+				"attempt", attempt+1,
+			)
+			continue
+		}
+	}
+
+	// All retries exhausted, deny access
+	m.logger.Debug("All authorization attempts failed, denying access",
+		"modelID", model.ID,
+		"attempts", len(retryDelays),
+	)
+	return false
 }
 
 // partOfMaaSInstance checks if the given LLMInferenceService is part of this "MaaS instance". This means that it is
