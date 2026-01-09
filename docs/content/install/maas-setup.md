@@ -52,20 +52,31 @@ echo $AUD
 #   https://kubernetes.default.svc
 ```
 
-The Kustomize manifest uses the default audience for the installed MaaS API policy. If 
+The Kustomize manifest uses the default audience for the installed MaaS API policies. If 
 the output of the previous script is different from a non-empty string and 
-`https://kubernetes.default.svc`, you are required to patch the policy of the MaaS API:
+`https://kubernetes.default.svc`, you are required to patch the MaaS API policies:
 
 ```shell
+# Patch main AuthPolicy (accepts both OpenShift tokens and SA tokens)
 kubectl patch authpolicy maas-api-auth-policy -n maas-api --type=merge --patch-file <(echo "  
 spec:
   rules:
     authentication:
-      openshift-identities:
+      default:
         kubernetesTokenReview:
           audiences:
             - $AUD
             - maas-default-gateway-sa")
+
+# Patch token issuance AuthPolicy (accepts only OpenShift tokens - prevents token-to-token issuance)
+kubectl patch authpolicy maas-api-token-issuance-auth-policy -n maas-api --type=merge --patch-file <(echo "  
+spec:
+  rules:
+    authentication:
+      default:
+        kubernetesTokenReview:
+          audiences:
+            - $AUD")
 ```
 
 ## Next steps

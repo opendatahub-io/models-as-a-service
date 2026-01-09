@@ -78,8 +78,15 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 #### MaaS API AuthPolicy
 
 - **Target**: `maas-api-route` (HTTPRoute)
-- **Authentication**: OpenShift user tokens via `kubernetesTokenReview`
-- **Purpose**: Allows authenticated OpenShift users to issue tokens
+- **Authentication**: Both OpenShift user tokens and SA tokens via `kubernetesTokenReview`
+- **Purpose**: Allows authenticated users to access general MaaS API endpoints (model listing, token info, etc.)
+
+#### MaaS API Token Issuance AuthPolicy
+
+- **Target**: `maas-api-token-issuance-route` (HTTPRoute)
+- **Authentication**: Only OpenShift user tokens via `kubernetesTokenReview`
+- **Purpose**: Restricts token issuance to OpenShift users only (prevents SA tokens from being used to issue more tokens)
+- **Security**: Prevents token proliferation by ensuring only original OpenShift tokens can create new SA tokens
 
 #### RateLimitPolicy
 
@@ -544,7 +551,9 @@ maas-api/
 ├── Service: maas-api
 ├── ServiceAccount: maas-api (with cluster permissions)
 ├── HTTPRoute: maas-api-route
+├── HTTPRoute: maas-api-token-issuance-route
 ├── AuthPolicy: maas-api-auth-policy
+├── AuthPolicy: maas-api-token-issuance-auth-policy
 └── ConfigMap: tier-to-group-mapping
 
 kuadrant-system/
