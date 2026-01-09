@@ -145,7 +145,7 @@ mike delete v1.0.0
 The documentation is automatically deployed to GitHub Pages using two workflows:
 
 1. **`.github/workflows/docs.yml`**: Deploys the `dev` version when changes are pushed to the main branch
-2. **`.github/workflows/docs-version.yml`**: Deploys versioned documentation when a git tag is pushed
+2. **`.github/workflows/create-release.yml`**: Deploys versioned documentation when a release tag is created
 
 #### How Versioning Works
 
@@ -162,3 +162,20 @@ The `dev` version doesn't appear in the version selector but can be accessed dir
 - URL: `https://opendatahub-io.github.io/models-as-a-service/dev/`
 
 This keeps the version dropdown clean for end users while still making development docs available for contributors.
+
+## MAAS_REF Automation
+
+When a new release tag is created using the `create-release.yml` workflow, the following automation occurs:
+
+1. **MAAS_REF Updates**: All references to `MAAS_REF="main"` in documentation and scripts are automatically updated to use the new release tag (e.g., `MAAS_REF="v1.0.0"`).
+
+2. **What Gets Updated**:
+   - Documentation files (`.md` files)
+   - Deployment scripts (`.sh` files)
+   - All variations: `export MAAS_REF="main"`, `MAAS_REF="main"`, `MAAS_REF:=main`
+
+3. **Usage**: 
+   - For production deployments, use a release tag: `export MAAS_REF="v1.0.0"`
+   - For development/testing, use: `export MAAS_REF="main"`
+
+This ensures that documentation and deployment scripts always reference stable release tags rather than the moving `main` branch.
