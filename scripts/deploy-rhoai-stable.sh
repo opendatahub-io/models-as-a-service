@@ -331,16 +331,26 @@ kubectl apply --server-side=true \
        envsubst '$CLUSTER_DOMAIN')
 
 if [[ -n "$AUD" && "$AUD" != "https://kubernetes.default.svc"  ]]; then
-  echo "* Configuring audience in MaaS AuthPolicy"
+  echo "* Configuring audience in MaaS AuthPolicies"
+  # Patch main AuthPolicy (accepts both OpenShift tokens and SA tokens)
   kubectl patch authpolicy maas-api-auth-policy -n maas-api --type=merge --patch-file <(echo "
 spec:
   rules:
     authentication:
-      openshift-identities:
+      default:
         kubernetesTokenReview:
           audiences:
             - $AUD
             - maas-default-gateway-sa")
+  # Patch token issuance AuthPolicy (accepts only OpenShift tokens - prevents token-to-token issuance)
+  kubectl patch authpolicy maas-api-token-issuance-auth-policy -n maas-api --type=merge --patch-file <(echo "
+spec:
+  rules:
+    authentication:
+      default:
+        kubernetesTokenReview:
+          audiences:
+            - $AUD")
 fi
 
 # Patch maas-api Deployment with stable image
