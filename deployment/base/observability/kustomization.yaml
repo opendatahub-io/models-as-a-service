@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
 - servicemonitor.yaml
+- prometheus-servicemonitors.yaml
 - telemetry-policy.yaml
 - istio-telemetry.yaml
 
