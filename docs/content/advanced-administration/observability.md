@@ -181,6 +181,8 @@ The observability stack includes:
 
 ## Grafana
 
+For general Grafana documentation, see the [Grafana Documentation](https://grafana.com/docs/grafana/latest/).
+
 ### Accessing Grafana
 
 After installation, get the Grafana URL:
