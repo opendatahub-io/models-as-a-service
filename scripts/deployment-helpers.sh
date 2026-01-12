@@ -287,7 +287,9 @@ wait_for_csv_with_min_version() {
       # Found a CSV with suitable version
       local installed_version=$(extract_version_from_csv "$csv_name")
       echo "✅ Found CSV: ${csv_name} (version: ${installed_version} >= ${min_version})"
-      wait_for_csv "$csv_name" "$namespace" "$timeout"
+      # Pass remaining time, not full timeout
+      local remaining_time=$((end_time - SECONDS))
+      wait_for_csv "$csv_name" "$namespace" "$remaining_time"
       return $?
     fi
     
