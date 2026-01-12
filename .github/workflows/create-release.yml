@@ -132,7 +132,15 @@ jobs:
             echo "Release branch $BRANCH already exists, checking it out"
             git fetch origin "$BRANCH"
             git checkout -b "$BRANCH" "origin/$BRANCH" || git checkout "$BRANCH"
-            git merge main --no-edit || echo "Merge conflicts or already up to date"
+            # Attempt to merge main, but don't fail if already up-to-date
+            if ! git merge main --no-edit; then
+              # Check if merge failed due to conflicts vs already up-to-date
+              if git diff --name-only --diff-filter=U | grep -q .; then
+                echo "❌ Merge conflicts detected. Please resolve manually."
+                exit 1
+              fi
+              echo "Branch is already up to date with main"
+            fi
           else
             echo "Creating new release branch $BRANCH from main"
             git checkout -b "$BRANCH" main
