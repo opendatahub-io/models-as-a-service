@@ -42,7 +42,6 @@ for file in "${FILES_TO_UPDATE[@]}"; do
     fi
     
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    FILE_UPDATED=false
     
     # Check if file contains MAAS_REF references
     if grep -q "MAAS_REF" "$FILE_PATH"; then
@@ -71,7 +70,6 @@ for file in "${FILES_TO_UPDATE[@]}"; do
         
         # Check if file was actually modified
         if ! diff -q "${FILE_PATH}.bak" "$FILE_PATH" > /dev/null 2>&1; then
-            FILE_UPDATED=true
             UPDATED_COUNT=$((UPDATED_COUNT + 1))
             echo "✅ Updated: $file"
         else
