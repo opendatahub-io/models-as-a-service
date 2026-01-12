@@ -1,7 +1,7 @@
 #!/bin/bash
 # Script to update image tags in kustomization.yaml files
-# Usage: ./scripts/update-kustomize-tag.sh <tag>
-# Example: ./scripts/update-kustomize-tag.sh v1.0.0
+# Usage: ./.github/scripts/update-kustomize-tag.sh <tag>
+# Example: ./.github/scripts/update-kustomize-tag.sh v1.0.0
 
 set -euo pipefail
 

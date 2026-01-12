@@ -145,12 +145,8 @@ jobs:
 
       - name: Update MAAS_REF references
         run: |
-          TAG="${{ needs.prepare-release.outputs.version_tag }}"
-          # Update MAAS_REF="main" to use the new tag
-          find . -type f \( -name "*.md" -o -name "*.sh" \) -not -path "./.git/*" -not -path "./node_modules/*" -exec sed -i "s|export MAAS_REF=\"main\"|export MAAS_REF=\"$TAG\"|g" {} +
-          find . -type f \( -name "*.md" -o -name "*.sh" \) -not -path "./.git/*" -not -path "./node_modules/*" -exec sed -i "s|MAAS_REF=\"main\"|MAAS_REF=\"$TAG\"|g" {} +
-          find . -type f \( -name "*.md" -o -name "*.sh" \) -not -path "./.git/*" -not -path "./node_modules/*" -exec sed -i "s|MAAS_REF:=main|MAAS_REF:=$TAG|g" {} +
-          echo "Updated MAAS_REF references from 'main' to '$TAG'"
+          chmod +x .github/scripts/update-maas-ref.sh
+          .github/scripts/update-maas-ref.sh "${{ needs.prepare-release.outputs.version_tag }}"
 
       - name: Commit and push release branch
         run: |
@@ -291,12 +287,12 @@ jobs:
     needs: create-tag
     
     steps:
-      - name: Checkout code
+      - name: Checkout version tag
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           fetch-tags: true
-          # Ensure we have write access to create gh-pages branch if it doesn't exist
+          ref: ${{ needs.create-release-branch.outputs.minor_release_branch }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Python
