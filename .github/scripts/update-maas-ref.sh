@@ -1,7 +1,13 @@
 #!/bin/bash
-# Script to update MAAS_REF references from "main" to a release tag
+# Script to update MAAS_REF references from "main" or any semantic version to a release tag
 # Usage: ./update-maas-ref.sh <tag>
 # Example: ./update-maas-ref.sh v1.0.0
+#
+# This script will replace:
+# - MAAS_REF="main" -> MAAS_REF="<tag>"
+# - MAAS_REF="v1.0.3" -> MAAS_REF="<tag>"
+# - MAAS_REF="1.0.3" -> MAAS_REF="<tag>"
+# - Any other semantic version pattern
 
 set -euo pipefail
 
@@ -15,7 +21,7 @@ fi
 TAG="$1"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-echo "Updating MAAS_REF references from 'main' to '$TAG'"
+echo "Updating MAAS_REF references from 'main' or any semantic version to '$TAG'"
 echo ""
 
 # List of specific files to update (to avoid false positives)
@@ -43,25 +49,24 @@ for file in "${FILES_TO_UPDATE[@]}"; do
         # Create a backup (for safety, though we're in a git repo)
         cp "$FILE_PATH" "${FILE_PATH}.bak"
         
-        # Update various patterns:
-        # 1. export MAAS_REF="main" (with or without comment)
-        # 2. MAAS_REF="main"
-        # 3. MAAS_REF:=main (shell default assignment)
-        # 4. "${MAAS_REF:=main}" (in variable expansion)
+        # Update various patterns to replace "main" OR any semantic version (v?[0-9]+\.[0-9]+\.[0-9]+)
+        # This will match: main, v1.0.0, 1.0.0, v1.0.3, 1.0.3, etc.
+        # Patterns handled:
+        # 1. export MAAS_REF="main" or export MAAS_REF="v1.0.3" -> export MAAS_REF="<tag>"
+        # 2. MAAS_REF="main" or MAAS_REF="v1.0.3" -> MAAS_REF="<tag>"
+        # 3. MAAS_REF:=main or MAAS_REF:=v1.0.3 -> MAAS_REF:=<tag>
+        # 4. "${MAAS_REF:=main}" or "${MAAS_REF:=v1.0.3}" -> "${MAAS_REF:=<tag>}"
         
-        # Use sed with more specific patterns that only match MAAS_REF assignments
-        # Patterns handle:
-        # - export MAAS_REF="main" (with or without trailing comments)
-        # - MAAS_REF="main"
-        # - MAAS_REF:=main (shell default assignment)
-        # - "${MAAS_REF:=main}" (in variable expansion)
-        sed -i \
-            -e "s|export MAAS_REF=\"main\"|export MAAS_REF=\"$TAG\"|g" \
-            -e "s|export MAAS_REF='main'|export MAAS_REF='$TAG'|g" \
-            -e "s|MAAS_REF=\"main\"|MAAS_REF=\"$TAG\"|g" \
-            -e "s|MAAS_REF='main'|MAAS_REF='$TAG'|g" \
-            -e "s|MAAS_REF:=main|MAAS_REF:=$TAG|g" \
-            -e "s|\"\${MAAS_REF:=main}\"|\"\${MAAS_REF:=$TAG}\"|g" \
+        # Use sed with extended regex (-E) to match either "main" or semantic versions
+        # Pattern: (main|v?[0-9]+\.[0-9]+\.[0-9]+) matches "main" or semantic version with optional v prefix
+        # Using # as delimiter to avoid conflicts with | in the regex pattern
+        sed -i -E \
+            -e "s#export MAAS_REF=\"(main|v?[0-9]+\.[0-9]+\.[0-9]+)\"#export MAAS_REF=\"$TAG\"#g" \
+            -e "s#export MAAS_REF='(main|v?[0-9]+\.[0-9]+\.[0-9]+)'#export MAAS_REF='$TAG'#g" \
+            -e "s#MAAS_REF=\"(main|v?[0-9]+\.[0-9]+\.[0-9]+)\"#MAAS_REF=\"$TAG\"#g" \
+            -e "s#MAAS_REF='(main|v?[0-9]+\.[0-9]+\.[0-9]+)'#MAAS_REF='$TAG'#g" \
+            -e "s#MAAS_REF:=(main|v?[0-9]+\.[0-9]+\.[0-9]+)#MAAS_REF:=$TAG#g" \
+            -e "s#\"\\\$\{MAAS_REF:=(main|v?[0-9]+\.[0-9]+\.[0-9]+)\}\"#\"\\\$\{MAAS_REF:=$TAG\}\"#g" \
             "$FILE_PATH"
         
         # Check if file was actually modified
@@ -70,7 +75,7 @@ for file in "${FILES_TO_UPDATE[@]}"; do
             UPDATED_COUNT=$((UPDATED_COUNT + 1))
             echo "✅ Updated: $file"
         else
-            echo "ℹ️  No changes needed: $file (MAAS_REF already set or not using 'main')"
+            echo "ℹ️  No changes needed: $file (MAAS_REF already set to '$TAG' or pattern not matched)"
         fi
         
         # Remove backup
@@ -88,6 +93,6 @@ if [ $UPDATED_COUNT -gt 0 ]; then
     cd "$PROJECT_ROOT"
     git diff --stat || true
 else
-    echo "ℹ️  No files required updates (MAAS_REF may already be set to tag or not present)"
+    echo "ℹ️  No files required updates (MAAS_REF may already be set to '$TAG' or not present)"
 fi
 

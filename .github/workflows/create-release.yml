@@ -288,11 +288,11 @@ jobs:
     
     steps:
       - name: Checkout version tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           fetch-tags: true
-          ref: ${{ needs.create-release-branch.outputs.minor_release_branch }}
+          ref: ${{ needs.create-tag.outputs.version_tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Python
