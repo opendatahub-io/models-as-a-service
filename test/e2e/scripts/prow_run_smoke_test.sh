@@ -223,6 +223,7 @@ print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
 run_token_verification
 
+sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
 
 # Test edit user  
