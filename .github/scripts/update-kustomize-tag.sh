@@ -13,7 +13,7 @@ if [ $# -lt 1 ]; then
 fi
 
 TAG="$1"
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 echo "Updating kustomization.yaml files with tag: $TAG"
 
