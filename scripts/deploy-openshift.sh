@@ -40,6 +40,9 @@ echo "   install the Red Hat OpenShift Service Mesh operator from OperatorHub."
 
 # Set custom MaaS API image if MAAS_API_IMAGE env var is provided
 set_maas_api_image
+# Register cleanup trap immediately (as per function documentation)
+# This trap will be extended later to also clean up TMP_DIR
+trap 'cleanup_maas_api_image' EXIT
 
 echo ""
 echo "1️⃣ Checking OpenShift version and Gateway API requirements..."
