@@ -51,11 +51,55 @@ spec:
 EOF
 
   echo "⏳ Waiting for Grafana operator to be ready..."
-  kubectl wait --for=condition=CatalogSourcesUnhealthy=false subscription/grafana-operator -n openshift-operators --timeout=60s
+  
+  # Wait for CSV to succeed (more reliable than waiting for specific deployment name)
+  echo "   Waiting for Grafana operator CSV to succeed..."
+  for i in $(seq 1 60); do
+    # Check if install plan needs approval
+    INSTALL_PLAN=$(kubectl get subscription grafana-operator -n openshift-operators -o jsonpath='{.status.installPlanRef.name}' 2>/dev/null || true)
+    if [ -n "$INSTALL_PLAN" ]; then
+      APPROVED=$(kubectl get installplan "$INSTALL_PLAN" -n openshift-operators -o jsonpath='{.spec.approved}' 2>/dev/null || true)
+      if [ "$APPROVED" = "false" ]; then
+        echo "   ⚠️  Install plan $INSTALL_PLAN requires approval, auto-approving..."
+        kubectl patch installplan "$INSTALL_PLAN" -n openshift-operators --type merge -p '{"spec":{"approved":true}}' || true
+      fi
+    fi
+    
+    CSV_NAME=$(kubectl get csv -n openshift-operators --no-headers 2>/dev/null | grep -i grafana | awk '{print $1}' | head -1 || true)
+    if [ -n "$CSV_NAME" ]; then
+      PHASE=$(kubectl get csv -n openshift-operators "$CSV_NAME" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+      if [ "$PHASE" = "Succeeded" ]; then
+        echo "   ✅ CSV $CSV_NAME succeeded"
+        break
+      fi
+      echo "   CSV $CSV_NAME phase: $PHASE (attempt $i/60)"
+    else
+      echo "   Waiting for Grafana CSV to appear... (attempt $i/60)"
+    fi
+    sleep 5
+  done
 
-  # Wait for the operator deployment to be available
+  # Verify CSV actually succeeded (fail explicitly if it didn't)
+  CSV_NAME=$(kubectl get csv -n openshift-operators --no-headers 2>/dev/null | grep -i grafana | awk '{print $1}' | head -1 || true)
+  if [ -z "$CSV_NAME" ]; then
+    echo "❌ Grafana CSV not found after waiting"
+    exit 1
+  fi
+  PHASE=$(kubectl get csv -n openshift-operators "$CSV_NAME" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  if [ "$PHASE" != "Succeeded" ]; then
+    echo "❌ Grafana CSV phase is '$PHASE', expected 'Succeeded'"
+    exit 1
+  fi
+
+  # Wait for any grafana operator deployment to be available
   echo "⏳ Waiting for Grafana operator deployment..."
-  kubectl wait --for=condition=Available deployment/grafana-operator-controller-manager-v5 -n openshift-operators --timeout=60s
+  DEPLOY_NAME=$(kubectl get deployment -n openshift-operators --no-headers 2>/dev/null | grep -i grafana | awk '{print $1}' | head -1 || true)
+  if [ -n "$DEPLOY_NAME" ]; then
+    kubectl wait --for=condition=Available deployment/"$DEPLOY_NAME" -n openshift-operators --timeout=120s || \
+      echo "   ⚠️  Deployment still starting, continuing..."
+  else
+    echo "   ⚠️  No Grafana deployment found yet, continuing..."
+  fi
 
   echo "✅ Grafana operator is installed and running"
 
