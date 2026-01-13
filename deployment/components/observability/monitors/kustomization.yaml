@@ -13,8 +13,8 @@ resources:
   # Istio Gateway metrics (namespace: openshift-ingress)
   - istio-gateway-service.yaml
   - istio-gateway-servicemonitor.yaml
-  # LLM model metrics (namespace: llm)
-  - kserve-llm-models-servicemonitor.yaml
+  # NOTE: KServe model ServiceMonitor moved to docs/samples/observability/
+  # Deploy it separately if you want model metrics: kubectl apply -f docs/samples/observability/kserve-llm-models-servicemonitor.yaml
 
 labels:
   - pairs:

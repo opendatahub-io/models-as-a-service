@@ -300,7 +300,9 @@ echo
 echo "## Installing Models-as-a-Service"
 
 export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-export AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
+# JWT uses base64url encoding; convert to standard base64 before decoding
+# tr: replace URL-safe chars (_- -> /+), awk: add padding (must be multiple of 4)
+export AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}' | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
 
 echo "* Cluster domain: ${CLUSTER_DOMAIN}"
 echo "* Cluster audience: ${AUD}"
