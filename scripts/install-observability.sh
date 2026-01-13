@@ -102,11 +102,13 @@ wait_for_crd() {
     local crd="$1"
     local timeout="${2:-120}"
     echo "⏳ Waiting for CRD $crd (timeout: ${timeout}s)..."
-    local elapsed=0
-    while [ $elapsed -lt $timeout ]; do
+    local end_time=$((SECONDS + timeout))
+    while [ $SECONDS -lt $end_time ]; do
         if kubectl get crd "$crd" &>/dev/null; then
-            # Check if kubectl wait succeeds (CRD becomes Established)
-            if kubectl wait --for=condition=Established --timeout="${timeout}s" "crd/$crd" 2>/dev/null; then
+            # Pass remaining time, not full timeout
+            local remaining_time=$((end_time - SECONDS))
+            [ $remaining_time -lt 1 ] && remaining_time=1
+            if kubectl wait --for=condition=Established --timeout="${remaining_time}s" "crd/$crd" 2>/dev/null; then
                 return 0
             else
                 echo "❌ CRD $crd failed to become Established"
@@ -114,7 +116,6 @@ wait_for_crd() {
             fi
         fi
         sleep 2
-        elapsed=$((elapsed + 2))
     done
     echo "❌ Timed out waiting for CRD $crd"
     return 1
