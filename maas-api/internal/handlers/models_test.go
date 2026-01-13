@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openai/openai-go/v2/packages/pagination"
@@ -15,6 +16,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
 
@@ -24,9 +26,9 @@ func TestListingModels(t *testing.T) {
 
 	// Create mock HTTP server to simulate authorization responses
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Always return OK for valid authorization header in tests
+		// Accept any Bearer token - the token exchange produces JWT tokens
 		authHeader := r.Header.Get("Authorization")
-		if authHeader == "Bearer valid-token" {
+		if strings.HasPrefix(authHeader, "Bearer ") && len(authHeader) > 7 {
 			w.WriteHeader(http.StatusOK)
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -169,16 +171,26 @@ func TestListingModels(t *testing.T) {
 	)
 	require.NoError(t, errMgr)
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr)
-	v1 := router.Group("/v1")
+	// Create token manager for test - uses fixtures helper which sets up tier config
+	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	defer cleanup()
 
-	v1.GET("/models", modelsHandler.ListLLMs)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager)
+
+	// Create token handler to extract user info middleware
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
+
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 
 	w := httptest.NewRecorder()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
 	require.NoError(t, err, "Failed to create request")
 
+	// Set headers required by ExtractUserInfo middleware
 	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+	req.Header.Set(constant.HeaderGroup, `["free-users"]`)
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code, "Expected status OK")

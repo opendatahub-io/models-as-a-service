@@ -165,7 +165,7 @@ func (h *Handler) IssueToken(c *gin.Context) {
 	}
 
 	// For ephemeral tokens, we explicitly pass an empty name.
-	token, err := h.manager.GenerateToken(c.Request.Context(), user, expiration, "")
+	token, err := h.manager.GenerateToken(c.Request.Context(), user, expiration)
 	if err != nil {
 		h.logger.Error("Failed to generate token",
 			"error", err,

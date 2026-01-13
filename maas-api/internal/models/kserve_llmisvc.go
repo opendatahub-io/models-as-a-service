@@ -2,19 +2,30 @@ package models
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
-	"strings"
+	"net/url"
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	"github.com/openai/openai-go/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"knative.dev/pkg/apis"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
+)
+
+// authResult represents the outcome of an authorization check attempt.
+type authResult int
+
+const (
+	authGranted authResult = iota
+	authDenied
+	authRetry
 )
 
 type GatewayRef struct {
@@ -22,24 +33,8 @@ type GatewayRef struct {
 	Namespace string
 }
 
-func (m *Manager) ListAvailableLLMs() ([]Model, error) {
-	list, err := m.llmIsvcLister.List(labels.Everything())
-	if err != nil {
-		return nil, fmt.Errorf("failed to list LLMInferenceServices: %w", err)
-	}
-
-	var instanceLLMs []*kservev1alpha1.LLMInferenceService
-	for _, llmIsvc := range list {
-		if m.partOfMaaSInstance(llmIsvc) {
-			instanceLLMs = append(instanceLLMs, llmIsvc)
-		}
-	}
-
-	return m.llmInferenceServicesToModels(instanceLLMs)
-}
-
-// ListAvailableLLMsForUser lists LLM models that the user has access to based on authorization checks.
-func (m *Manager) ListAvailableLLMsForUser(ctx context.Context, saToken string) ([]Model, error) {
+// ListAvailableLLMs lists LLM models that the user has access to based on authorization checks.
+func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Model, error) {
 	list, err := m.llmIsvcLister.List(labels.Everything())
 	if err != nil {
 		return nil, fmt.Errorf("failed to list LLMInferenceServices: %w", err)
@@ -53,10 +48,7 @@ func (m *Manager) ListAvailableLLMsForUser(ctx context.Context, saToken string) 
 	}
 
 	// Convert to models first, then filter based on authorization
-	allModels, err := m.llmInferenceServicesToModels(instanceLLMs)
-	if err != nil {
-		return nil, err
-	}
+	allModels := m.llmInferenceServicesToModels(instanceLLMs)
 
 	// Filter models based on user authorization
 	var authorizedModels []Model
@@ -70,133 +62,100 @@ func (m *Manager) ListAvailableLLMsForUser(ctx context.Context, saToken string) 
 }
 
 // userCanAccessModel checks if the user can access a specific model by making an authorization request.
-// Uses HEAD request with retry logic as recommended in PR feedback for production resilience.
+// Uses the HTTP loopback approach to leverage the gateway's AuthPolicy as the single source of truth.
 func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken string) bool {
 	if model.URL == nil {
-		m.logger.Debug("Model URL is nil, denying access",
-			"modelID", model.ID,
-		)
+		m.logger.Debug("Model URL is nil, denying access", "modelID", model.ID)
 		return false
 	}
 
-	modelURLStr := model.URL.String()
-	// Append configured endpoint to the base model URL for authorization check
-	authCheckURL := modelURLStr
-	if !strings.HasSuffix(modelURLStr, "/") {
-		authCheckURL += "/"
+	authCheckURL, err := url.JoinPath(model.URL.String(), m.authCheckEndpoint)
+	if err != nil {
+		m.logger.Debug("Failed to construct auth check URL", "modelID", model.ID, "error", err)
+		return false
 	}
-	authCheckURL += m.authCheckEndpoint
 
-	// Retry logic with exponential backoff as specified in PR feedback
-	retryDelays := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond}
+	backoff := wait.Backoff{
+		Steps:    4,
+		Duration: 100 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   0.1,
+	}
 
-	for attempt := range retryDelays {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return false
-			case <-time.After(retryDelays[attempt-1]):
-				// Continue with retry
-			}
-		}
+	var lastResult authResult
+	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
+		lastResult = m.doAuthCheck(ctx, authCheckURL, saToken, model.ID)
+		return lastResult != authRetry, nil
+	}); err != nil {
+		m.logger.Debug("Authorization check backoff failed", "modelID", model.ID, "error", err)
+	}
 
-		// Create HTTP HEAD request for lightweight authorization check
-		// HEAD aligns with gateway policies while avoiding POST issues on inference endpoints
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, authCheckURL, nil)
-		if err != nil {
-			m.logger.Debug("Failed to create authorization request",
-				"modelURL", authCheckURL,
-				"attempt", attempt+1,
-				"error", err,
-			)
-			continue
-		}
+	return lastResult == authGranted
+}
 
-		// Add authorization header
-		req.Header.Set("Authorization", "Bearer "+saToken)
+// doAuthCheck performs a single authorization check attempt.
+func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string) authResult {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, authCheckURL, nil)
+	if err != nil {
+		m.logger.Debug("Failed to create authorization request", "modelID", modelID, "error", err)
+		return authRetry
+	}
 
-		// Set a reasonable timeout for the authorization check
-		client := &http.Client{
-			Timeout: 3 * time.Second,
-		}
+	req.Header.Set("Authorization", "Bearer "+saToken)
 
-		// Perform the authorization check
-		resp, err := client.Do(req)
-		if err != nil {
-			m.logger.Debug("Authorization request failed",
-				"modelURL", authCheckURL,
-				"attempt", attempt+1,
-				"error", err,
-			)
-			// Continue to next retry
-			continue
-		}
-		resp.Body.Close()
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // To handle custom/self-signed certs we simply skip verification for now
+			},
+		},
+	}
 
-		// Debug log the status code for all responses
-		m.logger.Debug("Authorization check response",
-			"modelID", model.ID,
+	resp, err := client.Do(req)
+	if err != nil {
+		m.logger.Debug("Authorization request failed", "modelID", modelID, "error", err)
+		return authRetry
+	}
+	defer resp.Body.Close()
+
+	m.logger.Debug("Authorization check response",
+		"modelID", modelID,
+		"statusCode", resp.StatusCode,
+		"url", authCheckURL,
+	)
+
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return authGranted
+
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return authDenied
+
+	case resp.StatusCode == http.StatusNotFound:
+		// 404 is not a failure - endpoint might not exist but that's okay, allow access
+		m.logger.Debug("Model endpoint returned 404, allowing access (not a denial)", "modelID", modelID)
+		return authGranted
+
+	case resp.StatusCode == http.StatusMethodNotAllowed:
+		// 405 Method Not Allowed - this should not happen, something is misconfigured
+		// Deny access as we cannot verify authorization
+		m.logger.Debug("UNEXPECTED: Model endpoint returned 405 Method Not Allowed - this indicates a configuration issue. "+
+			"HEAD requests should be supported by the gateway. Denying access as authorization cannot be verified",
+			"modelID", modelID,
 			"statusCode", resp.StatusCode,
-			"attempt", attempt+1,
 			"url", authCheckURL,
 		)
+		return authDenied
 
-		// Check if the user has access (2xx status codes indicate success)
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			m.logger.Debug("User authorized for model",
-				"modelID", model.ID,
-				"statusCode", resp.StatusCode,
-				"attempt", attempt+1,
-			)
-			return true
-		}
-
-		// Handle specific HTTP status codes
-		switch resp.StatusCode {
-		case http.StatusUnauthorized, http.StatusForbidden:
-			// Clear authorization failure - user is not authorized
-			m.logger.Debug("User not authorized for model",
-				"modelID", model.ID,
-				"statusCode", resp.StatusCode,
-				"attempt", attempt+1,
-			)
-			return false
-		case http.StatusNotFound:
-			// 404 is not a failure - endpoint might not exist but that's okay, allow access
-			m.logger.Debug("Model endpoint returned 404, allowing access (not a denial)",
-				"modelID", model.ID,
-				"statusCode", resp.StatusCode,
-				"attempt", attempt+1,
-			)
-			return true
-		case http.StatusMethodNotAllowed:
-			// 405 Method Not Allowed - this should not happen, something is misconfigured
-			// Deny access as we cannot verify authorization
-			m.logger.Debug("UNEXPECTED: Model endpoint returned 405 Method Not Allowed - this indicates a configuration issue. "+
-				"HEAD requests should be supported by the gateway. Denying access as authorization cannot be verified",
-				"modelID", model.ID,
-				"statusCode", resp.StatusCode,
-				"attempt", attempt+1,
-				"url", authCheckURL,
-			)
-			return false
-		default:
-			// Retry on server errors (5xx) or other unexpected codes
-			m.logger.Debug("Unexpected status code, retrying",
-				"modelID", model.ID,
-				"statusCode", resp.StatusCode,
-				"attempt", attempt+1,
-			)
-			continue
-		}
+	default:
+		// Retry on server errors (5xx) or other unexpected codes
+		m.logger.Debug("Unexpected status code, retrying",
+			"modelID", modelID,
+			"statusCode", resp.StatusCode,
+		)
+		return authRetry
 	}
-
-	// All retries exhausted, deny access
-	m.logger.Debug("All authorization attempts failed, denying access",
-		"modelID", model.ID,
-		"attempts", len(retryDelays),
-	)
-	return false
 }
 
 // partOfMaaSInstance checks if the given LLMInferenceService is part of this "MaaS instance". This means that it is
@@ -213,7 +172,7 @@ func (m *Manager) partOfMaaSInstance(llmIsvc *kservev1alpha1.LLMInferenceService
 		m.hasManagedRouteAttachedToGateway(llmIsvc)
 }
 
-func (m *Manager) llmInferenceServicesToModels(items []*kservev1alpha1.LLMInferenceService) ([]Model, error) {
+func (m *Manager) llmInferenceServicesToModels(items []*kservev1alpha1.LLMInferenceService) []Model {
 	models := make([]Model, 0, len(items))
 
 	for _, item := range items {
@@ -243,7 +202,7 @@ func (m *Manager) llmInferenceServicesToModels(items []*kservev1alpha1.LLMInfere
 		})
 	}
 
-	return models, nil
+	return models
 }
 
 func (m *Manager) findLLMInferenceServiceURL(llmIsvc *kservev1alpha1.LLMInferenceService) *apis.URL {
