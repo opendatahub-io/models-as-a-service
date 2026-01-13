@@ -426,12 +426,13 @@ wait_for_csv() {
   local namespace="${2:-kuadrant-system}"
   local timeout="${3:-180}"  # timeout in seconds
   local interval=5
-  local elapsed=0
-  local last_status_print=0
+  local end_time=$((SECONDS + timeout))
+  local last_status_print=$SECONDS
 
   echo "⏳ Waiting for CSV ${csv_name} to succeed (timeout: ${timeout}s)..."
-  while [ $elapsed -lt $timeout ]; do
+  while [ $SECONDS -lt $end_time ]; do
     local phase=$(kubectl get csv -n "$namespace" "$csv_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    local elapsed=$((SECONDS - (end_time - timeout)))
 
     case "$phase" in
       "Succeeded")
@@ -444,15 +445,14 @@ wait_for_csv() {
         return 1
         ;;
       *)
-        if [ $((elapsed - last_status_print)) -ge 30 ]; then
+        if [ $((SECONDS - last_status_print)) -ge 30 ]; then
           echo "   CSV ${csv_name} status: ${phase} (${elapsed}s elapsed)"
-          last_status_print=$elapsed
+          last_status_print=$SECONDS
         fi
         ;;
     esac
 
     sleep $interval
-    elapsed=$((elapsed + interval))
   done
 
   echo "❌ Timed out after ${timeout}s waiting for CSV ${csv_name}" >&2
