@@ -398,6 +398,7 @@ wait_for_csv_with_min_version() {
       echo "✅ Found CSV: ${csv_name} (version: ${installed_version} >= ${min_version})"
       # Pass remaining time, not full timeout
       local remaining_time=$((end_time - SECONDS))
+      [ $remaining_time -lt 1 ] && remaining_time=1
       wait_for_csv "$csv_name" "$namespace" "$remaining_time"
       return $?
     fi
