@@ -18,10 +18,8 @@ The observability stack consists of:
 
 - **Limitador**: Rate limiting service that exposes metrics
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
-- **ServiceMonitors**: Automatically deployed to configure Prometheus metric scraping
-- **Visualization Options**:
-    - **Grafana**: Established, feature-rich dashboard visualization (see [Grafana documentation](https://grafana.com/docs/grafana/latest/))
-    - **Perses**: CNCF native, lightweight dashboard visualization (integrates with OpenShift Console)
+- **ServiceMonitors**: Deployed to configure Prometheus metric scraping
+- **Visualization**: Grafana dashboards (see [Grafana documentation](https://grafana.com/docs/grafana/latest/))
 
 ## Metrics Collection
 
@@ -115,7 +113,7 @@ For local development and testing, you can also use our [Limitador Persistence](
 
 ## Visualization
 
-For dashboard visualization, refer to the official documentation:
+For dashboard visualization options, see:
 
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
 - **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.19/html/monitoring_data_science_models/index)
