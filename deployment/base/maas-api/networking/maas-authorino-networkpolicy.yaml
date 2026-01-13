@@ -1,0 +1,41 @@
+# NetworkPolicy to allow Authorino pods to communicate with MaaS components
+# for AuthPolicy evaluation.
+#
+# This policy allows ingress from Authorino pods in the recommended Kuadrant
+# installation namespaces (kuadrant-system or openshift-operators).
+#
+# If Kuadrant is installed in a different namespace, users will need to create
+# their own NetworkPolicy to allow traffic from that namespace.
+#
+# Background:
+# - ODH creates a default NetworkPolicy that blocks ingress from unlabeled namespaces
+# - Kuadrant/Authorino namespace doesn't have ODH labels
+# - This policy adds an exception for Authorino pods to reach MaaS components
+#
+# See: docs/NETWORKPOLICY_AUTHORINO_ISSUE.md for full details.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: maas-authorino-allow
+  labels:
+    app.opendatahub.io/modelsasservice: "true"
+    app.kubernetes.io/part-of: maas
+    app.kubernetes.io/component: networking
+spec:
+  # Apply to all pods in this namespace (MaaS components)
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow traffic from Authorino pods in kuadrant-system or openshift-operators
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  - kuadrant-system      # Recommended Kuadrant namespace
+                  - openshift-operators  # Default Kuadrant namespace
+          podSelector:
+            matchLabels:
+              authorino-resource: authorino

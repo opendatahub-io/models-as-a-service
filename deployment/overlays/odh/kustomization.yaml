@@ -47,6 +47,18 @@ patches:
     kind: Deployment
     name: maas-api
 
+# Fix NetworkPolicy podSelector - the base labels transformer incorrectly adds
+# MaaS labels to the Authorino podSelector. Authorino pods only have 
+# 'authorino-resource: authorino', so we need to remove the extra labels.
+- target:
+    kind: NetworkPolicy
+    name: maas-authorino-allow
+  patch: |
+    - op: replace
+      path: /spec/ingress/0/from/0/podSelector/matchLabels
+      value:
+        authorino-resource: authorino
+
 replacements:
 # Gateway policies must be in openshift-ingress to target maas-default-gateway
 - source:
