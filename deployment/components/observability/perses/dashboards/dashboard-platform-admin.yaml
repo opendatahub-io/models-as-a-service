@@ -1,0 +1,1121 @@
+# Perses Dashboard: Platform Admin Dashboard
+# Equivalent to Grafana Platform Admin Dashboard
+apiVersion: perses.dev/v1alpha1
+kind: PersesDashboard
+metadata:
+  name: platform-admin-dashboard
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  display:
+    name: "Platform Admin Dashboard"
+    description: "Platform-wide metrics for administrators monitoring the MaaS platform"
+  duration: 1h
+  
+  # Variables
+  variables:
+    - kind: ListVariable
+      spec:
+        name: maas_namespace
+        display:
+          name: "MaaS Namespace"
+        allowMultiple: false
+        allowAllValue: true
+        defaultValue: "maas-api"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: namespace
+            matchers:
+              - kube_pod_info{pod=~"maas-api.*"}
+    - kind: ListVariable
+      spec:
+        name: model
+        display:
+          name: "Model"
+        allowMultiple: true
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: model_name
+            matchers:
+              - vllm:num_requests_running
+
+  # ALL Panels
+  panels:
+    # === Row: Component Health ===
+    limitadorHealth:
+      kind: Panel
+      spec:
+        display:
+          name: "💚 Limitador"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: limitador_up
+
+    authorinoHealth:
+      kind: Panel
+      spec:
+        display:
+          name: "🔐 Authorino"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: count(kube_pod_status_phase{namespace="kuadrant-system", pod=~"authorino.*", phase="Running"}) OR vector(0)
+
+    maasApiPods:
+      kind: Panel
+      spec:
+        display:
+          name: "🌐 MaaS API Pods"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: count(kube_pod_status_phase{namespace=~"$maas_namespace", pod=~"maas-api.*", phase="Running"} == 1) OR vector(0)
+
+    gatewayPods:
+      kind: Panel
+      spec:
+        display:
+          name: "🚪 Gateway Pods"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: count(kube_pod_status_phase{namespace="openshift-ingress", pod=~"maas-default-gateway.*", phase="Running"} == 1) OR vector(0)
+
+    firingAlerts:
+      kind: Panel
+      spec:
+        display:
+          name: "🚨 Firing Alerts"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: count(ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"llm|kuadrant-system|maas-api|envoy-gateway-system"}) OR vector(0)
+
+    activeAlertsTable:
+      kind: Panel
+      spec:
+        display:
+          name: "📋 Active Alerts"
+          description: "Currently firing alerts across MaaS namespaces"
+        plugin:
+          kind: TimeSeriesTable
+          spec:
+            columnSettings: []
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{alertname}} ({{severity}})"
+                  query: ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"llm|kuadrant-system|maas-api|envoy-gateway-system"}
+
+    # === Row: Key Metrics ===
+    totalAuthorizedHits:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Total Authorized Hits"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(authorized_hits)
+
+    platformCurrentRate:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Current Rate (5m avg)"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              decimalPlaces: 2
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(rate(authorized_hits[5m]))
+
+    platformSuccessRate:
+      kind: Panel
+      spec:
+        display:
+          name: "✅ Success Rate"
+        plugin:
+          kind: GaugeChart
+          spec:
+            calculation: last-number
+            format:
+              unit: percent
+              decimalPlaces: 1
+            max: 100
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: 100 * sum(authorized_hits) / (sum(authorized_hits) + sum(limited_calls))
+
+    activeUsers:
+      kind: Panel
+      spec:
+        display:
+          name: "👥 Active Users"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: count(count by (user) (authorized_hits))
+
+    p50Latency:
+      kind: Panel
+      spec:
+        display:
+          name: "⏱️ P50 Response Latency"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: milliseconds
+              decimalPlaces: 0
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket[5m])) by (le))
+
+    # === Row: Traffic Analysis ===
+    requestRateByModel:
+      kind: Panel
+      spec:
+        display:
+          name: "📈 Request Rate by Model"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model}}"
+                  query: sum by (model) (rate(authorized_hits[5m]))
+
+    overallErrorRate:
+      kind: Panel
+      spec:
+        display:
+          name: "❌ Overall Error Rate"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "4xx Errors"
+                  query: sum(rate(istio_requests_total{response_code=~"4.."}[5m])) OR vector(0)
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "5xx Errors"
+                  query: sum(rate(istio_requests_total{response_code=~"5.."}[5m])) OR vector(0)
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Rate Limited"
+                  query: sum(rate(limited_calls[5m])) OR vector(0)
+
+    requestRateByTier:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Request Rate by Tier"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{tier}}"
+                  query: sum by (tier) (rate(authorized_hits[5m]))
+
+    p95LatencyByService:
+      kind: Panel
+      spec:
+        display:
+          name: "⏱️ P95 Latency by Service"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: milliseconds
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{destination_service_name}}"
+                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
+
+    p99LatencyByService:
+      kind: Panel
+      spec:
+        display:
+          name: "⏱️ P99 Latency by Service"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: milliseconds
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{destination_service_name}}"
+                  query: histogram_quantile(0.99, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
+
+    rateLimitViolationsByTier:
+      kind: Panel
+      spec:
+        display:
+          name: "🚫 Rate Limit Violations by Tier"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{tier}}"
+                  query: sum by (tier) (rate(limited_calls[5m]))
+
+    successRateByTier:
+      kind: Panel
+      spec:
+        display:
+          name: "✅ Success Rate by Tier"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: percentunit
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{tier}}"
+                  query: sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))
+
+    # === Row: Top Users ===
+    topUsersByHits:
+      kind: Panel
+      spec:
+        display:
+          name: "🏆 Top 10 Users by Hits"
+          description: "Top 10 users ranked by total API requests made."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}}"
+                  query: topk(10, sum by (user) (authorized_calls))
+
+    topUsersByTokens:
+      kind: Panel
+      spec:
+        display:
+          name: "🏆 Top 10 Users by Tokens"
+          description: "Top 10 users ranked by total API tokens consumed."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}}"
+                  query: topk(10, sum by (user) (authorized_hits))
+
+    # === Row: Token Consumption ===
+    tokenConsumptionByTier:
+      kind: Panel
+      spec:
+        display:
+          name: "🔤 Token Consumption by Tier"
+          description: "Total API tokens consumed per tier, extracted from model response usage.total_tokens."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{tier}}"
+                  query: sum by (tier) (authorized_hits)
+
+    tokenConsumptionByUser:
+      kind: Panel
+      spec:
+        display:
+          name: "🔤 Token Consumption by User"
+          description: "Total API tokens consumed per user, extracted from model response usage.total_tokens."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}}"
+                  query: sum by (user) (authorized_hits)
+
+    # === Row: Detailed Breakdown ===
+    requestRateByUser:
+      kind: Panel
+      spec:
+        display:
+          name: "👥 Request Rate by User"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}}"
+                  query: sum by (user) (rate(authorized_hits[5m]))
+
+    requestVolumeByUserModelTier:
+      kind: Panel
+      spec:
+        display:
+          name: "📋 Request Volume by User, Model & Tier"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}} / {{model}} / {{tier}}"
+                  query: sum by (user, model, tier) (authorized_hits)
+
+    # === Row: Model Metrics (vLLM) ===
+    requestsRunning:
+      kind: Panel
+      spec:
+        display:
+          name: "🔄 Requests Running"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(vllm:num_requests_running)
+
+    requestsWaiting:
+      kind: Panel
+      spec:
+        display:
+          name: "⏳ Requests Waiting"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(vllm:num_requests_waiting)
+
+    gpuCacheUsage:
+      kind: Panel
+      spec:
+        display:
+          name: "💾 GPU Cache Usage"
+        plugin:
+          kind: GaugeChart
+          spec:
+            calculation: last-number
+            format:
+              unit: percent
+              decimalPlaces: 1
+            max: 100
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: 100 * avg(vllm:gpu_cache_usage_perc)
+
+    totalVllmRequests:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Total Model Requests"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(increase(vllm:e2e_request_latency_seconds_count{model_name=~"$model"}[1h]))
+
+    modelQueueDepth:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Model Queue Depth"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} running"
+                  query: sum by (model_name) (vllm:num_requests_running{model_name=~"$model"})
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} waiting"
+                  query: sum by (model_name) (vllm:num_requests_waiting{model_name=~"$model"})
+
+    modelInferenceLatency:
+      kind: Panel
+      spec:
+        display:
+          name: "⏱️ Model Inference Latency"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: seconds
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P50"
+                  query: histogram_quantile(0.5, sum(rate(vllm:e2e_request_latency_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P95"
+                  query: histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P99"
+                  query: histogram_quantile(0.99, sum(rate(vllm:e2e_request_latency_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+
+    tokensTotal:
+      kind: Panel
+      spec:
+        display:
+          name: "🔤 Tokens (1h)"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    (sum(increase(vllm:prompt_tokens_total{model_name=~"$model"}[1h])) + 
+                    sum(increase(vllm:generation_tokens_total{model_name=~"$model"}[1h]))) or 
+                    (sum(increase(vllm:request_prompt_tokens_sum{model_name=~"$model"}[1h])) + 
+                    sum(increase(vllm:request_generation_tokens_sum{model_name=~"$model"}[1h])))
+
+    tokenThroughput:
+      kind: Panel
+      spec:
+        display:
+          name: "🔤 Token Throughput"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: right
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Prompt tokens/s"
+                  query: sum(rate(vllm:prompt_tokens_total{model_name=~"$model"}[5m])) or sum(rate(vllm:request_prompt_tokens_sum{model_name=~"$model"}[5m]))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Generation tokens/s"
+                  query: sum(rate(vllm:generation_tokens_total{model_name=~"$model"}[5m])) or sum(rate(vllm:request_generation_tokens_sum{model_name=~"$model"}[5m]))
+
+    # === Row: User Tracking ===
+    requestsAndErrorsPerUser:
+      kind: Panel
+      spec:
+        display:
+          name: "👤 Requests & Errors per User"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}} ✅"
+                  query: sum by (user) (rate(authorized_calls[5m]))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}} 🚫 rate-limited"
+                  query: sum by (user) (rate(limited_calls[5m]))
+
+    # === Row: Resource Allocation ===
+    resourceAllocationTable:
+      kind: Panel
+      spec:
+        display:
+          name: "📦 Resource Allocation per Model"
+          description: "CPU and Memory requests/limits for LLM model pods"
+        plugin:
+          kind: TimeSeriesTable
+          spec:
+            columnSettings: []
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{pod}} - {{resource}} requests"
+                  query: kube_pod_container_resource_requests{namespace="llm", container="main"}
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{pod}} - {{resource}} limits"
+                  query: kube_pod_container_resource_limits{namespace="llm", container="main"}
+
+  # Layout definition
+  layouts:
+    - kind: Grid
+      spec:
+        display:
+          title: "🏥 Component Health"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/limitadorHealth"
+          - x: 6
+            "y": 0
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/authorinoHealth"
+          - x: 12
+            "y": 0
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/maasApiPods"
+          - x: 18
+            "y": 0
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/gatewayPods"
+          - x: 0
+            "y": 4
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/firingAlerts"
+          - x: 6
+            "y": 4
+            width: 18
+            height: 6
+            content:
+              "$ref": "#/spec/panels/activeAlertsTable"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "📊 Key Metrics"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 5
+            height: 4
+            content:
+              "$ref": "#/spec/panels/totalAuthorizedHits"
+          - x: 5
+            "y": 0
+            width: 5
+            height: 4
+            content:
+              "$ref": "#/spec/panels/platformCurrentRate"
+          - x: 10
+            "y": 0
+            width: 5
+            height: 4
+            content:
+              "$ref": "#/spec/panels/platformSuccessRate"
+          - x: 15
+            "y": 0
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/activeUsers"
+          - x: 19
+            "y": 0
+            width: 5
+            height: 4
+            content:
+              "$ref": "#/spec/panels/p50Latency"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "📈 Traffic Analysis"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/requestRateByModel"
+          - x: 12
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/overallErrorRate"
+          - x: 0
+            "y": 8
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/requestRateByTier"
+          - x: 12
+            "y": 8
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/p95LatencyByService"
+          - x: 0
+            "y": 16
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/p99LatencyByService"
+          - x: 12
+            "y": 16
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/rateLimitViolationsByTier"
+          - x: 0
+            "y": 24
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/successRateByTier"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "🏆 Top Users"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/topUsersByHits"
+          - x: 12
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/topUsersByTokens"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "🔤 Token Consumption"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/tokenConsumptionByTier"
+          - x: 12
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/tokenConsumptionByUser"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "📋 Detailed Breakdown"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/requestRateByUser"
+          - x: 0
+            "y": 8
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/requestVolumeByUserModelTier"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "🤖 Model Metrics (vLLM)"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/requestsRunning"
+          - x: 6
+            "y": 0
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/requestsWaiting"
+          - x: 12
+            "y": 0
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/gpuCacheUsage"
+          - x: 18
+            "y": 0
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/totalVllmRequests"
+          - x: 0
+            "y": 4
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/modelQueueDepth"
+          - x: 12
+            "y": 4
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/modelInferenceLatency"
+          - x: 0
+            "y": 12
+            width: 6
+            height: 4
+            content:
+              "$ref": "#/spec/panels/tokensTotal"
+          - x: 6
+            "y": 12
+            width: 18
+            height: 4
+            content:
+              "$ref": "#/spec/panels/tokenThroughput"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "👤 User Tracking"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/requestsAndErrorsPerUser"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "📦 Resource Allocation"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/resourceAllocationTable"
