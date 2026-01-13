@@ -1,13 +1,11 @@
 #!/bin/bash
 
 # MaaS Observability Stack Installation Script
-# Installs Grafana dashboards with Prometheus integration
+# Installs Grafana or Perses dashboards with Prometheus integration
 #
 # This script is idempotent - safe to run multiple times
 #
-# Note: Perses support will be added in a future release
-#
-# Usage: ./install-observability.sh [--namespace NAMESPACE] [--stack grafana]
+# Usage: ./install-observability.sh [--namespace NAMESPACE] [--stack grafana|perses|both]
 
 set -e
 
@@ -20,12 +18,13 @@ show_help() {
     echo ""
     echo "Options:"
     echo "  -n, --namespace    Target namespace for observability (default: maas-api)"
-    echo "  -s, --stack        Observability stack to install: grafana"
-    echo "                     (Perses support coming in a future release)"
+    echo "  -s, --stack        Observability stack to install: grafana, perses, or both"
     echo ""
     echo "Examples:"
     echo "  $0                              # Install Grafana (default)"
-    echo "  $0 --stack grafana              # Install Grafana"
+    echo "  $0 --stack grafana              # Install Grafana only"
+    echo "  $0 --stack perses               # Install Perses only (via OpenShift Console)"
+    echo "  $0 --stack both                 # Install both Grafana and Perses"
     echo "  $0 --namespace my-ns --stack grafana"
     echo ""
     exit 0
@@ -43,21 +42,15 @@ while [[ $# -gt 0 ]]; do
             ;;
         --stack|-s)
             if [[ -z "$2" || "$2" == -* ]]; then
-                echo "Error: --stack requires a value (grafana)"
+                echo "Error: --stack requires a value (grafana, perses, or both)"
                 exit 1
             fi
             case "$2" in
-                grafana)
+                grafana|perses|both)
                     OBSERVABILITY_STACK="$2"
                     ;;
-                perses|both)
-                    echo "Error: Perses support is not yet available."
-                    echo "       Perses dashboards will be added in a future release."
-                    echo "       Use --stack grafana for now."
-                    exit 1
-                    ;;
                 *)
-                    echo "Error: --stack must be 'grafana'"
+                    echo "Error: --stack must be 'grafana', 'perses', or 'both'"
                     exit 1
                     ;;
             esac
@@ -81,10 +74,7 @@ OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/components/observability"
 # ==========================================
 # Stack Selection
 # ==========================================
-# Note: Currently only Grafana is supported.
-# Perses support will be added in a future release.
-
-# Default to Grafana (only supported option currently)
+# Default to Grafana if not specified
 if [ -z "$OBSERVABILITY_STACK" ]; then
     OBSERVABILITY_STACK="grafana"
 fi
@@ -372,18 +362,58 @@ EOF
 }
 
 # ==========================================
-# Install Perses (placeholder for future release)
+# Install Perses
 # ==========================================
-# Note: Perses support will be added in a future release.
-# The install_perses function is intentionally disabled until:
-# - scripts/installers/install-perses.sh is added
-# - deployment/components/observability/perses/ manifests are added
 install_perses() {
     echo ""
-    echo "⚠️  Perses installation is not yet available."
-    echo "   Perses dashboards will be added in a future release."
-    echo "   Please use Grafana for now."
-    return 1
+    echo "5️⃣ Installing Perses..."
+
+    # Install Cluster Observability Operator (includes Perses)
+    if kubectl get csv -n openshift-operators 2>/dev/null | grep -q "cluster-observability-operator.*Succeeded"; then
+        echo "   ✅ Cluster Observability Operator already installed"
+    else
+        "$SCRIPT_DIR/installers/install-perses.sh"
+    fi
+
+    # Wait for Perses CRDs
+    echo "   Waiting for Perses CRDs..."
+    wait_for_crd "perses.perses.dev" 120 || {
+        echo "   ❌ Perses CRDs not available. Please check Cluster Observability Operator installation."
+        return 1
+    }
+
+    # Deploy UIPlugin (enables Perses in OpenShift Console)
+    echo "   Enabling Perses UIPlugin..."
+    kubectl apply -f "$OBSERVABILITY_DIR/perses/uiplugin.yaml"
+    echo "   ✅ UIPlugin enabled"
+
+    # Wait for UIPlugin's Perses instance to be ready
+    echo "   Waiting for Perses instance (created by UIPlugin)..."
+    for i in $(seq 1 30); do
+        PERSES_PODS=$(kubectl get pods -n openshift-operators -l app.kubernetes.io/name=perses --no-headers 2>/dev/null | grep -c Running || echo "0")
+        if [ "$PERSES_PODS" -ge 1 ] 2>/dev/null; then
+            echo "   ✅ Perses pod is running in openshift-operators"
+            break
+        fi
+        echo "   Waiting for Perses pod... (attempt $i/30)"
+        sleep 5
+    done
+
+    # Deploy dashboards to openshift-operators (where UIPlugin's Perses lives)
+    echo "   Deploying Perses dashboards..."
+    kubectl apply -f "$OBSERVABILITY_DIR/perses/dashboards/dashboard-ai-engineer.yaml" -n openshift-operators
+    kubectl apply -f "$OBSERVABILITY_DIR/perses/dashboards/dashboard-platform-admin.yaml" -n openshift-operators
+    echo "   ✅ Perses dashboards deployed"
+
+    # Deploy datasource to openshift-operators
+    echo "   Configuring Prometheus datasource..."
+    kubectl apply -f "$OBSERVABILITY_DIR/perses/perses-datasource.yaml" -n openshift-operators 2>/dev/null || \
+        echo "   ⚠️  Datasource may already be configured"
+
+    echo "   ✅ Perses installation complete"
+    echo ""
+    echo "   🌐 Access Perses dashboards via OpenShift Console:"
+    echo "      Observe → Dashboards → Perses tab"
 }
 
 # ==========================================
@@ -393,11 +423,12 @@ case "$OBSERVABILITY_STACK" in
     grafana)
         install_grafana
         ;;
-    perses|both)
-        # Perses not yet available - should be caught by argument parsing,
-        # but handle here as a safety net
-        echo "⚠️  Perses is not yet available. Installing Grafana instead."
+    perses)
+        install_perses
+        ;;
+    both)
         install_grafana
+        install_perses
         ;;
     *)
         echo "Unknown stack: $OBSERVABILITY_STACK"
@@ -414,11 +445,19 @@ echo "✅ Observability Stack Installed!"
 echo "========================================="
 echo ""
 
-# Show Grafana info
-GRAFANA_ROUTE=$(kubectl get route grafana-ingress -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
-if [ -n "$GRAFANA_ROUTE" ]; then
-    echo "📊 Grafana URL: https://$GRAFANA_ROUTE"
-    echo "   🔐 Default Credentials: admin / admin"
+# Show Grafana info if installed
+if [[ "$OBSERVABILITY_STACK" == "grafana" || "$OBSERVABILITY_STACK" == "both" ]]; then
+    GRAFANA_ROUTE=$(kubectl get route grafana-ingress -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
+    if [ -n "$GRAFANA_ROUTE" ]; then
+        echo "📊 Grafana URL: https://$GRAFANA_ROUTE"
+        echo "   🔐 Default Credentials: admin / admin"
+        echo ""
+    fi
+fi
+
+# Show Perses info if installed
+if [[ "$OBSERVABILITY_STACK" == "perses" || "$OBSERVABILITY_STACK" == "both" ]]; then
+    echo "📊 Perses Dashboards: OpenShift Console → Observe → Dashboards → Perses"
     echo ""
 fi
 
@@ -431,6 +470,4 @@ echo "   Limitador: authorized_hits, authorized_calls, limited_calls, limitador_
 echo "   Authorino: authorino_authorization_response_duration_seconds"
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:gpu_cache_usage_perc"
-echo ""
-echo "ℹ️  Note: Perses dashboards will be available in a future release."
 echo ""
