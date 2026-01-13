@@ -19,7 +19,7 @@ The observability stack consists of:
 - **Limitador**: Rate limiting service that exposes metrics
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
 - **ServiceMonitors**: Deployed to configure Prometheus metric scraping
-- **Visualization**: Grafana dashboards (Perses support coming in a future release)
+- **Visualization**: Grafana or Perses dashboards (see [Visualization](#visualization) section)
 
 ## Metrics Collection
 
@@ -121,22 +121,34 @@ For local development and testing, you can also use our [Limitador Persistence](
 
 ## Visualization
 
-For dashboard visualization options, see:
+MaaS supports two dashboard solutions:
+
+### Grafana
+
+For Grafana-based dashboards:
 
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
 - **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.19/html/monitoring_data_science_models/index)
 
-### Sample Dashboard
+Sample Grafana dashboard: [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
-A sample Grafana dashboard for token metrics is available:
+### Perses
 
-- [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
+Perses is a CNCF-native dashboard solution integrated with OpenShift Console via the Cluster Observability Operator.
 
-To import into Grafana:
+**Deployment:**
 
-1. Go to Grafana → Dashboards → Import
-2. Upload the JSON file or paste content
-3. Select your Prometheus datasource
+```bash
+# Install via Cluster Observability Operator
+kubectl apply -f deployment/components/observability/perses/uiplugin.yaml
+
+# Deploy dashboards
+kubectl apply -f deployment/components/observability/perses/dashboards/ -n openshift-operators
+```
+
+**Access:** OpenShift Console → Observe → Dashboards → Perses tab
+
+For detailed instructions, see [Perses Dashboard Samples](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/perses/README.md).
 
 ## Key Metrics Reference
 

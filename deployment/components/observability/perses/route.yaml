@@ -1,0 +1,20 @@
+# OpenShift Route to expose Perses UI
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: perses-ingress
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  to:
+    kind: Service
+    name: perses
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+

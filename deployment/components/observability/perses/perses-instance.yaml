@@ -1,0 +1,43 @@
+# Perses Instance for MaaS Observability
+# Deploys a Perses server for dashboard visualization
+# Explicitly use Red Hat image since operator defaults to Docker Hub
+apiVersion: perses.dev/v1alpha1
+kind: Perses
+metadata:
+  name: perses
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  # Explicitly set Red Hat image to avoid Docker Hub rate limits
+  image: registry.redhat.io/cluster-observability-operator/perses-rhel9@sha256:e797cdb47beef40b04da7b6d645bca3dc32e6247003c45b56b38efd9e13bf01c
+  metadata:
+    labels:
+      instance: perses
+      app.kubernetes.io/name: perses
+  config:
+    database:
+      file:
+        folder: '/perses'
+        extension: 'yaml'
+    schemas:
+      panels_path: '/etc/perses/cue/schemas/panels'
+      queries_path: '/etc/perses/cue/schemas/queries'
+      datasources_path: '/etc/perses/cue/schemas/datasources'
+      variables_path: '/etc/perses/cue/schemas/variables'
+    ephemeral_dashboard:
+      enable: false
+      cleanup_interval: '1h'
+  containerPort: 8080
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 5
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 5
