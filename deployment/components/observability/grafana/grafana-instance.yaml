@@ -4,7 +4,7 @@ metadata:
   labels:
     app: grafana
   name: grafana
-  namespace: llm-observability
+  namespace: maas-api
 spec:
   config:
     auth:
@@ -12,8 +12,14 @@ spec:
     log:
       mode: console
     security:
-      admin_password: password
-      admin_user: root
+      # WARNING: Default credentials for initial setup only.
+      # Change immediately after first login or configure OAuth integration.
+      # For production, consider using a Kubernetes Secret:
+      #   kubectl create secret generic grafana-admin-credentials \
+      #     --from-literal=admin-user=admin --from-literal=admin-password=<secure-password>
+      # Then reference the secret in the Grafana CR's deployment spec.
+      admin_user: admin
+      admin_password: admin
   deployment:
     spec:
       template:
