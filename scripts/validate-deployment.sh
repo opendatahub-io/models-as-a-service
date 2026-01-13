@@ -420,9 +420,17 @@ else
                 if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
                     print_success "Authentication successful (HTTP $HTTP_CODE)"
                     
+<<<<<<< HEAD
                     # Decode token and extract tier information using helper function
                     print_check "Token information"
                     TOKEN_PAYLOAD=$(decode_jwt_payload "$TOKEN")
+=======
+                    # Decode token and extract tier information
+                    # JWT uses base64url encoding; convert to standard base64 before decoding
+                    print_check "Token information"
+                    TOKEN_PAYLOAD_B64=$(echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}')
+                    TOKEN_PAYLOAD=$(echo "$TOKEN_PAYLOAD_B64" | base64 -d 2>/dev/null || echo "")
+>>>>>>> 1f5006b (fix(observability): address PR review feedback + fix JWT decoding)
                     if [ -n "$TOKEN_PAYLOAD" ]; then
                         SUB=$(echo "$TOKEN_PAYLOAD" | jq -r '.sub // empty' 2>/dev/null)
                         if [ -n "$SUB" ] && [ "$SUB" != "null" ]; then

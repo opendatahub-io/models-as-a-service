@@ -420,7 +420,17 @@ if [ "$temp_key_status" == "201" ]; then
     if [ -z "$TEMP_KEY_JTI" ]; then
         JWT_TOKEN=$(echo "$temp_key_body" | jq -r '.token // empty')
         if [ -n "$JWT_TOKEN" ]; then
+<<<<<<< HEAD
             TEMP_KEY_JTI=$(get_jwt_claim "$JWT_TOKEN" "jti")
+=======
+            # JWT uses base64url encoding; convert to standard base64 before decoding
+            PAYLOAD=$(echo "$JWT_TOKEN" | cut -d'.' -f2 | tr '_-' '/+')
+            case $((${#PAYLOAD} % 4)) in
+                2) PAYLOAD="${PAYLOAD}==" ;;
+                3) PAYLOAD="${PAYLOAD}=" ;;
+            esac
+            TEMP_KEY_JTI=$(echo "$PAYLOAD" | base64 -d 2>/dev/null | jq -r '.jti // empty' 2>/dev/null || echo "")
+>>>>>>> 1f5006b (fix(observability): address PR review feedback + fix JWT decoding)
         fi
     fi
     
