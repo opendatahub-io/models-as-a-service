@@ -148,7 +148,7 @@ if kubectl get configmap cluster-monitoring-config -n openshift-monitoring &>/de
     fi
 else
     echo "   Creating cluster-monitoring-config..."
-    kubectl apply -f "$OBSERVABILITY_DIR/cluster-monitoring-config.yaml"
+    kubectl apply -f "$PROJECT_ROOT/docs/samples/observability/cluster-monitoring-config.yaml"
     echo "   ✅ user-workload-monitoring enabled"
 fi
 
@@ -202,8 +202,9 @@ else
 fi
 
 # Deploy LLM models ServiceMonitor (for vLLM metrics)
+# NOTE: This ServiceMonitor is in docs/samples/ as it's optional/user-configurable
 if kubectl get ns llm &>/dev/null; then
-    kubectl apply -f "$OBSERVABILITY_DIR/monitors/kserve-llm-models-servicemonitor.yaml"
+    kubectl apply -f "$PROJECT_ROOT/docs/samples/observability/kserve-llm-models-servicemonitor.yaml"
     echo "   ✅ LLM models metrics configured"
 else
     echo "   ⚠️  llm namespace not found - skipping LLM metrics"
