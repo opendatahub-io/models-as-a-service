@@ -65,20 +65,23 @@ Options:
   -t, --operator-type     Which operator to install: "rhoai" (default) or "odh"
   -r, --maas-ref          Git ref for MaaS manifests (default: main)
   -c, --cert-name         TLS certificate secret name (default: data-science-gateway-service-tls)
-  -b, --operator-bundle   Custom operator bundle image to use instead of catalog
-                          (e.g., quay.io/opendatahub/opendatahub-operator-bundle:v3.2.0)
+  -b, --operator-catalog  Custom operator catalog/index image to use instead of default catalog
+                          (e.g., quay.io/opendatahub/opendatahub-operator-catalog:latest)
+                          NOTE: This must be a CATALOG image, not a bundle image!
+  --channel               Operator channel to use (default: fast-3 for catalog, fast for custom)
 
 Environment Variables:
   OPERATOR_TYPE           Same as --operator-type
   MAAS_REF                Same as --maas-ref
   CERT_NAME               Same as --cert-name
-  OPERATOR_BUNDLE         Same as --operator-bundle
+  OPERATOR_CATALOG        Same as --operator-catalog
+  OPERATOR_CHANNEL        Same as --channel
 
 Examples:
   $(basename "$0")                           # Install RHOAI (default)
   $(basename "$0") --operator-type odh       # Install ODH
   $(basename "$0") -t odh -r v1.0.0          # Install ODH with specific git ref
-  $(basename "$0") -t odh -b quay.io/org/bundle:tag  # Install ODH from custom bundle
+  $(basename "$0") -t odh -b quay.io/opendatahub/opendatahub-operator-catalog:latest  # Install ODH from custom catalog
   OPERATOR_TYPE=odh $(basename "$0")         # Install ODH via env var
 
 EOF
@@ -103,8 +106,12 @@ while [[ $# -gt 0 ]]; do
       CERT_NAME="$2"
       shift 2
       ;;
-    -b|--operator-bundle)
-      OPERATOR_BUNDLE="$2"
+    -b|--operator-catalog)
+      OPERATOR_CATALOG="$2"
+      shift 2
+      ;;
+    --channel)
+      OPERATOR_CHANNEL="$2"
       shift 2
       ;;
     -*)
@@ -136,8 +143,8 @@ fi
 
 echo "========================================="
 echo "Deploying with operator: ${OPERATOR_TYPE}"
-if [[ -n "${OPERATOR_BUNDLE:-}" ]]; then
-  echo "Using custom bundle: ${OPERATOR_BUNDLE}"
+if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
+  echo "Using custom catalog: ${OPERATOR_CATALOG}"
 fi
 echo "========================================="
 
@@ -272,7 +279,7 @@ metadata:
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
-  name: kuadrant-operator
+  name: rhcl-operator
   namespace: kuadrant-system
 spec:
   channel: stable
@@ -362,15 +369,20 @@ deploy_odh() {
   echo
   echo "* Installing OpenDataHub operator..."
 
-  # Determine catalog source based on whether a custom bundle is specified
+  # Determine catalog source and channel based on whether a custom catalog is specified
   local catalog_source="community-operators"
   local catalog_namespace="openshift-marketplace"
+  local channel="${OPERATOR_CHANNEL:-fast-3}"
 
-  if [[ -n "${OPERATOR_BUNDLE:-}" ]]; then
-    echo "* Using custom operator bundle: ${OPERATOR_BUNDLE}"
-    create_bundle_catalogsource "odh-custom-catalog" "openshift-marketplace" "${OPERATOR_BUNDLE}"
+  if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
+    echo "* Using custom operator catalog: ${OPERATOR_CATALOG}"
+    create_custom_catalogsource "odh-custom-catalog" "openshift-marketplace" "${OPERATOR_CATALOG}"
     catalog_source="odh-custom-catalog"
+    # Custom catalogs typically use 'fast' channel instead of 'fast-3'
+    channel="${OPERATOR_CHANNEL:-fast}"
   fi
+
+  echo "* Using channel: ${channel}"
 
   cat <<EOF | kubectl apply -f -
 apiVersion: v1
@@ -386,7 +398,7 @@ metadata:
   name: opendatahub-operator
   namespace: openshift-operators
 spec:
-  channel: fast-3
+  channel: ${channel}
   installPlanApproval: Automatic
   name: opendatahub-operator
   source: ${catalog_source}
@@ -405,7 +417,8 @@ deploy_dscinitialization() {
 
   echo "* Setting up DSCInitialization..."
 
-  cat <<EOF | kubectl apply -f -
+  # Use server-side apply to handle race conditions with operator creating DSCInitialization
+  cat <<EOF | kubectl apply --server-side=true -f -
 apiVersion: dscinitialization.opendatahub.io/v2
 kind: DSCInitialization
 metadata:
@@ -440,7 +453,8 @@ deploy_datasciencecluster() {
   fi
   echo "* Setting up DataScienceCluster with MaaS capability..."
 
-  cat <<EOF | kubectl apply -f -
+  # Use server-side apply to handle race conditions with operator
+  cat <<EOF | kubectl apply --server-side=true -f -
 apiVersion: datasciencecluster.opendatahub.io/v2
 kind: DataScienceCluster
 metadata:

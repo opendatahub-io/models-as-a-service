@@ -347,23 +347,27 @@ wait_for_csv() {
 # Custom Catalog Source Functions
 # ==========================================
 
-# create_bundle_catalogsource name namespace bundle_image
-#   Creates a CatalogSource from an operator bundle image using the file-based catalog (FBC) format.
-#   This allows installing operators from custom bundle images instead of the default catalog.
+# create_custom_catalogsource name namespace catalog_image
+#   Creates a CatalogSource from a catalog/index image.
+#   This allows installing operators from custom catalog images instead of the default catalog.
+#
+#   IMPORTANT: This requires a CATALOG/INDEX image, NOT a bundle image!
+#   - Catalog image: Contains the FBC database and runs 'opm serve' (e.g., quay.io/opendatahub/opendatahub-operator-catalog:latest)
+#   - Bundle image: Contains operator manifests only, cannot be used directly (e.g., quay.io/opendatahub/opendatahub-operator-bundle:latest)
 #
 # Arguments:
 #   name          - Name for the CatalogSource
 #   namespace     - Namespace for the CatalogSource (usually openshift-marketplace)
-#   bundle_image  - The operator bundle image (e.g., quay.io/opendatahub/opendatahub-operator-bundle:v3.2.0)
+#   catalog_image - The operator catalog/index image (e.g., quay.io/opendatahub/opendatahub-operator-catalog:latest)
 #
 # Returns:
 #   0 on success, 1 on failure
-create_bundle_catalogsource() {
+create_custom_catalogsource() {
   local name=${1?catalogsource name is required}; shift
   local namespace=${1?namespace is required}; shift
-  local bundle_image=${1?bundle image is required}; shift
+  local catalog_image=${1?catalog image is required}; shift
 
-  echo "* Creating CatalogSource '$name' from bundle image: $bundle_image"
+  echo "* Creating CatalogSource '$name' from catalog image: $catalog_image"
 
   # Check if CatalogSource already exists
   if kubectl get catalogsource "$name" -n "$namespace" &>/dev/null; then
@@ -380,7 +384,7 @@ metadata:
   namespace: ${namespace}
 spec:
   sourceType: grpc
-  image: ${bundle_image}
+  image: ${catalog_image}
   displayName: "Custom ${name} Catalog"
   publisher: "Custom"
   updateStrategy:
@@ -410,9 +414,9 @@ EOF
   return 0
 }
 
-# cleanup_bundle_catalogsource name namespace
-#   Removes a custom CatalogSource created by create_bundle_catalogsource.
-cleanup_bundle_catalogsource() {
+# cleanup_custom_catalogsource name namespace
+#   Removes a custom CatalogSource created by create_custom_catalogsource.
+cleanup_custom_catalogsource() {
   local name=${1?catalogsource name is required}; shift
   local namespace=${1?namespace is required}; shift
 
