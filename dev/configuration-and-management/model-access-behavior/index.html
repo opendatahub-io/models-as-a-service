@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/install/validation/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-access-behavior/">
       
       
-        <link rel="prev" href="../maas-setup/">
+        <link rel="prev" href="../tier-modification-known-issues/">
       
       
-        <link rel="next" href="../../configuration-and-management/tier-overview/">
+        <link rel="next" href="../../advanced-administration/observability/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Validation - ODH Models-as-a-Service Documentation</title>
+        <title>Model Access - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#validation-guide" class="md-skip">
+        <a href="#model-tier-access-behavior" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Validation
+              Model Access
             
           </span>
         </div>
@@ -301,7 +301,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../prerequisites/" class="md-tabs__link">
+        <a href="../../install/prerequisites/" class="md-tabs__link">
           
   
   
@@ -582,7 +582,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../prerequisites/" class="md-nav__link">
+      <a href="../../install/prerequisites/" class="md-nav__link">
         
   
   
@@ -664,7 +664,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../odh-setup/" class="md-nav__link">
+      <a href="../../install/odh-setup/" class="md-nav__link">
         
   
   
@@ -692,7 +692,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../rhoai-setup/" class="md-nav__link">
+      <a href="../../install/rhoai-setup/" class="md-nav__link">
         
   
   
@@ -733,8 +733,6 @@
                 
   
   
-    
-  
   
   
     
@@ -750,11 +748,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
         
           
           <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
@@ -775,7 +775,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -793,7 +793,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../maas-setup/" class="md-nav__link">
+      <a href="../../install/maas-setup/" class="md-nav__link">
         
   
   
@@ -818,37 +818,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Validation
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../install/validation/" class="md-nav__link">
         
   
   
@@ -864,159 +837,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#manual-validation-recommended" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Manual Validation (Recommended)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Manual Validation (Recommended)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-get-gateway-endpoint" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. Get Gateway Endpoint
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-get-authentication-token" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Get Authentication Token
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-list-available-models" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. List Available Models
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#4-test-model-inference-endpoint" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. Test Model Inference Endpoint
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-test-authorization-enforcement" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. Test Authorization Enforcement
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#6-test-rate-limiting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        6. Test Rate Limiting
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#7-verify-component-status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        7. Verify Component Status
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#automated-validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Automated Validation
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Troubleshooting
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Troubleshooting">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#common-issues" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Common Issues
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1094,7 +914,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration-and-management/tier-overview/" class="md-nav__link">
+      <a href="../tier-overview/" class="md-nav__link">
         
   
   
@@ -1122,7 +942,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration-and-management/tier-configuration/" class="md-nav__link">
+      <a href="../tier-configuration/" class="md-nav__link">
         
   
   
@@ -1150,7 +970,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration-and-management/tier-concepts/" class="md-nav__link">
+      <a href="../tier-concepts/" class="md-nav__link">
         
   
   
@@ -1178,7 +998,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration-and-management/token-management/" class="md-nav__link">
+      <a href="../token-management/" class="md-nav__link">
         
   
   
@@ -1214,7 +1034,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration-and-management/model-setup/" class="md-nav__link">
+      <a href="../model-setup/" class="md-nav__link">
         
   
   
@@ -1239,8 +1059,10 @@
                 
   
   
+    
   
   
+  
     
     
     
@@ -1254,13 +1076,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_5" checked>
         
           
           <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="">
@@ -1281,7 +1101,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1299,7 +1119,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration-and-management/group-membership-known-issues/" class="md-nav__link">
+      <a href="../group-membership-known-issues/" class="md-nav__link">
         
   
   
@@ -1327,7 +1147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration-and-management/tier-modification-known-issues/" class="md-nav__link">
+      <a href="../tier-modification-known-issues/" class="md-nav__link">
         
   
   
@@ -1352,10 +1172,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../configuration-and-management/model-access-behavior/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Access
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1371,6 +1218,170 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#model-tier-access-changes-during-active-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model Tier Access Changes During Active Usage
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Model Tier Access Changes During Active Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-model-access-removal-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How Model Access Removal Works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-behaviors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected Behaviors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Expected Behaviors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-impact-on-active-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Impact on Active Requests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-rbac-propagation-delay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. RBAC Propagation Delay
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-model-list-visibility-vs-access-mismatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Model List Visibility vs. Access Mismatch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-token-validity-vs-model-access-expected-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Token Validity vs. Model Access (Expected Behavior)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-immediate-access-revocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Immediate Access Revocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommended-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended Practices
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#future-enhancements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Future Enhancements
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1656,22 +1667,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#manual-validation-recommended" class="md-nav__link">
+  <a href="#model-tier-access-changes-during-active-usage" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Manual Validation (Recommended)
+        Model Tier Access Changes During Active Usage
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Manual Validation (Recommended)">
+    <nav class="md-nav" aria-label="Model Tier Access Changes During Active Usage">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#1-get-gateway-endpoint" class="md-nav__link">
+  <a href="#overview" class="md-nav__link">
     <span class="md-ellipsis">
       
-        1. Get Gateway Endpoint
+        Overview
       
     </span>
   </a>
@@ -1679,10 +1690,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#2-get-authentication-token" class="md-nav__link">
+  <a href="#how-model-access-removal-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2. Get Authentication Token
+        How Model Access Removal Works
       
     </span>
   </a>
@@ -1690,10 +1701,22 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#3-list-available-models" class="md-nav__link">
+  <a href="#expected-behaviors" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. List Available Models
+        Expected Behaviors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Expected Behaviors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-impact-on-active-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Impact on Active Requests
       
     </span>
   </a>
@@ -1701,10 +1724,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#4-test-model-inference-endpoint" class="md-nav__link">
+  <a href="#2-rbac-propagation-delay" class="md-nav__link">
     <span class="md-ellipsis">
       
-        4. Test Model Inference Endpoint
+        2. RBAC Propagation Delay
       
     </span>
   </a>
@@ -1712,10 +1735,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#5-test-authorization-enforcement" class="md-nav__link">
+  <a href="#3-model-list-visibility-vs-access-mismatch" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5. Test Authorization Enforcement
+        3. Model List Visibility vs. Access Mismatch
       
     </span>
   </a>
@@ -1723,10 +1746,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#6-test-rate-limiting" class="md-nav__link">
+  <a href="#4-token-validity-vs-model-access-expected-behavior" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6. Test Rate Limiting
+        4. Token Validity vs. Model Access (Expected Behavior)
       
     </span>
   </a>
@@ -1734,10 +1757,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#7-verify-component-status" class="md-nav__link">
+  <a href="#5-immediate-access-revocation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        7. Verify Component Status
+        5. Immediate Access Revocation
       
     </span>
   </a>
@@ -1748,35 +1771,34 @@
     </nav>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#automated-validation" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automated Validation
+        Recommended Practices
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#future-enhancements" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Troubleshooting
+        Future Enhancements
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Troubleshooting">
-      <ul class="md-nav__list">
+</li>
         
           <li class="md-nav__item">
-  <a href="#common-issues" class="md-nav__link">
+  <a href="#related-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Common Issues
+        Related Documentation
       
     </span>
   </a>
@@ -1808,131 +1830,171 @@
   
 
 
-<h1 id="validation-guide">Validation Guide</h1>
-<p>This guide provides instructions for validating and testing your MaaS Platform deployment.</p>
-<h2 id="manual-validation-recommended">Manual Validation (Recommended)</h2>
-<p>Follow these steps to validate your deployment and understand each component:</p>
-<h3 id="1-get-gateway-endpoint">1. Get Gateway Endpoint</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">CLUSTER_DOMAIN</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>ingresses.config.openshift.io<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.domain}&#39;</span><span class="k">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">HOST</span><span class="o">=</span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Gateway endpoint: </span><span class="nv">$HOST</span><span class="s2">&quot;</span>
-</code></pre></div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>If you haven't created the <code>maas-default-gateway</code> yet, you can use the fallback:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">HOST</span><span class="o">=</span><span class="s2">&quot;https://gateway.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Using fallback gateway endpoint: </span><span class="nv">$HOST</span><span class="s2">&quot;</span>
-</code></pre></div></p>
-</div>
-<h3 id="2-get-authentication-token">2. Get Authentication Token</h3>
-<p>For OpenShift:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">TOKEN_RESPONSE</span><span class="o">=</span><span class="k">$(</span>curl<span class="w"> </span>-sSk<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;expiration&quot;: &quot;10m&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">HOST</span><span class="si">}</span><span class="s2">/maas-api/v1/tokens&quot;</span><span class="k">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nv">TOKEN</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="nv">$TOKEN_RESPONSE</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>.token<span class="k">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Token obtained: </span><span class="si">${</span><span class="nv">TOKEN</span><span class="p">:</span><span class="nv">0</span><span class="p">:</span><span class="nv">20</span><span class="si">}</span><span class="s2">...&quot;</span>
-</code></pre></div>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>For more information about how tokens work, see <a href="../../configuration-and-management/token-management/">Understanding Token Management</a>.</p>
-</div>
-<h3 id="3-list-available-models">3. List Available Models</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">MODELS</span><span class="o">=</span><span class="k">$(</span>curl<span class="w"> </span>-sSk<span class="w"> </span><span class="si">${</span><span class="nv">HOST</span><span class="si">}</span>/maas-api/v1/models<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>.<span class="k">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$MODELS</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nv">MODEL_NAME</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="nv">$MODELS</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.data[0].id&#39;</span><span class="k">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="nv">MODEL_URL</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="nv">$MODELS</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.data[0].url&#39;</span><span class="k">)</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Model URL: </span><span class="nv">$MODEL_URL</span><span class="s2">&quot;</span>
-</code></pre></div>
-<h3 id="4-test-model-inference-endpoint">4. Test Model Inference Endpoint</h3>
-<p>Send a request to the model endpoint (should get a 200 OK response):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s2">&quot;{\&quot;model\&quot;: \&quot;</span><span class="si">${</span><span class="nv">MODEL_NAME</span><span class="si">}</span><span class="s2">\&quot;, \&quot;prompt\&quot;: \&quot;Hello\&quot;, \&quot;max_tokens\&quot;: 50}&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MODEL_URL</span><span class="si">}</span><span class="s2">/v1/completions&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq
-</code></pre></div>
-<h3 id="5-test-authorization-enforcement">5. Test Authorization Enforcement</h3>
-<p>Send a request to the model endpoint without a token (should get a 401 Unauthorized response):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>-d<span class="w"> </span><span class="s2">&quot;{\&quot;model\&quot;: \&quot;</span><span class="si">${</span><span class="nv">MODEL_NAME</span><span class="si">}</span><span class="s2">\&quot;, \&quot;prompt\&quot;: \&quot;Hello\&quot;, \&quot;max_tokens\&quot;: 50}&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MODEL_URL</span><span class="si">}</span><span class="s2">/v1/completions&quot;</span><span class="w"> </span>-v
-</code></pre></div>
-<h3 id="6-test-rate-limiting">6. Test Rate Limiting</h3>
-<p>Send multiple requests to trigger rate limit (should get 200 OK followed by 429 Rate Limit Exceeded after about 4 requests):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">for</span><span class="w"> </span>i<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="o">{</span><span class="m">1</span>..16<span class="o">}</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>curl<span class="w"> </span>-sSk<span class="w"> </span>-o<span class="w"> </span>/dev/null<span class="w"> </span>-w<span class="w"> </span><span class="s2">&quot;%{http_code}\n&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span>-d<span class="w"> </span><span class="s2">&quot;{\&quot;model\&quot;: \&quot;</span><span class="si">${</span><span class="nv">MODEL_NAME</span><span class="si">}</span><span class="s2">\&quot;, \&quot;prompt\&quot;: \&quot;Hello\&quot;, \&quot;max_tokens\&quot;: 50}&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MODEL_URL</span><span class="si">}</span><span class="s2">/v1/completions&quot;</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="k">done</span>
-</code></pre></div>
-<h3 id="7-verify-component-status">7. Verify Component Status</h3>
-<p>Check that all components are running:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>maas-api<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>kuadrant-system<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>kserve<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>llm
-</code></pre></div>
-<p>Check Gateway status:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>gateway<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>maas-default-gateway
-</code></pre></div>
-<p>Check that policies are enforced:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>authpolicy<span class="w"> </span>-A<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tokenratelimitpolicy<span class="w"> </span>-A<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>llminferenceservices<span class="w"> </span>-n<span class="w"> </span>llm
-</code></pre></div>
-<p>See the deployment scripts documentation at <code>scripts/README.md</code> for more information about validation and troubleshooting.</p>
-<h2 id="automated-validation">Automated Validation</h2>
-<p>For faster validation, you can use the automated validation script to run the manual validation steps more quickly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>./scripts/validate-deployment.sh
-</code></pre></div>
-<p>The script automates the manual validation steps above and provides detailed feedback with specific suggestions for fixing any issues found. This is useful when you need to quickly verify deployment status, but understanding the manual steps above helps with troubleshooting.</p>
-<h2 id="troubleshooting">Troubleshooting</h2>
-<h3 id="common-issues">Common Issues</h3>
+<h1 id="model-tier-access-behavior">Model Tier Access Behavior</h1>
+<p>This document describes the expected behaviors and operational considerations when modifying model tier access in the MaaS Platform Technical Preview release.</p>
+<h2 id="model-tier-access-changes-during-active-usage">Model Tier Access Changes During Active Usage</h2>
+<h3 id="overview">Overview</h3>
+<p>When a model is removed from a tier's access list (by updating the <code>alpha.maas.opendatahub.io/tiers</code> annotation on an <code>LLMInferenceService</code> resource), access revocation takes effect immediately. This section describes the expected behaviors and considerations for administrators.</p>
+<h3 id="how-model-access-removal-works">How Model Access Removal Works</h3>
 <ol>
-<li><strong>Getting <code>501</code> Not Implemented errors</strong>: Traffic is not making it to the Gateway.<ul class="task-list">
-<li class="task-list-item"><input type="checkbox"/> Verify Gateway status and HTTPRoute configuration</li>
-</ul>
-</li>
-<li><strong>Getting <code>401</code> Unauthorized errors when trying to get a token</strong>: Authentication maas-api is not working.<ul class="task-list">
-<li class="task-list-item"><input type="checkbox"/> Verify <code>maas-api-auth-policy</code> AuthPolicy is applied</li>
-<li class="task-list-item"><input type="checkbox"/> Validate the AuthPolicy audience matches the token audience (audiences: ["https://kubernetes.default.svc", "maas-default-gateway-sa"])</li>
-</ul>
-</li>
-<li><strong>Getting <code>401</code> errors when trying to get models</strong>: Authentication is not working for the models endpoint.<ul class="task-list">
-<li class="task-list-item"><input type="checkbox"/> Create a new token (default expiration is 10 minutes)</li>
-<li class="task-list-item"><input type="checkbox"/> Verify <code>gateway-auth-policy</code> AuthPolicy is applied</li>
-<li class="task-list-item"><input type="checkbox"/> Validate that <code>system:serviceaccounts:maas-default-gateway-tier-{TIER}</code> has <code>post</code> access to the <code>llminferenceservices</code> resource<ul>
-<li>Note: this should be automated by the ODH Controller</li>
-</ul>
-</li>
-</ul>
-</li>
-<li><strong>Getting <code>404</code> errors when trying to get models</strong>: The models endpoint is not working.<ul class="task-list">
-<li class="task-list-item"><input type="checkbox"/> Verify <code>model-route</code> HTTPRoute exist and is applied</li>
-<li class="task-list-item"><input type="checkbox"/> Verify the model is deployed and the <code>LLMInferenceService</code> has the <code>maas-default-gateway</code> gateway specified</li>
-<li class="task-list-item"><input type="checkbox"/> Verify that the model is recognized by maas-api by checking the <code>maas-api/v1/models</code> endpoint (see <a href="#3-list-available-models">List Available Models</a>)</li>
-</ul>
-</li>
-<li><strong>Rate limiting not working</strong>: Verify AuthPolicy and TokenRateLimitPolicy are applied<ul class="task-list">
-<li class="task-list-item"><input type="checkbox"/> Verify <code>gateway-rate-limits</code> RateLimitPolicy is applied</li>
-<li class="task-list-item"><input type="checkbox"/> Verify <code>gateway-token-rate-limits</code> TokenRateLimitPolicy is applied</li>
-<li class="task-list-item"><input type="checkbox"/> Verify the model is deployed and the <code>LLMInferenceService</code> has the <code>maas-default-gateway</code> gateway specified</li>
-<li class="task-list-item"><input type="checkbox"/> Verify that the model is rate limited by checking the inference endpoint (see <a href="#6-test-rate-limiting">Test Rate Limiting</a>)</li>
-<li class="task-list-item"><input type="checkbox"/> Verify that the model is token rate limited by checking the inference endpoint (see <a href="#6-test-rate-limiting">Test Rate Limiting</a>)</li>
-</ul>
-</li>
-<li><strong>Routes not accessible (503 errors)</strong>: Check MaaS Default Gateway status and HTTPRoute configuration<ul class="task-list">
-<li class="task-list-item"><input type="checkbox"/> Verify Gateway is in <code>Programmed</code> state: <code>kubectl get gateway -n openshift-ingress maas-default-gateway</code></li>
-<li class="task-list-item"><input type="checkbox"/> Check HTTPRoute configuration and status</li>
-</ul>
-</li>
+<li><strong>Annotation Update</strong>: The administrator updates the <code>alpha.maas.opendatahub.io/tiers</code> annotation to remove a tier from the allowed list</li>
+<li><strong>ODH Controller Processing</strong>: The ODH Controller detects the annotation change and updates RBAC resources</li>
+<li><strong>RBAC Update</strong>: The RoleBinding for the removed tier is deleted, revoking POST permissions for that tier's service accounts</li>
+<li><strong>Access Revocation</strong>: Users from the removed tier lose access to the model</li>
 </ol>
+<h3 id="expected-behaviors">Expected Behaviors</h3>
+<h4 id="1-impact-on-active-requests">1. Impact on Active Requests</h4>
+<p>Access revocation prevents new requests immediately.</p>
+<p><strong>Description</strong>:</p>
+<ul>
+<li><strong>New Requests</strong>: Any request arriving after the RBAC update will be denied immediately.</li>
+<li><strong>In-Flight Requests</strong>: Requests that have already passed the authorization gate typically complete successfully. However, dependent requests or long-running sessions requiring re-authorization will fail.</li>
+</ul>
+<p><strong>Example Scenario</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>1. User starts a long-running inference request (e.g., 2-minute generation)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>2. Administrator removes the tier from model annotation at 30 seconds
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>3. ODH Controller updates RBAC at 45 seconds
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>4. Request may fail at next authorization checkpoint (if any)
+</code></pre></div>
+<p><strong>Workaround</strong>:</p>
+<ul>
+<li>Avoid removing tier access during peak usage periods</li>
+<li>Monitor active requests before making changes</li>
+<li>Consider using maintenance windows for tier access changes</li>
+</ul>
+<h4 id="2-rbac-propagation-delay">2. RBAC Propagation Delay</h4>
+<p><strong>Description</strong>:</p>
+<ul>
+<li>There is a delay between annotation update and RBAC resource update by the ODH Controller</li>
+<li>During this window (typically seconds to minutes), access behavior is inconsistent:</li>
+<li>Some requests may still succeed (if authorization was cached)</li>
+<li>New requests may fail immediately</li>
+<li>Model may still appear in user's model list but be inaccessible</li>
+</ul>
+<p><strong>Example Timeline</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>T+0s:  Annotation updated (remove &quot;premium&quot; tier)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>T+5s:  ODH Controller detects change
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>T+10s: RoleBinding deleted
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>T+15s: RBAC fully propagated to API server
+</code></pre></div>
+<p><strong>Workaround</strong>:</p>
+<ul>
+<li>Wait 1-2 minutes after annotation update before verifying access changes</li>
+<li>Monitor ODH Controller logs to confirm RBAC updates are complete</li>
+<li>Use <code>kubectl get rolebinding -n &lt;model-namespace&gt;</code> to verify RoleBinding removal</li>
+</ul>
+<h4 id="3-model-list-visibility-vs-access-mismatch">3. Model List Visibility vs. Access Mismatch</h4>
+<p><strong>Description</strong>:</p>
+<ul>
+<li>The <code>/v1/models</code> endpoint lists all models that are part of the MaaS instance (via gateway references)</li>
+<li>The endpoint does not filter models by tier access permissions</li>
+<li>Users may see models in the list that they can no longer access after tier removal</li>
+<li>Attempts to use these models will fail with <code>403 Forbidden</code> or <code>401 Unauthorized</code></li>
+</ul>
+<p><strong>Example</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// GET /v1/models returns:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p">{</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;model-a&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ready&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">},</span><span class="w">  </span><span class="c1">// Still accessible</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;model-b&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ready&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span><span class="w">   </span><span class="c1">// No longer accessible after tier removal</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">}</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1">// POST to model-b fails with 403</span>
+</code></pre></div>
+<p><strong>Workaround</strong>:</p>
+<p>This behavior will be resolved in a future release where the model list is filtered by tier permissions (see <a href="https://github.com/opendatahub-io/models-as-a-service/pull/294">PR #294</a>). In the meantime, clients should expect potential <code>403 Forbidden</code> errors if attempting to access models that appear in the list but are not permitted.</p>
+<h4 id="4-token-validity-vs-model-access-expected-behavior">4. Token Validity vs. Model Access (Expected Behavior)</h4>
+<p>Tokens are per-user (Service Account), not per-model. Token validity and model access are independent—this is by design.</p>
+<p><strong>Description</strong>:</p>
+<ul>
+<li>Service Account tokens issued before tier removal remain valid until expiration</li>
+<li>Model access is controlled by RBAC, which is updated independently of token validity</li>
+<li>When a model is removed from a tier, the RBAC change revokes access immediately</li>
+<li>Users do not need to request new tokens; their existing tokens simply have access to fewer models</li>
+</ul>
+<p><strong>Example</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>1. User receives token at T+0 (valid for 1 hour)
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>2. User has access to models A, B, C (via RBAC)
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>3. Model B removed from tier at T+30min (RBAC updated)
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>4. Token still valid, but model access changes:
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>   - Model A: ✅ Accessible (RBAC allows)
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>   - Model B: ❌ No longer accessible (RBAC denies)
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>   - Model C: ✅ Accessible (RBAC allows)
+</code></pre></div>
+<p><strong>User Communication</strong>:</p>
+<ul>
+<li>Clearly message users when a model is being removed from a tier to set expectations regarding token validity vs. model access.</li>
+</ul>
+<h4 id="5-immediate-access-revocation">5. Immediate Access Revocation</h4>
+<p><strong>Description</strong>:</p>
+<ul>
+<li>The platform does not provide a "drain" mechanism to allow existing users to finish their sessions while blocking new ones.</li>
+<li>Revocation applies to the authorization policy immediately.</li>
+<li>While in-flight requests often complete (as they have passed the gate), the user experience is an immediate loss of access for any subsequent interaction.</li>
+</ul>
+<p><strong>Workaround</strong>:</p>
+<ul>
+<li>Monitor active requests before making changes:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Check for active connections (example)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>kubectl<span class="w"> </span>top<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>&lt;model-namespace&gt;
+</code></pre></div>
+<ul>
+<li>Use maintenance windows for tier access changes</li>
+<li>Consider implementing request draining in future releases</li>
+</ul>
+<h3 id="recommended-practices">Recommended Practices</h3>
+<ol>
+<li><strong>Plan Tier Access Changes</strong>:</li>
+<li>Schedule changes during low-usage periods</li>
+<li>Notify affected users in advance when possible</li>
+<li>
+<p>Monitor active requests before making changes</p>
+</li>
+<li>
+<p><strong>Verify Changes</strong>:</p>
+</li>
+<li>
+<p>Wait 1-2 minutes after annotation update</p>
+</li>
+<li>
+<p>Verify RoleBinding removal:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>rolebinding<span class="w"> </span>-n<span class="w"> </span>&lt;model-namespace&gt;<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>&lt;tier-name&gt;
+</code></pre></div>
+</li>
+<li>
+<p>Test access with a token from the affected tier</p>
+</li>
+<li>
+<p><strong>Monitor for Issues</strong>:</p>
+</li>
+<li>Check ODH Controller logs for RBAC update errors</li>
+<li>Monitor API server logs for authorization failures</li>
+<li>
+<p>Watch for increased error rates in user applications</p>
+</li>
+<li>
+<p><strong>Handle Errors Gracefully</strong>:</p>
+</li>
+<li>Implement retry logic with exponential backoff</li>
+<li>Provide clear error messages to end users</li>
+<li>Log access denials for troubleshooting</li>
+</ol>
+<h3 id="future-enhancements">Future Enhancements</h3>
+<p>The following improvements are planned for future releases:</p>
+<ol>
+<li><strong>Graceful Shutdown</strong>: Implement request draining before access revocation</li>
+<li><strong>Model List Filtering</strong>: Filter <code>/v1/models</code> by tier permissions</li>
+<li><strong>Real-time Notifications</strong>: Notify users when tier access changes</li>
+<li><strong>Audit Logging</strong>: Enhanced logging for tier access changes</li>
+</ol>
+<h3 id="related-documentation">Related Documentation</h3>
+<ul>
+<li><a href="../tier-configuration/">Tier Configuration</a> - How to configure tier access</li>
+<li><a href="../model-setup/">Model Setup</a> - How to configure model tier annotations</li>
+<li><a href="../token-management/">Token Management</a> - Understanding token lifecycle</li>
+</ul>
 
 
 
@@ -1955,7 +2017,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="December 17, 2025 22:29:53 UTC">December 17, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="January 14, 2026 03:47:47 UTC">January 14, 2026</span>
   </span>
 
     
@@ -1965,7 +2027,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 30, 2025 20:53:11 UTC">October 30, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="January 14, 2026 03:47:47 UTC">January 14, 2026</span>
   </span>
 
     
