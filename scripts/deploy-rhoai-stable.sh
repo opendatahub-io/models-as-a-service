@@ -1,33 +1,60 @@
 #!/bin/bash
 #
-# deploy-rhoai-stable.sh - Deploy Red Hat OpenShift AI v3 with Models-as-a-Service standalone capability
+# deploy-rhoai-stable.sh - Deploy Red Hat OpenShift AI v3 or OpenDataHub with Models-as-a-Service capability
 #
 # DESCRIPTION:
-#   This script automates the deployment of Red Hat OpenShift AI (RHOAI) v3 along with
-#   its required prerequisites and the Models-as-a-Service (MaaS) capability.
+#   This script automates the deployment of Red Hat OpenShift AI (RHOAI) v3 or OpenDataHub (ODH)
+#   along with its required prerequisites and the Models-as-a-Service (MaaS) capability.
 #
 #   The deployment includes:
 #   - cert-manager
 #   - Leader Worker Set (LWS)
-#   - Red Hat Connectivity Link
-#   - RHOAI v3 with KServe for model serving
-#   - MaaS standalone capability (Developer Preview)
+#   - Red Hat Connectivity Link (Kuadrant)
+#   - RHOAI v3 or ODH with KServe for model serving
+#   - MaaS capability (core components managed by the operator)
+#   - MaaS Gateway (not managed by operator)
+#   - Rate Limit and Token Limit policies (not managed by operator)
 #
 # PREREQUISITES:
 #   - OpenShift cluster v4.19.9+
 #   - Cluster administrator privileges
 #   - kubectl CLI tool configured and connected to cluster
-#   - kustomize tool available in PATH
+#   - kustomize tool available in PATH (for usage policies)
 #   - jq tool for JSON processing
 #
+# ENVIRONMENT VARIABLES:
+#   OPERATOR_TYPE   - Which operator to install: "rhoai" (default) or "odh"
+#   MAAS_REF        - Git ref for MaaS manifests (default: main)
+#   CERT_NAME       - TLS certificate secret name (default: data-science-gateway-service-tls)
+#
 # USAGE:
-#   ./deploy-rhoai-stable.sh
+#   ./deploy-rhoai-stable.sh                    # Install RHOAI (default)
+#   OPERATOR_TYPE=odh ./deploy-rhoai-stable.sh  # Install ODH
 #
 # NOTES:
 #   - The script is idempotent for most operations
-#   - No arguments are expected
+#   - Core MaaS components (deployment, auth policy) are managed by the RHOAI/ODH operator
+#   - Gateway and usage policies are installed separately by this script
 
 set -e
+
+# Configuration
+: "${OPERATOR_TYPE:=rhoai}"
+: "${MAAS_REF:=main}"
+: "${CERT_NAME:=data-science-gateway-service-tls}"
+
+# Export variables needed by envsubst
+export CERT_NAME
+
+# Validate OPERATOR_TYPE
+if [[ "$OPERATOR_TYPE" != "rhoai" && "$OPERATOR_TYPE" != "odh" ]]; then
+  echo "ERROR: OPERATOR_TYPE must be 'rhoai' or 'odh'. Got: $OPERATOR_TYPE"
+  exit 1
+fi
+
+echo "========================================="
+echo "Deploying with operator: ${OPERATOR_TYPE}"
+echo "========================================="
 
 waitsubscriptioninstalled() {
   local ns=${1?namespace is required}; shift
@@ -60,6 +87,16 @@ checksubscriptionexists() {
   local query="${catalogns_cond} and ${catalog_cond} and ${op_cond}"
 
   echo $(kubectl get subscriptions -A -ojson | jq ".items | map(select(${query})) | length")
+}
+
+# Check if a CSV exists by name prefix (e.g., "opendatahub-operator" matches "opendatahub-operator.v3.2.0")
+checkcsvexists() {
+  local csv_prefix=${1?csv prefix is required}; shift
+
+  # Count CSVs whose name starts with the given prefix
+  local count
+  count=$(kubectl get csv -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c "^${csv_prefix}" 2>/dev/null) || count=0
+  echo "$count"
 }
 
 deploy_certmanager() {
@@ -216,8 +253,18 @@ EOF
 }
 
 deploy_rhoai() {
-  local rhoai_exists=$(checksubscriptionexists openshift-marketplace redhat-operators rhods-operator)
-  if [[ $rhoai_exists -ne "0" ]]; then
+  # Check if ODH is already installed - can't have both
+  local odh_csv_count=$(checkcsvexists "opendatahub-operator")
+  if [[ $odh_csv_count -ne "0" ]]; then
+    echo "ERROR: OpenDataHub operator is already installed in the cluster."
+    echo "       Cannot install RHOAI when ODH is present. Please uninstall ODH first,"
+    echo "       or use OPERATOR_TYPE=odh to continue with ODH."
+    exit 1
+  fi
+
+  # Check if RHOAI is already installed
+  local rhoai_csv_count=$(checkcsvexists "rhods-operator")
+  if [[ $rhoai_csv_count -ne "0" ]]; then
     echo "* The RHOAI operator is present in the cluster. Skipping installation."
     return 0
   fi
@@ -226,24 +273,6 @@ deploy_rhoai() {
   echo "* Installing RHOAI v3 operator..."
 
   cat <<EOF | kubectl apply -f -
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: openshift-ai-inference
-  namespace: openshift-ingress
-spec:
-  gatewayClassName: openshift-default
-  listeners:
-  - name: http
-    port: 80
-    protocol: HTTP
-    allowedRoutes:
-      namespaces:
-        from: All
-  infrastructure:
-    labels:
-      serving.kserve.io/gateway: kserve-ingress-gateway
----
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -269,7 +298,95 @@ spec:
 EOF
 
   waitsubscriptioninstalled "redhat-ods-operator" "rhoai3-operator"
-  echo "* Setting up RHOAI instance and letting it deploy asynchronously."
+}
+
+deploy_odh() {
+  # Check if RHOAI is already installed - can't have both
+  local rhoai_csv_count=$(checkcsvexists "rhods-operator")
+  if [[ $rhoai_csv_count -ne "0" ]]; then
+    echo "ERROR: RHOAI operator is already installed in the cluster."
+    echo "       Cannot install ODH when RHOAI is present. Please uninstall RHOAI first,"
+    echo "       or use OPERATOR_TYPE=rhoai to continue with RHOAI."
+    exit 1
+  fi
+
+  # Check if ODH is already installed
+  local odh_csv_count=$(checkcsvexists "opendatahub-operator")
+  if [[ $odh_csv_count -ne "0" ]]; then
+    echo "* The ODH operator is present in the cluster. Skipping installation."
+    return 0
+  fi
+
+  echo
+  echo "* Installing OpenDataHub operator..."
+
+  cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-operators
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: opendatahub-operator
+  namespace: openshift-operators
+spec:
+  channel: fast-3
+  installPlanApproval: Automatic
+  name: opendatahub-operator
+  source: community-operators
+  sourceNamespace: openshift-marketplace
+EOF
+
+  waitsubscriptioninstalled "openshift-operators" "opendatahub-operator"
+}
+
+deploy_dscinitialization() {
+  # Check if a DSCInitialization already exists, skip creation if so
+  if kubectl get dscinitialization -A --no-headers 2>/dev/null | grep -q .; then
+    echo "* A DSCInitialization already exists in the cluster. Skipping creation."
+    return 0
+  fi
+
+  echo "* Setting up DSCInitialization..."
+
+  cat <<EOF | kubectl apply -f -
+apiVersion: dscinitialization.opendatahub.io/v2
+kind: DSCInitialization
+metadata:
+  name: default-dsci
+  labels:
+    app.kubernetes.io/name: dscinitialization
+spec:
+  applicationsNamespace: opendatahub
+  monitoring:
+    metrics:
+      storage:
+        retention: 90d
+        size: 5Gi
+    namespace: opendatahub
+    traces:
+      sampleRatio: '0.1'
+      storage:
+        backend: pv
+        retention: 2160h
+    managementState: Managed
+  trustedCABundle:
+    customCABundle: ''
+    managementState: Managed
+EOF
+}
+
+deploy_datasciencecluster() {
+  # Check if a DataScienceCluster already exists, skip creation if so
+  if kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
+    echo "* A DataScienceCluster already exists in the cluster. Skipping creation."
+    return 0
+  fi
+  echo "* Setting up DataScienceCluster with MaaS capability..."
 
   cat <<EOF | kubectl apply -f -
 apiVersion: datasciencecluster.opendatahub.io/v2
@@ -283,56 +400,102 @@ spec:
       managementState: Managed
       rawDeploymentServiceConfig: Headed
 
+      # MaaS capability - managed by operator
+      modelsAsService:
+        managementState: Managed
+
     # Components recommended for MaaS:
     dashboard:
       managementState: Managed
 EOF
 }
 
+wait_for_opendatahub_namespace() {
+  if kubectl get namespace opendatahub >/dev/null 2>&1; then
+    kubectl wait namespace/opendatahub --for=jsonpath='{.status.phase}'=Active --timeout=60s
+  else
+    echo "* Waiting for opendatahub namespace to be created by the operator..."
+    for i in {1..60}; do
+      if kubectl get namespace opendatahub >/dev/null 2>&1; then
+        kubectl wait namespace/opendatahub --for=jsonpath='{.status.phase}'=Active --timeout=60s
+        return 0
+      fi
+      sleep 5
+    done
+    echo "  WARNING: opendatahub namespace was not created within timeout."
+  fi
+}
+
+# ========================================
+# Main Deployment Flow
+# ========================================
+
 echo "## Installing prerequisites"
 
 deploy_certmanager
 deploy_lws
 deploy_rhcl
-deploy_rhoai
 
 echo
-echo "## Installing Models-as-a-Service"
+echo "## Installing ${OPERATOR_TYPE^^} operator"
+
+if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
+  deploy_rhoai
+else
+  deploy_odh
+fi
+
+echo
+echo "## Configuring DSCInitialization and DataScienceCluster"
+deploy_dscinitialization
+deploy_datasciencecluster
+
+echo
+echo "## Waiting for operator to initialize..."
+wait_for_opendatahub_namespace
+
+echo
+echo "## Installing MaaS components (not managed by operator)"
 
 export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 export AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
 
 echo "* Cluster domain: ${CLUSTER_DOMAIN}"
 echo "* Cluster audience: ${AUD}"
+echo "* TLS certificate secret: ${CERT_NAME}"
 
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: maas-api
-EOF
+echo
+echo "## Installing MaaS Gateway"
+echo "* Deploying maas-default-gateway..."
+kubectl apply --server-side=true \
+  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/networking/maas?ref=${MAAS_REF}" | \
+       envsubst '$CLUSTER_DOMAIN $CERT_NAME')
 
-if kubectl get namespace opendatahub >/dev/null 2>&1; then
-  kubectl wait namespace/opendatahub --for=jsonpath='{.status.phase}'=Active --timeout=60s
-else
-  echo "* Waiting for opendatahub namespace to be created by the operator..."
-  for i in {1..30}; do
-    if kubectl get namespace opendatahub >/dev/null 2>&1; then
-      kubectl wait namespace/opendatahub --for=jsonpath='{.status.phase}'=Active --timeout=60s
+echo
+echo "## Applying usage policies (RateLimit and TokenRateLimit)"
+echo "* Deploying rate-limit and token-limit policies..."
+kubectl apply --server-side=true \
+  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/usage-policies?ref=${MAAS_REF}")
+
+# Fix audience for ROSA/non-standard clusters
+if [[ -n "$AUD" && "$AUD" != "https://kubernetes.default.svc" ]]; then
+  echo
+  echo "## Configuring audience for non-standard cluster"
+  echo "* Detected non-default audience: ${AUD}"
+  
+  # Wait for maas-api namespace and AuthPolicy to be created by operator
+  echo "  * Waiting for maas-api namespace..."
+  for i in {1..60}; do
+    if kubectl get namespace maas-api >/dev/null 2>&1; then
       break
     fi
     sleep 5
   done
-fi
-
-: "${MAAS_REF:=main}"
-kubectl apply --server-side=true \
-  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/overlays/openshift?ref=${MAAS_REF}" | \
-       envsubst '$CLUSTER_DOMAIN')
-
-if [[ -n "$AUD" && "$AUD" != "https://kubernetes.default.svc"  ]]; then
-  echo "* Configuring audience in MaaS AuthPolicy"
-  kubectl patch authpolicy maas-api-auth-policy -n maas-api --type=merge --patch-file <(echo "
+  
+  echo "  * Waiting for AuthPolicy to be created by operator..."
+  for i in {1..60}; do
+    if kubectl get authpolicy maas-api-auth-policy -n maas-api >/dev/null 2>&1; then
+      kubectl patch authpolicy maas-api-auth-policy -n maas-api --type=merge --patch-file <(echo "
 spec:
   rules:
     authentication:
@@ -341,11 +504,42 @@ spec:
           audiences:
             - $AUD
             - maas-default-gateway-sa")
+      echo "  * AuthPolicy patched with custom audience."
+      break
+    fi
+    sleep 5
+  done
 fi
 
-# Patch maas-api Deployment with stable image
-: "${MAAS_RHOAI_IMAGE:=v3.0.0}"
-kubectl set image -n maas-api deployment/maas-api maas-api=registry.redhat.io/rhoai/odh-maas-api-rhel9:${MAAS_RHOAI_IMAGE}
+echo
+echo "## Fixing NetworkPolicy for Authorino"
+echo "* Creating NetworkPolicy to allow Authorino ingress to opendatahub namespace..."
+# The opendatahub NetworkPolicy blocks traffic from Authorino pods.
+# This fix allows Authorino to communicate for AuthN/AuthZ flows.
+cat <<EOF | kubectl apply -f -
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: opendatahub-authorino-allow
+  namespace: opendatahub
+spec:
+  podSelector: {}
+  ingress:
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              authorino-resource: authorino
+  policyTypes:
+    - Ingress
+EOF
+
+echo
+echo "## Observability Setup (Optional)"
+echo "* NOTE: Observability (Prometheus/Grafana integration) is not installed by default."
+echo "* To enable observability, apply the observability manifests:"
+echo "   kubectl apply --server-side=true \\"
+echo "     -f <(kustomize build \"https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/observability?ref=${MAAS_REF}\")"
 
 echo ""
 echo "========================================="
