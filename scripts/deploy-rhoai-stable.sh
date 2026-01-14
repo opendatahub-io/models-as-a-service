@@ -22,14 +22,25 @@
 #   - kustomize tool available in PATH (for usage policies)
 #   - jq tool for JSON processing
 #
-# ENVIRONMENT VARIABLES:
-#   OPERATOR_TYPE   - Which operator to install: "rhoai" (default) or "odh"
-#   MAAS_REF        - Git ref for MaaS manifests (default: main)
-#   CERT_NAME       - TLS certificate secret name (default: data-science-gateway-service-tls)
-#
 # USAGE:
-#   ./deploy-rhoai-stable.sh                    # Install RHOAI (default)
-#   OPERATOR_TYPE=odh ./deploy-rhoai-stable.sh  # Install ODH
+#   ./deploy-rhoai-stable.sh [OPTIONS]
+#
+# OPTIONS:
+#   -h, --help              Show this help message and exit
+#   -t, --operator-type     Which operator to install: "rhoai" (default) or "odh"
+#   -r, --maas-ref          Git ref for MaaS manifests (default: main)
+#   -c, --cert-name         TLS certificate secret name (default: data-science-gateway-service-tls)
+#
+# ENVIRONMENT VARIABLES:
+#   Options can also be set via environment variables:
+#   OPERATOR_TYPE, MAAS_REF, CERT_NAME
+#   CLI arguments take precedence over environment variables.
+#
+# EXAMPLES:
+#   ./deploy-rhoai-stable.sh                           # Install RHOAI (default)
+#   ./deploy-rhoai-stable.sh --operator-type odh       # Install ODH
+#   ./deploy-rhoai-stable.sh -t odh -r v1.0.0          # Install ODH with specific ref
+#   OPERATOR_TYPE=odh ./deploy-rhoai-stable.sh         # Install ODH via env var
 #
 # NOTES:
 #   - The script is idempotent for most operations
@@ -38,7 +49,78 @@
 
 set -e
 
-# Configuration
+# Source common helper functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/deployment-helpers.sh"
+
+# Show help message
+show_help() {
+  cat << EOF
+Deploy Red Hat OpenShift AI v3 or OpenDataHub with Models-as-a-Service capability
+
+Usage: $(basename "$0") [OPTIONS]
+
+Options:
+  -h, --help              Show this help message and exit
+  -t, --operator-type     Which operator to install: "rhoai" (default) or "odh"
+  -r, --maas-ref          Git ref for MaaS manifests (default: main)
+  -c, --cert-name         TLS certificate secret name (default: data-science-gateway-service-tls)
+  -b, --operator-bundle   Custom operator bundle image to use instead of catalog
+                          (e.g., quay.io/opendatahub/opendatahub-operator-bundle:v3.2.0)
+
+Environment Variables:
+  OPERATOR_TYPE           Same as --operator-type
+  MAAS_REF                Same as --maas-ref
+  CERT_NAME               Same as --cert-name
+  OPERATOR_BUNDLE         Same as --operator-bundle
+
+Examples:
+  $(basename "$0")                           # Install RHOAI (default)
+  $(basename "$0") --operator-type odh       # Install ODH
+  $(basename "$0") -t odh -r v1.0.0          # Install ODH with specific git ref
+  $(basename "$0") -t odh -b quay.io/org/bundle:tag  # Install ODH from custom bundle
+  OPERATOR_TYPE=odh $(basename "$0")         # Install ODH via env var
+
+EOF
+  exit 0
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      show_help
+      ;;
+    -t|--operator-type)
+      OPERATOR_TYPE="$2"
+      shift 2
+      ;;
+    -r|--maas-ref)
+      MAAS_REF="$2"
+      shift 2
+      ;;
+    -c|--cert-name)
+      CERT_NAME="$2"
+      shift 2
+      ;;
+    -b|--operator-bundle)
+      OPERATOR_BUNDLE="$2"
+      shift 2
+      ;;
+    -*)
+      echo "ERROR: Unknown option: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+    *)
+      echo "ERROR: Unexpected argument: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+  esac
+done
+
+# Set defaults for any unset variables
 : "${OPERATOR_TYPE:=rhoai}"
 : "${MAAS_REF:=main}"
 : "${CERT_NAME:=data-science-gateway-service-tls}"
@@ -54,50 +136,10 @@ fi
 
 echo "========================================="
 echo "Deploying with operator: ${OPERATOR_TYPE}"
+if [[ -n "${OPERATOR_BUNDLE:-}" ]]; then
+  echo "Using custom bundle: ${OPERATOR_BUNDLE}"
+fi
 echo "========================================="
-
-waitsubscriptioninstalled() {
-  local ns=${1?namespace is required}; shift
-  local name=${1?subscription name is required}; shift
-
-  echo "  * Waiting for Subscription $ns/$name to start setup..."
-  kubectl wait subscription --timeout=300s -n $ns $name --for=jsonpath='{.status.currentCSV}'
-  local csv=$(kubectl get subscription -n $ns $name -o jsonpath='{.status.currentCSV}')
-
-  # Because, sometimes, the CSV is not there immediately.
-  while ! kubectl get -n $ns csv $csv > /dev/null 2>&1; do
-    sleep 1
-  done
-
-  echo "  * Waiting for Subscription setup to finish setup. CSV = $csv ..."
-  if ! kubectl wait -n $ns --for=jsonpath="{.status.phase}"=Succeeded csv $csv --timeout=600s; then
-    echo "    * ERROR: Timeout while waiting for Subscription to finish installation."
-    exit 1
-  fi
-}
-
-checksubscriptionexists() {
-  local catalog_ns=${1?catalog namespace is required}; shift
-  local catalog_name=${1?catalog name is required}; shift
-  local operator_name=${1?operator name is required}; shift
-
-  local catalogns_cond=".spec.sourceNamespace == \"${catalog_ns}\""
-  local catalog_cond=".spec.source == \"${catalog_name}\""
-  local op_cond=".spec.name == \"${operator_name}\""
-  local query="${catalogns_cond} and ${catalog_cond} and ${op_cond}"
-
-  echo $(kubectl get subscriptions -A -ojson | jq ".items | map(select(${query})) | length")
-}
-
-# Check if a CSV exists by name prefix (e.g., "opendatahub-operator" matches "opendatahub-operator.v3.2.0")
-checkcsvexists() {
-  local csv_prefix=${1?csv prefix is required}; shift
-
-  # Count CSVs whose name starts with the given prefix
-  local count
-  count=$(kubectl get csv -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c "^${csv_prefix}" 2>/dev/null) || count=0
-  echo "$count"
-}
 
 deploy_certmanager() {
   local certmanager_exists=$(checksubscriptionexists openshift-marketplace redhat-operators openshift-cert-manager-operator)
@@ -320,6 +362,16 @@ deploy_odh() {
   echo
   echo "* Installing OpenDataHub operator..."
 
+  # Determine catalog source based on whether a custom bundle is specified
+  local catalog_source="community-operators"
+  local catalog_namespace="openshift-marketplace"
+
+  if [[ -n "${OPERATOR_BUNDLE:-}" ]]; then
+    echo "* Using custom operator bundle: ${OPERATOR_BUNDLE}"
+    create_bundle_catalogsource "odh-custom-catalog" "openshift-marketplace" "${OPERATOR_BUNDLE}"
+    catalog_source="odh-custom-catalog"
+  fi
+
   cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Namespace
@@ -337,8 +389,8 @@ spec:
   channel: fast-3
   installPlanApproval: Automatic
   name: opendatahub-operator
-  source: community-operators
-  sourceNamespace: openshift-marketplace
+  source: ${catalog_source}
+  sourceNamespace: ${catalog_namespace}
 EOF
 
   waitsubscriptioninstalled "openshift-operators" "opendatahub-operator"
@@ -410,22 +462,6 @@ spec:
 EOF
 }
 
-wait_for_opendatahub_namespace() {
-  if kubectl get namespace opendatahub >/dev/null 2>&1; then
-    kubectl wait namespace/opendatahub --for=jsonpath='{.status.phase}'=Active --timeout=60s
-  else
-    echo "* Waiting for opendatahub namespace to be created by the operator..."
-    for i in {1..60}; do
-      if kubectl get namespace opendatahub >/dev/null 2>&1; then
-        kubectl wait namespace/opendatahub --for=jsonpath='{.status.phase}'=Active --timeout=60s
-        return 0
-      fi
-      sleep 5
-    done
-    echo "  WARNING: opendatahub namespace was not created within timeout."
-  fi
-}
-
 # ========================================
 # Main Deployment Flow
 # ========================================
@@ -452,7 +488,7 @@ deploy_datasciencecluster
 
 echo
 echo "## Waiting for operator to initialize..."
-wait_for_opendatahub_namespace
+wait_for_namespace "opendatahub" 300
 
 echo
 echo "## Installing MaaS components (not managed by operator)"
@@ -483,19 +519,9 @@ if [[ -n "$AUD" && "$AUD" != "https://kubernetes.default.svc" ]]; then
   echo "## Configuring audience for non-standard cluster"
   echo "* Detected non-default audience: ${AUD}"
   
-  # Wait for maas-api namespace and AuthPolicy to be created by operator
-  echo "  * Waiting for maas-api namespace..."
-  for i in {1..60}; do
-    if kubectl get namespace maas-api >/dev/null 2>&1; then
-      break
-    fi
-    sleep 5
-  done
-  
-  echo "  * Waiting for AuthPolicy to be created by operator..."
-  for i in {1..60}; do
-    if kubectl get authpolicy maas-api-auth-policy -n maas-api >/dev/null 2>&1; then
-      kubectl patch authpolicy maas-api-auth-policy -n maas-api --type=merge --patch-file <(echo "
+  # Wait for AuthPolicy to be created by operator in opendatahub namespace
+  if wait_for_resource "authpolicy" "gateway-auth-policy" "openshift-ingress" 300; then
+    kubectl patch authpolicy gateway-auth-policy -n openshift-ingress --type=merge --patch-file <(echo "
 spec:
   rules:
     authentication:
@@ -504,11 +530,10 @@ spec:
           audiences:
             - $AUD
             - maas-default-gateway-sa")
-      echo "  * AuthPolicy patched with custom audience."
-      break
-    fi
-    sleep 5
-  done
+    echo "  * AuthPolicy patched with custom audience."
+  else
+    echo "  WARNING: Could not find AuthPolicy to patch. Skipping audience configuration."
+  fi
 fi
 
 echo
@@ -555,7 +580,7 @@ echo "   CLUSTER_DOMAIN=\$(kubectl get ingresses.config.openshift.io cluster -o 
 echo "   HOST=\"maas.\${CLUSTER_DOMAIN}\""
 echo ""
 echo "3. Get authentication token:"
-echo "   TOKEN_RESPONSE=\$(curl -sSk  -H "Authorization: Bearer $TOKEN" --json '{\"expiration\": \"10m\"}' \"\${HOST}/maas-api/v1/tokens\")"
+echo "   TOKEN_RESPONSE=\$(curl -sSk  -H \"Authorization: Bearer \$(oc whoami -t)\" --json '{\"expiration\": \"10m\"}' \"\${HOST}/maas-api/v1/tokens\")"
 echo "   TOKEN=\$(echo \$TOKEN_RESPONSE | jq -r .token)"
 echo "   echo \$TOKEN"
 echo ""

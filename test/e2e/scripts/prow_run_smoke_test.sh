@@ -89,7 +89,7 @@ check_prerequisites() {
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform on OpenShift..."
-    if ! "$PROJECT_ROOT/scripts/deploy-openshift.sh"; then
+    if ! "$PROJECT_ROOT/scripts/deploy-rhoai-stable.sh" --operator-type odh --operator-bundle quay.io/opendatahub/opendatahub-operator-bundle:latest; then
         echo "❌ ERROR: MaaS platform deployment failed"
         exit 1
     fi

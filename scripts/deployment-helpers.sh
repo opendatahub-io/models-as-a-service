@@ -9,6 +9,119 @@ export AUTHORINO_MIN_VERSION="0.22.0"
 export LIMITADOR_MIN_VERSION="0.16.0"
 export DNS_OPERATOR_MIN_VERSION="0.15.0"
 
+# ==========================================
+# OLM Subscription and CSV Helper Functions
+# ==========================================
+
+# waitsubscriptioninstalled namespace subscription_name
+#   Waits for an OLM Subscription to finish installing its CSV.
+#   Exits with error if the installation times out.
+waitsubscriptioninstalled() {
+  local ns=${1?namespace is required}; shift
+  local name=${1?subscription name is required}; shift
+
+  echo "  * Waiting for Subscription $ns/$name to start setup..."
+  kubectl wait subscription --timeout=300s -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'
+  local csv
+  csv=$(kubectl get subscription -n "$ns" "$name" -o jsonpath='{.status.currentCSV}')
+
+  # Because, sometimes, the CSV is not there immediately.
+  while ! kubectl get -n "$ns" csv "$csv" > /dev/null 2>&1; do
+    sleep 1
+  done
+
+  echo "  * Waiting for Subscription setup to finish setup. CSV = $csv ..."
+  if ! kubectl wait -n "$ns" --for=jsonpath="{.status.phase}"=Succeeded csv "$csv" --timeout=600s; then
+    echo "    * ERROR: Timeout while waiting for Subscription to finish installation."
+    return 1
+  fi
+}
+
+# checksubscriptionexists catalog_namespace catalog_name operator_name
+#   Checks if a subscription exists for the given operator from the specified catalog.
+#   Returns the count of matching subscriptions (0 if none found).
+checksubscriptionexists() {
+  local catalog_ns=${1?catalog namespace is required}; shift
+  local catalog_name=${1?catalog name is required}; shift
+  local operator_name=${1?operator name is required}; shift
+
+  local catalogns_cond=".spec.sourceNamespace == \"${catalog_ns}\""
+  local catalog_cond=".spec.source == \"${catalog_name}\""
+  local op_cond=".spec.name == \"${operator_name}\""
+  local query="${catalogns_cond} and ${catalog_cond} and ${op_cond}"
+
+  kubectl get subscriptions -A -ojson | jq ".items | map(select(${query})) | length"
+}
+
+# checkcsvexists csv_prefix
+#   Checks if a CSV exists by name prefix (e.g., "opendatahub-operator" matches "opendatahub-operator.v3.2.0").
+#   Returns the count of matching CSVs (0 if none found).
+checkcsvexists() {
+  local csv_prefix=${1?csv prefix is required}; shift
+
+  # Count CSVs whose name starts with the given prefix
+  local count
+  count=$(kubectl get csv -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c "^${csv_prefix}" 2>/dev/null) || count=0
+  echo "$count"
+}
+
+# ==========================================
+# Namespace Helper Functions
+# ==========================================
+
+# wait_for_namespace namespace [timeout]
+#   Waits for a namespace to be created and become Active.
+#   Returns 0 on success, 1 on timeout.
+wait_for_namespace() {
+  local namespace=${1?namespace is required}; shift
+  local timeout=${1:-300}  # default 5 minutes
+
+  if kubectl get namespace "$namespace" >/dev/null 2>&1; then
+    kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s
+    return $?
+  fi
+
+  echo "* Waiting for $namespace namespace to be created..."
+  local elapsed=0
+  local interval=5
+  while [ $elapsed -lt $timeout ]; do
+    if kubectl get namespace "$namespace" >/dev/null 2>&1; then
+      kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s
+      return $?
+    fi
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "  WARNING: $namespace namespace was not created within timeout."
+  return 1
+}
+
+# wait_for_resource kind name namespace [timeout]
+#   Waits for a resource to be created.
+#   Returns 0 when found, 1 on timeout.
+wait_for_resource() {
+  local kind=${1?kind is required}; shift
+  local name=${1?name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local timeout=${1:-300}  # default 5 minutes
+
+  echo "* Waiting for $kind/$name in $namespace..."
+  local elapsed=0
+  local interval=5
+  while [ $elapsed -lt $timeout ]; do
+    if kubectl get "$kind" "$name" -n "$namespace" >/dev/null 2>&1; then
+      echo "  * Found $kind/$name"
+      return 0
+    fi
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "  WARNING: $kind/$name was not found within timeout."
+  return 1
+}
+
 # find_project_root [start_dir] [marker]
 #   Walks up the directory tree to find the project root.
 #   Returns the path containing the marker (default: .git)
@@ -228,5 +341,84 @@ wait_for_csv() {
 
   echo "❌ Timed out after ${timeout}s waiting for CSV ${csv_name}" >&2
   return 1
+}
+
+# ==========================================
+# Custom Catalog Source Functions
+# ==========================================
+
+# create_bundle_catalogsource name namespace bundle_image
+#   Creates a CatalogSource from an operator bundle image using the file-based catalog (FBC) format.
+#   This allows installing operators from custom bundle images instead of the default catalog.
+#
+# Arguments:
+#   name          - Name for the CatalogSource
+#   namespace     - Namespace for the CatalogSource (usually openshift-marketplace)
+#   bundle_image  - The operator bundle image (e.g., quay.io/opendatahub/opendatahub-operator-bundle:v3.2.0)
+#
+# Returns:
+#   0 on success, 1 on failure
+create_bundle_catalogsource() {
+  local name=${1?catalogsource name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local bundle_image=${1?bundle image is required}; shift
+
+  echo "* Creating CatalogSource '$name' from bundle image: $bundle_image"
+
+  # Check if CatalogSource already exists
+  if kubectl get catalogsource "$name" -n "$namespace" &>/dev/null; then
+    echo "  * CatalogSource '$name' already exists. Updating..."
+    kubectl delete catalogsource "$name" -n "$namespace" --ignore-not-found
+    sleep 5
+  fi
+
+  cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: ${name}
+  namespace: ${namespace}
+spec:
+  sourceType: grpc
+  image: ${bundle_image}
+  displayName: "Custom ${name} Catalog"
+  publisher: "Custom"
+  updateStrategy:
+    registryPoll:
+      interval: 10m
+EOF
+
+  echo "  * Waiting for CatalogSource to be ready..."
+  local timeout=120
+  local elapsed=0
+  local interval=5
+
+  while [ $elapsed -lt $timeout ]; do
+    local state
+    state=$(kubectl get catalogsource "$name" -n "$namespace" -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null || echo "")
+    
+    if [ "$state" = "READY" ]; then
+      echo "  * CatalogSource '$name' is ready"
+      return 0
+    fi
+
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "  WARNING: CatalogSource may not be fully ready yet (state: $state)"
+  return 0
+}
+
+# cleanup_bundle_catalogsource name namespace
+#   Removes a custom CatalogSource created by create_bundle_catalogsource.
+cleanup_bundle_catalogsource() {
+  local name=${1?catalogsource name is required}; shift
+  local namespace=${1?namespace is required}; shift
+
+  if kubectl get catalogsource "$name" -n "$namespace" &>/dev/null; then
+    echo "* Removing CatalogSource '$name'..."
+    kubectl delete catalogsource "$name" -n "$namespace" --ignore-not-found
+  fi
 }
 
