@@ -289,7 +289,7 @@ spec:
   sourceNamespace: openshift-marketplace
 EOF
 
-  waitsubscriptioninstalled "kuadrant-system" "kuadrant-operator"
+  waitsubscriptioninstalled "kuadrant-system" "rhcl-operator"
   echo "* Setting up RHCL instance..."
 
   cat <<EOF | kubectl apply -f -
@@ -384,19 +384,28 @@ deploy_odh() {
 
   echo "* Using channel: ${channel}"
 
+  # Install in dedicated namespace to avoid conflicts with other operators
+  # that may have Manual approval (e.g., servicemeshoperator3 in openshift-operators)
   cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: openshift-operators
+  name: odh-operator
   labels:
     openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: odh-operator-group
+  namespace: odh-operator
+spec: {}
 ---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
   name: opendatahub-operator
-  namespace: openshift-operators
+  namespace: odh-operator
 spec:
   channel: ${channel}
   installPlanApproval: Automatic
@@ -405,7 +414,7 @@ spec:
   sourceNamespace: ${catalog_namespace}
 EOF
 
-  waitsubscriptioninstalled "openshift-operators" "opendatahub-operator"
+  waitsubscriptioninstalled "odh-operator" "opendatahub-operator"
 }
 
 deploy_dscinitialization() {
