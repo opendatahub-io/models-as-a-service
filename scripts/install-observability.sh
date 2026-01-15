@@ -123,13 +123,18 @@ if kubectl get configmap cluster-monitoring-config -n openshift-monitoring &>/de
     else
         echo "   Patching cluster-monitoring-config to enable user-workload-monitoring..."
         # Use patch to merge the setting, preserving any existing configuration
-        # This adds enableUserWorkload: true to the existing config.yaml data
         if [ -z "$CURRENT_CONFIG" ]; then
             # ConfigMap exists but has no config.yaml data
             kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
                 --type merge -p '{"data":{"config.yaml":"enableUserWorkload: true\n"}}'
+        elif echo "$CURRENT_CONFIG" | grep -q "enableUserWorkload:"; then
+            # ConfigMap has enableUserWorkload set to something other than true (e.g., false)
+            # Replace the existing value to avoid duplicate YAML keys
+            NEW_CONFIG=$(echo "$CURRENT_CONFIG" | sed 's/enableUserWorkload:.*/enableUserWorkload: true/')
+            kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
+                --type merge -p "{\"data\":{\"config.yaml\":$(echo "$NEW_CONFIG" | jq -Rs .)}}"
         else
-            # ConfigMap exists with existing config - append the setting
+            # ConfigMap exists with config but no enableUserWorkload setting - append it
             NEW_CONFIG=$(printf '%s\nenableUserWorkload: true\n' "$CURRENT_CONFIG")
             kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
                 --type merge -p "{\"data\":{\"config.yaml\":$(echo "$NEW_CONFIG" | jq -Rs .)}}"
