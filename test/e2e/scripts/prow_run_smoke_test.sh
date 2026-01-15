@@ -50,6 +50,9 @@ find_project_root() {
 # Configuration
 PROJECT_ROOT="$(find_project_root)"
 
+# Source helper functions
+source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
+
 # Options (can be set as environment variables)
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
@@ -88,9 +91,14 @@ check_prerequisites() {
 }
 
 deploy_maas_platform() {
-    echo "Deploying MaaS platform on OpenShift..."
-    if ! "$PROJECT_ROOT/scripts/deploy-rhoai-stable.sh" --operator-type odh --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:latest --channel fast; then
+    echo "Deploying MaaS platform on OpenShift..." --operator-image quay.io/opendatahub/opendatahub-operator:pr-3063
+    if ! "$PROJECT_ROOT/scripts/deploy-rhoai-stable.sh" --operator-type odh --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:pr-3078 --channel fast; then
         echo "❌ ERROR: MaaS platform deployment failed"
+        exit 1
+    fi
+    # Wait for DataScienceCluster's KServe and ModelsAsService to be ready
+    if ! wait_datasciencecluster_ready "default-dsc" 600; then
+        echo "❌ ERROR: DataScienceCluster components did not become ready"
         exit 1
     fi
     echo "✅ MaaS platform deployment completed"

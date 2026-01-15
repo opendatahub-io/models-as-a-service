@@ -26,14 +26,19 @@
 #   ./deploy-rhoai-stable.sh [OPTIONS]
 #
 # OPTIONS:
-#   -h, --help              Show this help message and exit
+#   -h, --help              Show this help message and exit (use -v for advanced options)
 #   -t, --operator-type     Which operator to install: "rhoai" (default) or "odh"
 #   -r, --maas-ref          Git ref for MaaS manifests (default: main)
 #   -c, --cert-name         TLS certificate secret name (default: data-science-gateway-service-tls)
 #
+# ADVANCED OPTIONS (use --help -v to see these):
+#   -b, --operator-catalog  Custom operator catalog/index image
+#   --operator-image        Custom operator image (patches CSV after installation)
+#   --channel               Operator channel to use
+#
 # ENVIRONMENT VARIABLES:
 #   Options can also be set via environment variables:
-#   OPERATOR_TYPE, MAAS_REF, CERT_NAME
+#   OPERATOR_TYPE, MAAS_REF, CERT_NAME, OPERATOR_CATALOG, OPERATOR_IMAGE, OPERATOR_CHANNEL
 #   CLI arguments take precedence over environment variables.
 #
 # EXAMPLES:
@@ -55,44 +60,73 @@ source "${SCRIPT_DIR}/deployment-helpers.sh"
 
 # Show help message
 show_help() {
+  local verbose="${1:-false}"
+  
   cat << EOF
 Deploy Red Hat OpenShift AI v3 or OpenDataHub with Models-as-a-Service capability
 
 Usage: $(basename "$0") [OPTIONS]
 
 Options:
-  -h, --help              Show this help message and exit
+  -h, --help              Show this help message and exit (use -v for advanced options)
   -t, --operator-type     Which operator to install: "rhoai" (default) or "odh"
   -r, --maas-ref          Git ref for MaaS manifests (default: main)
   -c, --cert-name         TLS certificate secret name (default: data-science-gateway-service-tls)
-  -b, --operator-catalog  Custom operator catalog/index image to use instead of default catalog
-                          (e.g., quay.io/opendatahub/opendatahub-operator-catalog:latest)
-                          NOTE: This must be a CATALOG image, not a bundle image!
-  --channel               Operator channel to use (default: fast-3 for catalog, fast for custom)
 
 Environment Variables:
   OPERATOR_TYPE           Same as --operator-type
   MAAS_REF                Same as --maas-ref
   CERT_NAME               Same as --cert-name
-  OPERATOR_CATALOG        Same as --operator-catalog
-  OPERATOR_CHANNEL        Same as --channel
 
 Examples:
   $(basename "$0")                           # Install RHOAI (default)
   $(basename "$0") --operator-type odh       # Install ODH
   $(basename "$0") -t odh -r v1.0.0          # Install ODH with specific git ref
-  $(basename "$0") -t odh -b quay.io/opendatahub/opendatahub-operator-catalog:latest  # Install ODH from custom catalog
   OPERATOR_TYPE=odh $(basename "$0")         # Install ODH via env var
 
 EOF
+
+  if [[ "$verbose" == "true" ]]; then
+    cat << EOF
+Advanced Options (for development/testing):
+  -b, --operator-catalog  Custom operator catalog/index image to use instead of default catalog
+                          (e.g., quay.io/opendatahub/opendatahub-operator-catalog:latest)
+                          NOTE: This must be a CATALOG image, not a bundle image!
+  --operator-image        Custom operator image to use (patches the CSV after installation)
+                          (e.g., quay.io/opendatahub/opendatahub-operator:pr-1234)
+  --channel               Operator channel to use (default: fast-3 for catalog, fast for custom)
+
+Advanced Environment Variables:
+  OPERATOR_CATALOG        Same as --operator-catalog
+  OPERATOR_IMAGE          Same as --operator-image
+  OPERATOR_CHANNEL        Same as --channel
+
+Advanced Examples:
+  $(basename "$0") -t odh -b quay.io/opendatahub/opendatahub-operator-catalog:pr-3063 --channel fast
+  $(basename "$0") -t odh --operator-image quay.io/opendatahub/opendatahub-operator:pr-1234
+
+EOF
+  else
+    echo "Use '$(basename "$0") --help -v' to see advanced options for custom catalogs and images."
+    echo ""
+  fi
+
   exit 0
 }
 
 # Parse command line arguments
+SHOW_HELP=false
+VERBOSE_HELP=false
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
-      show_help
+      SHOW_HELP=true
+      shift
+      ;;
+    -v|--verbose)
+      VERBOSE_HELP=true
+      shift
       ;;
     -t|--operator-type)
       OPERATOR_TYPE="$2"
@@ -108,6 +142,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -b|--operator-catalog)
       OPERATOR_CATALOG="$2"
+      shift 2
+      ;;
+    --operator-image)
+      OPERATOR_IMAGE="$2"
       shift 2
       ;;
     --channel)
@@ -127,6 +165,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Handle help after parsing all args (so -h -v works in any order)
+if [[ "$SHOW_HELP" == "true" ]]; then
+  show_help "$VERBOSE_HELP"
+fi
+
 # Set defaults for any unset variables
 : "${OPERATOR_TYPE:=rhoai}"
 : "${MAAS_REF:=main}"
@@ -145,6 +188,9 @@ echo "========================================="
 echo "Deploying with operator: ${OPERATOR_TYPE}"
 if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
   echo "Using custom catalog: ${OPERATOR_CATALOG}"
+fi
+if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
+  echo "Using custom operator image: ${OPERATOR_IMAGE}"
 fi
 echo "========================================="
 
@@ -415,6 +461,31 @@ spec:
 EOF
 
   waitsubscriptioninstalled "odh-operator" "opendatahub-operator"
+
+  # If a custom operator image is specified, patch the CSV
+  if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
+    echo "* Patching operator with custom image: ${OPERATOR_IMAGE}"
+    
+    # Get the CSV name
+    local csv_name
+    csv_name=$(kubectl get csv -n odh-operator -o jsonpath='{.items[?(@.metadata.name)].metadata.name}' | tr ' ' '\n' | grep "^opendatahub-operator" | head -1)
+    
+    if [[ -z "$csv_name" ]]; then
+      echo "  WARNING: Could not find ODH CSV to patch. Skipping image override."
+    else
+      echo "  * Found CSV: ${csv_name}"
+      # Patch the deployment spec in the CSV to use the custom image
+      kubectl patch csv "$csv_name" -n odh-operator --type='json' -p="[
+        {\"op\": \"replace\", \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/image\", \"value\": \"${OPERATOR_IMAGE}\"}
+      ]"
+      echo "  * CSV patched with custom image"
+      
+      # Wait for the operator deployment to be updated
+      echo "  * Waiting for operator deployment to update..."
+      sleep 5
+      kubectl rollout status deployment/opendatahub-operator-controller-manager -n odh-operator --timeout=120s 2>/dev/null || true
+    fi
+  fi
 }
 
 deploy_dscinitialization() {
@@ -541,10 +612,9 @@ if [[ -n "$AUD" && "$AUD" != "https://kubernetes.default.svc" ]]; then
   echo
   echo "## Configuring audience for non-standard cluster"
   echo "* Detected non-default audience: ${AUD}"
-  
-  # Wait for AuthPolicy to be created by operator in opendatahub namespace
-  if wait_for_resource "authpolicy" "gateway-auth-policy" "openshift-ingress" 300; then
-    kubectl patch authpolicy gateway-auth-policy -n openshift-ingress --type=merge --patch-file <(echo "
+  # Patch the correct AuthPolicy: maas-api-auth-policy in the openshift-ingress namespace
+  if wait_for_resource "authpolicy" "maas-api-auth-policy" "opendatahub" 300; then
+    kubectl patch authpolicy maas-api-auth-policy -n opendatahub --type=merge --patch-file <(echo "
 spec:
   rules:
     authentication:
@@ -553,9 +623,9 @@ spec:
           audiences:
             - $AUD
             - maas-default-gateway-sa")
-    echo "  * AuthPolicy patched with custom audience."
+    echo "  * AuthPolicy 'maas-api-auth-policy' patched with custom audience."
   else
-    echo "  WARNING: Could not find AuthPolicy to patch. Skipping audience configuration."
+    echo "  WARNING: Could not find AuthPolicy 'maas-api-auth-policy' to patch. Skipping audience configuration."
   fi
 fi
 

@@ -394,8 +394,6 @@ EOF
 
   echo "  * Waiting for CatalogSource to be ready..."
   local timeout=120
-  local elapsed=0
-  local interval=5
 
   if ! kubectl wait catalogsource "$name" -n "$namespace" \
       --for=jsonpath='{.status.connectionState.lastObservedState}'=READY \
@@ -419,5 +417,54 @@ cleanup_custom_catalogsource() {
     echo "* Removing CatalogSource '$name'..."
     kubectl delete catalogsource "$name" -n "$namespace" --ignore-not-found
   fi
+}
+
+# wait_datasciencecluster_ready [name] [timeout]
+#   Waits for a DataScienceCluster's KServe and ModelsAsService components to be ready.
+#
+# Arguments:
+#   name    - Name of the DataScienceCluster (default: default-dsc)
+#   timeout - Timeout in seconds (default: 600)
+#
+# Returns:
+#   0 on success, 1 on failure
+wait_datasciencecluster_ready() {
+  local name="${1:-default-dsc}"
+  local timeout="${2:-600}"
+  local interval=10
+  local elapsed=0
+
+  echo "* Waiting for DataScienceCluster '$name' KServe and ModelsAsService components to be ready..."
+
+  while [ $elapsed -lt $timeout ]; do
+    # Grab full DSC status as JSON
+    local dsc_json
+    dsc_json=$(kubectl get datasciencecluster "$name" -o json 2>/dev/null || echo "")
+    
+    if [ -z "$dsc_json" ]; then
+      echo "  - Waiting for DataScienceCluster/$name resource to appear..."
+      sleep $interval
+      elapsed=$((elapsed + interval))
+      continue
+    fi
+
+    local kserve_state kserve_ready maas_ready
+    kserve_state=$(echo "$dsc_json" | jq -r '.status.components.kserve.managementState // ""')
+    kserve_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="KserveReady") | .status' | tail -n1)
+    maas_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelsAsServiceReady") | .status' | tail -n1)
+
+    if [[ "$kserve_state" == "Managed" && "$kserve_ready" == "True" && "$maas_ready" == "True" ]]; then
+      echo "  * KServe and ModelsAsService are ready in DataScienceCluster '$name'"
+      return 0
+    else
+      echo "  - KServe state: $kserve_state, KserveReady: $kserve_ready, ModelsAsServiceReady: $maas_ready"
+    fi
+
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "  ERROR: KServe and/or ModelsAsService did not become ready in DataScienceCluster/$name within $timeout seconds."
+  return 1
 }
 
