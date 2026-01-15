@@ -496,7 +496,7 @@ deploy_lws
 deploy_rhcl
 
 echo
-echo "## Installing ${OPERATOR_TYPE^^} operator"
+echo "## Installing $(echo "$OPERATOR_TYPE" | tr '[:lower:]' '[:upper:]') operator"
 
 if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
   deploy_rhoai
@@ -558,29 +558,6 @@ spec:
     echo "  WARNING: Could not find AuthPolicy to patch. Skipping audience configuration."
   fi
 fi
-
-echo
-echo "## Fixing NetworkPolicy for Authorino"
-echo "* Creating NetworkPolicy to allow Authorino ingress to opendatahub namespace..."
-# The opendatahub NetworkPolicy blocks traffic from Authorino pods.
-# This fix allows Authorino to communicate for AuthN/AuthZ flows.
-cat <<EOF | kubectl apply -f -
-kind: NetworkPolicy
-apiVersion: networking.k8s.io/v1
-metadata:
-  name: opendatahub-authorino-allow
-  namespace: opendatahub
-spec:
-  podSelector: {}
-  ingress:
-    - from:
-        - namespaceSelector: {}
-          podSelector:
-            matchLabels:
-              authorino-resource: authorino
-  policyTypes:
-    - Ingress
-EOF
 
 echo
 echo "## Observability Setup (Optional)"

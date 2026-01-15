@@ -397,20 +397,15 @@ EOF
   local elapsed=0
   local interval=5
 
-  while [ $elapsed -lt $timeout ]; do
-    local state
-    state=$(kubectl get catalogsource "$name" -n "$namespace" -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null || echo "")
-    
-    if [ "$state" = "READY" ]; then
-      echo "  * CatalogSource '$name' is ready"
-      return 0
-    fi
-
-    sleep $interval
-    elapsed=$((elapsed + interval))
-  done
-
-  echo "  WARNING: CatalogSource may not be fully ready yet (state: $state)"
+  if ! kubectl wait catalogsource "$name" -n "$namespace" \
+      --for=jsonpath='{.status.connectionState.lastObservedState}'=READY \
+      --timeout="${timeout}s" 2>/dev/null; then
+    local state=$(kubectl get catalogsource "$name" -n "$namespace" \
+      -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null)
+    echo "  ERROR: CatalogSource may not be fully ready yet (state: $state)"
+    return 1
+  fi
+  echo "  * CatalogSource '$name' is ready"
   return 0
 }
 

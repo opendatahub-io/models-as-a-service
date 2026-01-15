@@ -98,6 +98,16 @@ deploy_maas_platform() {
 
 deploy_models() {
     echo "Deploying simulator Model"
+    # Create llm namespace if it does not exist
+    if ! kubectl get namespace llm >/dev/null 2>&1; then
+        echo "Creating 'llm' namespace..."
+        if ! kubectl create namespace llm; then
+            echo "❌ ERROR: Failed to create 'llm' namespace"
+            exit 1
+        fi
+    else
+        echo "'llm' namespace already exists"
+    fi
     if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator/ | kubectl apply -f -); then
         echo "❌ ERROR: Failed to deploy simulator model"
         exit 1
