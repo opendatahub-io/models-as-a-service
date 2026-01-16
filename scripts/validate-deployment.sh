@@ -410,8 +410,10 @@ else
                     print_success "Authentication successful (HTTP $HTTP_CODE)"
                     
                     # Decode token and extract tier information
+                    # JWT uses base64url encoding; convert to standard base64 before decoding
                     print_check "Token information"
-                    TOKEN_PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null || echo "")
+                    TOKEN_PAYLOAD_B64=$(echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}')
+                    TOKEN_PAYLOAD=$(echo "$TOKEN_PAYLOAD_B64" | base64 -d 2>/dev/null || echo "")
                     if [ -n "$TOKEN_PAYLOAD" ]; then
                         SUB=$(echo "$TOKEN_PAYLOAD" | jq -r '.sub' 2>/dev/null || echo "")
                         if [ -n "$SUB" ] && [ "$SUB" != "null" ]; then

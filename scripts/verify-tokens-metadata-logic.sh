@@ -416,7 +416,8 @@ if [ "$temp_key_status" == "201" ]; then
     if [ -z "$TEMP_KEY_JTI" ]; then
         JWT_TOKEN=$(echo "$temp_key_body" | jq -r '.token // empty')
         if [ -n "$JWT_TOKEN" ]; then
-            PAYLOAD=$(echo "$JWT_TOKEN" | cut -d'.' -f2)
+            # JWT uses base64url encoding; convert to standard base64 before decoding
+            PAYLOAD=$(echo "$JWT_TOKEN" | cut -d'.' -f2 | tr '_-' '/+')
             case $((${#PAYLOAD} % 4)) in
                 2) PAYLOAD="${PAYLOAD}==" ;;
                 3) PAYLOAD="${PAYLOAD}=" ;;

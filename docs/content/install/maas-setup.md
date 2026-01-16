@@ -45,7 +45,8 @@ The default audience of Kubernetes clusters is usually `https://kubernetes.defau
 You can check the audience of your cluster with the following commands:
 
 ```shell
-AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
+# JWT uses base64url encoding; convert to standard base64 before decoding
+AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}' | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
 echo $AUD
 
 # Output:
