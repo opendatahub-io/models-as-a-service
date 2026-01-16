@@ -17,6 +17,7 @@ echo "========================================="
 echo "🚀 MaaS Platform OpenShift Deployment"
 echo "========================================="
 echo ""
+ENABLE_KEYCLOAK_IDP=${ENABLE_KEYCLOAK_IDP:-false}
 
 # Check if running on OpenShift
 if ! kubectl api-resources | grep -q "route.openshift.io"; then
@@ -32,6 +33,7 @@ echo "  - oc: $(oc version --client 2>/dev/null | head -n1 || echo 'not found')"
 echo "  - jq: $(jq --version 2>/dev/null || echo 'not found')"
 echo "  - yq: $(yq --version 2>/dev/null | head -n1 || echo 'not found')"
 echo "  - kustomize: $(kustomize version --short 2>/dev/null || echo 'not found')"
+echo "  - envsubst: $(envsubst --version 2>/dev/null | head -n1 || echo 'not found')"
 echo "  - git: $(git --version 2>/dev/null || echo 'not found')"
 echo ""
 echo "ℹ️  Note: OpenShift Service Mesh should be automatically installed when GatewayClass is created."
@@ -73,6 +75,7 @@ echo "   ℹ️  Note: If ODH/RHOAI is already installed, some namespaces may al
 MAAS_API_NAMESPACE=${MAAS_API_NAMESPACE:-maas-api}
 export MAAS_API_NAMESPACE
 echo "   MaaS API namespace: $MAAS_API_NAMESPACE (set MAAS_API_NAMESPACE env var to override)"
+echo "   Keycloak IDP enabled: $ENABLE_KEYCLOAK_IDP"
 
 for ns in opendatahub kserve kuadrant-system llm "$MAAS_API_NAMESPACE"; do
     kubectl create namespace $ns 2>/dev/null || echo "   Namespace $ns already exists"
@@ -272,39 +275,45 @@ cd "$PROJECT_ROOT"
 kustomize build deployment/base/policies | sed "s/maas-api\.maas-api\.svc/maas-api.${MAAS_API_NAMESPACE}.svc/g" | kubectl apply --server-side=true --force-conflicts -f -
 
 echo ""
-echo "1️⃣2️⃣ Patching AuthPolicy with correct audience..."
-echo "   Attempting to detect audience..."
-TOKEN=$(kubectl create token default --duration=10m 2>/dev/null || echo "")
-if [ -z "$TOKEN" ]; then
-    echo "   ⚠️  Could not create token, skipping audience detection"
-    AUD=""
+echo "1️⃣2️⃣ Configuring AuthPolicy..."
+if [[ "$ENABLE_KEYCLOAK_IDP" == "true" ]]; then
+    echo "   Configuring Keycloak IDP..."
+    "$SCRIPT_DIR/deploy-keycloak-idp.sh"
 else
-    echo "   Token created successfully"
-    JWT_PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 2>/dev/null || echo "")
-    if [ -z "$JWT_PAYLOAD" ]; then
-        echo "   ⚠️  Could not extract JWT payload, skipping audience detection"
+    echo "   Patching AuthPolicy with correct audience..."
+    echo "   Attempting to detect audience..."
+    TOKEN=$(kubectl create token default --duration=10m 2>/dev/null || echo "")
+    if [ -z "$TOKEN" ]; then
+        echo "   ⚠️  Could not create token, skipping audience detection"
         AUD=""
     else
-        echo "   JWT payload extracted"
-        DECODED_PAYLOAD=$(echo "$JWT_PAYLOAD" | jq -Rr '@base64d | fromjson' || echo "")
-        if [ -z "$DECODED_PAYLOAD" ]; then
-            echo "   ⚠️  Could not decode base64 payload, skipping audience detection"
+        echo "   Token created successfully"
+        JWT_PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 2>/dev/null || echo "")
+        if [ -z "$JWT_PAYLOAD" ]; then
+            echo "   ⚠️  Could not extract JWT payload, skipping audience detection"
             AUD=""
         else
-            echo "   Payload decoded successfully"
-            AUD=$(echo "$DECODED_PAYLOAD" | jq -r '.aud[0]' 2>/dev/null || echo "")
+            echo "   JWT payload extracted"
+            DECODED_PAYLOAD=$(echo "$JWT_PAYLOAD" | jq -Rr '@base64d | fromjson' || echo "")
+            if [ -z "$DECODED_PAYLOAD" ]; then
+                echo "   ⚠️  Could not decode base64 payload, skipping audience detection"
+                AUD=""
+            else
+                echo "   Payload decoded successfully"
+                AUD=$(echo "$DECODED_PAYLOAD" | jq -r '.aud[0]' 2>/dev/null || echo "")
+            fi
         fi
     fi
-fi
-if [ -n "$AUD" ] && [ "$AUD" != "null" ]; then
-    echo "   Detected audience: $AUD"
-    PATCH_JSON="[{\"op\":\"replace\",\"path\":\"/spec/rules/authentication/openshift-identities/kubernetesTokenReview/audiences/0\",\"value\":\"$AUD\"}]"
-    kubectl patch authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE"  \
-      --type='json' \
-      -p "$PATCH_JSON" 2>/dev/null && echo "   ✅ AuthPolicy patched" || echo "   ⚠️  Failed to patch AuthPolicy (may need manual configuration)"
-else
-    echo "   ⚠️  Could not detect audience, skipping AuthPolicy patch"
-    echo "      You may need to manually configure the audience later"
+    if [ -n "$AUD" ] && [ "$AUD" != "null" ]; then
+        echo "   Detected audience: $AUD"
+        PATCH_JSON="[{\"op\":\"replace\",\"path\":\"/spec/rules/authentication/openshift-identities/kubernetesTokenReview/audiences/0\",\"value\":\"$AUD\"}]"
+        kubectl patch authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE" \
+          --type='json' \
+          -p "$PATCH_JSON" 2>/dev/null && echo "   ✅ AuthPolicy patched" || echo "   ⚠️  Failed to patch AuthPolicy (may need manual configuration)"
+    else
+        echo "   ⚠️  Could not detect audience, skipping AuthPolicy patch"
+        echo "      You may need to manually configure the audience later"
+    fi
 fi
 
 echo ""
@@ -473,8 +482,31 @@ echo "2. Get Gateway endpoint:"
 echo "   CLUSTER_DOMAIN=\$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
 echo "   HOST=\"maas.\${CLUSTER_DOMAIN}\""
 echo ""
+if [[ "$ENABLE_KEYCLOAK_IDP" == "true" ]]; then
 echo "3. Get authentication token:"
-echo "   TOKEN_RESPONSE=\$(curl -sSk -H \"Authorization: Bearer \$(oc whoami -t)\" -H \"Content-Type: application/json\" -X POST -d '{\"expiration\": \"10m\"}' \"\${HOST}/maas-api/v1/tokens\")"
+echo "   KEYCLOAK_URL=\"https://keycloak.\${CLUSTER_DOMAIN}\""
+echo "   KEYCLOAK_REALM=\"maas\""
+echo "   KEYCLOAK_CLIENT_ID=\"maas-cli\""
+echo "   KEYCLOAK_CLIENT_SECRET=\"maas-cli-secret\""
+echo "   KEYCLOAK_USERNAME=\"user@example.com\""
+echo "   KEYCLOAK_PASSWORD=\"your-password\""
+echo "   KEYCLOAK_ACCESS_TOKEN=\$(curl -sSk -H \"Content-Type: application/x-www-form-urlencoded\" -d \"grant_type=password\" -d \"client_id=\${KEYCLOAK_CLIENT_ID}\" -d \"client_secret=\${KEYCLOAK_CLIENT_SECRET}\" -d \"username=\${KEYCLOAK_USERNAME}\" -d \"password=\${KEYCLOAK_PASSWORD}\" \"\${KEYCLOAK_URL}/realms/\${KEYCLOAK_REALM}/protocol/openid-connect/token\" | jq -r .access_token)"
+echo "   TOKEN=\$(curl -sSk -H \"Authorization: Bearer \${KEYCLOAK_ACCESS_TOKEN}\" -H \"Content-Type: application/json\" -X POST -d '{\"expiration\": \"24h\"}' \"https://\${HOST}/maas-api/v1/tokens\" | jq -r .token)"
+echo ""
+echo "4. List models (Keycloak token) and call inference (MaaS token):"
+echo "   MODELS=\$(curl -sSk \"https://\${HOST}/maas-api/v1/models\" -H \"Content-Type: application/json\" -H \"Authorization: Bearer \${KEYCLOAK_ACCESS_TOKEN}\")"
+echo "   MODEL_NAME=\$(echo \$MODELS | jq -r '.data[0].id')"
+echo "   MODEL_URL=\$(echo \$MODELS | jq -r '.data[0].url')"
+echo "   curl -sSk -H \"Authorization: Bearer \${TOKEN}\" -H \"Content-Type: application/json\" -d \"{\\\"model\\\": \\\"\${MODEL_NAME}\\\", \\\"messages\\\": [{\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"Hello\\\"}], \\\"max_tokens\\\": 50}\" \"\${MODEL_URL}/v1/chat/completions\""
+echo ""
+echo "5. Test authorization limiting (no token 401 error):"
+echo "   curl -sSk -H \"Content-Type: application/json\" -d \"{\\\"model\\\": \\\"\${MODEL_NAME}\\\", \\\"messages\\\": [{\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"Hello\\\"}], \\\"max_tokens\\\": 50}\" \"\${MODEL_URL}/v1/chat/completions\" -v"
+echo ""
+echo "6. Test rate limiting (200 OK followed by 429 Rate Limit Exceeded after about 4 requests):"
+echo "   for i in {1..16}; do curl -sSk -o /dev/null -w \"%{http_code}\\n\" -H \"Authorization: Bearer \${TOKEN}\" -H \"Content-Type: application/json\" -d \"{\\\"model\\\": \\\"\${MODEL_NAME}\\\", \\\"messages\\\": [{\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"Hello\\\"}], \\\"max_tokens\\\": 50}\" \"\${MODEL_URL}/v1/chat/completions\"; done"
+else
+echo "3. Get authentication token:"
+echo "   TOKEN_RESPONSE=\$(curl -sSk --oauth2-bearer '\$(oc whoami -t)' --json '{\"expiration\": \"24h\"}' \"\${HOST}/maas-api/v1/tokens\")"
 echo "   TOKEN=\$(echo \$TOKEN_RESPONSE | jq -r .token)"
 echo ""
 echo "4. Test model endpoint:"
@@ -488,6 +520,7 @@ echo "   curl -sSk -H \"Content-Type: application/json\" -d \"{\\\"model\\\": \\
 echo ""
 echo "6. Test rate limiting (200 OK followed by 429 Rate Limit Exceeded after about 4 requests):"
 echo "   for i in {1..16}; do curl -sSk -o /dev/null -w \"%{http_code}\\n\" -H \"Authorization: Bearer \$TOKEN\" -H \"Content-Type: application/json\" -d \"{\\\"model\\\": \\\"\${MODEL_NAME}\\\", \\\"prompt\\\": \\\"Hello\\\", \\\"max_tokens\\\": 50}\" \"\${MODEL_URL}\"; done"
+fi
 echo ""
 echo "7. Run validation script (Runs all the checks again):"
 echo "   ./scripts/validate-deployment.sh"

@@ -57,6 +57,8 @@ nav:
       - Operator Setup: install/platform-setup.md
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
+      - Keycloak IDP Quickstart: install/keycloak-idp.md
+      - IDP Deployment Details: install/idp-deployment.md
       - Validation: install/validation.md
     - Configuration & Management:
       - Tier Management: configuration-and-management/tier-overview.md

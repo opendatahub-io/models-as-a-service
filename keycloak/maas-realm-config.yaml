@@ -1,0 +1,316 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maas-realm-config
+  namespace: keycloak-system
+data:
+  maas-realm.json: |
+    {
+      "realm": "maas",
+      "enabled": true,
+      "displayName": "Models as a Service",
+      "accessTokenLifespan": 3600,
+      "refreshTokenMaxReuse": 0,
+      "sslRequired": "external",
+      "clients": [
+        {
+          "clientId": "maas-cli",
+          "enabled": true,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "maas-cli-secret",
+          "directAccessGrantsEnabled": true,
+          "serviceAccountsEnabled": true,
+          "standardFlowEnabled": true,
+          "implicitFlowEnabled": false,
+          "publicClient": false,
+          "protocol": "openid-connect",
+          "attributes": {
+            "access.token.lifespan": "3600",
+            "oauth2.device.authorization.grant.enabled": "true",
+            "oauth2DeviceAuthorizationGrantEnabled": "true"
+          },
+          "redirectUris": [
+            "https://httpbin.org/get"
+          ],
+          "webOrigins": [
+            "https://httpbin.org"
+          ],
+          "protocolMappers": [
+            {
+              "name": "realm roles",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-realm-role-mapper",
+              "consentRequired": false,
+              "config": {
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "realm_access.roles",
+                "userinfo.token.claim": "true",
+                "multivalued": "true"
+              }
+            },
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "consentRequired": false,
+              "config": {
+                "full.path": "false",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "groups",
+                "userinfo.token.claim": "true"
+              }
+            },
+            {
+              "name": "tier",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-attribute-mapper",
+              "consentRequired": false,
+              "config": {
+                "user.attribute": "tier",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "tier",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ]
+        }
+      ],
+      "roles": {
+        "realm": [
+          {
+            "name": "maas-admin",
+            "description": "MaaS platform administrator"
+          },
+          {
+            "name": "maas-user", 
+            "description": "MaaS platform user"
+          }
+        ]
+      },
+      "groups": [
+        {
+          "name": "free-users",
+          "path": "/free-users",
+          "attributes": {
+            "tier": ["free"],
+            "rate-limit": ["5"]
+          }
+        },
+        {
+          "name": "premium-users", 
+          "path": "/premium-users",
+          "attributes": {
+            "tier": ["premium"],
+            "rate-limit": ["20"]
+          }
+        },
+        {
+          "name": "enterprise-users",
+          "path": "/enterprise-users", 
+          "attributes": {
+            "tier": ["enterprise"],
+            "rate-limit": ["100"]
+          }
+        },
+        {
+          "name": "admins",
+          "path": "/admins",
+          "attributes": {
+            "tier": ["admin"]
+          },
+          "realmRoles": ["maas-admin"]
+        }
+      ],
+      "users": [
+        {
+          "username": "freeuser1",
+          "enabled": true,
+          "email": "freeuser1@example.com",
+          "firstName": "Free",
+          "lastName": "User1",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "password123",
+              "temporary": false
+            }
+          ],
+          "groups": ["/free-users"],
+          "attributes": {
+            "tier": ["free"]
+          },
+          "realmRoles": ["maas-user"]
+        },
+        {
+          "username": "freeuser2", 
+          "enabled": true,
+          "email": "freeuser2@example.com",
+          "firstName": "Free",
+          "lastName": "User2",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "password123",
+              "temporary": false
+            }
+          ],
+          "groups": ["/free-users"],
+          "attributes": {
+            "tier": ["free"]
+          },
+          "realmRoles": ["maas-user"]
+        },
+        {
+          "username": "premiumuser1",
+          "enabled": true,
+          "email": "premiumuser1@example.com", 
+          "firstName": "Premium",
+          "lastName": "User1",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "password123",
+              "temporary": false
+            }
+          ],
+          "groups": ["/premium-users"],
+          "attributes": {
+            "tier": ["premium"]
+          },
+          "realmRoles": ["maas-user"]
+        },
+        {
+          "username": "premiumuser2",
+          "enabled": true,
+          "email": "premiumuser2@example.com",
+          "firstName": "Premium", 
+          "lastName": "User2",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "password123",
+              "temporary": false
+            }
+          ],
+          "groups": ["/premium-users"],
+          "attributes": {
+            "tier": ["premium"]
+          },
+          "realmRoles": ["maas-user"]
+        },
+        {
+          "username": "enterpriseuser1",
+          "enabled": true,
+          "email": "enterpriseuser1@example.com",
+          "firstName": "Enterprise",
+          "lastName": "User1", 
+          "credentials": [
+            {
+              "type": "password",
+              "value": "password123",
+              "temporary": false
+            }
+          ],
+          "groups": ["/enterprise-users"],
+          "attributes": {
+            "tier": ["enterprise"]
+          },
+          "realmRoles": ["maas-user"]
+        },
+        {
+          "username": "alice",
+          "enabled": true,
+          "email": "alice@example.com",
+          "firstName": "Alice", 
+          "lastName": "Admin",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "password123",
+              "temporary": false
+            }
+          ],
+          "groups": ["/admins"],
+          "attributes": {
+            "tier": ["admin"]
+          },
+          "realmRoles": ["maas-admin"]
+        },
+        {
+          "username": "bob",
+          "enabled": true,
+          "email": "bob@example.com",
+          "firstName": "Bob",
+          "lastName": "User",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "password123",
+              "temporary": false
+            }
+          ],
+          "groups": ["/premium-users"],
+          "attributes": {
+            "tier": ["premium"]
+          },
+          "realmRoles": ["maas-user"]
+        }
+      ],
+      "identityProviders": [
+        {
+          "alias": "github",
+          "providerId": "github",
+          "enabled": true,
+          "trustEmail": true,
+          "storeToken": true,
+          "firstBrokerLoginFlowAlias": "first broker login",
+          "config": {
+            "clientId": "${GITHUB_CLIENT_ID}",
+            "clientSecret": "${GITHUB_CLIENT_SECRET}",
+            "defaultScope": "read:user user:email"
+          }
+        }
+      ],
+      "identityProviderMappers": [
+        {
+          "name": "github-hardcode-maas-user",
+          "identityProviderAlias": "github",
+          "identityProviderMapper": "oidc-hardcoded-role-idp-mapper",
+          "config": {
+            "role": "maas-user"
+          }
+        }
+      ],
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "tier",
+          "protocol": "openid-connect", 
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tier",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "tier",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }

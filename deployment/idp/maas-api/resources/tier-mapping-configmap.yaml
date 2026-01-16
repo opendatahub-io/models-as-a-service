@@ -1,0 +1,42 @@
+# Tier to Group Mapping for MaaS API (Keycloak IDP)
+# This ConfigMap defines which Keycloak groups belong to each tier
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tier-to-group-mapping
+  labels:
+    app: maas-api
+    component: tier-mapping
+  annotations:
+    opendatahub.io/managed: "false"
+data:
+  tiers: |
+    # Free tier - default for all authenticated users
+    - name: free
+      displayName: Free Tier
+      level: 0
+      groups:
+        - tier-free-users
+        - free-users
+        - system:authenticated  # Default for all authenticated users
+
+    # Premium tier - for premium users
+    - name: premium
+      displayName: Premium Tier
+      level: 1
+      groups:
+        - tier-premium-users
+        - premium-group
+        - premium-users
+
+    # Enterprise tier - highest level
+    - name: enterprise
+      displayName: Enterprise Tier
+      level: 2
+      groups:
+        - tier-enterprise-users
+        - enterprise-group
+        - enterprise-users
+        - admin-group
+        - admins

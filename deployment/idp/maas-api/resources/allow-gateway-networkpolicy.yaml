@@ -1,0 +1,22 @@
+# Allow gateway ingress to MaaS API pods for the IDP flow.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: maas-allow-gateway
+  labels:
+    app: maas-api
+    component: networking
+  annotations:
+    opendatahub.io/managed: "false"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: models-as-a-service
+      app.kubernetes.io/name: maas-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
