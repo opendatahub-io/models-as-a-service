@@ -300,10 +300,17 @@ echo
 echo "## Installing Models-as-a-Service"
 
 export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-export AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
+export AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | base64 -d 2>/dev/null | jq -r '.aud[0]' 2>/dev/null)"
+# Get the TLS certificate secret name from the default ingress controller
+export CERT_NAME=$(kubectl get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)
+if [[ -z "$CERT_NAME" ]]; then
+  # No custom cert configured - discover the auto-generated secret from the router deployment
+  CERT_NAME=$(kubectl get deployment router-default -n openshift-ingress -o jsonpath='{.spec.template.spec.volumes[?(@.name=="default-certificate")].secret.secretName}' 2>/dev/null)
+fi
 
 echo "* Cluster domain: ${CLUSTER_DOMAIN}"
 echo "* Cluster audience: ${AUD}"
+echo "* TLS certificate: ${CERT_NAME}"
 
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
@@ -326,13 +333,20 @@ else
 fi
 
 : "${MAAS_REF:=main}"
-kubectl apply --server-side=true \
+kubectl apply --server-side=true --force-conflicts \
   -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/overlays/openshift?ref=${MAAS_REF}" | \
-       envsubst '$CLUSTER_DOMAIN')
+       envsubst '$CLUSTER_DOMAIN $CERT_NAME')
+
+# Deploy tier-to-group-mapping ConfigMap to maas-api namespace
+# This is required because kserve's LLMInferenceService webhook validates
+# tier annotations against the ConfigMap in the maas-api namespace
+echo "* Deploying tier-to-group-mapping ConfigMap to maas-api namespace..."
+kubectl apply --server-side=true --force-conflicts -n maas-api \
+  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/maas-api/resources?ref=${MAAS_REF}")
 
 if [[ -n "$AUD" && "$AUD" != "https://kubernetes.default.svc"  ]]; then
   echo "* Configuring audience in MaaS AuthPolicy"
-  kubectl patch authpolicy maas-api-auth-policy -n maas-api --type=merge --patch-file <(echo "
+  kubectl patch authpolicy maas-api-auth-policy -n opendatahub --type=merge --patch-file <(echo "
 spec:
   rules:
     authentication:
@@ -345,7 +359,7 @@ fi
 
 # Patch maas-api Deployment with stable image
 : "${MAAS_RHOAI_IMAGE:=v3.0.0}"
-kubectl set image -n maas-api deployment/maas-api maas-api=registry.redhat.io/rhoai/odh-maas-api-rhel9:${MAAS_RHOAI_IMAGE}
+kubectl set image -n opendatahub deployment/maas-api maas-api=registry.redhat.io/rhoai/odh-maas-api-rhel9:${MAAS_RHOAI_IMAGE}
 
 echo ""
 echo "========================================="
@@ -361,7 +375,7 @@ echo "   CLUSTER_DOMAIN=\$(kubectl get ingresses.config.openshift.io cluster -o 
 echo "   HOST=\"maas.\${CLUSTER_DOMAIN}\""
 echo ""
 echo "3. Get authentication token:"
-echo "   TOKEN_RESPONSE=\$(curl -sSk --oauth2-bearer '\$(oc whoami -t)' --json '{\"expiration\": \"10m\"}' \"\${HOST}/maas-api/v1/tokens\")"
+echo "   TOKEN_RESPONSE=\$(curl -sSk --oauth2-bearer \"\$(oc whoami -t)\" --json '{\"expiration\": \"10m\"}' \"https://\${HOST}/maas-api/v1/tokens\")"
 echo "   TOKEN=\$(echo \$TOKEN_RESPONSE | jq -r .token)"
 echo ""
 echo "4. Test model endpoint:"
