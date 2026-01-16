@@ -7,48 +7,14 @@ the operator will automatically deploy:
 - **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
 - **NetworkPolicy** (maas-authorino-allow) - Allows Authorino to reach MaaS API
 
-You must manually install the following components:
-
-Provided you have an OpenShift cluster where you had either:
-
-* [installed Open Data Hub project](odh-setup.md);
-* or had [installed Red Hat OpenShift AI](rhoai-setup.md)
-
-then you can proceed to install the remaining MaaS components by following this guide.
+You must manually install the following components after completing the [platform setup](platform-setup.md)
+(which includes creating the required `maas-default-gateway`):
 
 The tools you will need:
 
 * `kubectl` or `oc` client (this guide uses `kubectl`)
 * `kustomize`
 * `envsubst`
-
-## Create MaaS Gateway
-
-A Gateway with the name `maas-default-gateway` is **required** for MaaS to function. If you already
-created this Gateway during the ODH/RHOAI setup (as documented in [odh-setup.md](odh-setup.md)),
-you can skip to the next section.
-
-If the Gateway does not exist yet, create it using the example below:
-
-!!! warning "Example Gateway Configuration"
-    The Gateway configuration below is provided as an example. Depending on your cluster setup,
-    you may need additional configuration such as TLS certificates, specific listener settings,
-    or custom infrastructure labels. Consult your cluster administrator if you're unsure about
-    Gateway requirements for your environment.
-
-```shell
-export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-
-kubectl apply --server-side=true \
-  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/networking/maas?ref=main" | \
-       envsubst '$CLUSTER_DOMAIN')
-```
-
-Wait for the Gateway to be programmed:
-
-```shell
-kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=60s
-```
 
 ## Install Gateway AuthPolicy
 

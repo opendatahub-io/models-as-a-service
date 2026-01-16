@@ -3,8 +3,8 @@
 ODH's _Models-as-a-Service_ is compatible with the Open Data Hub project (ODH) and
 Red Hat OpenShift AI (RHOAI). MaaS is installed by enabling it in the DataScienceCluster resource:
 
-* Install the [Open Data Hub project](odh-setup.md) or [Red Hat OpenShift AI](rhoai-setup.md)
-  with MaaS enabled in the DataScienceCluster (the operator will automatically deploy the MaaS API, MaaS API AuthPolicy, and NetworkPolicy).
+* [Install your platform](platform-setup.md) (ODH or RHOAI) with MaaS enabled in the DataScienceCluster
+  (the operator will automatically deploy the MaaS API, MaaS API AuthPolicy, and NetworkPolicy).
 * [Install Gateway and policies manually](maas-setup.md) (Gateway, Gateway AuthPolicy, TokenRateLimitPolicy, and RateLimitPolicy).
 
 MaaS inherits the platform requirement for a Red Hat OpenShift cluster version 4.19.9 or
