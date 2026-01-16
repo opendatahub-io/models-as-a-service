@@ -54,9 +54,7 @@ nav:
   - Administrator Guide:
     - Prerequisites:
       - Overview: install/prerequisites.md
-      - Operators:
-        - Open Data Hub: install/odh-setup.md
-        - Red Hat OpenShift AI: install/rhoai-setup.md
+      - Operator Setup: install/platform-setup.md
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
       - Validation: install/validation.md
@@ -69,6 +67,7 @@ nav:
     - Known Issues:
       - Group Membership: configuration-and-management/group-membership-known-issues.md
       - Tier Modification: configuration-and-management/tier-modification-known-issues.md
+      - Model Access: configuration-and-management/model-access-behavior.md
     - Advanced Administration:
       - Observability: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md

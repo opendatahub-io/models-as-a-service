@@ -29,25 +29,33 @@ This guide provides quickstart instructions for deploying the MaaS Platform infr
 For OpenShift clusters, use the automated deployment script:
 
 ```bash
-export MAAS_REF="main"
+export MAAS_REF="main"  # Use the latest release tag, or "main" for development
 ./scripts/deploy-rhoai-stable.sh
 ```
+
+!!! note "Using Release Tags"
+    The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
+    The release workflow automatically updates all `MAAS_REF="main"` references in documentation and scripts
+    to use the new release tag when a release is created. Use `"main"` only for development/testing.
 
 ### Verify Deployment
 
 The deployment script creates the following core resources:
 
 - **Gateway**: `maas-default-gateway` in `openshift-ingress` namespace
-- **HTTPRoutes**: `maas-api-route` in the `openshift-ingress` namespace
-- **Policies**: `AuthPolicy`, `TokenRateLimitPolicy`, `RateLimitPolicy`, `TelemetryPolicy`
-- **MaaS API**: Deployment and service in `maas-api` namespace
+- **HTTPRoutes**: `maas-api-route` in the `redhat-ods-applications` namespace (deployed by operator)
+- **Policies**:
+  - `maas-api-auth-policy` (deployed by operator) - Protects MaaS API
+  - `gateway-auth-policy` (deployed by script) - Protects Gateway/model inference
+  - `TokenRateLimitPolicy`, `RateLimitPolicy` (deployed by script) - Usage limits
+- **MaaS API**: Deployment and service in `redhat-ods-applications` namespace (deployed by operator)
 - **Operators**: Cert-manager, LWS, Red Hat Connectivity Link and Red Hat OpenShift AI.
 
 Check deployment status:
 
 ```bash
 # Check all namespaces
-kubectl get ns | grep -E "maas-api|kuadrant-system|kserve|opendatahub|redhat-ods-applications|llm"
+kubectl get ns | grep -E "kuadrant-system|kserve|opendatahub|redhat-ods-applications|llm"
 
 # Check Gateway status
 kubectl get gateway -n openshift-ingress maas-default-gateway
@@ -57,16 +65,15 @@ kubectl get authpolicy -A
 kubectl get tokenratelimitpolicy -A
 kubectl get ratelimitpolicy -A
 
-# Check MaaS API
-kubectl get pods -n maas-api
-kubectl get svc -n maas-api
+# Check MaaS API (deployed by operator in redhat-ods-applications)
+kubectl get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
+kubectl get svc -n redhat-ods-applications maas-api
 
 # Check Kuadrant operators
 kubectl get pods -n kuadrant-system
 
-# Check KServe (if deployed)
+# Check RHOAI/KServe
 kubectl get pods -n kserve
-kubectl get pods -n opendatahub
 kubectl get pods -n redhat-ods-applications
 ```
 
