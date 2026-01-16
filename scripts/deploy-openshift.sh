@@ -40,6 +40,9 @@ echo "   install the Red Hat OpenShift Service Mesh operator from OperatorHub."
 
 # Set custom MaaS API image if MAAS_API_IMAGE env var is provided
 set_maas_api_image
+# Register cleanup trap immediately (as per function documentation)
+# This trap will be extended later to also clean up TMP_DIR
+trap 'cleanup_maas_api_image' EXIT
 
 echo ""
 echo "1️⃣ Checking OpenShift version and Gateway API requirements..."
@@ -286,7 +289,10 @@ else
         AUD=""
     else
         echo "   JWT payload extracted"
-        DECODED_PAYLOAD=$(echo "$JWT_PAYLOAD" | jq -Rr '@base64d | fromjson' || echo "")
+        # Convert base64url to standard base64: replace - with + and _ with /
+        # Then add padding (base64 must be multiple of 4 chars)
+        JWT_PAYLOAD_STD=$(echo "$JWT_PAYLOAD" | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}')
+        DECODED_PAYLOAD=$(echo "$JWT_PAYLOAD_STD" | jq -Rr '@base64d | fromjson' || echo "")
         if [ -z "$DECODED_PAYLOAD" ]; then
             echo "   ⚠️  Could not decode base64 payload, skipping audience detection"
             AUD=""
