@@ -1,77 +1,98 @@
-# Install Models-as-a-Service
+# Install MaaS Components
 
-The Models-as-a-Service (MaaS) of ODH project is provided as standalone capability. 
-Provided you have an OpenShift cluster where you had either:
+After enabling MaaS in your DataScienceCluster (set `modelsAsService.managementState: Managed`
+in the `spec.components.kserve` section - see [platform setup guide](platform-setup.md#install-platform-with-model-serving)
+for the complete configuration), the operator will automatically deploy:
 
-* [installed Open Data Hub project](odh-setup.md);
-* or had [installed Red Hat OpenShift AI](rhoai-setup.md)
+- **MaaS API** (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)
+- **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
+- **NetworkPolicy** (maas-authorino-allow) - Allows Authorino to reach MaaS API
 
-then you can proceed to install MaaS capabilities by following this guide.
+You must manually install the following components after completing the [platform setup](platform-setup.md)
+(which includes creating the required `maas-default-gateway`):
 
 The tools you will need:
 
 * `kubectl` or `oc` client (this guide uses `kubectl`)
 * `kustomize`
-* `jq`
 * `envsubst`
-* `base64`
-* `cut`
-  
-## Install MaaS using the Kustomize manifest
 
-Install MaaS by running the following commands:
+## Install Gateway AuthPolicy
+
+Install the authentication policy for the Gateway. This policy applies to model inference traffic
+and integrates with the MaaS API for tier-based access control:
 
 ```shell
-export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-
-kubectl create namespace maas-api
+# For RHOAI installations (MaaS API in redhat-ods-applications namespace)
 kubectl apply --server-side=true \
-  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/overlays/openshift?ref=main" | \
-       envsubst '$CLUSTER_DOMAIN')
+  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/auth-policies?ref=main" | \
+       sed "s/maas-api\.maas-api\.svc/maas-api.redhat-ods-applications.svc/g")
+
+# For ODH installations (MaaS API in opendatahub namespace)
+kubectl apply --server-side=true \
+  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/auth-policies?ref=main" | \
+       sed "s/maas-api\.maas-api\.svc/maas-api.opendatahub.svc/g")
 ```
 
-The Kustomize manifest will:
+### Configuring Custom Token Review Audience
 
-* Create a Gateway as the ingress point for any traffic related to MaaS (for inference 
-  and for the MaaS API).
-* Install the support MaaS API (`Deployment`, `Service`, `ServiceAccount`, 
-  `ClusterRole`, `ClusterRoleBinding`, `HTTPRoute`, and its `AuthPolicy`).
-* Install predefined policies: authentication, authorization and rate limits (See 
-  [Tier Management](../configuration-and-management/tier-overview.md))
-
-### Policy audience adjustment
-
-The default audience of Kubernetes clusters is usually `https://kubernetes.default.svc`.
-You can check the audience of your cluster with the following commands:
+If your cluster uses a custom token review audience (not the default `https://kubernetes.default.svc`),
+you must patch the `maas-api-auth-policy` to include your cluster's audience:
 
 ```shell
+# Detect your cluster's audience
 AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
-echo $AUD
 
-# Output:
-#   https://kubernetes.default.svc
-```
+echo "Cluster audience: ${AUD}"
 
-The Kustomize manifest uses the default audience for the installed MaaS API policy. If 
-the output of the previous script is different from a non-empty string and 
-`https://kubernetes.default.svc`, you are required to patch the policy of the MaaS API:
-
-```shell
-kubectl patch authpolicy maas-api-auth-policy -n maas-api --type=merge --patch-file <(echo "  
+# Patch the MaaS API AuthPolicy with your cluster's audience
+# For RHOAI installations:
+kubectl patch authpolicy maas-api-auth-policy -n redhat-ods-applications --type=merge --patch "
 spec:
   rules:
     authentication:
       openshift-identities:
         kubernetesTokenReview:
           audiences:
-            - $AUD
-            - maas-default-gateway-sa")
+            - ${AUD}
+            - maas-default-gateway-sa"
+
+# For ODH installations:
+kubectl patch authpolicy maas-api-auth-policy -n opendatahub --type=merge --patch "
+spec:
+  rules:
+    authentication:
+      openshift-identities:
+        kubernetesTokenReview:
+          audiences:
+            - ${AUD}
+            - maas-default-gateway-sa"
 ```
+
+## Install Usage Policies
+
+Install rate limiting policies (TokenRateLimitPolicy and RateLimitPolicy):
+
+```shell
+export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+
+kubectl apply --server-side=true \
+  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/usage-policies?ref=main" | \
+       envsubst '$CLUSTER_DOMAIN')
+```
+
+These policies define:
+
+* **TokenRateLimitPolicy** - Rate limits based on token consumption per tier
+* **RateLimitPolicy** - Request rate limits per tier
+
+See [Tier Management](../configuration-and-management/tier-overview.md) for more details on
+configuring usage policies and tiers.
 
 ## Next steps
 
 * **Deploy models.** In the Quick Start, we provide
-  [sample deployments](../quickstart.md#deploy-sample-models-optional) that you 
+  [sample deployments](../quickstart.md#deploy-sample-models-optional) that you
   can use to try the MaaS capability.
-* **Perform validation.** Follow the [validation guide](validation.md) to verify that 
+* **Perform validation.** Follow the [validation guide](validation.md) to verify that
   MaaS is working correctly.

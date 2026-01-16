@@ -54,9 +54,7 @@ nav:
   - Administrator Guide:
     - Prerequisites:
       - Overview: install/prerequisites.md
-      - Operators:
-        - Open Data Hub: install/odh-setup.md
-        - Red Hat OpenShift AI: install/rhoai-setup.md
+      - Operator Setup: install/platform-setup.md
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
       - Validation: install/validation.md

@@ -130,7 +130,14 @@ deploy_models() {
     echo "✅ Simulator model deployed"
     
     echo "Waiting for model to be ready..."
-    oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s
+    if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
+        echo "❌ ERROR: Timed out waiting for model to be ready"
+        echo "=== LLMInferenceService YAML dump ==="
+        oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
+        echo "=== Events in llm namespace ==="
+        oc get events -n llm --sort-by='.lastTimestamp' || true
+        exit 1
+    fi
     echo "✅ Simulator Model deployed"
 }
 
@@ -248,6 +255,7 @@ print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
 run_token_verification
 
+sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
 
 # Test edit user  

@@ -8,6 +8,7 @@ namespace: opendatahub
 resources:
   - ../../base/policies/auth-policies
   - ../../base/maas-api
+  - maas-authorino-networkpolicy.yaml
 
 configMapGenerator:
 - envs:
