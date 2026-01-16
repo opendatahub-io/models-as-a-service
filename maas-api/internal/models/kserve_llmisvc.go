@@ -134,10 +134,10 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 		return authDenied
 
 	case resp.StatusCode == http.StatusNotFound:
-		// 404 is not a failure - endpoint might not exist but that's okay, allow access
-		// TODO: Follow-up with fail-close implementation https://issues.redhat.com/browse/RHOAIENG-45883
-		m.logger.Debug("Model endpoint returned 404, allowing access (not a denial)", "modelID", modelID)
-		return authGranted
+		// 404 means we cannot verify authorization - deny access (fail-closed)
+		// See: https://issues.redhat.com/browse/RHOAIENG-45883
+		m.logger.Debug("Model endpoint returned 404, denying access (cannot verify authorization)", "modelID", modelID)
+		return authDenied
 
 	case resp.StatusCode == http.StatusMethodNotAllowed:
 		// 405 Method Not Allowed - this should not happen, something is misconfigured
