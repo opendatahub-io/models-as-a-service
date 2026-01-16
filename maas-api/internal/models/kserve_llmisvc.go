@@ -82,12 +82,13 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 		Jitter:   0.1,
 	}
 
-	var lastResult authResult
+	var lastResult authResult = authDenied // fail-closed by default
 	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
 		lastResult = m.doAuthCheck(ctx, authCheckURL, saToken, model.ID)
 		return lastResult != authRetry, nil
 	}); err != nil {
 		m.logger.Debug("Authorization check backoff failed", "modelID", model.ID, "error", err)
+		return false // explicit fail-closed on error
 	}
 
 	return lastResult == authGranted
