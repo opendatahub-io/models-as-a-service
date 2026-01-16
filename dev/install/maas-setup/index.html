@@ -11,7 +11,7 @@
         <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/install/maas-setup/">
       
       
-        <link rel="prev" href="../rhoai-setup/">
+        <link rel="prev" href="../platform-setup/">
       
       
         <link rel="next" href="../validation/">
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#install-models-as-a-service" class="md-skip">
+        <a href="#install-maas-components" class="md-skip">
           Skip to content
         </a>
       
@@ -609,69 +609,15 @@
   
   
   
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1_2" >
-        
-          
-          <label class="md-nav__link" for="__nav_4_1_2" id="__nav_4_1_2_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Operators
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_1_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_1_2">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Operators
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
     <li class="md-nav__item">
-      <a href="../odh-setup/" class="md-nav__link">
+      <a href="../platform-setup/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Open Data Hub
+    Operator Setup
   
 
     
@@ -680,42 +626,6 @@
   
 
       </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../rhoai-setup/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Red Hat OpenShift AI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
     </li>
   
 
@@ -853,22 +763,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#install-maas-using-the-kustomize-manifest" class="md-nav__link">
+  <a href="#install-gateway-authpolicy" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install MaaS using the Kustomize manifest
+        Install Gateway AuthPolicy
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Install MaaS using the Kustomize manifest">
+    <nav class="md-nav" aria-label="Install Gateway AuthPolicy">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#policy-audience-adjustment" class="md-nav__link">
+  <a href="#configuring-custom-token-review-audience" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Policy audience adjustment
+        Configuring Custom Token Review Audience
       
     </span>
   </a>
@@ -877,6 +787,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#install-usage-policies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install Usage Policies
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1562,22 +1483,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#install-maas-using-the-kustomize-manifest" class="md-nav__link">
+  <a href="#install-gateway-authpolicy" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install MaaS using the Kustomize manifest
+        Install Gateway AuthPolicy
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Install MaaS using the Kustomize manifest">
+    <nav class="md-nav" aria-label="Install Gateway AuthPolicy">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#policy-audience-adjustment" class="md-nav__link">
+  <a href="#configuring-custom-token-review-audience" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Policy audience adjustment
+        Configuring Custom Token Review Audience
       
     </span>
   </a>
@@ -1586,6 +1507,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#install-usage-policies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install Usage Policies
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1620,69 +1552,88 @@
   
 
 
-<h1 id="install-models-as-a-service">Install Models-as-a-Service</h1>
-<p>The Models-as-a-Service (MaaS) of ODH project is provided as standalone capability. 
-Provided you have an OpenShift cluster where you had either:</p>
+<h1 id="install-maas-components">Install MaaS Components</h1>
+<p>After enabling MaaS in your DataScienceCluster (set <code>modelsAsService.managementState: Managed</code>
+in the <code>spec.components.kserve</code> section - see <a href="../platform-setup/#install-platform-with-model-serving">platform setup guide</a>
+for the complete configuration), the operator will automatically deploy:</p>
 <ul>
-<li><a href="../odh-setup/">installed Open Data Hub project</a>;</li>
-<li>or had <a href="../rhoai-setup/">installed Red Hat OpenShift AI</a></li>
+<li><strong>MaaS API</strong> (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)</li>
+<li><strong>MaaS API AuthPolicy</strong> (maas-api-auth-policy) - Protects the MaaS API endpoint</li>
+<li><strong>NetworkPolicy</strong> (maas-authorino-allow) - Allows Authorino to reach MaaS API</li>
 </ul>
-<p>then you can proceed to install MaaS capabilities by following this guide.</p>
+<p>You must manually install the following components after completing the <a href="../platform-setup/">platform setup</a>
+(which includes creating the required <code>maas-default-gateway</code>):</p>
 <p>The tools you will need:</p>
 <ul>
 <li><code>kubectl</code> or <code>oc</code> client (this guide uses <code>kubectl</code>)</li>
 <li><code>kustomize</code></li>
-<li><code>jq</code></li>
 <li><code>envsubst</code></li>
-<li><code>base64</code></li>
-<li><code>cut</code></li>
 </ul>
-<h2 id="install-maas-using-the-kustomize-manifest">Install MaaS using the Kustomize manifest</h2>
-<p>Install MaaS by running the following commands:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">CLUSTER_DOMAIN</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>ingresses.config.openshift.io<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.domain}&#39;</span><span class="k">)</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>kubectl<span class="w"> </span>create<span class="w"> </span>namespace<span class="w"> </span>maas-api
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>--server-side<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>-f<span class="w"> </span>&lt;<span class="o">(</span>kustomize<span class="w"> </span>build<span class="w"> </span><span class="s2">&quot;https://github.com/opendatahub-io/models-as-a-service.git/deployment/overlays/openshift?ref=main&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">       </span>envsubst<span class="w"> </span><span class="s1">&#39;$CLUSTER_DOMAIN&#39;</span><span class="o">)</span>
+<h2 id="install-gateway-authpolicy">Install Gateway AuthPolicy</h2>
+<p>Install the authentication policy for the Gateway. This policy applies to model inference traffic
+and integrates with the MaaS API for tier-based access control:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># For RHOAI installations (MaaS API in redhat-ods-applications namespace)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>--server-side<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>-f<span class="w"> </span>&lt;<span class="o">(</span>kustomize<span class="w"> </span>build<span class="w"> </span><span class="s2">&quot;https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/auth-policies?ref=main&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">       </span>sed<span class="w"> </span><span class="s2">&quot;s/maas-api\.maas-api\.svc/maas-api.redhat-ods-applications.svc/g&quot;</span><span class="o">)</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># For ODH installations (MaaS API in opendatahub namespace)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>--server-side<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>-f<span class="w"> </span>&lt;<span class="o">(</span>kustomize<span class="w"> </span>build<span class="w"> </span><span class="s2">&quot;https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/auth-policies?ref=main&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">       </span>sed<span class="w"> </span><span class="s2">&quot;s/maas-api\.maas-api\.svc/maas-api.opendatahub.svc/g&quot;</span><span class="o">)</span>
 </code></pre></div>
-<p>The Kustomize manifest will:</p>
-<ul>
-<li>Create a Gateway as the ingress point for any traffic related to MaaS (for inference 
-  and for the MaaS API).</li>
-<li>Install the support MaaS API (<code>Deployment</code>, <code>Service</code>, <code>ServiceAccount</code>, 
-  <code>ClusterRole</code>, <code>ClusterRoleBinding</code>, <code>HTTPRoute</code>, and its <code>AuthPolicy</code>).</li>
-<li>Install predefined policies: authentication, authorization and rate limits (See 
-  <a href="../../configuration-and-management/tier-overview/">Tier Management</a>)</li>
-</ul>
-<h3 id="policy-audience-adjustment">Policy audience adjustment</h3>
-<p>The default audience of Kubernetes clusters is usually <code>https://kubernetes.default.svc</code>.
-You can check the audience of your cluster with the following commands:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">AUD</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>kubectl<span class="w"> </span>create<span class="w"> </span>token<span class="w"> </span>default<span class="w"> </span>--duration<span class="o">=</span>10m<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="p">|</span><span class="w"> </span>cut<span class="w"> </span>-d.<span class="w"> </span>-f2<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-Rr<span class="w"> </span><span class="s1">&#39;@base64d | fromjson | .aud[0]&#39;</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="k">)</span><span class="s2">&quot;</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">echo</span><span class="w"> </span><span class="nv">$AUD</span>
+<h3 id="configuring-custom-token-review-audience">Configuring Custom Token Review Audience</h3>
+<p>If your cluster uses a custom token review audience (not the default <code>https://kubernetes.default.svc</code>),
+you must patch the <code>maas-api-auth-policy</code> to include your cluster's audience:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Detect your cluster&#39;s audience</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">AUD</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>kubectl<span class="w"> </span>create<span class="w"> </span>token<span class="w"> </span>default<span class="w"> </span>--duration<span class="o">=</span>10m<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="p">|</span><span class="w"> </span>cut<span class="w"> </span>-d.<span class="w"> </span>-f2<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-Rr<span class="w"> </span><span class="s1">&#39;@base64d | fromjson | .aud[0]&#39;</span><span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="k">)</span><span class="s2">&quot;</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Output:</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1">#   https://kubernetes.default.svc</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Cluster audience: </span><span class="si">${</span><span class="nv">AUD</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># Patch the MaaS API AuthPolicy with your cluster&#39;s audience</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># For RHOAI installations:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>authpolicy<span class="w"> </span>maas-api-auth-policy<span class="w"> </span>-n<span class="w"> </span>redhat-ods-applications<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>--patch<span class="w"> </span><span class="s2">&quot;</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="s2">spec:</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="s2">  rules:</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="s2">    authentication:</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="s2">      openshift-identities:</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="s2">        kubernetesTokenReview:</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="s2">          audiences:</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="s2">            - </span><span class="si">${</span><span class="nv">AUD</span><span class="si">}</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="s2">            - maas-default-gateway-sa&quot;</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="c1"># For ODH installations:</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>authpolicy<span class="w"> </span>maas-api-auth-policy<span class="w"> </span>-n<span class="w"> </span>opendatahub<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>--patch<span class="w"> </span><span class="s2">&quot;</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="s2">spec:</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="s2">  rules:</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="s2">    authentication:</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="s2">      openshift-identities:</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="s2">        kubernetesTokenReview:</span>
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="s2">          audiences:</span>
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="s2">            - </span><span class="si">${</span><span class="nv">AUD</span><span class="si">}</span>
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="s2">            - maas-default-gateway-sa&quot;</span>
 </code></pre></div>
-<p>The Kustomize manifest uses the default audience for the installed MaaS API policy. If 
-the output of the previous script is different from a non-empty string and 
-<code>https://kubernetes.default.svc</code>, you are required to patch the policy of the MaaS API:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>authpolicy<span class="w"> </span>maas-api-auth-policy<span class="w"> </span>-n<span class="w"> </span>maas-api<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>--patch-file<span class="w"> </span>&lt;<span class="o">(</span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;  </span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="s2">spec:</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="s2">  rules:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="s2">    authentication:</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="s2">      openshift-identities:</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="s2">        kubernetesTokenReview:</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="s2">          audiences:</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="s2">            - </span><span class="nv">$AUD</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="s2">            - maas-default-gateway-sa&quot;</span><span class="o">)</span>
+<h2 id="install-usage-policies">Install Usage Policies</h2>
+<p>Install rate limiting policies (TokenRateLimitPolicy and RateLimitPolicy):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">CLUSTER_DOMAIN</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>ingresses.config.openshift.io<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.domain}&#39;</span><span class="k">)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>--server-side<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>-f<span class="w"> </span>&lt;<span class="o">(</span>kustomize<span class="w"> </span>build<span class="w"> </span><span class="s2">&quot;https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/usage-policies?ref=main&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">       </span>envsubst<span class="w"> </span><span class="s1">&#39;$CLUSTER_DOMAIN&#39;</span><span class="o">)</span>
 </code></pre></div>
+<p>These policies define:</p>
+<ul>
+<li><strong>TokenRateLimitPolicy</strong> - Rate limits based on token consumption per tier</li>
+<li><strong>RateLimitPolicy</strong> - Request rate limits per tier</li>
+</ul>
+<p>See <a href="../../configuration-and-management/tier-overview/">Tier Management</a> for more details on
+configuring usage policies and tiers.</p>
 <h2 id="next-steps">Next steps</h2>
 <ul>
 <li><strong>Deploy models.</strong> In the Quick Start, we provide
-  <a href="../../quickstart/#deploy-sample-models-optional">sample deployments</a> that you 
+  <a href="../../quickstart/#deploy-sample-models-optional">sample deployments</a> that you
   can use to try the MaaS capability.</li>
-<li><strong>Perform validation.</strong> Follow the <a href="../validation/">validation guide</a> to verify that 
+<li><strong>Perform validation.</strong> Follow the <a href="../validation/">validation guide</a> to verify that
   MaaS is working correctly.</li>
 </ul>
 
@@ -1707,7 +1658,7 @@ the output of the previous script is different from a non-empty string and
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="January 6, 2026 15:49:22 UTC">January 6, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="January 16, 2026 16:50:32 UTC">January 16, 2026</span>
   </span>
 
     
