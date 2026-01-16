@@ -134,6 +134,7 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 
 	case resp.StatusCode == http.StatusNotFound:
 		// 404 is not a failure - endpoint might not exist but that's okay, allow access
+		// TODO: Follow-up with fail-close implementation https://issues.redhat.com/browse/RHOAIENG-45883
 		m.logger.Debug("Model endpoint returned 404, allowing access (not a denial)", "modelID", modelID)
 		return authGranted
 
