@@ -94,22 +94,32 @@ PROJECT_DIR=$(git rev-parse --show-toplevel)
 kustomize build ${PROJECT_DIR}/deployment/base/policies | kubectl apply --server-side=true --force-conflicts -f -
 ```
 
-#### Ensure the correct audience is set for AuthPolicy
+#### Ensure the correct audience is set for AuthPolicies
 
-Patch `AuthPolicy` with the correct audience for Openshift Identities:
+Patch `AuthPolicy` resources with the correct audience for Openshift Identities:
 
 ```shell
 AUD="$(kubectl create token default --duration=10m \
   | cut -d. -f2 \
   | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
 
-echo "Patching AuthPolicy with audience: $AUD"
+echo "Patching AuthPolicies with audience: $AUD"
 
+# Patch main AuthPolicy (accepts both OpenShift tokens and SA tokens)
 kubectl patch authpolicy maas-api-auth-policy -n maas-api \
   --type='json' \
   -p "$(jq -nc --arg aud "$AUD" '[{
     op:"replace",
-    path:"/spec/rules/authentication/openshift-identities/kubernetesTokenReview/audiences/0",
+    path:"/spec/rules/authentication/default/kubernetesTokenReview/audiences/0",
+    value:$aud
+  }]')"
+
+# Patch token issuance AuthPolicy (accepts only OpenShift tokens - prevents token-to-token issuance)
+kubectl patch authpolicy maas-api-token-issuance-auth-policy -n maas-api \
+  --type='json' \
+  -p "$(jq -nc --arg aud "$AUD" '[{
+    op:"replace",
+    path:"/spec/rules/authentication/default/kubernetesTokenReview/audiences/0",
     value:$aud
   }]')"
 ```

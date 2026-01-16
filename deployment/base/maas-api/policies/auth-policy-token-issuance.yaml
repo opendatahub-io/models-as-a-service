@@ -1,20 +1,28 @@
 apiVersion: kuadrant.io/v1
 kind: AuthPolicy
 metadata:
-  name: maas-api-auth-policy
+  name: maas-api-token-issuance-auth-policy
 spec:
   targetRef:
     group: gateway.networking.k8s.io
     kind: HTTPRoute
-    name: maas-api-route
+    name: maas-api-token-issuance-route
   rules:
-    # Allow any authenticated user to access the API
+    # Only allow k8s tokens (not SA tokens) for token issuance
+    # This prevents tokens from being used to issue more tokens
     authentication:
       default:
         kubernetesTokenReview:
           audiences:
             - https://kubernetes.default.svc
-            - maas-default-gateway-sa
+    authorization:
+      # Deny service accounts - only real users can issue tokens
+      deny-service-accounts:
+        patternMatching:
+          patterns:
+            - selector: auth.identity.user.groups
+              operator: excl
+              value: "system:serviceaccounts"
     response:
       success:
         headers:
