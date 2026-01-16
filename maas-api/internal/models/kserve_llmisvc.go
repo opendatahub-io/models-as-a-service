@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"net/url"
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
@@ -69,12 +68,6 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 		return false
 	}
 
-	authCheckURL, err := url.JoinPath(model.URL.String(), m.authCheckEndpoint)
-	if err != nil {
-		m.logger.Debug("Failed to construct auth check URL", "modelID", model.ID, "error", err)
-		return false
-	}
-
 	backoff := wait.Backoff{
 		Steps:    4,
 		Duration: 100 * time.Millisecond,
@@ -84,7 +77,7 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 
 	lastResult := authDenied // fail-closed by default
 	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		lastResult = m.doAuthCheck(ctx, authCheckURL, saToken, model.ID)
+		lastResult = m.doAuthCheck(ctx, model.URL.String(), saToken, model.ID)
 		return lastResult != authRetry, nil
 	}); err != nil {
 		m.logger.Debug("Authorization check backoff failed", "modelID", model.ID, "error", err)

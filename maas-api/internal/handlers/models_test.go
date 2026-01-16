@@ -167,7 +167,6 @@ func TestListingModels(t *testing.T) {
 		clients.LLMInferenceServiceLister,
 		clients.HTTPRouteLister,
 		gatewayRef,
-		"v1/models", // authCheckEndpoint for testing
 	)
 	require.NoError(t, errMgr)
 

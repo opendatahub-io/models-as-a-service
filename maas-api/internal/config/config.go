@@ -62,11 +62,6 @@ type Config struct {
 	// DataPath is the path to the database file for disk mode.
 	// Default: /data/maas-api.db
 	DataPath string
-
-	// AuthCheckEndpoint is the endpoint path used for authorization checks.
-	// This will be appended to the base model URL for HEAD requests.
-	// Default: v1/models
-	AuthCheckEndpoint string
 }
 
 // Load loads configuration from environment variables.
@@ -75,16 +70,15 @@ func Load() *Config {
 	gatewayName := env.GetString("GATEWAY_NAME", constant.DefaultGatewayName)
 
 	c := &Config{
-		Name:              env.GetString("INSTANCE_NAME", gatewayName),
-		Namespace:         env.GetString("NAMESPACE", constant.DefaultNamespace),
-		GatewayName:       env.GetString("GATEWAY_NAME", gatewayName),
-		GatewayNamespace:  env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
-		Port:              env.GetString("PORT", "8080"),
-		DebugMode:         debugMode,
-		StorageMode:       StorageModeInMemory,
-		DBConnectionURL:   env.GetString("DB_CONNECTION_URL", ""),
-		DataPath:          env.GetString("DATA_PATH", DefaultDataPath),
-		AuthCheckEndpoint: env.GetString("AUTH_CHECK_ENDPOINT", "/"),
+		Name:             env.GetString("INSTANCE_NAME", gatewayName),
+		Namespace:        env.GetString("NAMESPACE", constant.DefaultNamespace),
+		GatewayName:      env.GetString("GATEWAY_NAME", gatewayName),
+		GatewayNamespace: env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
+		Port:             env.GetString("PORT", "8080"),
+		DebugMode:        debugMode,
+		StorageMode:      StorageModeInMemory,
+		DBConnectionURL:  env.GetString("DB_CONNECTION_URL", ""),
+		DataPath:         env.GetString("DATA_PATH", DefaultDataPath),
 	}
 
 	// Validate STORAGE_MODE env var through Set() to ensure consistent validation
@@ -109,5 +103,4 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.Var(&c.StorageMode, "storage", "Storage mode: in-memory (default), disk, or external")
 	fs.StringVar(&c.DBConnectionURL, "db-connection-url", c.DBConnectionURL, "Database connection URL (required for --storage=external)")
 	fs.StringVar(&c.DataPath, "data-path", c.DataPath, "Path to database file (for --storage=disk)")
-	fs.StringVar(&c.AuthCheckEndpoint, "auth-check-endpoint", c.AuthCheckEndpoint, "Endpoint path for authorization checks (appended to model URL)")
 }

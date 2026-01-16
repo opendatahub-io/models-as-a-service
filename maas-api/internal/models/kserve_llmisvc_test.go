@@ -258,7 +258,6 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) {
 				fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects(tt.llmServices)...),
 				fixtures.NewHTTPRouteLister(fixtures.ToRuntimeObjects(tt.httpRoutes)...),
 				gateway,
-				"v1/models",
 			)
 			require.NoError(t, errMgr)
 
@@ -319,7 +318,6 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 			fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
-			"v1/models",
 		)
 		require.NoError(t, errMgr)
 
@@ -337,7 +335,6 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 			fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
-			"v1/models",
 		)
 		require.NoError(t, errMgr)
 
