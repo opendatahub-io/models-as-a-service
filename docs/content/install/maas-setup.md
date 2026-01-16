@@ -1,7 +1,8 @@
 # Install MaaS Components
 
-After enabling MaaS in your DataScienceCluster (via `modelsAsService.managementState: Managed`),
-the operator will automatically deploy:
+After enabling MaaS in your DataScienceCluster (set `modelsAsService.managementState: Managed`
+in the `spec.components.kserve` section - see [platform setup guide](platform-setup.md#install-platform-with-model-serving)
+for the complete configuration), the operator will automatically deploy:
 
 - **MaaS API** (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)
 - **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
