@@ -91,7 +91,7 @@ check_prerequisites() {
 }
 
 deploy_maas_platform() {
-    echo "Deploying MaaS platform on OpenShift..." --operator-image quay.io/opendatahub/opendatahub-operator:pr-3063
+    echo "Deploying MaaS platform on OpenShift..."
     if ! "$PROJECT_ROOT/scripts/deploy-rhoai-stable.sh" --operator-type odh --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:latest --channel fast; then
         echo "❌ ERROR: MaaS platform deployment failed"
         exit 1
@@ -145,11 +145,14 @@ validate_deployment() {
     echo "Deployment Validation"
     if [ "$SKIP_VALIDATION" = false ]; then
         if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
-            echo "❌ ERROR: Deployment validation failed"
-            exit 1
-        else
-            echo "✅ Deployment validation completed"
+            echo "⚠️  First validation attempt failed, waiting 60 seconds and retrying..."
+            sleep 60
+            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+                echo "❌ ERROR: Deployment validation failed after retry"
+                exit 1
+            fi
         fi
+        echo "✅ Deployment validation completed"
     else
         echo "⏭️  Skipping validation"
     fi

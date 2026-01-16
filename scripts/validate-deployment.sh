@@ -601,6 +601,7 @@ else
         
         SUCCESS_COUNT=0
         RATE_LIMITED_COUNT=0
+        FAILED_COUNT=0
         
         for i in $(seq 1 $RATE_LIMIT_TEST_COUNT); do
             HTTP_CODE=$(curl -sSk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" \
@@ -613,15 +614,23 @@ else
                 ((SUCCESS_COUNT++))
             elif [ "$HTTP_CODE" = "429" ]; then
                 ((RATE_LIMITED_COUNT++))
+            else
+                ((FAILED_COUNT++))
+                # Log first few failed requests for debugging
+                if [ "$FAILED_COUNT" -le 3 ]; then
+                    print_info "  Request $i failed with HTTP $HTTP_CODE"
+                fi
             fi
         done
         
         if [ "$RATE_LIMITED_COUNT" -gt 0 ]; then
             print_success "Rate limiting is working ($SUCCESS_COUNT successful, $RATE_LIMITED_COUNT rate limited)"
-        elif [ "$SUCCESS_COUNT" -gt 0 ]; then
+        elif [ "$SUCCESS_COUNT" -gt 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
             print_warning "Rate limiting may not be enforced" "All $SUCCESS_COUNT requests succeeded without rate limiting"
+        elif [ "$SUCCESS_COUNT" -gt 0 ]; then
+            print_warning "Rate limiting test inconclusive" "$SUCCESS_COUNT succeeded, $FAILED_COUNT failed (auth may still be stabilizing)"
         else
-            print_fail "Rate limiting test failed" "All requests failed" "Check TokenRateLimitPolicy and Limitador"
+            print_fail "Rate limiting test failed" "All $RATE_LIMIT_TEST_COUNT requests failed (got $FAILED_COUNT errors)" "Check TokenRateLimitPolicy, Limitador, and auth service health"
         fi
     fi
     
