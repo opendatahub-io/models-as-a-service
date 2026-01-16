@@ -104,7 +104,8 @@ fi
 
 echo -e "${GREEN}✓ Token obtained successfully from MaaS API${NC}"
 
-TOKEN_PAYLOAD=$(echo "$TOKEN" | jq -R 'split(".") | .[1] | @base64d' 2>/dev/null)
+# JWT uses base64url encoding; convert to standard base64 before decoding
+TOKEN_PAYLOAD=$(echo "$TOKEN" | jq -R 'split(".") | .[1]' 2>/dev/null | tr -d '"' | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}' | jq -Rr '@base64d' 2>/dev/null)
 if [ -z "$TOKEN_PAYLOAD" ] || [ "$TOKEN_PAYLOAD" = "null" ]; then
     echo -e "${YELLOW}Warning:${NC} Failed to decode MaaS token payload"
     USER_NAME="unknown"
