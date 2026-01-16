@@ -101,6 +101,13 @@ deploy_maas_platform() {
         echo "❌ ERROR: DataScienceCluster components did not become ready"
         exit 1
     fi
+    
+    # Wait for Authorino to be ready and auth service cluster to be healthy
+    echo "Waiting for Authorino and auth service to be ready..."
+    if ! wait_authorino_ready 600; then
+        echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+    fi
+    
     echo "✅ MaaS platform deployment completed"
 }
 

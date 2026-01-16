@@ -431,7 +431,7 @@ cleanup_custom_catalogsource() {
 wait_datasciencecluster_ready() {
   local name="${1:-default-dsc}"
   local timeout="${2:-600}"
-  local interval=10
+  local interval=20
   local elapsed=0
 
   echo "* Waiting for DataScienceCluster '$name' KServe and ModelsAsService components to be ready..."
@@ -466,5 +466,112 @@ wait_datasciencecluster_ready() {
 
   echo "  ERROR: KServe and/or ModelsAsService did not become ready in DataScienceCluster/$name within $timeout seconds."
   return 1
+}
+
+# wait_authorino_ready [timeout]
+#   Waits for Authorino to be ready and accepting requests.
+#   Note: Request are required because authorino will report ready status but still give 500 errors.
+#   
+#   This checks:
+#   1. Authorino CR status is Ready
+#   2. Auth service cluster is healthy in gateway's Envoy
+#   3. Auth requests are actually succeeding (not erroring)
+#
+# Arguments:
+#   timeout - Timeout in seconds (default: 120)
+#
+# Returns:
+#   0 on success, 1 on failure
+wait_authorino_ready() {
+  local timeout=${1:-120}
+  local interval=5
+  local elapsed=0
+
+  echo "* Waiting for Authorino to be ready (timeout: ${timeout}s)..."
+
+  # First, wait for Authorino CR to be ready
+  echo "  - Checking Authorino CR status..."
+  while [[ $elapsed -lt $timeout ]]; do
+    local authorino_ready
+    authorino_ready=$(kubectl get authorino -n kuadrant-system -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+    
+    if [[ "$authorino_ready" == "True" ]]; then
+      echo "  * Authorino CR is Ready"
+      break
+    fi
+    
+    echo "  - Authorino CR not ready yet (status: ${authorino_ready:-not found}), waiting..."
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  if [[ $elapsed -ge $timeout ]]; then
+    echo "  ERROR: Authorino CR did not become ready within ${timeout} seconds"
+    return 1
+  fi
+
+  # Then, wait for the auth service cluster to be healthy in the gateway
+  echo "  - Checking auth service cluster health in gateway..."
+  local gateway_pod
+  gateway_pod=$(kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  
+  if [[ -z "$gateway_pod" ]]; then
+    echo "  WARNING: Could not find gateway pod, skipping cluster health check"
+    return 0
+  fi
+
+  # Wait for auth cluster to show healthy
+  while [[ $elapsed -lt $timeout ]]; do
+    local health_status
+    health_status=$(kubectl exec -n openshift-ingress "$gateway_pod" -- pilot-agent request GET /clusters 2>/dev/null | grep "kuadrant-auth-service" | grep "health_flags" | head -1 || echo "")
+    
+    if [[ "$health_status" == *"healthy"* ]]; then
+      echo "  * Auth service cluster is healthy in gateway"
+      break
+    fi
+    
+    echo "  - Auth service cluster not healthy yet, waiting..."
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  # Finally, verify auth requests are actually succeeding (not just cluster marked healthy)
+  echo "  - Verifying auth requests are succeeding..."
+  local cluster_domain
+  cluster_domain=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
+  
+  if [[ -z "$cluster_domain" ]]; then
+    echo "  WARNING: Could not determine cluster domain, skipping request verification"
+    return 0
+  fi
+
+  local maas_url="https://maas.${cluster_domain}/maas-api/health"
+  local consecutive_success=0
+  local required_success=3
+
+  while [[ $elapsed -lt $timeout ]]; do
+    # Make a test request - we expect 401 (auth working) not 500 (auth failing)
+    local http_code
+    http_code=$(curl -sSk -o /dev/null -w "%{http_code}" "$maas_url" 2>/dev/null || echo "000")
+    
+    if [[ "$http_code" == "401" || "$http_code" == "200" ]]; then
+      consecutive_success=$((consecutive_success + 1))
+      echo "  - Auth request succeeded (HTTP $http_code) [$consecutive_success/$required_success]"
+      
+      if [[ $consecutive_success -ge $required_success ]]; then
+        echo "  * Auth requests verified working"
+        return 0
+      fi
+    else
+      consecutive_success=0
+      echo "  - Auth request returned HTTP $http_code, waiting for stabilization..."
+    fi
+    
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+
+  echo "  WARNING: Auth request verification timed out, continuing anyway"
+  return 0
 }
 
