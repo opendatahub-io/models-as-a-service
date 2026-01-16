@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
@@ -75,9 +76,15 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 		Jitter:   0.1,
 	}
 
+	endpoint, errURL := url.JoinPath(model.URL.String(), "/v1/chat/completions")
+	if errURL != nil {
+		m.logger.Error("Failed to create endpoint", "modelID", model.ID, "model.URL", model.URL.String(), "errURL", errURL)
+		return false
+	}
+
 	lastResult := authDenied // fail-closed by default
 	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		lastResult = m.doAuthCheck(ctx, model.URL.String(), saToken, model.ID)
+		lastResult = m.doAuthCheck(ctx, endpoint, saToken, model.ID)
 		return lastResult != authRetry, nil
 	}); err != nil {
 		m.logger.Debug("Authorization check backoff failed", "modelID", model.ID, "error", err)
@@ -89,7 +96,7 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 
 // doAuthCheck performs a single authorization check attempt.
 func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string) authResult {
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, authCheckURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, authCheckURL, nil)
 	if err != nil {
 		m.logger.Debug("Failed to create authorization request", "modelID", modelID, "error", err)
 		return authRetry
@@ -136,7 +143,7 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 		// 405 Method Not Allowed - this should not happen, something is misconfigured
 		// Deny access as we cannot verify authorization
 		m.logger.Debug("UNEXPECTED: Model endpoint returned 405 Method Not Allowed - this indicates a configuration issue. "+
-			"HEAD requests should be supported by the gateway. Denying access as authorization cannot be verified",
+			"OPTIONS requests should be supported by the gateway. Denying access as authorization cannot be verified",
 			"modelID", modelID,
 			"statusCode", resp.StatusCode,
 			"url", authCheckURL,
