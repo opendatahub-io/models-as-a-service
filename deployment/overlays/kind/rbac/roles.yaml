@@ -1,0 +1,32 @@
+---
+# Role for model-a access (free tier - all users)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: model-a-access
+  namespace: llm
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  resourceNames: ["model-a"]
+  verbs: ["get"]
+- apiGroups: ["serving.kserve.io"]
+  resources: ["inferenceservices", "llminferenceservices"]
+  resourceNames: ["model-a"]
+  verbs: ["get", "list", "create"]
+---
+# Role for model-b access (premium tier - premium/enterprise only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: model-b-access
+  namespace: llm
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  resourceNames: ["model-b"]
+  verbs: ["get"]
+- apiGroups: ["serving.kserve.io"]
+  resources: ["inferenceservices", "llminferenceservices"]
+  resourceNames: ["model-b"]
+  verbs: ["get", "list", "create"]

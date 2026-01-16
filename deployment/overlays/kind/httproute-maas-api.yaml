@@ -1,0 +1,60 @@
+# HTTPRoutes for Kind deployment
+# These replace OpenShift Routes with Gateway API HTTPRoutes
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: maas-api-route
+  namespace: maas-api
+spec:
+  parentRefs:
+  - name: maas-gateway
+    namespace: maas-api
+
+  hostnames:
+  - "localhost"
+  - "maas.local"  # Can add to /etc/hosts for nicer URLs
+
+  rules:
+  # MaaS API routes
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /maas-api/v1
+    backendRefs:
+    - name: maas-api
+      port: 8000
+      weight: 100
+
+  # Model inference routes (will be added by model deployments)
+  # - matches:
+  #   - path:
+  #       type: PathPrefix
+  #       value: /v1/models
+  #   backendRefs:
+  #   - name: model-service
+  #     port: 8080
+
+---
+# Health check route (optional)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: maas-health-route
+  namespace: maas-api
+spec:
+  parentRefs:
+  - name: maas-gateway
+    namespace: maas-api
+
+  hostnames:
+  - "localhost"
+
+  rules:
+  - matches:
+    - path:
+        type: Exact
+        value: /health
+    backendRefs:
+    - name: maas-api
+      port: 8000

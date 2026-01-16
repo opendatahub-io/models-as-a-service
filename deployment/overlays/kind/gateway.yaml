@@ -1,0 +1,35 @@
+# Gateway API Gateway for Kind local development
+# Creates a gateway in istio-system that will auto-provision a deployment and NodePort service
+# The service will be patched by the setup script to use fixed NodePorts (30080, 30443)
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: maas-gateway
+  namespace: istio-system
+  annotations:
+    # Use NodePort service type for Kind
+    networking.istio.io/service-type: NodePort
+spec:
+  gatewayClassName: istio
+  listeners:
+  - name: http
+    hostname: "localhost"
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: All
+  - name: https
+    hostname: "localhost"
+    port: 443
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: All
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        name: gateway-cert
+        namespace: istio-system
