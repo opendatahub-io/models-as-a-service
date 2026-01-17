@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openai/openai-go/v2/packages/pagination"
@@ -15,12 +16,25 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
 
 func TestListingModels(t *testing.T) {
 	testLogger := logger.Development()
 	strptr := func(s string) *string { return &s }
+
+	// Create mock HTTP server to simulate authorization responses
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Accept any Bearer token - the token exchange produces JWT tokens
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") && len(authHeader) > 7 {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer authServer.Close()
 
 	const (
 		testGatewayName      = "test-gateway"
@@ -31,7 +45,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "llama-7b",
 			Namespace:        "model-serving",
-			URL:              fixtures.PublicURL("http://llama-7b.model-serving.acme.com/v1"),
+			URL:              fixtures.PublicURL(authServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -43,7 +57,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "gpt-3-turbo",
 			Namespace:        "openai-models",
-			URL:              fixtures.PublicURL("http://gpt-3-turbo.openai-models.acme.com/v1"),
+			URL:              fixtures.PublicURL(authServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -51,7 +65,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "bert-base",
 			Namespace:        "nlp-models",
-			URL:              fixtures.PublicURL("http://bert-base.nlp-models.svc.acme.me/v1"),
+			URL:              fixtures.PublicURL(authServer.URL),
 			Ready:            false,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -59,7 +73,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "llama-7b-private-url",
 			Namespace:        "model-serving",
-			URL:              fixtures.AddressEntry("http://10.0.32.128/model-serving/llama-7b-private-url/v1"),
+			URL:              fixtures.AddressEntry(authServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -75,7 +89,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "fallback-model-name",
 			Namespace:        fixtures.TestNamespace,
-			URL:              fixtures.PublicURL("http://fallback-model-name." + fixtures.TestNamespace + ".acme.com/v1"),
+			URL:              fixtures.PublicURL(authServer.URL),
 			Ready:            true,
 			SpecModelName:    strptr("fallback-model-name"),
 			GatewayName:      testGatewayName,
@@ -84,7 +98,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "model-with-metadata",
 			Namespace:        "model-serving",
-			URL:              fixtures.PublicURL("http://model-with-metadata.model-serving.acme.com/v1"),
+			URL:              fixtures.PublicURL(authServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -104,7 +118,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "model-with-partial-metadata",
 			Namespace:        "model-serving",
-			URL:              fixtures.PublicURL("http://model-with-partial-metadata.model-serving.acme.com/v1"),
+			URL:              fixtures.PublicURL(authServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -122,7 +136,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "model-with-empty-metadata",
 			Namespace:        "model-serving",
-			URL:              fixtures.PublicURL("http://model-with-empty-metadata.model-serving.acme.com/v1"),
+			URL:              fixtures.PublicURL(authServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -156,15 +170,26 @@ func TestListingModels(t *testing.T) {
 	)
 	require.NoError(t, errMgr)
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr)
+	// Create token manager for test - uses fixtures helper which sets up tier config
+	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	defer cleanup()
+
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager)
+
+	// Create token handler to extract user info middleware
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
+
 	v1 := router.Group("/v1")
-	v1.GET("/models", modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 
 	w := httptest.NewRecorder()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
 	require.NoError(t, err, "Failed to create request")
 
+	// Set headers required by ExtractUserInfo middleware
 	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+	req.Header.Set(constant.HeaderGroup, `["free-users"]`)
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
@@ -174,7 +199,8 @@ func TestListingModels(t *testing.T) {
 	require.NoError(t, err, "Failed to unmarshal response body")
 
 	assert.Equal(t, "list", response.Object, "Expected object type to be 'list'")
-	require.Len(t, response.Data, len(llmInferenceServices), "Mismatched number of models returned")
+	// With authorization, we expect 8 models (excluding the one without URL)
+	require.Len(t, response.Data, len(llmInferenceServices)-1, "Mismatched number of models returned")
 
 	modelsByName := make(map[string]models.Model)
 	for _, model := range response.Data {
@@ -182,6 +208,11 @@ func TestListingModels(t *testing.T) {
 	}
 
 	for _, scenario := range llmTestScenarios {
+		// Skip the model without URL as it should be filtered out by authorization
+		if scenario.Name == "model-without-url" {
+			continue
+		}
+
 		// expected ID mirrors toModels(): fallback to metadata.name unless spec.model.name is non-empty
 		expectedModelID := scenario.Name
 		if scenario.SpecModelName != nil && *scenario.SpecModelName != "" {

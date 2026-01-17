@@ -13,6 +13,7 @@ It covers how token issuance works, the underlying service account architecture,
 
 1. [Overview](#overview)
 1. [How Token Issuance Works](#how-token-issuance-works)
+1. [Model Discovery](#model-discovery)
 1. [Practical Usage](#practical-usage)
 1. [Token Lifecycle Management](#token-lifecycle-management)
 1. [Frequently Asked Questions (FAQ)](#frequently-asked-questions-faq)
@@ -87,6 +88,36 @@ sequenceDiagram
     Model-->>Gateway: Response
     Gateway-->>User: Response
 ```
+
+---
+
+## Model Discovery
+
+The `/v1/models` endpoint allows you to discover which models you're authorized to access. This endpoint works with any valid authentication token - you don't need to create an API key first.
+
+### How It Works
+
+When you call `/v1/models`, the system checks your authorization against each model's endpoint. If your token doesn't have the correct audience for these internal checks, the API automatically exchanges it for a short-lived service account token.
+
+```mermaid
+flowchart LR
+    A[Your Token] --> B{Has correct<br/>audience?}
+    B -->|Yes| D[Use as-is]
+    B -->|No| C[Auto-exchange]
+    C --> D
+    D --> E[Check model<br/>authorization]
+    E --> F[Return<br/>authorized models]
+```
+
+This means you can:
+
+1. **Authenticate with OpenShift or OIDC** - use your existing identity
+2. **Call `/v1/models` immediately** - see available models without creating an API key first
+
+!!! info "Security Note"
+    The token exchange is an internal implementation detail. Authentication is still fully handled by Authorino - 
+    the API only peeks at the token's audience claim to decide if exchange is needed. Your identity always comes 
+    from Authorino's validated headers, not from parsing the token.
 
 ---
 
@@ -172,6 +203,24 @@ A: You will not be able to issue *new* tokens. However, any existing, non-expire
 **Q: Can I use one token to access multiple different models?**
 
 A: Yes. Your token grants you access based on your tier's RBAC permissions. If your tier is authorized to use multiple models, a single token will work for all of them.
+
+---
+
+**Q: What's the difference between my OpenShift token and an API key?**
+
+A: Your **OpenShift token** is your identity token from authentication (e.g. OpenShift or OIDC). It proves who you are but may not have the correct audience for model access. An **API key** (issued via `/v1/tokens`) is a service account token with the correct audience and permissions for accessing models. You can use either to list models, but only API keys work for model inference.
+
+---
+
+**Q: Do I need an API key to list available models?**
+
+A: No. You can call `/v1/models` with your OpenShift/OIDC token directly. The API automatically handles token exchange if needed. This lets you discover available models before deciding which API keys to create.
+
+---
+
+**Q: What is "token audience" and why does it matter?**
+
+A: Token audience identifies the intended recipient of a token. Model endpoints expect tokens with a specific audience (`{tenant}-sa`). OpenShift/OIDC tokens have different audiences, so the API exchanges them internally when needed for authorization checks.
 
 ---
 

@@ -5,13 +5,33 @@
 
 set -e
 
-# Source helper functions
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-source "$SCRIPT_DIR/deployment-helpers.sh"
-
-
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+source "$SCRIPT_DIR/deployment-helpers.sh"
+
+ENABLE_TLS_BACKEND=1
+
+# Respect INSECURE_HTTP env var (used by test scripts)
+# This provides consistency with prow_run_smoke_test.sh and smoke.sh
+if [[ "${INSECURE_HTTP:-}" == "true" ]]; then
+  ENABLE_TLS_BACKEND=0
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --insecure)
+      ENABLE_TLS_BACKEND=0
+      shift
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+
 
 echo "========================================="
 echo "🚀 MaaS Platform OpenShift Deployment"
@@ -38,8 +58,8 @@ echo "ℹ️  Note: OpenShift Service Mesh should be automatically installed whe
 echo "   If the Gateway gets stuck in 'Waiting for controller', you may need to manually"
 echo "   install the Red Hat OpenShift Service Mesh operator from OperatorHub."
 
-# Set custom MaaS API image if MAAS_API_IMAGE env var is provided
-set_maas_api_image
+# Set up cleanup trap for custom MaaS API image (if MAAS_API_IMAGE is set)
+trap 'cleanup_maas_api_image' EXIT INT TERM
 
 echo ""
 echo "1️⃣ Checking OpenShift version and Gateway API requirements..."
@@ -224,29 +244,7 @@ cd "$PROJECT_ROOT"
 kubectl apply -f deployment/base/networking/odh/kuadrant.yaml
 
 echo ""
-echo "8️⃣ Deploying MaaS API..."
-cd "$PROJECT_ROOT"
-# Process kustomization.yaml to replace hardcoded namespace, then build
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"; cleanup_maas_api_image' EXIT
-
-cp -r "$PROJECT_ROOT/deployment/base/maas-api/." "$TMP_DIR"
-
-(
-  cd "$TMP_DIR"
-  kustomize edit set namespace "$MAAS_API_NAMESPACE"
-)
-kustomize build "$TMP_DIR" | kubectl apply -f -
-
-# Restart Kuadrant operator to pick up the new configuration
-echo "   Restarting Kuadrant operator to apply Gateway API provider recognition..."
-kubectl rollout restart deployment/kuadrant-operator-controller-manager -n kuadrant-system
-echo "   Waiting for Kuadrant operator to be ready..."
-kubectl rollout status deployment/kuadrant-operator-controller-manager -n kuadrant-system --timeout=60s || \
-  echo "   ⚠️  Kuadrant operator taking longer than expected, continuing..."
-
-echo ""
-echo "🔟 Waiting for Gateway to be ready..."
+echo "8️⃣ Waiting for Gateway to be ready..."
 echo "   Note: This may take a few minutes if Service Mesh is being automatically installed..."
 
 # Wait for Service Mesh CRDs to be established
@@ -267,12 +265,54 @@ kubectl wait --for=condition=Programmed gateway maas-default-gateway -n openshif
   echo "   ⚠️  Gateway is taking longer than expected, continuing..."
 
 echo ""
-echo "1️⃣1️⃣ Applying Gateway Policies..."
-cd "$PROJECT_ROOT"
-kustomize build deployment/base/policies | sed "s/maas-api\.maas-api\.svc/maas-api.${MAAS_API_NAMESPACE}.svc/g" | kubectl apply --server-side=true --force-conflicts -f -
+echo "9️⃣ Deploying MaaS API and policies..."
+
+# Set custom image if MAAS_API_IMAGE is specified
+set_maas_api_image
+
+# Delete existing deployment to ensure clean state
+kubectl delete deployment maas-api -n "$MAAS_API_NAMESPACE" --ignore-not-found=true --wait=true --timeout=60s >/dev/null 2>&1 || true
+
+# Select overlay based on TLS mode (TLS is default)
+OVERLAY="overlays/tls-backend"
+if [[ "$ENABLE_TLS_BACKEND" -eq 0 ]]; then
+  OVERLAY="overlays/http-backend"
+  echo "   ⚠️  TLS disabled, applying HTTP backend overlay..."
+else
+  echo "   Applying TLS backend overlay..."
+fi
+
+# Build and apply with correct namespace
+# Use sed to replace default namespace while preserving explicit namespaces (openshift-ingress, kuadrant-system)
+# This avoids `kustomize edit set namespace` which overwrites ALL namespaces
+kustomize build "$PROJECT_ROOT/deployment/$OVERLAY" \
+  | sed "s/namespace: maas-api/namespace: ${MAAS_API_NAMESPACE}/g" \
+  | sed "s/maas-api\.maas-api\.svc/maas-api.${MAAS_API_NAMESPACE}.svc/g" \
+  | kubectl apply --server-side=true --force-conflicts -f - || \
+  echo "   ⚠️  MaaS API deployment had issues, continuing..."
+
+# Configure Authorino TLS (patches operator-managed resources via kubectl)
+if [[ "$ENABLE_TLS_BACKEND" -eq 1 ]]; then
+  echo "   Configuring Authorino for TLS..."
+  "$PROJECT_ROOT/deployment/overlays/tls-backend/configure-authorino-tls.sh" 2>&1 || \
+    echo "   ⚠️  Authorino TLS configuration had issues (non-fatal)"
+  
+  echo "   Waiting for Authorino deployment to pick up TLS config..."
+  kubectl rollout status deployment/authorino -n kuadrant-system --timeout=120s 2>&1 || \
+    echo "   ⚠️  Authorino rollout taking longer than expected, continuing..."
+  
+  # Restart maas-api to ensure it picks up Authorino TLS config
+  echo "   Restarting MaaS API to pick up Authorino TLS configuration..."
+  kubectl rollout restart deployment/maas-api -n "$MAAS_API_NAMESPACE" 2>&1 || \
+    echo "   ⚠️  Failed to restart maas-api deployment"
+fi
+
+echo "   Waiting for MaaS API deployment to be ready..."
+kubectl rollout status deployment/maas-api -n "$MAAS_API_NAMESPACE" --timeout=180s 2>&1 || \
+  echo "   ⚠️  MaaS API rollout is taking longer than expected, continuing..."
 
 echo ""
-echo "1️⃣2️⃣ Patching AuthPolicy with correct audience..."
+echo "1️⃣0️⃣ Patching AuthPolicy with correct audience..."
 echo "   Attempting to detect audience..."
 TOKEN=$(kubectl create token default --duration=10m 2>/dev/null || echo "")
 if [ -z "$TOKEN" ]; then
@@ -308,7 +348,7 @@ else
 fi
 
 echo ""
-echo "1️⃣3️⃣ Updating Limitador image for metrics exposure..."
+echo "1️⃣1️⃣ Updating Limitador image for metrics exposure..."
 kubectl -n kuadrant-system patch limitador limitador --type merge \
   -p '{"spec":{"image":"quay.io/kuadrant/limitador:1a28eac1b42c63658a291056a62b5d940596fd4c","version":""}}' 2>/dev/null && \
   echo "   ✅ Limitador image updated" || \
@@ -474,7 +514,7 @@ echo "   CLUSTER_DOMAIN=\$(kubectl get ingresses.config.openshift.io cluster -o 
 echo "   HOST=\"maas.\${CLUSTER_DOMAIN}\""
 echo ""
 echo "3. Get authentication token:"
-echo "   TOKEN_RESPONSE=\$(curl -sSk -H \"Authorization: Bearer \$(oc whoami -t)\" -H \"Content-Type: application/json\" -X POST -d '{\"expiration\": \"10m\"}' \"\${HOST}/maas-api/v1/tokens\")"
+echo "   TOKEN_RESPONSE=\$(curl -sSk -H \"Authorization: Bearer \$(oc whoami -t)\" -H \"Content-Type: application/json\" -X POST -d '{\"expiration\": \"10m\"}' \"https://\${HOST}/maas-api/v1/tokens\")"
 echo "   TOKEN=\$(echo \$TOKEN_RESPONSE | jq -r .token)"
 echo ""
 echo "4. Test model endpoint:"

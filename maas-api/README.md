@@ -227,7 +227,7 @@ maas-api supports three storage modes, controlled by the `--storage` flag:
 # In-memory (default - no configuration needed)
 
 # Disk storage (persistent, single replica)
-kustomize build deployment/overlays/sqlite-pvc | kubectl apply -f -
+kustomize build deployment/overlays/tls-backend-disk | kubectl apply -f -
 
 # External database - see docs/samples/database/external for configuration
 ```

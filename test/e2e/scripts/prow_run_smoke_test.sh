@@ -26,6 +26,8 @@
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
 #   MAAS_API_IMAGE - Custom image for MaaS API (e.g., quay.io/opendatahub/maas-api:pr-232)
+#   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
+#                    Affects both deploy-openshift.sh and smoke.sh
 # =============================================================================
 
 set -euo pipefail
@@ -57,6 +59,7 @@ source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
+INSECURE_HTTP=${INSECURE_HTTP:-false}
 
 print_header() {
     echo ""
@@ -168,12 +171,13 @@ setup_vars_for_tests() {
     fi
     echo "K8S_CLUSTER_URL: ${K8S_CLUSTER_URL}"
 
-    export CLUSTER_DOMAIN="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
-    export HOST="maas.${CLUSTER_DOMAIN}"
-    export MAAS_API_BASE_URL="http://${HOST}/maas-api"
-    echo "CLUSTER_DOMAIN: ${CLUSTER_DOMAIN}"
-    echo "HOST: ${HOST}"
-    echo "MAAS_API_BASE_URL: ${MAAS_API_BASE_URL}"
+    # Export INSECURE_HTTP for smoke.sh (it handles MAAS_API_BASE_URL detection)
+    # This aligns with deploy-openshift.sh which also respects INSECURE_HTTP
+    export INSECURE_HTTP
+    if [ "$INSECURE_HTTP" = "true" ]; then
+        echo "⚠️  INSECURE_HTTP=true - will use HTTP for tests"
+    fi
+    
     echo "✅ Variables for tests setup completed"
 }
 

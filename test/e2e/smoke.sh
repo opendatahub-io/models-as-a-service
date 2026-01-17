@@ -13,7 +13,7 @@ setup_python_venv() {
     # Create virtual environment if it doesn't exist
     if [[ ! -d "${VENV_DIR}" ]]; then
         echo "[smoke] Creating virtual environment at ${VENV_DIR}"
-        python3 -m venv "${VENV_DIR}"
+        python3 -m venv "${VENV_DIR}" --upgrade-deps
     fi
     
     # Activate virtual environment
@@ -50,9 +50,16 @@ if [[ -z "${MAAS_API_BASE_URL}" ]]; then
     HOST="maas.${CLUSTER_DOMAIN}"
   fi
 
-  SCHEME="https"
-  if ! curl -skS -m 5 "${SCHEME}://${HOST}/maas-api/healthz" -o /dev/null; then
+  # Determine scheme: INSECURE_HTTP forces HTTP, otherwise try HTTPS first with fallback
+  if [[ "${INSECURE_HTTP:-}" == "true" ]]; then
     SCHEME="http"
+    echo "[smoke] Using HTTP (INSECURE_HTTP=true)"
+  else
+    SCHEME="https"
+    if ! curl -skS -m 5 "${SCHEME}://${HOST}/maas-api/healthz" -o /dev/null; then
+      SCHEME="http"
+      echo "[smoke] HTTPS not available, falling back to HTTP"
+    fi
   fi
 
   MAAS_API_BASE_URL="${SCHEME}://${HOST}/maas-api"

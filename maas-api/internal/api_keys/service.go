@@ -22,7 +22,7 @@ func NewService(tokenManager *token.Manager, store MetadataStore) *Service {
 
 func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, name string, description string, expiration time.Duration) (*APIKey, error) {
 	// Generate token
-	tok, err := s.tokenManager.GenerateToken(ctx, user, expiration, "")
+	tok, err := s.tokenManager.GenerateToken(ctx, user, expiration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate token: %w", err)
 	}

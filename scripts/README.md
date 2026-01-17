@@ -19,6 +19,7 @@ Complete automated deployment script for OpenShift clusters.
 - Deploys Gateway infrastructure
 - Deploys KServe components (if not already present)
 - Configures MaaS API
+- Generates a self-signed backend certificate and configures MaaS API for HTTPS
 - Applies policies (AuthPolicy, RateLimitPolicy, TelemetryPolicy)
 - Creates OpenShift Routes
 - Applies temporary workarounds for known issues
@@ -29,6 +30,7 @@ Complete automated deployment script for OpenShift clusters.
 - `kubectl` installed
 - `jq` installed
 - `kustomize` installed
+- `openssl` installed (used for MaaS API backend TLS)
 
 ---
 
@@ -234,5 +236,4 @@ For issues or questions:
 2. Check the main project [README](../README.md)
 3. Review [deployment documentation](../docs/content/quickstart.md)
 4. Check sample model configurations in [docs/samples/models/](../docs/samples/models/)
-
 
