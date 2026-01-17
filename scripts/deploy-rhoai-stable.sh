@@ -549,10 +549,35 @@ spec:
       # MaaS capability - managed by operator
       modelsAsService:
         managementState: Managed
-
+    
     # Components recommended for MaaS:
     dashboard:
       managementState: Managed
+    
+    # Other components disabled for MaaS-focused deployment
+    modelmeshserving:
+      managementState: Removed  # Use KServe instead
+    
+    datasciencepipelines:
+      managementState: Removed  # Not needed for MaaS
+    
+    ray:
+      managementState: Removed  # Not needed for MaaS
+    
+    kueue:
+      managementState: Removed  # Not needed for MaaS
+    
+    modelregistry:
+      managementState: Removed  # Not needed for MaaS
+    
+    trustyai:
+      managementState: Removed  # Not needed for MaaS
+    
+    trainingoperator:
+      managementState: Removed  # Not needed for MaaS 
+    
+    llamastackoperator:
+      managementState: Removed  # Not needed for MaaS 
 EOF
 }
 
