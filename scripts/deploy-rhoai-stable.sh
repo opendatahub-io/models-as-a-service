@@ -558,24 +558,6 @@ spec:
     modelmeshserving:
       managementState: Removed  # Use KServe instead
     
-    datasciencepipelines:
-      managementState: Removed  # Not needed for MaaS
-    
-    ray:
-      managementState: Removed  # Not needed for MaaS
-    
-    kueue:
-      managementState: Removed  # Not needed for MaaS
-    
-    modelregistry:
-      managementState: Removed  # Not needed for MaaS
-    
-    trustyai:
-      managementState: Removed  # Not needed for MaaS
-    
-    trainingoperator:
-      managementState: Removed  # Not needed for MaaS 
-    
     llamastackoperator:
       managementState: Removed  # Not needed for MaaS 
 EOF
