@@ -6,6 +6,119 @@ export AUTHORINO_MIN_VERSION="0.22.0"
 export LIMITADOR_MIN_VERSION="0.16.0"
 export DNS_OPERATOR_MIN_VERSION="0.15.0"
 
+# ==========================================
+# OLM Subscription and CSV Helper Functions
+# ==========================================
+
+# waitsubscriptioninstalled namespace subscription_name
+#   Waits for an OLM Subscription to finish installing its CSV.
+#   Exits with error if the installation times out.
+waitsubscriptioninstalled() {
+  local ns=${1?namespace is required}; shift
+  local name=${1?subscription name is required}; shift
+
+  echo "  * Waiting for Subscription $ns/$name to start setup..."
+  kubectl wait subscription --timeout=300s -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'
+  local csv
+  csv=$(kubectl get subscription -n "$ns" "$name" -o jsonpath='{.status.currentCSV}')
+
+  # Because, sometimes, the CSV is not there immediately.
+  while ! kubectl get -n "$ns" csv "$csv" > /dev/null 2>&1; do
+    sleep 1
+  done
+
+  echo "  * Waiting for Subscription setup to finish setup. CSV = $csv ..."
+  if ! kubectl wait -n "$ns" --for=jsonpath="{.status.phase}"=Succeeded csv "$csv" --timeout=600s; then
+    echo "    * ERROR: Timeout while waiting for Subscription to finish installation."
+    return 1
+  fi
+}
+
+# checksubscriptionexists catalog_namespace catalog_name operator_name
+#   Checks if a subscription exists for the given operator from the specified catalog.
+#   Returns the count of matching subscriptions (0 if none found).
+checksubscriptionexists() {
+  local catalog_ns=${1?catalog namespace is required}; shift
+  local catalog_name=${1?catalog name is required}; shift
+  local operator_name=${1?operator name is required}; shift
+
+  local catalogns_cond=".spec.sourceNamespace == \"${catalog_ns}\""
+  local catalog_cond=".spec.source == \"${catalog_name}\""
+  local op_cond=".spec.name == \"${operator_name}\""
+  local query="${catalogns_cond} and ${catalog_cond} and ${op_cond}"
+
+  kubectl get subscriptions -A -ojson | jq ".items | map(select(${query})) | length"
+}
+
+# checkcsvexists csv_prefix
+#   Checks if a CSV exists by name prefix (e.g., "opendatahub-operator" matches "opendatahub-operator.v3.2.0").
+#   Returns the count of matching CSVs (0 if none found).
+checkcsvexists() {
+  local csv_prefix=${1?csv prefix is required}; shift
+
+  # Count CSVs whose name starts with the given prefix
+  local count
+  count=$(kubectl get csv -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c "^${csv_prefix}" 2>/dev/null) || count=0
+  echo "$count"
+}
+
+# ==========================================
+# Namespace Helper Functions
+# ==========================================
+
+# wait_for_namespace namespace [timeout]
+#   Waits for a namespace to be created and become Active.
+#   Returns 0 on success, 1 on timeout.
+wait_for_namespace() {
+  local namespace=${1?namespace is required}; shift
+  local timeout=${1:-300}  # default 5 minutes
+
+  if kubectl get namespace "$namespace" >/dev/null 2>&1; then
+    kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s
+    return $?
+  fi
+
+  echo "* Waiting for $namespace namespace to be created..."
+  local elapsed=0
+  local interval=5
+  while [ $elapsed -lt $timeout ]; do
+    if kubectl get namespace "$namespace" >/dev/null 2>&1; then
+      kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s
+      return $?
+    fi
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "  WARNING: $namespace namespace was not created within timeout."
+  return 1
+}
+
+# wait_for_resource kind name namespace [timeout]
+#   Waits for a resource to be created.
+#   Returns 0 when found, 1 on timeout.
+wait_for_resource() {
+  local kind=${1?kind is required}; shift
+  local name=${1?name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local timeout=${1:-300}  # default 5 minutes
+
+  echo "* Waiting for $kind/$name in $namespace..."
+  local elapsed=0
+  local interval=5
+  while [ $elapsed -lt $timeout ]; do
+    if kubectl get "$kind" "$name" -n "$namespace" >/dev/null 2>&1; then
+      echo "  * Found $kind/$name"
+      return 0
+    fi
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "  WARNING: $kind/$name was not found within timeout."
+  return 1
+}
+
 # find_project_root [start_dir] [marker]
 #   Walks up the directory tree to find the project root.
 #   Returns the path containing the marker (default: .git)
@@ -253,30 +366,6 @@ wait_for_pods() {
   return 1
 }
 
-# Helper function to wait for a resource to exist
-# Usage: wait_for_resource <resource_type> <resource_name> <namespace> [timeout]
-wait_for_resource() {
-  local resource_type="$1"
-  local resource_name="$2"
-  local namespace="$3"
-  local timeout="${4:-60}"
-  local interval=2
-  local elapsed=0
-
-  echo "⏳ Waiting for ${resource_type}/${resource_name} in ${namespace} (timeout: ${timeout}s)..."
-  while [ $elapsed -lt $timeout ]; do
-    if kubectl get "$resource_type" "$resource_name" -n "$namespace" &>/dev/null; then
-      echo "✅ ${resource_type}/${resource_name} exists"
-      return 0
-    fi
-    sleep $interval
-    elapsed=$((elapsed + interval))
-  done
-
-  echo "⚠️  Timed out waiting for ${resource_type}/${resource_name}" >&2
-  return 1
-}
-
 wait_for_validating_webhooks() {
     local namespace="$1"
     local timeout="${2:-60}"
@@ -324,3 +413,234 @@ wait_for_validating_webhooks() {
     return 1
 }
 
+# ==========================================
+# Custom Catalog Source Functions
+# ==========================================
+
+# create_custom_catalogsource name namespace catalog_image
+#   Creates a CatalogSource from a catalog/index image.
+#   This allows installing operators from custom catalog images instead of the default catalog.
+#
+#   IMPORTANT: This requires a CATALOG/INDEX image, NOT a bundle image!
+#   - Catalog image: Contains the FBC database and runs 'opm serve' (e.g., quay.io/opendatahub/opendatahub-operator-catalog:latest)
+#   - Bundle image: Contains operator manifests only, cannot be used directly (e.g., quay.io/opendatahub/opendatahub-operator-bundle:latest)
+#
+# Arguments:
+#   name          - Name for the CatalogSource
+#   namespace     - Namespace for the CatalogSource (usually openshift-marketplace)
+#   catalog_image - The operator catalog/index image (e.g., quay.io/opendatahub/opendatahub-operator-catalog:latest)
+#
+# Returns:
+#   0 on success, 1 on failure
+create_custom_catalogsource() {
+  local name=${1?catalogsource name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local catalog_image=${1?catalog image is required}; shift
+
+  echo "* Creating CatalogSource '$name' from catalog image: $catalog_image"
+
+  # Check if CatalogSource already exists
+  if kubectl get catalogsource "$name" -n "$namespace" &>/dev/null; then
+    echo "  * CatalogSource '$name' already exists. Updating..."
+    kubectl delete catalogsource "$name" -n "$namespace" --ignore-not-found
+    sleep 5
+  fi
+
+  cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: ${name}
+  namespace: ${namespace}
+spec:
+  sourceType: grpc
+  image: ${catalog_image}
+  displayName: "Custom ${name} Catalog"
+  publisher: "Custom"
+  updateStrategy:
+    registryPoll:
+      interval: 10m
+EOF
+
+  echo "  * Waiting for CatalogSource to be ready..."
+  local timeout=120
+
+  if ! kubectl wait catalogsource "$name" -n "$namespace" \
+      --for=jsonpath='{.status.connectionState.lastObservedState}'=READY \
+      --timeout="${timeout}s" 2>/dev/null; then
+    local state=$(kubectl get catalogsource "$name" -n "$namespace" \
+      -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null)
+    echo "  ERROR: CatalogSource may not be fully ready yet (state: $state)"
+    return 1
+  fi
+  echo "  * CatalogSource '$name' is ready"
+  return 0
+}
+
+# cleanup_custom_catalogsource name namespace
+#   Removes a custom CatalogSource created by create_custom_catalogsource.
+cleanup_custom_catalogsource() {
+  local name=${1?catalogsource name is required}; shift
+  local namespace=${1?namespace is required}; shift
+
+  if kubectl get catalogsource "$name" -n "$namespace" &>/dev/null; then
+    echo "* Removing CatalogSource '$name'..."
+    kubectl delete catalogsource "$name" -n "$namespace" --ignore-not-found
+  fi
+}
+
+# wait_datasciencecluster_ready [name] [timeout]
+#   Waits for a DataScienceCluster's KServe and ModelsAsService components to be ready.
+#
+# Arguments:
+#   name    - Name of the DataScienceCluster (default: default-dsc)
+#   timeout - Timeout in seconds (default: 600)
+#
+# Returns:
+#   0 on success, 1 on failure
+wait_datasciencecluster_ready() {
+  local name="${1:-default-dsc}"
+  local timeout="${2:-600}"
+  local interval=20
+  local elapsed=0
+
+  echo "* Waiting for DataScienceCluster '$name' KServe and ModelsAsService components to be ready..."
+
+  while [ $elapsed -lt $timeout ]; do
+    # Grab full DSC status as JSON
+    local dsc_json
+    dsc_json=$(kubectl get datasciencecluster "$name" -o json 2>/dev/null || echo "")
+    
+    if [ -z "$dsc_json" ]; then
+      echo "  - Waiting for DataScienceCluster/$name resource to appear..."
+      sleep $interval
+      elapsed=$((elapsed + interval))
+      continue
+    fi
+
+    local kserve_state kserve_ready maas_ready
+    kserve_state=$(echo "$dsc_json" | jq -r '.status.components.kserve.managementState // ""')
+    kserve_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="KserveReady") | .status' | tail -n1)
+    maas_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelsAsServiceReady") | .status' | tail -n1)
+
+    if [[ "$kserve_state" == "Managed" && "$kserve_ready" == "True" && "$maas_ready" == "True" ]]; then
+      echo "  * KServe and ModelsAsService are ready in DataScienceCluster '$name'"
+      return 0
+    else
+      echo "  - KServe state: $kserve_state, KserveReady: $kserve_ready, ModelsAsServiceReady: $maas_ready"
+    fi
+
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "  ERROR: KServe and/or ModelsAsService did not become ready in DataScienceCluster/$name within $timeout seconds."
+  return 1
+}
+
+# wait_authorino_ready [timeout]
+#   Waits for Authorino to be ready and accepting requests.
+#   Note: Request are required because authorino will report ready status but still give 500 errors.
+#   
+#   This checks:
+#   1. Authorino CR status is Ready
+#   2. Auth service cluster is healthy in gateway's Envoy
+#   3. Auth requests are actually succeeding (not erroring)
+#
+# Arguments:
+#   timeout - Timeout in seconds (default: 120)
+#
+# Returns:
+#   0 on success, 1 on failure
+wait_authorino_ready() {
+  local timeout=${1:-120}
+  local interval=5
+  local elapsed=0
+
+  echo "* Waiting for Authorino to be ready (timeout: ${timeout}s)..."
+
+  # First, wait for Authorino CR to be ready
+  echo "  - Checking Authorino CR status..."
+  while [[ $elapsed -lt $timeout ]]; do
+    local authorino_ready
+    authorino_ready=$(kubectl get authorino -n kuadrant-system -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+    
+    if [[ "$authorino_ready" == "True" ]]; then
+      echo "  * Authorino CR is Ready"
+      break
+    fi
+    
+    echo "  - Authorino CR not ready yet (status: ${authorino_ready:-not found}), waiting..."
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  if [[ $elapsed -ge $timeout ]]; then
+    echo "  ERROR: Authorino CR did not become ready within ${timeout} seconds"
+    return 1
+  fi
+
+  # Then, wait for the auth service cluster to be healthy in the gateway
+  echo "  - Checking auth service cluster health in gateway..."
+  local gateway_pod
+  gateway_pod=$(kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  
+  if [[ -z "$gateway_pod" ]]; then
+    echo "  WARNING: Could not find gateway pod, skipping cluster health check"
+    return 0
+  fi
+
+  # Wait for auth cluster to show healthy
+  while [[ $elapsed -lt $timeout ]]; do
+    local health_status
+    health_status=$(kubectl exec -n openshift-ingress "$gateway_pod" -- pilot-agent request GET /clusters 2>/dev/null | grep "kuadrant-auth-service" | grep "health_flags" | head -1 || echo "")
+    
+    if [[ "$health_status" == *"healthy"* ]]; then
+      echo "  * Auth service cluster is healthy in gateway"
+      break
+    fi
+    
+    echo "  - Auth service cluster not healthy yet, waiting..."
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  # Finally, verify auth requests are actually succeeding (not just cluster marked healthy)
+  echo "  - Verifying auth requests are succeeding..."
+  local cluster_domain
+  cluster_domain=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
+  
+  if [[ -z "$cluster_domain" ]]; then
+    echo "  WARNING: Could not determine cluster domain, skipping request verification"
+    return 0
+  fi
+
+  local maas_url="https://maas.${cluster_domain}/maas-api/health"
+  local consecutive_success=0
+  local required_success=3
+
+  while [[ $elapsed -lt $timeout ]]; do
+    # Make a test request - we expect 401 (auth working) not 500 (auth failing)
+    local http_code
+    http_code=$(curl -sSk -o /dev/null -w "%{http_code}" "$maas_url" 2>/dev/null || echo "000")
+    
+    if [[ "$http_code" == "401" || "$http_code" == "200" ]]; then
+      consecutive_success=$((consecutive_success + 1))
+      echo "  - Auth request succeeded (HTTP $http_code) [$consecutive_success/$required_success]"
+      
+      if [[ $consecutive_success -ge $required_success ]]; then
+        echo "  * Auth requests verified working"
+        return 0
+      fi
+    else
+      consecutive_success=0
+      echo "  - Auth request returned HTTP $http_code, waiting for stabilization..."
+    fi
+    
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+
+  echo "  WARNING: Auth request verification timed out, continuing anyway"
+  return 0
+}

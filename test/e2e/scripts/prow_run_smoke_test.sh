@@ -52,6 +52,9 @@ find_project_root() {
 # Configuration
 PROJECT_ROOT="$(find_project_root)"
 
+# Source helper functions
+source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
+
 # Options (can be set as environment variables)
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
@@ -92,15 +95,37 @@ check_prerequisites() {
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform on OpenShift..."
-    if ! "$PROJECT_ROOT/scripts/deploy-openshift.sh"; then
+    if ! "$PROJECT_ROOT/scripts/deploy-rhoai-stable.sh" --operator-type odh --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:latest --channel fast; then
         echo "❌ ERROR: MaaS platform deployment failed"
         exit 1
     fi
+    # Wait for DataScienceCluster's KServe and ModelsAsService to be ready
+    if ! wait_datasciencecluster_ready "default-dsc" 600; then
+        echo "❌ ERROR: DataScienceCluster components did not become ready"
+        exit 1
+    fi
+    
+    # Wait for Authorino to be ready and auth service cluster to be healthy
+    echo "Waiting for Authorino and auth service to be ready..."
+    if ! wait_authorino_ready 600; then
+        echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+    fi
+    
     echo "✅ MaaS platform deployment completed"
 }
 
 deploy_models() {
     echo "Deploying simulator Model"
+    # Create llm namespace if it does not exist
+    if ! kubectl get namespace llm >/dev/null 2>&1; then
+        echo "Creating 'llm' namespace..."
+        if ! kubectl create namespace llm; then
+            echo "❌ ERROR: Failed to create 'llm' namespace"
+            exit 1
+        fi
+    else
+        echo "'llm' namespace already exists"
+    fi
     if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator/ | kubectl apply -f -); then
         echo "❌ ERROR: Failed to deploy simulator model"
         exit 1
@@ -123,11 +148,14 @@ validate_deployment() {
     echo "Deployment Validation"
     if [ "$SKIP_VALIDATION" = false ]; then
         if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
-            echo "❌ ERROR: Deployment validation failed"
-            exit 1
-        else
-            echo "✅ Deployment validation completed"
+            echo "⚠️  First validation attempt failed, waiting 60 seconds and retrying..."
+            sleep 60
+            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+                echo "❌ ERROR: Deployment validation failed after retry"
+                exit 1
+            fi
         fi
+        echo "✅ Deployment validation completed"
     else
         echo "⏭️  Skipping validation"
     fi

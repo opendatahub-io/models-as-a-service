@@ -31,6 +31,8 @@ spec:
             type: OpenshiftDefaultIngress  # Use OpenShift's default ingress certificate
         managementState: Removed  # Disable Knative serving (incompatible with RawDeployment)
         name: knative-serving
+      modelsAsService:
+        managementState: Managed
     
     # Other components disabled for MaaS-focused deployment
     modelmeshserving:
