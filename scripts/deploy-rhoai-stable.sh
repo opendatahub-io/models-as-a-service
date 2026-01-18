@@ -554,12 +554,8 @@ spec:
     dashboard:
       managementState: Managed
     
-    # Other components disabled for MaaS-focused deployment
-    modelmeshserving:
-      managementState: Removed  # Use KServe instead
-    
     llamastackoperator:
-      managementState: Removed  # Not needed for MaaS 
+      managementState: Removed 
 EOF
 }
 
