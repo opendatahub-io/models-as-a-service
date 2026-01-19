@@ -12,7 +12,7 @@ metadata:
       == "main"
   creationTimestamp: null
   labels:
-    appstudio.openshift.io/application: opendatahub-release
+    appstudio.openshift.io/application: opendatahub-builds
     appstudio.openshift.io/component: maas-api
     pipelines.appstudio.openshift.io/type: build
   name: maas-api-on-pull-request
