@@ -27,9 +27,9 @@
 #
 # OPTIONS:
 #   -h, --help              Show this help message and exit (use -v for advanced options)
-#   -t, --operator-type     Which operator to install: "rhoai" (default) or "odh"
+#   -t, --operator-type     Which operator to install: "odh" (default) or "rhoai"
 #   -r, --maas-ref          Git ref for MaaS manifests (default: main)
-#   -c, --cert-name         TLS certificate secret name (default: data-science-gateway-service-tls)
+#   -c, --cert-name         TLS certificate secret name (default: auto-detected)
 #
 # ADVANCED OPTIONS (use --help -v to see these):
 #   -b, --operator-catalog  Custom operator catalog/index image
@@ -42,10 +42,10 @@
 #   CLI arguments take precedence over environment variables.
 #
 # EXAMPLES:
-#   ./deploy-rhoai-stable.sh                           # Install RHOAI (default)
-#   ./deploy-rhoai-stable.sh --operator-type odh       # Install ODH
-#   ./deploy-rhoai-stable.sh -t odh -r v1.0.0          # Install ODH with specific ref
-#   OPERATOR_TYPE=odh ./deploy-rhoai-stable.sh         # Install ODH via env var
+#   ./deploy-rhoai-stable.sh                           # Install ODH (default)
+#   ./deploy-rhoai-stable.sh --operator-type rhoai     # Install RHOAI
+#   ./deploy-rhoai-stable.sh -t rhoai -r v1.0.0        # Install RHOAI with specific ref
+#   OPERATOR_TYPE=rhoai ./deploy-rhoai-stable.sh       # Install RHOAI via env var
 #
 # NOTES:
 #   - The script is idempotent for most operations
@@ -69,9 +69,9 @@ Usage: $(basename "$0") [OPTIONS]
 
 Options:
   -h, --help              Show this help message and exit (use -v for advanced options)
-  -t, --operator-type     Which operator to install: "rhoai" (default) or "odh"
+  -t, --operator-type     Which operator to install: "odh" (default) or "rhoai"
   -r, --maas-ref          Git ref for MaaS manifests (default: main)
-  -c, --cert-name         TLS certificate secret name (default: data-science-gateway-service-tls)
+  -c, --cert-name         TLS certificate secret name (default: auto-detected)
 
 Environment Variables:
   OPERATOR_TYPE           Same as --operator-type
@@ -79,10 +79,10 @@ Environment Variables:
   CERT_NAME               Same as --cert-name
 
 Examples:
-  $(basename "$0")                           # Install RHOAI (default)
-  $(basename "$0") --operator-type odh       # Install ODH
-  $(basename "$0") -t odh -r v1.0.0          # Install ODH with specific git ref
-  OPERATOR_TYPE=odh $(basename "$0")         # Install ODH via env var
+  $(basename "$0")                           # Install ODH (default)
+  $(basename "$0") --operator-type rhoai     # Install RHOAI
+  $(basename "$0") -t rhoai -r v1.0.0        # Install RHOAI with specific git ref
+  OPERATOR_TYPE=rhoai $(basename "$0")       # Install RHOAI via env var
 
 EOF
 
@@ -171,12 +171,9 @@ if [[ "$SHOW_HELP" == "true" ]]; then
 fi
 
 # Set defaults for any unset variables
-: "${OPERATOR_TYPE:=rhoai}"
+: "${OPERATOR_TYPE:=odh}"
 : "${MAAS_REF:=main}"
-: "${CERT_NAME:=data-science-gateway-service-tls}"
-
-# Export variables needed by envsubst
-export CERT_NAME
+# CERT_NAME will be detected dynamically later, but can be overridden via env var or CLI arg
 
 # Validate OPERATOR_TYPE
 if [[ "$OPERATOR_TYPE" != "rhoai" && "$OPERATOR_TYPE" != "odh" ]]; then
@@ -186,6 +183,10 @@ fi
 
 echo "========================================="
 echo "Deploying with operator: ${OPERATOR_TYPE}"
+if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
+  echo "NOTE: RHOAI may not support all features if using an older operator version."
+  echo "      If you encounter errors, try using ODH: OPERATOR_TYPE=odh $0"
+fi
 if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
   echo "Using custom catalog: ${OPERATOR_CATALOG}"
 fi
@@ -193,6 +194,18 @@ if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
   echo "Using custom operator image: ${OPERATOR_IMAGE}"
 fi
 echo "========================================="
+
+# Determine applications namespace based on operator type
+get_applications_namespace() {
+  if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
+    echo "redhat-ods-applications"
+  else
+    echo "opendatahub"
+  fi
+}
+
+# Set applications namespace variable
+APPLICATIONS_NS=$(get_applications_namespace)
 
 deploy_certmanager() {
   local certmanager_exists=$(checksubscriptionexists openshift-marketplace redhat-operators openshift-cert-manager-operator)
@@ -506,21 +519,12 @@ metadata:
   labels:
     app.kubernetes.io/name: dscinitialization
 spec:
-  applicationsNamespace: opendatahub
+  applicationsNamespace: ${APPLICATIONS_NS}
   monitoring:
-    metrics:
-      storage:
-        retention: 90d
-        size: 5Gi
-    namespace: opendatahub
-    traces:
-      sampleRatio: '0.1'
-      storage:
-        backend: pv
-        retention: 2160h
     managementState: Managed
+    namespace: ${APPLICATIONS_NS}
+    metrics: {}
   trustedCABundle:
-    customCABundle: ''
     managementState: Managed
 EOF
 }
@@ -585,7 +589,7 @@ deploy_datasciencecluster
 
 echo
 echo "## Waiting for operator to initialize..."
-wait_for_namespace "opendatahub" 300
+wait_for_namespace "$APPLICATIONS_NS" 300
 
 echo
 echo "## Installing MaaS components (not managed by operator)"
@@ -595,7 +599,63 @@ export AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. 
 
 echo "* Cluster domain: ${CLUSTER_DOMAIN}"
 echo "* Cluster audience: ${AUD}"
-echo "* TLS certificate secret: ${CERT_NAME}"
+
+# Detect TLS certificate if not explicitly set
+if [[ -z "${CERT_NAME:-}" ]]; then
+  echo "* Detecting TLS certificate secret..."
+
+  # Try 1: Get certificate from GatewayConfig (operator-managed, most reliable)
+  if kubectl get gatewayconfig.services.platform.opendatahub.io default-gateway &>/dev/null; then
+    GATEWAY_CERT_TYPE=$(kubectl get gatewayconfig.services.platform.opendatahub.io default-gateway \
+      -o jsonpath='{.spec.certificate.type}' 2>/dev/null)
+
+    if [[ "$GATEWAY_CERT_TYPE" == "Provided" ]]; then
+      CERT_NAME=$(kubectl get gatewayconfig.services.platform.opendatahub.io default-gateway \
+        -o jsonpath='{.spec.certificate.secretName}' 2>/dev/null)
+      if [[ -n "$CERT_NAME" ]]; then
+        echo "  * Found certificate from GatewayConfig (Provided): ${CERT_NAME}"
+      fi
+    elif [[ "$GATEWAY_CERT_TYPE" == "OpenshiftDefaultIngress" ]]; then
+      # Try to get the default ingress certificate
+      CERT_NAME=$(kubectl get ingresscontroller default -n openshift-ingress-operator \
+        -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)
+      if [[ -n "$CERT_NAME" ]]; then
+        echo "  * Found certificate from IngressController: ${CERT_NAME}"
+      fi
+    fi
+  fi
+
+  # Try 2: Check known certificate secret names (RHOAI/ODH defaults)
+  if [[ -z "$CERT_NAME" ]]; then
+    CERT_CANDIDATES=("data-science-gateway-service-tls" "default-gateway-cert")
+    for cert in "${CERT_CANDIDATES[@]}"; do
+      if kubectl get secret -n openshift-ingress "$cert" &>/dev/null; then
+        CERT_NAME="$cert"
+        echo "  * Found TLS certificate secret in openshift-ingress: ${cert}"
+        break
+      fi
+    done
+  fi
+
+  # Try 3: Get certificate from router deployment (fallback for default cluster cert)
+  if [[ -z "$CERT_NAME" ]]; then
+    CERT_NAME=$(kubectl get deployment router-default -n openshift-ingress \
+      -o jsonpath='{.spec.template.spec.volumes[?(@.name=="default-certificate")].secret.secretName}' 2>/dev/null)
+    if [[ -n "$CERT_NAME" ]]; then
+      echo "  * Found certificate from router deployment: ${CERT_NAME}"
+    fi
+  fi
+
+  # Warning if no certificate found
+  if [[ -z "$CERT_NAME" ]]; then
+    echo "  ⚠️  WARNING: No TLS certificate found. HTTPS listener will not be configured."
+    echo "     You can specify a certificate with: --cert-name <secret-name>"
+    echo "     Or set CERT_NAME environment variable."
+  fi
+fi
+
+export CERT_NAME
+echo "* TLS certificate secret: ${CERT_NAME:-<none>}"
 
 echo
 echo "## Installing MaaS Gateway"
@@ -616,8 +676,8 @@ if [[ -n "$AUD" && "$AUD" != "https://kubernetes.default.svc" ]]; then
   echo "## Configuring audience for non-standard cluster"
   echo "* Detected non-default audience: ${AUD}"
   # Patch the correct AuthPolicy: maas-api-auth-policy in the openshift-ingress namespace
-  if wait_for_resource "authpolicy" "maas-api-auth-policy" "opendatahub" 300; then
-    kubectl patch authpolicy maas-api-auth-policy -n opendatahub --type=merge --patch-file <(echo "
+  if wait_for_resource "authpolicy" "maas-api-auth-policy" "$APPLICATIONS_NS" 300; then
+    kubectl patch authpolicy maas-api-auth-policy -n "$APPLICATIONS_NS" --type=merge --patch-file <(echo "
 spec:
   rules:
     authentication:
