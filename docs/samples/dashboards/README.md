@@ -78,8 +78,7 @@ Monitor these important metrics:
 ### 🔗 Related Documentation
 
 - [Deployment Guide](../../README.md)
-- [Token Metrics Guide](../../token-metrics.md)
-- [Observability Setup](../../deployment/base/observability/)
+- [Observability Setup](../../content/advanced-administration/observability.md)
 
 ### 🛠️ Customization
 
