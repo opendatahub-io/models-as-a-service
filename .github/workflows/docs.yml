@@ -5,11 +5,13 @@ on:
     branches: [ main, master]
     paths:
       - 'docs/**'
+      - '**/*.md'
       - '.github/workflows/docs.yml'
   pull_request:
     branches: [ main, master ]
     paths:
       - 'docs/**'
+      - '**/*.md'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -21,9 +23,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  link-validation:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Markdown Links
+        uses: becheran/mlc@v1.2.0
+        with:
+          # To skip checking http/https links, add: --offline
+          args: .
+
   # Build job for PRs - just validates the docs build
   build-pr:
     if: github.event_name == 'pull_request'
+    needs: link-validation
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
