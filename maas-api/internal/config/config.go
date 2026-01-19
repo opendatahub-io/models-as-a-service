@@ -80,7 +80,7 @@ type Config struct {
 func Load() *Config {
 	debugMode, _ := env.GetBool("DEBUG_MODE", false)
 	gatewayName := env.GetString("GATEWAY_NAME", constant.DefaultGatewayName)
-	secure, _ := env.GetBool("SECURE", true)
+	secure, _ := env.GetBool("SECURE", false)
 
 	c := &Config{
 		Name:             env.GetString("INSTANCE_NAME", gatewayName),
@@ -116,7 +116,7 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.GatewayNamespace, "gateway-namespace", c.GatewayNamespace, "Namespace where MaaS-enabled Gateway is deployed")
 
 	fs.StringVar(&c.Address, "address", c.Address, "Listen address (default :8443 for secure, :8080 for insecure)")
-	fs.BoolVar(&c.Secure, "secure", c.Secure, "Use HTTPS (default: true)")
+	fs.BoolVar(&c.Secure, "secure", c.Secure, "Use HTTPS (default: false)")
 	c.TLS.bindFlags(fs)
 
 	// Deprecated flag (backward compatibility with pre-TLS version)
