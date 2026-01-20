@@ -671,12 +671,37 @@ kubectl apply --server-side=true \
   -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/usage-policies?ref=${MAAS_REF}")
 
 # Fix audience for ROSA/non-standard clusters
+# =====================================================
+# Background:
+# - Hypershift/ROSA clusters use custom OIDC providers with non-standard audiences
+# - Default AuthPolicy expects audience: https://kubernetes.default.svc
+# - Service account tokens from these clusters have different audiences
+# - Without this patch, authentication fails with HTTP 401
+#
+# Problem:
+# - When modelsAsService.managementState: Managed, the operator creates AuthPolicy
+# - Operator's reconciliation loop may revert manual patches back to defaults
+# - This causes authentication to break after initial successful patching
+#
+# Solution:
+# - Annotate AuthPolicy with opendatahub.io/managed=false to prevent reconciliation
+# - Patch with cluster-specific audience
+# - Verify the patch persisted after giving operator time to reconcile
+# - Warn user if operator reverts the change
+# =====================================================
 if [[ -n "$AUD" && "$AUD" != "https://kubernetes.default.svc" ]]; then
   echo
   echo "## Configuring audience for non-standard cluster"
   echo "* Detected non-default audience: ${AUD}"
-  # Patch the correct AuthPolicy: maas-api-auth-policy in the openshift-ingress namespace
+
   if wait_for_resource "authpolicy" "maas-api-auth-policy" "$APPLICATIONS_NS" 300; then
+    # Step 1: Annotate to prevent operator reconciliation
+    # This tells the operator to not manage this resource, allowing our custom config to persist
+    kubectl annotate authpolicy maas-api-auth-policy -n "$APPLICATIONS_NS" \
+      opendatahub.io/managed="false" --overwrite 2>/dev/null || true
+
+    # Step 2: Patch AuthPolicy with cluster-specific audience
+    # The custom audience allows service account tokens from Hypershift/ROSA to be validated
     kubectl patch authpolicy maas-api-auth-policy -n "$APPLICATIONS_NS" --type=merge --patch-file <(echo "
 spec:
   rules:
@@ -687,6 +712,19 @@ spec:
             - $AUD
             - maas-default-gateway-sa")
     echo "  * AuthPolicy 'maas-api-auth-policy' patched with custom audience."
+
+    # Step 3: Verify the patch persisted
+    # Wait briefly to allow operator reconciliation cycle to run, then check if our patch survived
+    sleep 3
+    ACTUAL_AUD=$(kubectl get authpolicy maas-api-auth-policy -n "$APPLICATIONS_NS" \
+      -o jsonpath='{.spec.rules.authentication.openshift-identities.kubernetesTokenReview.audiences[0]}' 2>/dev/null || echo "")
+    if [[ "$ACTUAL_AUD" == "$AUD" ]]; then
+      echo "  * Verified: Custom audience configuration persisted"
+    else
+      echo "  ⚠️  WARNING: AuthPolicy audience may have been reverted to: ${ACTUAL_AUD}"
+      echo "     This may cause authentication failures on Hypershift/ROSA clusters"
+      echo "     The operator might be reconciling the AuthPolicy. Consider disabling operator management."
+    fi
   else
     echo "  WARNING: Could not find AuthPolicy 'maas-api-auth-policy' to patch. Skipping audience configuration."
   fi
