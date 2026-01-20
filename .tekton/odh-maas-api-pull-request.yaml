@@ -13,9 +13,9 @@ metadata:
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
-    appstudio.openshift.io/component: maas-api
+    appstudio.openshift.io/component: odh-maas-api-ci
     pipelines.appstudio.openshift.io/type: build
-  name: maas-api-on-pull-request
+  name: odh-maas-api-on-pull-request
   namespace: open-data-hub-tenant
 spec:
   params:
@@ -44,7 +44,7 @@ spec:
     - name: pathInRepo
       value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
-    serviceAccountName: build-pipeline-maas-api
+    serviceAccountName: build-pipeline-maas-api-poc
   workspaces:
   - name: git-auth
     secret:
