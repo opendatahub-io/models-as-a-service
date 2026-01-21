@@ -279,13 +279,9 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 	testLogger := logger.Development()
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
-	// Create mock HTTP server to simulate authorization responses for OPTIONS requests
+	// Create mock HTTP server to simulate gateway authorization responses.
+	// The auth check uses GET /v1/models to verify access.
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodOptions {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "Bearer valid-token" {
 			w.WriteHeader(http.StatusOK)

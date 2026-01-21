@@ -76,7 +76,7 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 		Jitter:   0.1,
 	}
 
-	endpoint, errURL := url.JoinPath(model.URL.String(), "/v1/chat/completions")
+	endpoint, errURL := url.JoinPath(model.URL.String(), "/v1/models")
 	if errURL != nil {
 		m.logger.Error("Failed to create endpoint", "modelID", model.ID, "model.URL", model.URL.String(), "errURL", errURL)
 		return false
@@ -95,8 +95,9 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 }
 
 // doAuthCheck performs a single authorization check attempt.
+// Uses GET /v1/models as it's a standard OpenAI-compatible endpoint supported by all inference servers.
 func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string) authResult {
-	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, authCheckURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authCheckURL, nil)
 	if err != nil {
 		m.logger.Debug("Failed to create authorization request", "modelID", modelID, "error", err)
 		return authRetry
@@ -140,15 +141,15 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 		return authDenied
 
 	case resp.StatusCode == http.StatusMethodNotAllowed:
-		// 405 Method Not Allowed - this should not happen, something is misconfigured
-		// Deny access as we cannot verify authorization
-		m.logger.Debug("UNEXPECTED: Model endpoint returned 405 Method Not Allowed - this indicates a configuration issue. "+
-			"OPTIONS requests should be supported by the gateway. Denying access as authorization cannot be verified",
+		// 405 Method Not Allowed means the request reached the gateway or model server,
+		// proving it passed AuthorizationPolicies (which would return 401/403).
+		// The 405 indicates the HTTP method isn't enabled on this route/endpoint,
+		// not an authorization failure. Grant access since auth clearly succeeded.
+		m.logger.Debug("Model endpoint returned 405 - method not allowed but auth succeeded",
 			"modelID", modelID,
-			"statusCode", resp.StatusCode,
 			"url", authCheckURL,
 		)
-		return authDenied
+		return authGranted
 
 	default:
 		// Retry on server errors (5xx) or other unexpected codes
