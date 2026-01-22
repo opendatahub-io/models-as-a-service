@@ -17,19 +17,15 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 echo "Updating kustomization.yaml files with tag: $TAG"
 
-# Update base maas-api kustomization.yaml
-BASE_KUSTOMIZATION="${PROJECT_ROOT}/deployment/base/maas-api/kustomization.yaml"
-if [ -f "$BASE_KUSTOMIZATION" ]; then
-    echo "  - Updating ${BASE_KUSTOMIZATION}"
+# Update base maas-api core kustomization.yaml (contains the images section)
+CORE_KUSTOMIZATION="${PROJECT_ROOT}/deployment/base/maas-api/core/kustomization.yaml"
+if [ -f "$CORE_KUSTOMIZATION" ]; then
+    echo "  - Updating ${CORE_KUSTOMIZATION}"
     # Use sed to update the newTag field, preserving indentation
-    sed -i "s/\(newTag: \).*/\1${TAG}/" "$BASE_KUSTOMIZATION"
-fi
-
-# Update dev overlay kustomization.yaml
-DEV_KUSTOMIZATION="${PROJECT_ROOT}/maas-api/deploy/overlays/dev/kustomization.yaml"
-if [ -f "$DEV_KUSTOMIZATION" ]; then
-    echo "  - Updating ${DEV_KUSTOMIZATION}"
-    sed -i "s/\(newTag: \).*/\1${TAG}/" "$DEV_KUSTOMIZATION"
+    sed -i "s/\(newTag: \).*/\1${TAG}/" "$CORE_KUSTOMIZATION"
+else
+    echo "Error: ${CORE_KUSTOMIZATION} not found!"
+    exit 1
 fi
 
 # Update ODH overlay params.env if it exists
@@ -43,7 +39,6 @@ fi
 echo "Tag update complete!"
 echo ""
 echo "Updated files:"
-echo "  - ${BASE_KUSTOMIZATION}"
-[ -f "$DEV_KUSTOMIZATION" ] && echo "  - ${DEV_KUSTOMIZATION}"
+echo "  - ${CORE_KUSTOMIZATION}"
 [ -f "$ODH_PARAMS" ] && echo "  - ${ODH_PARAMS}"
 
