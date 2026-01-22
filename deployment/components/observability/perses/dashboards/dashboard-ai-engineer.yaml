@@ -113,8 +113,8 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: |
-                    100 * (sum(authorized_hits{user=~"$user"}) / 
-                    (sum(authorized_hits{user=~"$user"}) + sum(limited_calls{user=~"$user"}))) 
+                    100 * (sum(authorized_calls{user=~"$user"}) / 
+                    (sum(authorized_calls{user=~"$user"}) + sum(limited_calls{user=~"$user"}))) 
                     OR vector(100)
 
     # === Row: Usage Trends ===
