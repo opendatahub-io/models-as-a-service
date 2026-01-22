@@ -539,18 +539,18 @@ spec:
           "title": "👤 Requests & Errors per User",
           "type": "timeseries"
         },
-        {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 120}, "id": 108, "panels": [], "title": "🔮 Blocked Features (Placeholders)", "type": "row"},
+        {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 120}, "id": 108, "panels": [], "title": "👤 Per-User Metrics", "type": "row"},
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "⚠️ BLOCKED: Requires EnvoyFilter to inject 'user' label into Istio metrics.\n\nExpected metric: istio_request_duration_milliseconds{user=\"$user\"}\n\nCurrently Istio metrics only have service-level labels, not user context.",
-          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "dark-yellow", "value": null}]}, "unit": "ms", "noValue": "Blocked\nRequires EnvoyFilter"}, "overrides": []},
-          "gridPos": {"h": 5, "w": 8, "x": 0, "y": 121},
+          "description": "P95 latency per authenticated user.\n\nThis metric is populated via Istio Telemetry reading the X-MaaS-Username header set by the AuthPolicy.",
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "ms"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 121},
           "id": 31,
-          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "histogram_quantile(0.95, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!=\"\"}[5m])))", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (user, le) (increase(istio_request_duration_milliseconds_bucket{user!=\"\", user!=\"unknown\"}[1h])))", "legendFormat": "{{user}}", "refId": "A"}],
           "title": "⏱️ P95 Latency per User",
-          "type": "stat"
+          "type": "timeseries"
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
@@ -566,14 +566,14 @@ spec:
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "ℹ️ Required changes to enable blocked features:\n\n**Latency per User:**\n- Add EnvoyFilter to extract 'user' from JWT/header\n- Configure Istio Telemetry to include custom dimensions\n\n**Token per User:**\n- Modify llm-d/vLLM to accept X-User-ID header\n- Label token metrics with user context\n\n**Related Jira:** TBD - User story to be identified",
-          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "dark-blue", "value": null}]}, "noValue": "See panel description\nfor implementation notes"}, "overrides": []},
+          "description": "ℹ️ Per-User Metrics Status:\n\n**✅ Latency per User:** ENABLED\n- Istio Telemetry reads X-MaaS-Username header\n- User label added to istio_request_duration_milliseconds\n\n**⚠️ Token Breakdown per User:** BLOCKED\n- Requires vLLM to accept X-User-ID header\n- Label token metrics with user context",
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "dark-blue", "value": null}]}, "noValue": "See panel description\nfor status"}, "overrides": []},
           "gridPos": {"h": 5, "w": 8, "x": 16, "y": 121},
           "id": 33,
           "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "vector(0)", "instant": true, "refId": "A"}],
-          "title": "📝 Implementation Notes",
+          "title": "📝 Status Notes",
           "type": "stat"
         }
       ],
