@@ -163,7 +163,7 @@ TOKEN_RESPONSE=$(curl -sSk \
 
 echo $TOKEN_RESPONSE | jq -r .
 
-echo $TOKEN_RESPONSE | jq -r .token | cut -d. -f2 | base64 -d 2>/dev/null | jq .
+echo $TOKEN_RESPONSE | jq -r .token | cut -d. -f2 | jq -Rr '@base64d | fromjson'
 
 TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token)
 ```
