@@ -64,7 +64,7 @@ spec:
           "id": 8,
           "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true, "text": {}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "(sum(authorized_hits{user=~\"^$user$\"}) / (sum(authorized_hits{user=~\"^$user$\"}) + sum(limited_calls{user=~\"^$user$\"}))) OR vector(1)", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "(sum(authorized_calls{user=~\"^$user$\"}) / (sum(authorized_calls{user=~\"^$user$\"}) + sum(limited_calls{user=~\"^$user$\"}))) OR vector(1)", "instant": true, "refId": "A"}],
           "description": "Percentage of your requests that were successful. < 95% indicates you may be hitting rate limits frequently.",
           "title": "✅ My Success Rate",
           "type": "gauge"
