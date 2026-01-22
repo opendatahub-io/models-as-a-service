@@ -52,7 +52,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: sum(authorized_hits{user=~"$user"})
+                  query: sum(authorized_hits{user=~"^$user$"})
 
     currentRate:
       kind: Panel
@@ -72,7 +72,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: sum(rate(authorized_hits{user=~"$user"}[5m]))
+                  query: sum(rate(authorized_hits{user=~"^$user$"}[5m]))
 
     rateLimitedRequests:
       kind: Panel
@@ -91,7 +91,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: sum(limited_calls{user=~"$user"}) OR vector(0)
+                  query: sum(limited_calls{user=~"^$user$"}) OR vector(0)
 
     mySuccessRate:
       kind: Panel
@@ -113,8 +113,8 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: |
-                    100 * (sum(authorized_calls{user=~"$user"}) / 
-                    (sum(authorized_calls{user=~"$user"}) + sum(limited_calls{user=~"$user"}))) 
+                    100 * (sum(authorized_calls{user=~"^$user$"}) / 
+                    (sum(authorized_calls{user=~"^$user$"}) + sum(limited_calls{user=~"^$user$"}))) 
                     OR vector(100)
 
     # === Row: Usage Trends ===
@@ -139,7 +139,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{model}}"
-                  query: sum by (model) (authorized_hits{user=~"$user"})
+                  query: sum by (model) (authorized_hits{user=~"^$user$"})
 
     requestTrends:
       kind: Panel
@@ -162,14 +162,14 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Authorized"
-                  query: sum(rate(authorized_hits{user=~"$user"}[5m]))
+                  query: sum(rate(authorized_hits{user=~"^$user$"}[5m]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Rate Limited"
-                  query: sum(rate(limited_calls{user=~"$user"}[5m]))
+                  query: sum(rate(limited_calls{user=~"^$user$"}[5m]))
 
     # === Row: Hourly Usage Patterns ===
     hourlyUsageByModel:
@@ -196,7 +196,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{model}}"
-                  query: sum by (model) (increase(authorized_hits{user=~"$user"}[1h]))
+                  query: sum by (model) (increase(authorized_hits{user=~"^$user$"}[1h]))
 
     # === Row: Detailed Analysis ===
     requestVolumeByModel:
@@ -222,7 +222,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{model}}"
-                  query: sum by (model) (increase(authorized_hits{user=~"$user"}[1h]))
+                  query: sum by (model) (increase(authorized_hits{user=~"^$user$"}[1h]))
 
     rateLimitedByModel:
       kind: Panel
@@ -245,7 +245,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{model}} (limited)"
-                  query: sum by (model) (increase(limited_calls{user=~"$user"}[1h]))
+                  query: sum by (model) (increase(limited_calls{user=~"^$user$"}[1h]))
 
     # === Row: Usage Summary Table ===
     usageSummaryByModelTier:
@@ -269,7 +269,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{model}} / {{tier}}"
-                  query: sum by (model, tier) (authorized_hits{user=~"$user"})
+                  query: sum by (model, tier) (authorized_hits{user=~"^$user$"})
 
   # Layout definition
   layouts:
