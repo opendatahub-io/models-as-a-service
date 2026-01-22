@@ -30,8 +30,8 @@ _base64_decode() {
 #   echo "$PAYLOAD" | jq -r '.sub'
 #
 # Example:
-#   TOKEN="<header>.<payload>.<signature>"  # Your JWT token
-#   decode_jwt_payload "$TOKEN"  # Returns decoded JSON payload
+#   TOKEN="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"
+#   decode_jwt_payload "$TOKEN"  # Returns: {"sub":"1234567890"}
 decode_jwt_payload() {
   local jwt_token="$1"
 
