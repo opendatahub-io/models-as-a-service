@@ -150,8 +150,7 @@ spec:
           description: "Currently firing alerts across MaaS namespaces"
         plugin:
           kind: TimeSeriesTable
-          spec:
-            columnSettings: []
+          spec: {}
         queries:
           - kind: TimeSeriesQuery
             spec:
@@ -221,7 +220,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: 100 * sum(authorized_hits) / (sum(authorized_hits) + sum(limited_calls))
+                  query: 100 * sum(authorized_calls) / (sum(authorized_calls) + sum(limited_calls))
 
     activeUsers:
       kind: Panel
@@ -428,7 +427,7 @@ spec:
               mode: table
             yAxis:
               format:
-                unit: percentunit
+                unit: percent
         queries:
           - kind: TimeSeriesQuery
             spec:
@@ -824,8 +823,7 @@ spec:
           description: "CPU and Memory requests/limits for LLM model pods"
         plugin:
           kind: TimeSeriesTable
-          spec:
-            columnSettings: []
+          spec: {}
         queries:
           - kind: TimeSeriesQuery
             spec:
@@ -841,6 +839,51 @@ spec:
                 spec:
                   seriesNameFormat: "{{pod}} - {{resource}} limits"
                   query: kube_pod_container_resource_limits{namespace="llm", container="main"}
+
+    # === Row: Per-User Metrics ===
+    p95LatencyPerUser:
+      kind: Panel
+      spec:
+        display:
+          name: "⏱️ P95 Latency per User"
+          description: "P95 latency per authenticated user. Populated via Istio Telemetry reading X-MaaS-Username header."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: milliseconds
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}}"
+                  query: histogram_quantile(0.95, sum by (user, le) (increase(istio_request_duration_milliseconds_bucket{user!="", user!="unknown"}[1h])))
+
+    statusNotes:
+      kind: Panel
+      spec:
+        display:
+          name: "📝 Status Notes"
+          description: "✅ Latency per User: ENABLED\n⚠️ Token Breakdown per User: BLOCKED (requires vLLM changes)"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: vector(0)
 
   # Layout definition
   layouts:
@@ -1119,3 +1162,23 @@ spec:
             height: 8
             content:
               "$ref": "#/spec/panels/resourceAllocationTable"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "👤 Per-User Metrics"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 16
+            height: 8
+            content:
+              "$ref": "#/spec/panels/p95LatencyPerUser"
+          - x: 16
+            "y": 0
+            width: 8
+            height: 8
+            content:
+              "$ref": "#/spec/panels/statusNotes"
