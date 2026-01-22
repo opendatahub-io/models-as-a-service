@@ -595,9 +595,8 @@ echo
 echo "## Installing MaaS components (not managed by operator)"
 
 export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-# JWT uses base64url encoding; convert to standard base64 before decoding
-# tr: replace URL-safe chars (_- -> /+), awk: add padding (must be multiple of 4)
-export AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}' | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
+# Use helper function to get cluster audience from JWT
+export AUD="$(get_cluster_audience)"
 
 echo "* Cluster domain: ${CLUSTER_DOMAIN}"
 echo "* Cluster audience: ${AUD}"
