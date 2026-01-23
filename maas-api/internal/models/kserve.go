@@ -1,8 +1,11 @@
 package models
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 
 	kservev1beta1 "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
@@ -22,6 +25,7 @@ type Manager struct {
 	httpRouteLister gatewaylisters.HTTPRouteLister
 	gatewayRef      GatewayRef
 	logger          *logger.Logger
+	httpClient      *http.Client
 }
 
 func NewManager(
@@ -47,6 +51,17 @@ func NewManager(
 		httpRouteLister: httpRouteLister,
 		gatewayRef:      gatewayRef,
 		logger:          log,
+		httpClient: &http.Client{
+			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // To handle custom/self-signed certs we simply skip verification for now
+				},
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 	}, nil
 }
 

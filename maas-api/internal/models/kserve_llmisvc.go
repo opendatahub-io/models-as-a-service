@@ -2,30 +2,18 @@ package models
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net/http"
 	"net/url"
-	"time"
+	"sync"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
-	"github.com/openai/openai-go/v2"
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"knative.dev/pkg/apis"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
-)
-
-// authResult represents the outcome of an authorization check attempt.
-type authResult int
-
-const (
-	authGranted authResult = iota
-	authDenied
-	authRetry
 )
 
 type GatewayRef struct {
@@ -33,7 +21,7 @@ type GatewayRef struct {
 	Namespace string
 }
 
-// ListAvailableLLMs lists LLM models that the user has access to based on authorization checks.
+// ListAvailableLLMs discovers and returns models from authorized LLMInferenceServices.
 func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Model, error) {
 	list, err := m.llmIsvcLister.List(labels.Everything())
 	if err != nil {
@@ -47,117 +35,66 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 		}
 	}
 
-	// Convert to models first, then filter based on authorization
-	allModels := m.llmInferenceServicesToModels(instanceLLMs)
+	var (
+		authorizedModels []Model
+		mu               sync.Mutex
+	)
 
-	// Filter models based on user authorization
-	var authorizedModels []Model
-	for _, model := range allModels {
-		if m.userCanAccessModel(ctx, model, saToken) {
-			authorizedModels = append(authorizedModels, model)
-		}
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(10) // bounded concurrency for HTTP calls
+
+	for _, llmIsvc := range instanceLLMs {
+		g.Go(func() error {
+			models := m.discoverModels(ctx, llmIsvc, saToken)
+			if len(models) > 0 {
+				mu.Lock()
+				defer mu.Unlock()
+				authorizedModels = append(authorizedModels, models...)
+			}
+			return nil
+		})
 	}
+
+	_ = g.Wait() // errors handled within goroutines
 
 	return authorizedModels, nil
 }
 
-// userCanAccessModel checks if the user can access a specific model by making an authorization request.
-// Uses the HTTP loopback approach to leverage the gateway's AuthPolicy as the single source of truth.
-func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken string) bool {
-	if model.URL == nil {
-		m.logger.Debug("Model URL is nil, denying access", "modelID", model.ID)
-		return false
+func (m *Manager) discoverModels(ctx context.Context, llmIsvc *kservev1alpha1.LLMInferenceService, saToken string) []Model {
+	svcMetadata := m.extractMetadata(llmIsvc)
+	if svcMetadata.URL == nil {
+		m.logger.Debug("LLMInferenceService has no URL, skipping",
+			"namespace", llmIsvc.Namespace,
+			"name", llmIsvc.Name,
+		)
+		return nil
 	}
 
-	backoff := wait.Backoff{
-		Steps:    4,
-		Duration: 100 * time.Millisecond,
-		Factor:   2.0,
-		Jitter:   0.1,
+	endpoint, err := url.JoinPath(svcMetadata.URL.String(), "/v1/models")
+	if err != nil {
+		m.logger.Error("Failed to create endpoint URL",
+			"namespace", llmIsvc.Namespace,
+			"name", llmIsvc.Name,
+			"error", err,
+		)
+		return nil
 	}
 
-	endpoint, errURL := url.JoinPath(model.URL.String(), "/v1/models")
-	if errURL != nil {
-		m.logger.Error("Failed to create endpoint", "modelID", model.ID, "model.URL", model.URL.String(), "errURL", errURL)
-		return false
+	discoveredModels := m.fetchModelsWithRetry(ctx, endpoint, saToken, llmIsvc.Name)
+	if discoveredModels == nil {
+		return nil
 	}
 
-	lastResult := authDenied // fail-closed by default
-	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		lastResult = m.doAuthCheck(ctx, endpoint, saToken, model.ID)
-		return lastResult != authRetry, nil
-	}); err != nil {
-		m.logger.Debug("Authorization check backoff failed", "modelID", model.ID, "error", err)
-		return false // explicit fail-closed on error
-	}
-
-	return lastResult == authGranted
+	return m.enrichModels(discoveredModels, svcMetadata)
 }
 
-// doAuthCheck performs a single authorization check attempt.
-// Uses GET /v1/models as it's a standard OpenAI-compatible endpoint supported by all inference servers.
-func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string) authResult {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authCheckURL, nil)
-	if err != nil {
-		m.logger.Debug("Failed to create authorization request", "modelID", modelID, "error", err)
-		return authRetry
-	}
-
-	req.Header.Set("Authorization", "Bearer "+saToken)
-
-	client := &http.Client{
-		Timeout: 3 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec // To handle custom/self-signed certs we simply skip verification for now
-			},
-		},
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		m.logger.Debug("Authorization request failed", "modelID", modelID, "error", err)
-		return authRetry
-	}
-	defer resp.Body.Close()
-
-	m.logger.Debug("Authorization check response",
-		"modelID", modelID,
-		"statusCode", resp.StatusCode,
-		"url", authCheckURL,
-	)
-
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return authGranted
-
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return authDenied
-
-	case resp.StatusCode == http.StatusNotFound:
-		// 404 means we cannot verify authorization - deny access (fail-closed)
-		// See: https://issues.redhat.com/browse/RHOAIENG-45883
-		m.logger.Debug("Model endpoint returned 404, denying access (cannot verify authorization)", "modelID", modelID)
-		return authDenied
-
-	case resp.StatusCode == http.StatusMethodNotAllowed:
-		// 405 Method Not Allowed means the request reached the gateway or model server,
-		// proving it passed AuthorizationPolicies (which would return 401/403).
-		// The 405 indicates the HTTP method isn't enabled on this route/endpoint,
-		// not an authorization failure. Grant access since auth clearly succeeded.
-		m.logger.Debug("Model endpoint returned 405 - method not allowed but auth succeeded",
-			"modelID", modelID,
-			"url", authCheckURL,
-		)
-		return authGranted
-
-	default:
-		// Retry on server errors (5xx) or other unexpected codes
-		m.logger.Debug("Unexpected status code, retrying",
-			"modelID", modelID,
-			"statusCode", resp.StatusCode,
-		)
-		return authRetry
+func (m *Manager) extractMetadata(llmIsvc *kservev1alpha1.LLMInferenceService) llmInferenceServiceMetadata {
+	return llmInferenceServiceMetadata{
+		URL:       m.findLLMInferenceServiceURL(llmIsvc),
+		Ready:     m.checkLLMInferenceServiceReadiness(llmIsvc),
+		Details:   m.extractModelDetails(llmIsvc),
+		Namespace: llmIsvc.Namespace,
+		Created:   llmIsvc.CreationTimestamp.Unix(),
 	}
 }
 
@@ -173,39 +110,6 @@ func (m *Manager) partOfMaaSInstance(llmIsvc *kservev1alpha1.LLMInferenceService
 		m.hasHTTPRouteSpecRefToGateway(llmIsvc) ||
 		m.hasReferencedRouteAttachedToGateway(llmIsvc) ||
 		m.hasManagedRouteAttachedToGateway(llmIsvc)
-}
-
-func (m *Manager) llmInferenceServicesToModels(items []*kservev1alpha1.LLMInferenceService) []Model {
-	models := make([]Model, 0, len(items))
-
-	for _, item := range items {
-		url := m.findLLMInferenceServiceURL(item)
-		if url == nil {
-			m.logger.Debug("Failed to find URL for LLMInferenceService",
-				"namespace", item.Namespace,
-				"name", item.Name,
-			)
-		}
-
-		modelID := item.Name
-		if item.Spec.Model.Name != nil && *item.Spec.Model.Name != "" {
-			modelID = *item.Spec.Model.Name
-		}
-
-		models = append(models, Model{
-			Model: openai.Model{
-				ID:      modelID,
-				Object:  "model",
-				OwnedBy: item.Namespace,
-				Created: item.CreationTimestamp.Unix(),
-			},
-			URL:     url,
-			Ready:   m.checkLLMInferenceServiceReadiness(item),
-			Details: m.extractModelDetails(item),
-		})
-	}
-
-	return models
 }
 
 func (m *Manager) findLLMInferenceServiceURL(llmIsvc *kservev1alpha1.LLMInferenceService) *apis.URL {

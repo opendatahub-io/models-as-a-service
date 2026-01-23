@@ -6,7 +6,7 @@ metadata:
     alpha.maas.opendatahub.io/tiers: '[]'
 spec:
   model:
-    uri: hf://facebook/opt-125m
+    uri: hf://sshleifer/tiny-gpt2 # ~2MB test model, simulator ignores it anyway
     name: facebook/opt-125m
   replicas: 1
   router: 
