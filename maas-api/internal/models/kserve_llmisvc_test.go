@@ -16,6 +16,7 @@ import (
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
@@ -574,6 +575,41 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		require.NoError(t, err)
 
 		assert.Empty(t, discoveredModels, "Expected no models when server returns empty list")
+	})
+
+	t.Run("405 Method Not Allowed uses service name as fallback model ID", func(t *testing.T) {
+		// When server returns 405, auth succeeded but /v1/models endpoint is not supported.
+		// Should return a model using LLMInferenceService name as best-effort fallback.
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}))
+		defer mockServer.Close()
+
+		annotations := map[string]string{
+			constant.AnnotationDescription: "A model without /v1/models support",
+			constant.AnnotationDisplayName: "Fallback Model",
+		}
+		llmService := makeLLMService("my-llm-service", "test-ns", mockServer.URL, annotations)
+		manager, errMgr := models.NewManager(
+			testLogger,
+			fixtures.NewInferenceServiceLister(),
+			fixtures.NewLLMInferenceServiceLister(llmService),
+			fixtures.NewHTTPRouteLister(),
+			gateway,
+		)
+		require.NoError(t, errMgr)
+
+		discoveredModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
+		require.NoError(t, err)
+
+		require.Len(t, discoveredModels, 1, "Should return one model using service name as fallback")
+		assert.Equal(t, "my-llm-service", discoveredModels[0].ID, "Model ID should be the LLMInferenceService name")
+		assert.Equal(t, "test-ns", discoveredModels[0].OwnedBy, "OwnedBy should be set from namespace")
+		assert.NotZero(t, discoveredModels[0].Created, "Created should be set from service creation timestamp")
+		// Verify metadata is still enriched from LLMInferenceService annotations
+		require.NotNil(t, discoveredModels[0].Details)
+		assert.Equal(t, "A model without /v1/models support", discoveredModels[0].Details.Description)
+		assert.Equal(t, "Fallback Model", discoveredModels[0].Details.DisplayName)
 	})
 
 	t.Run("model timestamps from server response are preserved", func(t *testing.T) {
