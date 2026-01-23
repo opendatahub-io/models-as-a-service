@@ -80,7 +80,7 @@ func (m *Manager) discoverModels(ctx context.Context, llmIsvc *kservev1alpha1.LL
 		return nil
 	}
 
-	discoveredModels := m.fetchModelsWithRetry(ctx, endpoint, saToken, llmIsvc.Name)
+	discoveredModels := m.fetchModelsWithRetry(ctx, endpoint, saToken, svcMetadata)
 	if discoveredModels == nil {
 		return nil
 	}
@@ -90,12 +90,21 @@ func (m *Manager) discoverModels(ctx context.Context, llmIsvc *kservev1alpha1.LL
 
 func (m *Manager) extractMetadata(llmIsvc *kservev1alpha1.LLMInferenceService) llmInferenceServiceMetadata {
 	return llmInferenceServiceMetadata{
-		URL:       m.findLLMInferenceServiceURL(llmIsvc),
-		Ready:     m.checkLLMInferenceServiceReadiness(llmIsvc),
-		Details:   m.extractModelDetails(llmIsvc),
-		Namespace: llmIsvc.Namespace,
-		Created:   llmIsvc.CreationTimestamp.Unix(),
+		ServiceName: llmIsvc.Name,
+		ModelName:   m.extractModelName(llmIsvc),
+		URL:         m.findLLMInferenceServiceURL(llmIsvc),
+		Ready:       m.checkLLMInferenceServiceReadiness(llmIsvc),
+		Details:     m.extractModelDetails(llmIsvc),
+		Namespace:   llmIsvc.Namespace,
+		Created:     llmIsvc.CreationTimestamp.Unix(),
 	}
+}
+
+func (m *Manager) extractModelName(llmIsvc *kservev1alpha1.LLMInferenceService) string {
+	if llmIsvc.Spec.Model.Name != nil && *llmIsvc.Spec.Model.Name != "" {
+		return *llmIsvc.Spec.Model.Name
+	}
+	return llmIsvc.Name
 }
 
 // partOfMaaSInstance checks if the given LLMInferenceService is part of this "MaaS instance". This means that it is

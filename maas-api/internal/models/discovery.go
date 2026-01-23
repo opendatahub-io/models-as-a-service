@@ -22,14 +22,16 @@ const (
 )
 
 type llmInferenceServiceMetadata struct {
-	URL       *apis.URL
-	Ready     bool
-	Details   *Details
-	Namespace string
-	Created   int64
+	ServiceName string // LLMInferenceService resource name (for logging)
+	ModelName   string // from spec.model.name or fallback to service name
+	URL         *apis.URL
+	Ready       bool
+	Details     *Details
+	Namespace   string
+	Created     int64
 }
 
-func (m *Manager) fetchModelsWithRetry(ctx context.Context, endpoint, saToken, llmIsvcName string) []openai.Model {
+func (m *Manager) fetchModelsWithRetry(ctx context.Context, endpoint, saToken string, svc llmInferenceServiceMetadata) []openai.Model {
 	backoff := wait.Backoff{
 		Steps:    4,
 		Duration: 100 * time.Millisecond,
@@ -43,14 +45,14 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, endpoint, saToken, l
 	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
 		var models []openai.Model
 		var authRes authResult
-		models, authRes = m.fetchModels(ctx, endpoint, saToken, llmIsvcName)
+		models, authRes = m.fetchModels(ctx, endpoint, saToken, svc)
 		if authRes == authGranted {
 			result = models
 		}
 		lastResult = authRes
 		return lastResult != authRetry, nil
 	}); err != nil {
-		m.logger.Debug("Model fetch backoff failed", "llmIsvcName", llmIsvcName, "error", err)
+		m.logger.Debug("Model fetch backoff failed", "service", svc.ServiceName, "error", err)
 		return nil // explicit fail-closed on error
 	}
 
@@ -60,10 +62,10 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, endpoint, saToken, l
 	return result
 }
 
-func (m *Manager) fetchModels(ctx context.Context, endpoint, saToken, llmIsvcName string) ([]openai.Model, authResult) {
+func (m *Manager) fetchModels(ctx context.Context, endpoint, saToken string, svc llmInferenceServiceMetadata) ([]openai.Model, authResult) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		m.logger.Debug("Failed to create request", "llmIsvcName", llmIsvcName, "error", err)
+		m.logger.Debug("Failed to create request", "service", svc.ServiceName, "error", err)
 		return nil, authRetry
 	}
 
@@ -71,22 +73,22 @@ func (m *Manager) fetchModels(ctx context.Context, endpoint, saToken, llmIsvcNam
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		m.logger.Debug("Request failed", "llmIsvcName", llmIsvcName, "error", err)
+		m.logger.Debug("Request failed", "service", svc.ServiceName, "error", err)
 		return nil, authRetry
 	}
 	defer resp.Body.Close()
 
 	m.logger.Debug("Models fetch response",
-		"llmIsvcName", llmIsvcName,
+		"service", svc.ServiceName,
 		"statusCode", resp.StatusCode,
 		"url", endpoint,
 	)
 
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		models, parseErr := m.parseModelsResponse(resp.Body, llmIsvcName)
+		models, parseErr := m.parseModelsResponse(resp.Body, svc.ServiceName)
 		if parseErr != nil {
-			m.logger.Debug("Failed to parse models response", "llmIsvcName", llmIsvcName, "error", parseErr)
+			m.logger.Debug("Failed to parse models response", "service", svc.ServiceName, "error", parseErr)
 			return nil, authRetry
 		}
 		return models, authGranted
@@ -97,7 +99,7 @@ func (m *Manager) fetchModels(ctx context.Context, endpoint, saToken, llmIsvcNam
 	case resp.StatusCode == http.StatusNotFound:
 		// 404 means we cannot verify authorization - deny access (fail-closed)
 		// See: https://issues.redhat.com/browse/RHOAIENG-45883
-		m.logger.Debug("Model endpoint returned 404, denying access (cannot verify authorization)", "llmIsvcName", llmIsvcName)
+		m.logger.Debug("Model endpoint returned 404, denying access (cannot verify authorization)", "service", svc.ServiceName)
 		return nil, authDenied
 
 	case resp.StatusCode == http.StatusMethodNotAllowed:
@@ -105,20 +107,21 @@ func (m *Manager) fetchModels(ctx context.Context, endpoint, saToken, llmIsvcNam
 		// proving it passed AuthorizationPolicies (which would return 401/403).
 		// The 405 indicates the HTTP method isn't enabled on this route/endpoint,
 		// not an authorization failure.
-		// Use the LLMInferenceService name as a best-effort fallback for model ID.
-		m.logger.Debug("Model endpoint returned 405 - auth succeeded, using LLMInferenceService name as model ID",
-			"llmIsvcName", llmIsvcName,
+		// Use spec.model.name as a best-effort fallback for model ID.
+		m.logger.Debug("Model endpoint returned 405 - auth succeeded, using spec.model.name as fallback model ID",
+			"service", svc.ServiceName,
+			"modelName", svc.ModelName,
 			"url", endpoint,
 		)
 		return []openai.Model{{
-			ID:     llmIsvcName,
+			ID:     svc.ModelName,
 			Object: "model",
 		}}, authGranted
 
 	default:
 		// Retry on server errors (5xx) or other unexpected codes
 		m.logger.Debug("Unexpected status code, retrying",
-			"llmIsvcName", llmIsvcName,
+			"service", svc.ServiceName,
 			"statusCode", resp.StatusCode,
 		)
 		return nil, authRetry

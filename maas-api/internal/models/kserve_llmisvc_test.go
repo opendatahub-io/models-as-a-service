@@ -577,9 +577,9 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		assert.Empty(t, discoveredModels, "Expected no models when server returns empty list")
 	})
 
-	t.Run("405 Method Not Allowed uses service name as fallback model ID", func(t *testing.T) {
+	t.Run("405 Method Not Allowed uses spec.model.name as fallback model ID", func(t *testing.T) {
 		// When server returns 405, auth succeeded but /v1/models endpoint is not supported.
-		// Should return a model using LLMInferenceService name as best-effort fallback.
+		// Should return a model using spec.model.name as best-effort fallback.
 		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}))
@@ -590,6 +590,9 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 			constant.AnnotationDisplayName: "Fallback Model",
 		}
 		llmService := makeLLMService("my-llm-service", "test-ns", mockServer.URL, annotations)
+		specModelName := "granite-3b-instruct"
+		llmService.Spec.Model.Name = &specModelName
+
 		manager, errMgr := models.NewManager(
 			testLogger,
 			fixtures.NewInferenceServiceLister(),
@@ -602,14 +605,40 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		discoveredModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
 		require.NoError(t, err)
 
-		require.Len(t, discoveredModels, 1, "Should return one model using service name as fallback")
-		assert.Equal(t, "my-llm-service", discoveredModels[0].ID, "Model ID should be the LLMInferenceService name")
+		require.Len(t, discoveredModels, 1, "Should return one model using spec.model.name as fallback")
+		assert.Equal(t, "granite-3b-instruct", discoveredModels[0].ID, "Model ID should be from spec.model.name")
 		assert.Equal(t, "test-ns", discoveredModels[0].OwnedBy, "OwnedBy should be set from namespace")
 		assert.NotZero(t, discoveredModels[0].Created, "Created should be set from service creation timestamp")
 		// Verify metadata is still enriched from LLMInferenceService annotations
 		require.NotNil(t, discoveredModels[0].Details)
 		assert.Equal(t, "A model without /v1/models support", discoveredModels[0].Details.Description)
 		assert.Equal(t, "Fallback Model", discoveredModels[0].Details.DisplayName)
+	})
+
+	t.Run("405 Method Not Allowed falls back to service name when spec.model.name is empty", func(t *testing.T) {
+		// When spec.model.name is not set, fall back to LLMInferenceService name
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}))
+		defer mockServer.Close()
+
+		llmService := makeLLMService("my-fallback-service", "test-ns", mockServer.URL, nil)
+		// spec.model.name is not set
+
+		manager, errMgr := models.NewManager(
+			testLogger,
+			fixtures.NewInferenceServiceLister(),
+			fixtures.NewLLMInferenceServiceLister(llmService),
+			fixtures.NewHTTPRouteLister(),
+			gateway,
+		)
+		require.NoError(t, errMgr)
+
+		discoveredModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
+		require.NoError(t, err)
+
+		require.Len(t, discoveredModels, 1)
+		assert.Equal(t, "my-fallback-service", discoveredModels[0].ID, "Model ID should fall back to service name")
 	})
 
 	t.Run("model timestamps from server response are preserved", func(t *testing.T) {
