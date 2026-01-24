@@ -30,6 +30,8 @@ type Manager struct {
 	namespaceLister      corelistersv1.NamespaceLister
 	serviceAccountLister corelistersv1.ServiceAccountLister
 	logger               *logger.Logger
+	keycloakManager      *KeycloakTokenManager
+	useKeycloak          bool
 }
 
 func NewManager(
@@ -47,11 +49,51 @@ func NewManager(
 		namespaceLister:      namespaceLister,
 		serviceAccountLister: serviceAccountLister,
 		logger:               log,
+		useKeycloak:          false,
 	}
 }
 
-// GenerateToken creates a Service Account token in the namespace bound to the tier the user belongs to.
-func (m *Manager) GenerateToken(ctx context.Context, user *UserContext, expiration time.Duration) (*Token, error) {
+// NewManagerWithKeycloak creates a manager with Keycloak support
+func NewManagerWithKeycloak(
+	log *logger.Logger,
+	tenantName string,
+	tierMapper *tier.Mapper,
+	clientset kubernetes.Interface,
+	namespaceLister corelistersv1.NamespaceLister,
+	serviceAccountLister corelistersv1.ServiceAccountLister,
+	keycloakConfig KeycloakConfig,
+) *Manager {
+	return &Manager{
+		tenantName:           tenantName,
+		tierMapper:           tierMapper,
+		clientset:            clientset,
+		namespaceLister:      namespaceLister,
+		serviceAccountLister: serviceAccountLister,
+		logger:               log,
+		useKeycloak:          true,
+		keycloakManager:      NewKeycloakTokenManager(keycloakConfig, log),
+	}
+}
+
+// GenerateToken creates a token - either Service Account or Keycloak based on configuration.
+// If useKeycloak is true, openshiftToken must be provided.
+func (m *Manager) GenerateToken(ctx context.Context, user *UserContext, expiration time.Duration, name string, openshiftToken ...string) (*Token, error) {
+	// name parameter is ignored - kept for interface compatibility
+	_ = name
+
+	if m.useKeycloak {
+		if len(openshiftToken) == 0 || openshiftToken[0] == "" {
+			return nil, errors.New("Keycloak token required for token exchange")
+		}
+		return m.keycloakManager.GenerateToken(ctx, user, openshiftToken[0], expiration)
+	}
+
+	// Fall back to ServiceAccount token generation
+	return m.generateServiceAccountToken(ctx, user, expiration)
+}
+
+// generateServiceAccountToken creates a Service Account token (original implementation)
+func (m *Manager) generateServiceAccountToken(ctx context.Context, user *UserContext, expiration time.Duration) (*Token, error) {
 	log := m.logger.WithFields(
 		"expiration", expiration.String(),
 	)
@@ -120,8 +162,18 @@ func (m *Manager) GenerateToken(ctx context.Context, user *UserContext, expirati
 	return result, nil
 }
 
-// RevokeTokens revokes all tokens for a user by recreating their Service Account.
+// RevokeTokens revokes all tokens for a user.
+// For ServiceAccount mode: recreates the Service Account.
+// For Keycloak mode: calls Keycloak revocation (placeholder for PoC).
 func (m *Manager) RevokeTokens(ctx context.Context, user *UserContext) error {
+	if m.useKeycloak {
+		return m.keycloakManager.RevokeTokens(ctx, user)
+	}
+	return m.revokeServiceAccountTokens(ctx, user)
+}
+
+// revokeServiceAccountTokens revokes all tokens for a user by recreating their Service Account.
+func (m *Manager) revokeServiceAccountTokens(ctx context.Context, user *UserContext) error {
 	log := m.logger
 
 	userTier, err := m.tierMapper.GetTierForGroups(user.Groups...)
@@ -261,6 +313,69 @@ func (m *Manager) createServiceAccountToken(ctx context.Context, namespace, saNa
 	return result, nil
 }
 
+// UseKeycloak returns whether Keycloak is enabled for this manager
+func (m *Manager) UseKeycloak() bool {
+	return m.useKeycloak
+}
+
+// GetAdminServiceAccountToken gets or creates an admin ServiceAccount token for Keycloak PoC.
+// This is a hack to work around the fact that model authorization checks need ServiceAccount tokens
+// for RBAC validation, but we're using Keycloak for user authentication.
+// The admin SA should be in a tier namespace and have access to models via RoleBindings created by odh-model-controller.
+func (m *Manager) GetAdminServiceAccountToken(ctx context.Context, tierName string, ttl int) (string, error) {
+	const adminSAName = "maas-keycloak-admin"
+
+	// Determine the tier namespace
+	namespace, err := m.tierMapper.Namespace(tierName)
+	if err != nil {
+		return "", fmt.Errorf("failed to determine namespace for tier %s: %w", tierName, err)
+	}
+
+	// Ensure the admin SA exists in the tier namespace
+	_, err = m.serviceAccountLister.ServiceAccounts(namespace).Get(adminSAName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// Create the admin SA
+			sa := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      adminSAName,
+					Namespace: namespace,
+					Labels: map[string]string{
+						"app.kubernetes.io/name":       "maas-api",
+						"app.kubernetes.io/component":   "keycloak-admin",
+						"app.kubernetes.io/managed-by":  "maas-api",
+						"maas.opendatahub.io/tier":      tierName,
+					},
+				},
+			}
+
+			_, createErr := m.clientset.CoreV1().ServiceAccounts(namespace).Create(ctx, sa, metav1.CreateOptions{})
+			if createErr != nil {
+				if !apierrors.IsAlreadyExists(createErr) {
+					return "", fmt.Errorf("failed to create admin service account %s in namespace %s: %w", adminSAName, namespace, createErr)
+				}
+				// SA was created by another goroutine, continue
+			} else {
+				m.logger.Info("Created admin service account for Keycloak PoC",
+					"service_account", adminSAName,
+					"namespace", namespace,
+					"tier", tierName,
+				)
+			}
+		} else {
+			return "", fmt.Errorf("failed to check admin service account %s in namespace %s: %w", adminSAName, namespace, err)
+		}
+	}
+
+	// Create a token for the admin SA
+	tokenRequest, err := m.createServiceAccountToken(ctx, namespace, adminSAName, ttl)
+	if err != nil {
+		return "", fmt.Errorf("failed to create token for admin service account: %w", err)
+	}
+
+	return tokenRequest.Status.Token, nil
+}
+
 // deleteServiceAccount deletes a service account.
 func (m *Manager) deleteServiceAccount(ctx context.Context, namespace, saName string) error {
 	err := m.clientset.CoreV1().ServiceAccounts(namespace).Delete(ctx, saName, metav1.DeleteOptions{})
@@ -327,8 +442,16 @@ func (m *Manager) Audience() string {
 }
 
 // HasValidAudience checks if the given JWT token has the expected service account audience.
-// Returns false if the token cannot be parsed or doesn't contain the expected audience.
+// When using Keycloak, this always returns true since Keycloak tokens are validated by the gateway AuthPolicy.
+// Returns false if the token cannot be parsed or doesn't contain the expected audience (for non-Keycloak tokens).
 func (m *Manager) HasValidAudience(tokenString string) bool {
+	// When using Keycloak, tokens are validated by the gateway AuthPolicy, so we don't need to check audience
+	// The gateway will handle authentication/authorization for model endpoints
+	if m.useKeycloak {
+		m.logger.Debug("Keycloak enabled - skipping audience check (gateway AuthPolicy handles validation)")
+		return true
+	}
+
 	claims, err := extractClaims(tokenString)
 	if err != nil {
 		m.logger.Warn("Failed to extract claims from token", "error", err)

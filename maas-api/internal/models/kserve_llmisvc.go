@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
@@ -17,6 +18,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 // authResult represents the outcome of an authorization check attempt.
@@ -34,7 +36,8 @@ type GatewayRef struct {
 }
 
 // ListAvailableLLMs lists LLM models that the user has access to based on authorization checks.
-func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Model, error) {
+// userContext is optional but required when using Keycloak to determine tier for admin SA token.
+func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string, userContext interface{}) ([]Model, error) {
 	list, err := m.llmIsvcLister.List(labels.Everything())
 	if err != nil {
 		return nil, fmt.Errorf("failed to list LLMInferenceServices: %w", err)
@@ -53,7 +56,7 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 	// Filter models based on user authorization
 	var authorizedModels []Model
 	for _, model := range allModels {
-		if m.userCanAccessModel(ctx, model, saToken) {
+		if m.userCanAccessModel(ctx, model, saToken, userContext) {
 			authorizedModels = append(authorizedModels, model)
 		}
 	}
@@ -63,7 +66,8 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 
 // userCanAccessModel checks if the user can access a specific model by making an authorization request.
 // Uses the HTTP loopback approach to leverage the gateway's AuthPolicy as the single source of truth.
-func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken string) bool {
+// userContext is optional but required when using Keycloak to get admin SA token for the user's tier.
+func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken string, userContext interface{}) bool {
 	if model.URL == nil {
 		m.logger.Debug("Model URL is nil, denying access", "modelID", model.ID)
 		return false
@@ -84,7 +88,7 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 
 	lastResult := authDenied // fail-closed by default
 	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		lastResult = m.doAuthCheck(ctx, endpoint, saToken, model.ID)
+		lastResult = m.doAuthCheck(ctx, endpoint, saToken, model.ID, userContext)
 		return lastResult != authRetry, nil
 	}); err != nil {
 		m.logger.Debug("Authorization check backoff failed", "modelID", model.ID, "error", err)
@@ -96,14 +100,40 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 
 // doAuthCheck performs a single authorization check attempt.
 // Uses GET /v1/models as it's a standard OpenAI-compatible endpoint supported by all inference servers.
-func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string) authResult {
+// For Keycloak: uses admin ServiceAccount token from user's tier instead of the Keycloak JWT.
+// userContext is optional but required when using Keycloak to determine tier for admin SA token.
+func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string, userContext interface{}) authResult {
+	// For Keycloak: swap to admin SA token for RBAC validation
+	// The Gateway AuthPolicy validates the Keycloak token, but model endpoints need SA tokens for RBAC
+	tokenToUse := saToken
+	if m.tokenManager != nil && m.tokenManager.UseKeycloak() {
+		// Try to get user context to determine tier
+		if userCtx, ok := userContext.(*token.UserContext); ok && userCtx != nil && len(userCtx.Groups) > 0 {
+			// Determine user's tier from groups
+			tierName := m.determineTierFromGroups(userCtx.Groups)
+			adminToken, err := m.tokenManager.GetAdminServiceAccountToken(ctx, tierName, 600) // 10 min TTL
+			if err != nil {
+				m.logger.Warn("Failed to get admin SA token for Keycloak, falling back to original token",
+					"error", err,
+					"modelID", modelID,
+				)
+				// Fall back to original token - this may fail RBAC but Gateway auth will pass
+			} else {
+				tokenToUse = adminToken
+				m.logger.Debug("Using admin SA token for model authorization check",
+					"modelID", modelID,
+				)
+			}
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authCheckURL, nil)
 	if err != nil {
 		m.logger.Debug("Failed to create authorization request", "modelID", modelID, "error", err)
 		return authRetry
 	}
 
-	req.Header.Set("Authorization", "Bearer "+saToken)
+	req.Header.Set("Authorization", "Bearer "+tokenToUse)
 
 	client := &http.Client{
 		Timeout: 3 * time.Second,
@@ -173,6 +203,24 @@ func (m *Manager) partOfMaaSInstance(llmIsvc *kservev1alpha1.LLMInferenceService
 		m.hasHTTPRouteSpecRefToGateway(llmIsvc) ||
 		m.hasReferencedRouteAttachedToGateway(llmIsvc) ||
 		m.hasManagedRouteAttachedToGateway(llmIsvc)
+}
+
+// determineTierFromGroups determines the tier name from user groups for PoC hack.
+// This is a simple heuristic: look for tier-{tierName}-users groups.
+// Returns "free" as default if no tier group is found.
+func (m *Manager) determineTierFromGroups(groups []string) string {
+	// Look for tier-{tierName}-users pattern in groups
+	for _, group := range groups {
+		if len(group) > 5 && group[:5] == "tier-" {
+			// Extract tier name: "tier-free-users" -> "free"
+			parts := strings.Split(group, "-")
+			if len(parts) >= 2 {
+				return parts[1] // Return the tier name (e.g., "free", "premium", "enterprise")
+			}
+		}
+	}
+	// Default to "free" tier if no tier group found
+	return "free"
 }
 
 func (m *Manager) llmInferenceServicesToModels(items []*kservev1alpha1.LLMInferenceService) []Model {

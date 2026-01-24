@@ -77,33 +77,34 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		return
 	}
 
-	// Check if the token has the correct audience for model authorization checks.
-	// If not, exchange it for a proper service account token.
+	// Get user context for tier determination
+	userCtx, exists := c.Get("user")
+	if !exists {
+		h.logger.Error("User context not found")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": "Internal server error",
+				"type":    "server_error",
+			}})
+		return
+	}
+
+	user, ok := userCtx.(*token.UserContext)
+	if !ok {
+		h.logger.Error("Invalid user context type")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": "Internal server error",
+				"type":    "server_error",
+			}})
+		return
+	}
+
+	// For Keycloak: use the bearer token directly (admin SA will be used in authorization checks)
+	// For ServiceAccount: check audience and exchange if needed
 	saToken := bearerToken
-	if !h.tokenManager.HasValidAudience(bearerToken) {
-		userCtx, exists := c.Get("user")
-		if !exists {
-			h.logger.Error("User context not found for token exchange")
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": gin.H{
-					"message": "Internal server error",
-					"type":    "server_error",
-				}})
-			return
-		}
-
-		user, ok := userCtx.(*token.UserContext)
-		if !ok {
-			h.logger.Error("Invalid user context type")
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": gin.H{
-					"message": "Internal server error",
-					"type":    "server_error",
-				}})
-			return
-		}
-
-		exchangedToken, err := h.tokenManager.GenerateToken(c.Request.Context(), user, 10*time.Minute)
+	if !h.tokenManager.HasValidAudience(bearerToken) && !h.tokenManager.UseKeycloak() {
+		exchangedToken, err := h.tokenManager.GenerateToken(c.Request.Context(), user, 10*time.Minute, "", bearerToken)
 		if err != nil {
 			h.logger.Error("Token exchange failed",
 				"error", err,
@@ -120,7 +121,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		saToken = exchangedToken.Token
 	}
 
-	modelList, err := h.modelMgr.ListAvailableLLMs(c.Request.Context(), saToken)
+	modelList, err := h.modelMgr.ListAvailableLLMs(c.Request.Context(), saToken, user)
 	if err != nil {
 		h.logger.Error("Failed to get available LLM models",
 			"error", err,

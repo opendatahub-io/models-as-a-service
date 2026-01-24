@@ -261,7 +261,7 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) {
 			)
 			require.NoError(t, errMgr)
 
-			availableModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
+			availableModels, err := manager.ListAvailableLLMs(t.Context(), "any-token", nil)
 			require.NoError(t, err)
 
 			var actualNames []string

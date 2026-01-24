@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -22,6 +23,13 @@ type Manager struct {
 	httpRouteLister gatewaylisters.HTTPRouteLister
 	gatewayRef      GatewayRef
 	logger          *logger.Logger
+	tokenManager    tokenManagerInterface // Optional: for Keycloak admin SA token generation
+}
+
+// tokenManagerInterface defines the interface needed for getting admin SA tokens
+type tokenManagerInterface interface {
+	GetAdminServiceAccountToken(ctx context.Context, tierName string, ttl int) (string, error)
+	UseKeycloak() bool
 }
 
 func NewManager(
@@ -30,6 +38,18 @@ func NewManager(
 	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister,
 	httpRouteLister gatewaylisters.HTTPRouteLister,
 	gatewayRef GatewayRef,
+) (*Manager, error) {
+	return NewManagerWithTokenManager(log, isvcLister, llmIsvcLister, httpRouteLister, gatewayRef, nil)
+}
+
+// NewManagerWithTokenManager creates a Manager with optional token manager for Keycloak admin SA support
+func NewManagerWithTokenManager(
+	log *logger.Logger,
+	isvcLister kservelistersv1beta1.InferenceServiceLister,
+	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister,
+	httpRouteLister gatewaylisters.HTTPRouteLister,
+	gatewayRef GatewayRef,
+	tokenMgr tokenManagerInterface,
 ) (*Manager, error) {
 	if isvcLister == nil {
 		return nil, errors.New("isvcLister is required")
@@ -47,6 +67,7 @@ func NewManager(
 		httpRouteLister: httpRouteLister,
 		gatewayRef:      gatewayRef,
 		logger:          log,
+		tokenManager:    tokenMgr,
 	}, nil
 }
 

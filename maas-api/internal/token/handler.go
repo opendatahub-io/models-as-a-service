@@ -34,27 +34,46 @@ func NewHandler(log *logger.Logger, name string, manager *Manager) *Handler {
 
 // parseGroupsHeader parses the group header which comes as a JSON array.
 // Format: "[\"group1\",\"group2\",\"group3\"]" (JSON-encoded array string).
+// Also handles Authorino format: "[group1 group2 group3]" (space-separated string representation).
 func parseGroupsHeader(header string) ([]string, error) {
 	if header == "" {
 		return nil, errors.New("header is empty")
 	}
 
-	// Try to unmarshal as JSON array directly
+	// First, try to unmarshal as JSON array directly (standard format)
 	var groups []string
-	if err := json.Unmarshal([]byte(header), &groups); err != nil {
-		return nil, fmt.Errorf("failed to parse header as JSON array: %w", err)
+	if err := json.Unmarshal([]byte(header), &groups); err == nil {
+		// Successfully parsed as JSON array
+		if len(groups) == 0 {
+			return nil, errors.New("no groups found in header")
+		}
+		// Trim whitespace from each group
+		for i := range groups {
+			groups[i] = strings.TrimSpace(groups[i])
+		}
+		return groups, nil
 	}
 
-	if len(groups) == 0 {
-		return nil, errors.New("no groups found in header")
+	// If JSON parsing failed, try to handle Authorino format: "[group1 group2 group3]"
+	// Remove brackets and split by space
+	trimmed := strings.TrimSpace(header)
+	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		// Remove brackets
+		trimmed = trimmed[1 : len(trimmed)-1]
+		// Split by space and filter empty strings
+		parts := strings.Fields(trimmed)
+		if len(parts) == 0 {
+			return nil, errors.New("no groups found in header")
+		}
+		// Trim whitespace from each group
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		return parts, nil
 	}
 
-	// Trim whitespace from each group
-	for i := range groups {
-		groups[i] = strings.TrimSpace(groups[i])
-	}
-
-	return groups, nil
+	// If neither format works, return a generic error
+	return nil, fmt.Errorf("failed to parse header as JSON array or Authorino format: header=%q", header)
 }
 
 // ExtractUserInfo extracts user information from headers set by the auth policy.
@@ -164,8 +183,16 @@ func (h *Handler) IssueToken(c *gin.Context) {
 		return
 	}
 
+	// Extract OpenShift token from Authorization header for Keycloak exchange
+	var openshiftToken string
+	authHeader := c.GetHeader("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		openshiftToken = strings.TrimPrefix(authHeader, "Bearer ")
+	}
+
 	// For ephemeral tokens, we explicitly pass an empty name.
-	token, err := h.manager.GenerateToken(c.Request.Context(), user, expiration)
+	// Pass OpenShift token if available (for Keycloak mode)
+	token, err := h.manager.GenerateToken(c.Request.Context(), user, expiration, "", openshiftToken)
 	if err != nil {
 		h.logger.Error("Failed to generate token",
 			"error", err,

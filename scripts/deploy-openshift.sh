@@ -101,10 +101,11 @@ done
 echo ""
 echo "3️⃣ Installing dependencies..."
 
-# Only clean up leftover CRDs if Kuadrant operators are NOT already installed
-echo "   Checking for existing Kuadrant installation..."
-EXISTING_KUADRANT_CSV=$(find_csv_with_min_version "kuadrant-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" || echo "")
-if [ -z "$EXISTING_KUADRANT_CSV" ]; then
+# Only clean up leftover CRDs if RHCL operators are NOT already installed
+echo "   Checking for existing RHCL (Red Hat Connectivity Link) installation..."
+EXISTING_RHCL_CSV=$(find_csv_with_min_version "rhcl-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" || \
+                   find_csv_with_min_version "kuadrant-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" || echo "")
+if [ -z "$EXISTING_RHCL_CSV" ]; then
     echo "   No existing installation found, checking for leftover CRDs..."
     LEFTOVER_CRDS=$(kubectl get crd 2>/dev/null | grep -E "kuadrant|authorino|limitador" | awk '{print $1}')
     if [ -n "$LEFTOVER_CRDS" ]; then
@@ -113,19 +114,26 @@ if [ -z "$EXISTING_KUADRANT_CSV" ]; then
         sleep 5  # Brief wait for cleanup to complete
     fi
 else
-    echo "   ✅ Kuadrant operator already installed ($EXISTING_KUADRANT_CSV), skipping CRD cleanup"
+    echo "   ✅ RHCL operator already installed ($EXISTING_RHCL_CSV), skipping CRD cleanup"
 fi
 
-echo "   Installing Kuadrant..."
+echo "   Installing RHCL (Red Hat Connectivity Link)..."
 "$SCRIPT_DIR/install-dependencies.sh" --kuadrant
 
 echo ""
-echo "4️⃣ Checking for OpenDataHub/RHOAI KServe..."
-if kubectl get crd llminferenceservices.serving.kserve.io &>/dev/null 2>&1; then
-    echo "   ✅ KServe CRDs already present (ODH/RHOAI detected)"
+echo "4️⃣ Installing OpenDataHub (ODH) operator..."
+if kubectl get crd llminferenceservices.serving.kserve.io &>/dev/null 2>&1 && \
+   kubectl get datasciencecluster -n opendatahub default-dsc &>/dev/null 2>&1; then
+    echo "   ✅ ODH operator and DataScienceCluster already present"
+    echo "   ℹ️  Skipping ODH installation"
 else
-    echo "   ⚠️  KServe not detected. Deploying ODH KServe components..."
+    echo "   Installing ODH operator and KServe components..."
+    echo "   This will install:"
+    echo "     - ODH Operator"
+    echo "     - DSCInitialization"
+    echo "     - DataScienceCluster with KServe"
     "$SCRIPT_DIR/install-dependencies.sh" --ocp --odh
+    echo "   ✅ ODH installation completed"
 fi
 
 # Patch odh-model-controller deployment to set MAAS_NAMESPACE
@@ -217,10 +225,11 @@ fi
 
 
 echo ""
-echo "6️⃣ Waiting for Kuadrant operators to be installed by OLM..."
+echo "6️⃣ Waiting for RHCL (Red Hat Connectivity Link) operators to be installed by OLM..."
 # Wait for CSVs to reach Succeeded state (this ensures CRDs are created and deployments are ready)
-wait_for_csv_with_min_version "kuadrant-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" 300 || \
-    echo "   ⚠️  Kuadrant operator CSV did not succeed, continuing anyway..."
+wait_for_csv_with_min_version "rhcl-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" 300 || \
+    wait_for_csv_with_min_version "kuadrant-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" 300 || \
+    echo "   ⚠️  RHCL operator CSV did not succeed, continuing anyway..."
 
 wait_for_csv_with_min_version "authorino-operator" "$AUTHORINO_MIN_VERSION" "kuadrant-system" 60 || \
     echo "   ⚠️  Authorino operator CSV did not succeed"
@@ -232,19 +241,45 @@ wait_for_csv_with_min_version "dns-operator" "$DNS_OPERATOR_MIN_VERSION" "kuadra
     echo "   ⚠️  DNS operator CSV did not succeed"
 
 # Verify CRDs are present
-echo "   Verifying Kuadrant CRDs are available..."
+echo "   Verifying RHCL CRDs are available..."
 wait_for_crd "kuadrants.kuadrant.io" 30 || echo "   ⚠️  kuadrants.kuadrant.io CRD not found"
 wait_for_crd "authpolicies.kuadrant.io" 10 || echo "   ⚠️  authpolicies.kuadrant.io CRD not found"
 wait_for_crd "ratelimitpolicies.kuadrant.io" 10 || echo "   ⚠️  ratelimitpolicies.kuadrant.io CRD not found"
 wait_for_crd "tokenratelimitpolicies.kuadrant.io" 10 || echo "   ⚠️  tokenratelimitpolicies.kuadrant.io CRD not found"
 
 echo ""
-echo "7️⃣ Deploying Kuadrant configuration (now that CRDs exist)..."
+echo "7️⃣ Deploying RHCL configuration (now that CRDs exist)..."
 cd "$PROJECT_ROOT"
 kubectl apply -f deployment/base/networking/odh/kuadrant.yaml
 
 echo ""
+<<<<<<< Updated upstream
 echo "8️⃣ Waiting for Gateway to be ready..."
+=======
+echo "8️⃣ Deploying MaaS API..."
+cd "$PROJECT_ROOT"
+# Process kustomization.yaml to replace hardcoded namespace, then build
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"; cleanup_maas_api_image' EXIT
+
+cp -r "$PROJECT_ROOT/deployment/base/maas-api/." "$TMP_DIR"
+
+(
+  cd "$TMP_DIR"
+  kustomize edit set namespace "$MAAS_API_NAMESPACE"
+)
+kustomize build "$TMP_DIR" | kubectl apply -f -
+
+# Restart RHCL operator to pick up the new configuration
+echo "   Restarting RHCL operator to apply Gateway API provider recognition..."
+kubectl rollout restart deployment/kuadrant-operator-controller-manager -n kuadrant-system
+echo "   Waiting for RHCL operator to be ready..."
+kubectl rollout status deployment/kuadrant-operator-controller-manager -n kuadrant-system --timeout=60s || \
+  echo "   ⚠️  RHCL operator taking longer than expected, continuing..."
+
+echo ""
+echo "🔟 Waiting for Gateway to be ready..."
+>>>>>>> Stashed changes
 echo "   Note: This may take a few minutes if Service Mesh is being automatically installed..."
 
 # Wait for Service Mesh CRDs to be established
@@ -361,10 +396,10 @@ echo "========================================="
 echo ""
 echo "Applying temporary workarounds for known issues..."
 
-echo "   🔧 Restarting Kuadrant, Authorino, and Limitador operators to refresh webhook configurations..."
+echo "   🔧 Restarting RHCL, Authorino, and Limitador operators to refresh webhook configurations..."
 kubectl delete pod -n kuadrant-system -l control-plane=controller-manager 2>/dev/null && \
-  echo "   ✅ Kuadrant operator restarted" || \
-  echo "   ⚠️  Could not restart Kuadrant operator"
+  echo "   ✅ RHCL operator restarted" || \
+  echo "   ⚠️  Could not restart RHCL operator"
 
 kubectl rollout restart deployment authorino-operator -n kuadrant-system 2>/dev/null && \
   echo "   ✅ Authorino operator restarted" || \
@@ -376,7 +411,7 @@ kubectl rollout restart deployment limitador-operator-controller-manager -n kuad
 
 echo "   Waiting for operators to be ready..."
 kubectl rollout status deployment kuadrant-operator-controller-manager -n kuadrant-system --timeout=60s 2>/dev/null || \
-  echo "   ⚠️  Kuadrant operator taking longer than expected"
+  echo "   ⚠️  RHCL operator taking longer than expected"
 kubectl rollout status deployment authorino-operator -n kuadrant-system --timeout=60s 2>/dev/null || \
   echo "   ⚠️  Authorino operator taking longer than expected"
 kubectl rollout status deployment limitador-operator-controller-manager -n kuadrant-system --timeout=60s 2>/dev/null || \
@@ -401,7 +436,7 @@ echo ""
 # Check component status
 echo "Component Status:"
 kubectl get pods -n "$MAAS_API_NAMESPACE" --no-headers | grep Running | wc -l | xargs echo "  MaaS API pods running:"
-kubectl get pods -n kuadrant-system --no-headers | grep Running | wc -l | xargs echo "  Kuadrant pods running:"
+kubectl get pods -n kuadrant-system --no-headers | grep Running | wc -l | xargs echo "  RHCL (Red Hat Connectivity Link) pods running:"
 kubectl get pods -n opendatahub --no-headers | grep Running | wc -l | xargs echo "  KServe pods running:"
 
 echo ""
@@ -432,7 +467,7 @@ echo "If policies show 'Not enforced' status:"
 echo "1. Check if Gateway API provider is recognized:"
 echo "   kubectl describe authpolicy gateway-auth-policy -n openshift-ingress | grep -A 5 'Status:'"
 echo ""
-echo "2. If Gateway API provider is not installed, restart all Kuadrant operators:"
+echo "2. If Gateway API provider is not installed, restart all RHCL (Red Hat Connectivity Link) operators:"
 echo "   kubectl rollout restart deployment/kuadrant-operator-controller-manager -n kuadrant-system"
 echo "   kubectl rollout restart deployment/authorino-operator -n kuadrant-system"
 echo "   kubectl rollout restart deployment/limitador-operator-controller-manager -n kuadrant-system"
@@ -447,7 +482,7 @@ echo "5. If environment variable is missing, patch the deployment:"
 echo "   kubectl -n kuadrant-system patch deployment kuadrant-operator-controller-manager --type='json' \\"
 echo "     -p='[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/env/-\", \"value\": {\"name\": \"ISTIO_GATEWAY_CONTROLLER_NAMES\", \"value\": \"openshift.io/gateway-controller/v1\"}}]'"
 echo ""
-echo "6. Restart Kuadrant operator after patching:"
+echo "6. Restart RHCL (Red Hat Connectivity Link) operator after patching:"
 echo "   kubectl rollout restart deployment/kuadrant-operator-controller-manager -n kuadrant-system"
 echo "   kubectl rollout status deployment/kuadrant-operator-controller-manager -n kuadrant-system --timeout=60s"
 echo ""

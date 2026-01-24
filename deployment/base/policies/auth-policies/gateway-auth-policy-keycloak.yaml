@@ -1,0 +1,69 @@
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: gateway-auth-policy
+  namespace: openshift-ingress
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+  rules:
+    metadata:
+      # Enriching identity metadata with a proper subscription tier based on user groups
+      matchedTier:
+        http:
+          # TODO: network policy to limit access to this endpoint
+          url: http://maas-api.maas-api.svc.cluster.local:8080/v1/tiers/lookup
+          contentType: application/json
+          method: POST
+          body:
+            expression: |-
+              { "groups": auth.identity.groups }
+        cache:
+          key:
+            selector: auth.identity.preferred_username
+          ttl: 300
+    authentication:
+      # Keycloak tokens for model access (PoC: Keycloak-only)
+      keycloak:
+        jwt:
+          issuerUrl: https://keycloak-keycloak.apps.jland-test.zlz1.s1.devshift.org/realms/maas
+        defaults:
+          userid:
+            expression: auth.identity.preferred_username
+        cache:
+          key:
+            selector: context.request.http.headers.authorization.@case:lower
+          ttl: 600
+    authorization:
+      tier-access:
+        cache:
+          key:
+            selector: "{auth.identity.userid}:{request.path}"
+          ttl: 60
+        # For PoC: Allow all authenticated requests
+        # In production, use Keycloak Authorization Services with OPA Rego
+        # or map Keycloak users to Kubernetes groups for SubjectAccessReview
+        when:
+          - selector: auth.identity.userid
+            operator: neq
+            value: ""
+    response:
+      success:
+        filters:
+          identity:
+            json:
+              properties:
+                userid:
+                  expression: auth.identity.userid
+                tier:
+                  expression: auth.metadata.matchedTier["tier"]
+        headers:
+          X-MaaS-Username:
+            plain:
+              selector: auth.identity.preferred_username
+          X-MaaS-Group:
+            plain:
+              selector: auth.identity.groups

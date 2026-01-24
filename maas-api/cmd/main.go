@@ -176,25 +176,54 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	tierMapper := tier.NewMapper(log, cluster.ConfigMapLister, cfg.Name, cfg.Namespace)
 	v1Routes.POST("/tiers/lookup", tier.NewHandler(tierMapper).TierLookup)
 
-	modelManager, err := models.NewManager(
+	// Create token manager first (needed for model manager when using Keycloak)
+	var tokenManager *token.Manager
+	if cfg.KeycloakEnabled {
+		log.Info("Using Keycloak for token minting",
+			"base_url", cfg.KeycloakBaseURL,
+			"realm", cfg.KeycloakRealm,
+		)
+		keycloakConfig := token.KeycloakConfig{
+			BaseURL:      cfg.KeycloakBaseURL,
+			Realm:        cfg.KeycloakRealm,
+			ClientID:     cfg.KeycloakClientID,
+			ClientSecret: cfg.KeycloakClientSecret,
+			Audience:     cfg.KeycloakAudience,
+		}
+		tokenManager = token.NewManagerWithKeycloak(
+			log,
+			cfg.Name,
+			tierMapper,
+			cluster.ClientSet,
+			cluster.NamespaceLister,
+			cluster.ServiceAccountLister,
+			keycloakConfig,
+		)
+	} else {
+		log.Info("Using ServiceAccount for token minting")
+		tokenManager = token.NewManager(
+			log,
+			cfg.Name,
+			tierMapper,
+			cluster.ClientSet,
+			cluster.NamespaceLister,
+			cluster.ServiceAccountLister,
+		)
+	}
+
+	// Create model manager with token manager (for Keycloak admin SA support)
+	modelManager, err := models.NewManagerWithTokenManager(
 		log,
 		cluster.InferenceServiceLister,
 		cluster.LLMInferenceServiceLister,
 		cluster.HTTPRouteLister,
 		models.GatewayRef{Name: cfg.GatewayName, Namespace: cfg.GatewayNamespace},
+		tokenManager,
 	)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}
 
-	tokenManager := token.NewManager(
-		log,
-		cfg.Name,
-		tierMapper,
-		cluster.ClientSet,
-		cluster.NamespaceLister,
-		cluster.ServiceAccountLister,
-	)
 	tokenHandler := token.NewHandler(log, cfg.Name, tokenManager)
 
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, tokenManager)

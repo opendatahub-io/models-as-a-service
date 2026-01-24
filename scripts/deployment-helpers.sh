@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Minimum version requirements for operators
-export KUADRANT_MIN_VERSION="1.3.1"
+# RHCL (Red Hat Connectivity Link) minimum version
+export KUADRANT_MIN_VERSION="1.2.1"
 export AUTHORINO_MIN_VERSION="0.22.0"
 export LIMITADOR_MIN_VERSION="0.16.0"
 export DNS_OPERATOR_MIN_VERSION="0.15.0"
@@ -363,6 +364,30 @@ wait_for_pods() {
     sleep 5
   done
   echo "⚠️  Timeout waiting for pods in $namespace" >&2
+  return 1
+}
+
+# Helper function to wait for a resource to exist
+# Usage: wait_for_resource <resource_type> <resource_name> <namespace> [timeout]
+wait_for_resource() {
+  local resource_type="$1"
+  local resource_name="$2"
+  local namespace="$3"
+  local timeout="${4:-60}"
+  local interval=2
+  local elapsed=0
+
+  echo "⏳ Waiting for ${resource_type}/${resource_name} in ${namespace} (timeout: ${timeout}s)..."
+  while [ $elapsed -lt $timeout ]; do
+    if kubectl get "$resource_type" "$resource_name" -n "$namespace" &>/dev/null; then
+      echo "✅ ${resource_type}/${resource_name} exists"
+      return 0
+    fi
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  echo "⚠️  Timed out waiting for ${resource_type}/${resource_name}" >&2
   return 1
 }
 

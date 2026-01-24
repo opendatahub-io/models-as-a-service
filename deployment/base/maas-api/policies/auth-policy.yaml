@@ -2,25 +2,32 @@ apiVersion: kuadrant.io/v1
 kind: AuthPolicy
 metadata:
   name: maas-api-auth-policy
+  namespace: maas-api
 spec:
   targetRef:
     group: gateway.networking.k8s.io
     kind: HTTPRoute
     name: maas-api-route
   rules:
-    # Allow any authenticated user to access the API
+    # Keycloak tokens only (Keycloak PoC)
     authentication:
-      openshift-identities:
-        kubernetesTokenReview:
-          audiences:
-            - https://kubernetes.default.svc
-            - maas-default-gateway-sa
+      keycloak:
+        jwt:
+          issuerUrl: https://keycloak-keycloak.apps.jland-test.zlz1.s1.devshift.org/realms/maas
+        defaults:
+          userid:
+            expression: auth.identity.preferred_username
+        cache:
+          key:
+            selector: context.request.http.headers.authorization.@case:lower
+          ttl: 600
     response:
       success:
         headers:
+          # Keycloak identity fields
           X-MaaS-Username:
             plain:
-              selector: auth.identity.user.username
+              selector: auth.identity.preferred_username
           X-MaaS-Group:
             plain:
-              selector: auth.identity.user.groups.@tostr
+              selector: auth.identity.groups

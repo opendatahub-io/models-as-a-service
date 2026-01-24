@@ -15,13 +15,13 @@ const TierConfigYAML = `
   level: 1
   groups:
   - system:authenticated
-  - free-users
+  - tier-free-users
 - name: premium
   displayName: Premium Tier
   description: Premium tier
   level: 10
   groups:
-  - premium-users
+  - tier-premium-users
   - beta-testers
 - name: developer
   displayName: Developer Tier
@@ -34,7 +34,7 @@ const TierConfigYAML = `
   description: Enterprise tier
   level: 20
   groups:
-  - enterprise-users
+  - tier-enterprise-users
   - admin-users
 `
 

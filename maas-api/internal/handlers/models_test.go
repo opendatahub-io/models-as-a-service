@@ -189,7 +189,7 @@ func TestListingModels(t *testing.T) {
 	// Set headers required by ExtractUserInfo middleware
 	req.Header.Set("Authorization", "Bearer valid-token")
 	req.Header.Set(constant.HeaderUsername, "test-user@example.com")
-	req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+	req.Header.Set(constant.HeaderGroup, `["tier-free-users"]`)
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
