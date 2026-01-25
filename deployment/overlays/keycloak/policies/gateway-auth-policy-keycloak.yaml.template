@@ -1,0 +1,63 @@
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: gateway-auth-policy
+  namespace: openshift-ingress
+  annotations:
+    opendatahub.io/managed: "false"
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+  rules:
+    metadata:
+      # Enriching identity metadata with a proper subscription tier based on user groups
+      matchedTier:
+        http:
+          # TODO: network policy to limit access to this endpoint
+          url: http://maas-api.${MAAS_API_NAMESPACE}.svc.cluster.local:8080/v1/tiers/lookup
+          contentType: application/json
+          method: POST
+          body:
+            expression: |-
+              { "groups": auth.identity.groups }
+        cache:
+          key:
+            selector: auth.identity.preferred_username
+          ttl: 300
+    authentication:
+      # Keycloak tokens for model access (PoC: Keycloak-only)
+      keycloak:
+        jwt:
+          issuerUrl: ${KEYCLOAK_ISSUER_URL}
+        defaults:
+          userid:
+            expression: auth.identity.preferred_username
+        cache:
+          key:
+            selector: context.request.http.headers.authorization.@case:lower
+          ttl: 600
+    # Authorization removed for PoC - Gateway AuthPolicy already validates Keycloak tokens
+    # For production, add proper authorization using:
+    # - OPA Rego policies (authorization.tier-access.opa)
+    # - Kubernetes SubjectAccessReview (authorization.tier-access.kubernetesSubjectAccessReview)
+    # - Keycloak Authorization Services
+    response:
+      success:
+        filters:
+          identity:
+            json:
+              properties:
+                userid:
+                  expression: auth.identity.userid
+                tier:
+                  expression: auth.metadata.matchedTier["tier"]
+        headers:
+          X-MaaS-Username:
+            plain:
+              selector: auth.identity.preferred_username
+          X-MaaS-Group:
+            plain:
+              selector: auth.identity.groups

@@ -43,28 +43,26 @@ User → OpenShift Token → maas-api → Keycloak Token Exchange → Keycloak T
 - `kubectl` access
 - `jq` installed
 
-### Step 1: Deploy Keycloak and Configure
+### Step 1: Deploy Base Platform
 
 ```bash
-./scripts/setup-keycloak-poc.sh
+./scripts/deploy-rhoai-stable.sh --operator-type odh --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:latest --channel fast
+./scripts/deploy-openshift.sh
 ```
 
-This script:
-1. Deploys Keycloak to the cluster
-2. Creates the `maas` realm
-3. Configures the `maas-api` client
-4. Sets up a test user
-
-### Step 2: Deploy MaaS with Keycloak Integration
+### Step 2: Deploy Keycloak Overlay
 
 ```bash
 ./scripts/deploy-keycloak-poc.sh
 ```
 
-This script:
-1. Deploys the base MaaS platform
-2. Configures maas-api with Keycloak environment variables
-3. Updates AuthPolicy to use OIDC authentication
+This consolidated script handles everything:
+1. Deploys Keycloak to the cluster
+2. Creates the `maas` realm
+3. Configures the `maas-api` client
+4. Sets up test users and groups
+5. Configures maas-api with Keycloak environment variables
+6. Updates AuthPolicies to use OIDC authentication
 
 ### Step 3: Test the PoC
 

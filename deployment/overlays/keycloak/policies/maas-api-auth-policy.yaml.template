@@ -1,0 +1,40 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: maas-api-auth-policy
+  namespace: ${MAAS_API_NAMESPACE}
+  annotations:
+    opendatahub.io/managed: "false"
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: maas-api-route
+  rules:
+    # Keycloak tokens only (Keycloak PoC)
+    authentication:
+      keycloak:
+        jwt:
+          issuerUrl: ${KEYCLOAK_ISSUER_URL}
+        defaults:
+          userid:
+            expression: auth.identity.preferred_username
+        cache:
+          key:
+            selector: context.request.http.headers.authorization.@case:lower
+          ttl: 600
+    response:
+      success:
+        headers:
+          # Keycloak identity fields
+          X-MaaS-Username:
+            plain:
+              selector: auth.identity.preferred_username
+          X-MaaS-Group:
+            # Format groups as JSON array string for parseGroupsHeader
+            # parseGroupsHeader expects: ["group1","group2"] or [group1 group2]
+            # Authorino's plain.selector on arrays may output without brackets
+            # We use plain.selector and rely on Authorino to serialize correctly
+            # If this fails, groups may need to be formatted differently
+            plain:
+              selector: auth.identity.groups

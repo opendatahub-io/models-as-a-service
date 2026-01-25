@@ -5,10 +5,11 @@ This is a quick start guide for the Keycloak IDP-based token minting PoC.
 ## Quick Deploy
 
 ```bash
-# 1. Deploy Keycloak and configure it
-./scripts/setup-keycloak-poc.sh
+# 1. Deploy base platform
+./scripts/deploy-rhoai-stable.sh --operator-type odh --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:latest --channel fast
+./scripts/deploy-openshift.sh
 
-# 2. Deploy MaaS with Keycloak integration
+# 2. Deploy Keycloak overlay (handles everything)
 ./scripts/deploy-keycloak-poc.sh
 
 # 3. Test the PoC

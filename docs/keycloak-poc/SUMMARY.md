@@ -16,7 +16,7 @@ This PoC demonstrates replacing Kubernetes ServiceAccount token minting with Key
    - `deployment/base/policies/auth-policies/gateway-auth-policy-keycloak.yaml` - OIDC AuthPolicy
 
 3. **Scripts**
-   - `scripts/setup-keycloak-poc.sh` - Keycloak setup and configuration
+   - `scripts/deploy-keycloak-poc.sh` - Consolidated Keycloak deployment and configuration
    - `scripts/deploy-keycloak-poc.sh` - Full PoC deployment
    - `scripts/test-keycloak-poc.sh` - PoC testing script
 
@@ -67,7 +67,7 @@ This PoC demonstrates replacing Kubernetes ServiceAccount token minting with Key
 
 ### Quick Deploy
 ```bash
-./scripts/setup-keycloak-poc.sh      # Setup Keycloak
+./scripts/deploy-keycloak-poc.sh     # Deploy Keycloak overlay (consolidated)
 ./scripts/deploy-keycloak-poc.sh     # Deploy MaaS with Keycloak
 ./scripts/test-keycloak-poc.sh       # Test the PoC
 ```

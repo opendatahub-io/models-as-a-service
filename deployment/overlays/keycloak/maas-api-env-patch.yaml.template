@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maas-api
+  namespace: ${MAAS_API_NAMESPACE}
+  annotations:
+    opendatahub.io/managed: "false"
+spec:
+  template:
+    spec:
+      containers:
+      - name: maas-api
+        image: ${MAAS_API_IMAGE}
+        env:
+        - name: KEYCLOAK_ENABLED
+          value: "true"
+        - name: KEYCLOAK_BASE_URL
+          value: "${KEYCLOAK_BASE_URL}"
+        - name: KEYCLOAK_REALM
+          value: "${KEYCLOAK_REALM:-maas}"
+        - name: KEYCLOAK_CLIENT_ID
+          value: "${KEYCLOAK_CLIENT_ID:-maas-api}"
+        - name: KEYCLOAK_CLIENT_SECRET
+          value: "${KEYCLOAK_CLIENT_SECRET:-maas-api-secret}"
+        - name: KEYCLOAK_AUDIENCE
+          value: "${KEYCLOAK_AUDIENCE:-maas-model-access}"
+        - name: DEBUG_MODE
+          value: "true"
