@@ -95,7 +95,51 @@ kubectl rollout status deployment/maas-api -n "$MAAS_API_NAMESPACE" --timeout=12
 # Update AuthPolicy to use OIDC
 echo ""
 echo "5️⃣ Updating AuthPolicy to use OIDC authentication..."
+
+# First, patch any existing AuthPolicy to remove old authorization keys BEFORE applying the new one
+# This prevents auth issues from old kubernetesSubjectAccessReview keys
+if kubectl get authpolicy gateway-auth-policy -n openshift-ingress &>/dev/null; then
+    echo "   Patching existing AuthPolicy to remove old authorization keys..."
+    kubectl patch authpolicy gateway-auth-policy -n openshift-ingress --type=json -p '[
+      {
+        "op": "remove",
+        "path": "/spec/rules/authentication/service-accounts"
+      },
+      {
+        "op": "remove",
+        "path": "/spec/rules/authorization/tier-access/kubernetesSubjectAccessReview"
+      },
+      {
+        "op": "replace",
+        "path": "/spec/rules/authorization/tier-access/cache/key/selector",
+        "value": "{auth.identity.userid}:{request.path}"
+      }
+    ]' 2>&1 || echo "   ⚠️  Patch failed (may not be needed if AuthPolicy is new)"
+    
+    # Set annotation to prevent operator from reverting changes
+    kubectl annotate authpolicy gateway-auth-policy -n openshift-ingress \
+      opendatahub.io/managed=false --overwrite 2>/dev/null || true
+    echo "   ✅ Set annotation 'opendatahub.io/managed=false' to prevent operator management"
+fi
+
+# Apply the Keycloak AuthPolicy (this will replace or create the AuthPolicy)
 kubectl apply -f deployment/base/policies/auth-policies/gateway-auth-policy-keycloak.yaml
+
+# Ensure annotation is set after apply (in case it was overwritten)
+kubectl annotate authpolicy gateway-auth-policy -n openshift-ingress \
+  opendatahub.io/managed=false --overwrite 2>/dev/null || true
+
+# Verify the authorization section doesn't have old keys
+echo "   Verifying authorization section..."
+HAS_OLD_AUTH=$(kubectl get authpolicy gateway-auth-policy -n openshift-ingress -o jsonpath='{.spec.rules.authorization.tier-access.kubernetesSubjectAccessReview}' 2>/dev/null || echo "")
+if [ -n "$HAS_OLD_AUTH" ] && [ "$HAS_OLD_AUTH" != "null" ]; then
+    echo "   ⚠️  WARNING: Old kubernetesSubjectAccessReview still present in authorization!"
+    echo "   Attempting to remove it again..."
+    kubectl patch authpolicy gateway-auth-policy -n openshift-ingress --type=json -p '[{"op": "remove", "path": "/spec/rules/authorization/tier-access/kubernetesSubjectAccessReview"}]' 2>&1
+else
+    echo "   ✅ Authorization section is clean (no old kubernetesSubjectAccessReview)"
+fi
+
 
 echo ""
 echo "========================================="

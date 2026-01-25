@@ -437,23 +437,69 @@ else
     
     if [ -n "$MAAS_API_NAMESPACE" ]; then
         echo "   Found maas-api-auth-policy in namespace: $MAAS_API_NAMESPACE"
-        echo "   Updating to use Keycloak authentication..."
+        echo "   Removing openshift-identities and updating to use Keycloak authentication..."
         
-        # Remove openshift-identities and add Keycloak authentication
+        # First, remove openshift-identities if it exists
+        echo "   Removing openshift-identities from authentication..."
         kubectl patch authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE" --type=json \
-          -p="[{\"op\": \"remove\", \"path\": \"/spec/rules/authentication/openshift-identities\"}, {\"op\": \"add\", \"path\": \"/spec/rules/authentication/keycloak\", \"value\": {\"jwt\": {\"issuerUrl\": \"${KEYCLOAK_ISSUER_URL}\"}, \"defaults\": {\"userid\": {\"expression\": \"auth.identity.preferred_username\"}}, \"cache\": {\"key\": {\"selector\": \"context.request.http.headers.authorization.@case:lower\"}, \"ttl\": 600}}}, {\"op\": \"replace\", \"path\": \"/spec/rules/response/success/headers/X-MaaS-Username/plain/selector\", \"value\": \"auth.identity.preferred_username\"}, {\"op\": \"replace\", \"path\": \"/spec/rules/response/success/headers/X-MaaS-Group/plain/selector\", \"value\": \"auth.identity.groups\"}]" 2>/dev/null || true
+          -p='[{"op": "remove", "path": "/spec/rules/authentication/openshift-identities"}]' 2>&1 || echo "   ⚠️  openshift-identities may not exist (continuing...)"
+        
+        # Apply from file (more reliable than patching) - this replaces the entire spec
+        # First update the namespace in the file temporarily
+        TEMP_MAAS_API_POLICY=$(mktemp)
+        # Update both issuerUrl and namespace
+        sed -e "s|issuerUrl:.*|issuerUrl: ${KEYCLOAK_ISSUER_URL}|" \
+            -e "s|namespace:.*|namespace: ${MAAS_API_NAMESPACE}|" \
+            "$MAAS_API_AUTH_POLICY_FILE" > "$TEMP_MAAS_API_POLICY"
+        
+        if kubectl apply -f "$TEMP_MAAS_API_POLICY" 2>/dev/null; then
+            echo "   ✅ maas-api AuthPolicy applied successfully from file"
+        else
+            echo "   ⚠️  Failed to apply from file, trying patch instead..."
+            # Fallback to patch if apply fails
+            kubectl patch authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE" --type=json \
+              -p="[{\"op\": \"remove\", \"path\": \"/spec/rules/authentication/openshift-identities\"}, {\"op\": \"add\", \"path\": \"/spec/rules/authentication/keycloak\", \"value\": {\"jwt\": {\"issuerUrl\": \"${KEYCLOAK_ISSUER_URL}\"}, \"defaults\": {\"userid\": {\"expression\": \"auth.identity.preferred_username\"}}, \"cache\": {\"key\": {\"selector\": \"context.request.http.headers.authorization.@case:lower\"}, \"ttl\": 600}}}, {\"op\": \"replace\", \"path\": \"/spec/rules/response/success/headers/X-MaaS-Username/plain/selector\", \"value\": \"auth.identity.preferred_username\"}, {\"op\": \"replace\", \"path\": \"/spec/rules/response/success/headers/X-MaaS-Group/plain/selector\", \"value\": \"auth.identity.groups\"}]" 2>&1 || echo "   ⚠️  Patch also failed"
+        fi
+        
+        rm -f "$TEMP_MAAS_API_POLICY"
+        
+        # Verify openshift-identities was removed
+        HAS_OPENSHIFT_ID=$(kubectl get authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE" -o jsonpath='{.spec.rules.authentication.openshift-identities}' 2>/dev/null || echo "")
+        if [ -n "$HAS_OPENSHIFT_ID" ] && [ "$HAS_OPENSHIFT_ID" != "null" ]; then
+            echo "   ⚠️  WARNING: openshift-identities still present! Attempting to remove again..."
+            kubectl patch authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE" --type=json \
+              -p='[{"op": "remove", "path": "/spec/rules/authentication/openshift-identities"}]' 2>&1
+        else
+            echo "   ✅ openshift-identities removed successfully"
+        fi
         
         # Always set the annotation to prevent operator management
         kubectl annotate authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE" \
           opendatahub.io/managed=false --overwrite 2>/dev/null || true
         
-        echo "   ✅ maas-api AuthPolicy updated to use Keycloak"
+        # Verify the response section was updated correctly
+        ACTUAL_USERNAME=$(kubectl get authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE" -o jsonpath='{.spec.rules.response.success.headers.X-MaaS-Username.plain.selector}' 2>/dev/null || echo "")
+        ACTUAL_GROUP=$(kubectl get authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE" -o jsonpath='{.spec.rules.response.success.headers.X-MaaS-Group.plain.selector}' 2>/dev/null || echo "")
+        
+        if [ "$ACTUAL_USERNAME" == "auth.identity.preferred_username" ] && [ "$ACTUAL_GROUP" == "auth.identity.groups" ]; then
+            echo "   ✅ maas-api AuthPolicy updated correctly with Keycloak fields"
+        else
+            echo "   ⚠️  WARNING: Response section may not be correct!"
+            echo "      Username selector: ${ACTUAL_USERNAME:-<not found>}"
+            echo "      Group selector: ${ACTUAL_GROUP:-<not found>}"
+            echo "      Expected: auth.identity.preferred_username and auth.identity.groups"
+        fi
+        
         echo "   ✅ Annotation 'opendatahub.io/managed=false' set to prevent operator management"
         echo "   ✅ Issuer URL set to: ${KEYCLOAK_ISSUER_URL}"
     else
         # Apply from file if AuthPolicy doesn't exist yet
         TEMP_MAAS_API_POLICY=$(mktemp)
-        sed "s|issuerUrl:.*|issuerUrl: ${KEYCLOAK_ISSUER_URL}|" "$MAAS_API_AUTH_POLICY_FILE" > "$TEMP_MAAS_API_POLICY"
+        # Default to opendatahub namespace if not found
+        MAAS_API_NAMESPACE="opendatahub"
+        sed -e "s|issuerUrl:.*|issuerUrl: ${KEYCLOAK_ISSUER_URL}|" \
+            -e "s|namespace:.*|namespace: ${MAAS_API_NAMESPACE}|" \
+            "$MAAS_API_AUTH_POLICY_FILE" > "$TEMP_MAAS_API_POLICY"
         
         if kubectl apply -f "$TEMP_MAAS_API_POLICY" 2>/dev/null; then
             echo "   ✅ maas-api AuthPolicy applied successfully"
@@ -465,9 +511,9 @@ else
     fi
 fi
 
-# Update maas-api deployment to use the new image
+# Update maas-api deployment to use the new image and enable Keycloak
 echo ""
-echo "1️⃣4️⃣ Updating maas-api deployment image..."
+echo "1️⃣4️⃣ Updating maas-api deployment image and enabling Keycloak..."
 MAAS_API_NAMESPACE=${MAAS_API_NAMESPACE:-opendatahub}
 MAAS_API_IMAGE="quay.io/maas/maas-api:keycloak-poc"
 
@@ -481,11 +527,100 @@ if kubectl get deployment maas-api -n "$MAAS_API_NAMESPACE" &>/dev/null; then
     # Update the image
     kubectl set image deployment/maas-api -n "$MAAS_API_NAMESPACE" maas-api="$MAAS_API_IMAGE" 2>/dev/null || true
     
+    echo "   Enabling Keycloak in maas-api deployment..."
+    # Use kubectl set env which handles both adding and updating env vars
+    # This is more reliable than patching and works whether vars exist or not
+    if kubectl set env deployment/maas-api -n "$MAAS_API_NAMESPACE" \
+      KEYCLOAK_ENABLED=true \
+      KEYCLOAK_BASE_URL="${KEYCLOAK_URL}" \
+      KEYCLOAK_REALM=maas \
+      KEYCLOAK_CLIENT_ID=maas-api \
+      KEYCLOAK_CLIENT_SECRET=maas-api-secret \
+      KEYCLOAK_AUDIENCE=maas-model-access \
+      DEBUG_MODE=true 2>&1; then
+        echo "   ✅ Keycloak environment variables set successfully"
+    else
+        echo "   ⚠️  Failed to set environment variables, trying patch method..."
+        # Fallback to patch if set env fails
+        kubectl patch deployment maas-api -n "$MAAS_API_NAMESPACE" --type='json' -p="[
+          {
+            \"op\": \"add\",
+            \"path\": \"/spec/template/spec/containers/0/env/-\",
+            \"value\": {
+              \"name\": \"KEYCLOAK_ENABLED\",
+              \"value\": \"true\"
+            }
+          },
+          {
+            \"op\": \"add\",
+            \"path\": \"/spec/template/spec/containers/0/env/-\",
+            \"value\": {
+              \"name\": \"KEYCLOAK_BASE_URL\",
+              \"value\": \"${KEYCLOAK_URL}\"
+            }
+          },
+          {
+            \"op\": \"add\",
+            \"path\": \"/spec/template/spec/containers/0/env/-\",
+            \"value\": {
+              \"name\": \"KEYCLOAK_REALM\",
+              \"value\": \"maas\"
+            }
+          },
+          {
+            \"op\": \"add\",
+            \"path\": \"/spec/template/spec/containers/0/env/-\",
+            \"value\": {
+              \"name\": \"KEYCLOAK_CLIENT_ID\",
+              \"value\": \"maas-api\"
+            }
+          },
+          {
+            \"op\": \"add\",
+            \"path\": \"/spec/template/spec/containers/0/env/-\",
+            \"value\": {
+              \"name\": \"KEYCLOAK_CLIENT_SECRET\",
+              \"value\": \"maas-api-secret\"
+            }
+          },
+          {
+            \"op\": \"add\",
+            \"path\": \"/spec/template/spec/containers/0/env/-\",
+            \"value\": {
+              \"name\": \"KEYCLOAK_AUDIENCE\",
+              \"value\": \"maas-model-access\"
+            }
+          },
+          {
+            \"op\": \"add\",
+            \"path\": \"/spec/template/spec/containers/0/env/-\",
+            \"value\": {
+              \"name\": \"DEBUG_MODE\",
+              \"value\": \"true\"
+            }
+          }
+        ]" 2>&1 || echo "   ⚠️  Patch also failed"
+    fi
+    
+    # Verify the environment variables were set
+    echo "   Verifying environment variables..."
+    KEYCLOAK_ENABLED_CHECK=$(kubectl get deployment maas-api -n "$MAAS_API_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="KEYCLOAK_ENABLED")].value}' 2>/dev/null || echo "")
+    DEBUG_MODE_CHECK=$(kubectl get deployment maas-api -n "$MAAS_API_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="DEBUG_MODE")].value}' 2>/dev/null || echo "")
+    
+    if [ "$KEYCLOAK_ENABLED_CHECK" == "true" ] && [ "$DEBUG_MODE_CHECK" == "true" ]; then
+        echo "   ✅ Environment variables verified: KEYCLOAK_ENABLED=true, DEBUG_MODE=true"
+    else
+        echo "   ⚠️  WARNING: Environment variables may not be set correctly!"
+        echo "      KEYCLOAK_ENABLED: ${KEYCLOAK_ENABLED_CHECK:-<not found>}"
+        echo "      DEBUG_MODE: ${DEBUG_MODE_CHECK:-<not found>}"
+    fi
+    
     echo "   Waiting for rollout to complete..."
     kubectl rollout status deployment/maas-api -n "$MAAS_API_NAMESPACE" --timeout=120s 2>/dev/null || \
       echo "   ⚠️  Rollout may still be in progress"
     
-    echo "   ✅ maas-api deployment updated with annotation 'opendatahub.io/managed=false'"
+    echo "   ✅ maas-api deployment updated with Keycloak configuration"
+    echo "   ✅ Annotation 'opendatahub.io/managed=false' set to prevent operator management"
 else
     echo "   ⚠️  maas-api deployment not found in namespace $MAAS_API_NAMESPACE"
     echo "   The deployment will use the new image when it's created"

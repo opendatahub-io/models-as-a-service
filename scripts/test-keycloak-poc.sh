@@ -224,7 +224,15 @@ if [ -n "$MODEL_ID" ] && [ "$MODEL_ID" != "null" ] && [ -n "$MODEL_URL" ] && [ "
     echo "   Endpoint: ${MODEL_URL}/v1/chat/completions"
     echo ""
     
-    REQUEST_BODY='{"model": "${MODEL_NAME}", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": '"$MAX_TOKENS"'}'
+    # Construct JSON body with proper variable expansion
+    REQUEST_BODY=$(jq -n \
+      --arg model "$MODEL_ID" \
+      --argjson max_tokens "${MAX_TOKENS:-100}" \
+      '{
+        "model": $model,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "max_tokens": $max_tokens
+      }')
     
     INFERENCE_RESPONSE=$(curl -sSk \
       -H "Authorization: Bearer ${TOKEN}" \

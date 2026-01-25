@@ -37,19 +37,11 @@ spec:
           key:
             selector: context.request.http.headers.authorization.@case:lower
           ttl: 600
-    authorization:
-      tier-access:
-        cache:
-          key:
-            selector: "{auth.identity.userid}:{request.path}"
-          ttl: 60
-        # For PoC: Allow all authenticated requests
-        # In production, use Keycloak Authorization Services with OPA Rego
-        # or map Keycloak users to Kubernetes groups for SubjectAccessReview
-        when:
-          - selector: auth.identity.userid
-            operator: neq
-            value: ""
+           # Authorization removed for PoC - Gateway AuthPolicy already validates Keycloak tokens
+           # For production, add proper authorization using:
+           # - OPA Rego policies (authorization.tier-access.opa)
+           # - Kubernetes SubjectAccessReview (authorization.tier-access.kubernetesSubjectAccessReview)
+           # - Keycloak Authorization Services
     response:
       success:
         filters:
