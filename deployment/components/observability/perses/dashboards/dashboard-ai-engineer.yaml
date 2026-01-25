@@ -33,11 +33,11 @@ spec:
   # ALL Panels
   panels:
     # === Row: My Usage Summary ===
-    myTotalRequests:
+    myTotalTokens:
       kind: Panel
       spec:
         display:
-          name: "📊 My Total Tokens"
+          name: "📊 Total Tokens"
           description: "Total API tokens you have consumed that were successfully authorized."
         plugin:
           kind: StatChart
@@ -54,11 +54,33 @@ spec:
                 spec:
                   query: sum(authorized_hits{user=~"^$user$"})
 
-    currentRate:
+    myTotalRequests:
       kind: Panel
       spec:
         display:
-          name: "⚡ Current Rate (5m avg)"
+          name: "📊 Total Requests"
+          description: "Total API requests you have made that were successfully authorized."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(authorized_calls{user=~"^$user$"})
+
+    tokenRate:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Token Rate"
+          description: "Your current token consumption rate (tokens per second) averaged over the last 5 minutes."
         plugin:
           kind: StatChart
           spec:
@@ -73,6 +95,27 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: sum(rate(authorized_hits{user=~"^$user$"}[5m]))
+
+    requestRate:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Request Rate"
+          description: "Your current request rate (requests per second) averaged over the last 5 minutes."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              decimalPlaces: 2
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(rate(authorized_calls{user=~"^$user$"}[5m]))
 
     rateLimitedRequests:
       kind: Panel
@@ -118,11 +161,12 @@ spec:
                     OR vector(100)
 
     # === Row: Usage Trends ===
-    usageByModel:
+    tokenUsageByModel:
       kind: Panel
       spec:
         display:
-          name: "📈 Usage by Model"
+          name: "📈 Token Usage by Model"
+          description: "Your token consumption broken down by model. Shows which models consume the most tokens."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -141,11 +185,12 @@ spec:
                   seriesNameFormat: "{{model}}"
                   query: sum by (model) (authorized_hits{user=~"^$user$"})
 
-    requestTrends:
+    usageTrends:
       kind: Panel
       spec:
         display:
-          name: "📊 Request Trends (Success vs Rate Limited)"
+          name: "📊 Usage Trends (Tokens vs Rate Limited Requests)"
+          description: "Token consumption rate (authorized) and rate-limited request rate over time."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -161,22 +206,23 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "Authorized"
+                  seriesNameFormat: "Tokens (authorized)"
                   query: sum(rate(authorized_hits{user=~"^$user$"}[5m]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "Rate Limited"
+                  seriesNameFormat: "Requests (rate limited)"
                   query: sum(rate(limited_calls{user=~"^$user$"}[5m]))
 
     # === Row: Hourly Usage Patterns ===
-    hourlyUsageByModel:
+    hourlyTokenUsageByModel:
       kind: Panel
       spec:
         display:
-          name: "⏰ Hourly Usage by Model"
+          name: "⏰ Hourly Token Usage by Model"
+          description: "Hourly token consumption broken down by model."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -199,11 +245,12 @@ spec:
                   query: sum by (model) (increase(authorized_hits{user=~"^$user$"}[1h]))
 
     # === Row: Detailed Analysis ===
-    requestVolumeByModel:
+    tokenVolumeByModel:
       kind: Panel
       spec:
         display:
-          name: "📊 Request Volume by Model (Selected Range)"
+          name: "📊 Token Volume by Model (Selected Range)"
+          description: "Token volume per model over the selected time range."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -282,25 +329,37 @@ spec:
         items:
           - x: 0
             "y": 0
-            width: 6
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/myTotalTokens"
+          - x: 4
+            "y": 0
+            width: 4
             height: 4
             content:
               "$ref": "#/spec/panels/myTotalRequests"
-          - x: 6
+          - x: 8
             "y": 0
-            width: 6
+            width: 4
             height: 4
             content:
-              "$ref": "#/spec/panels/currentRate"
+              "$ref": "#/spec/panels/tokenRate"
           - x: 12
             "y": 0
-            width: 6
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/requestRate"
+          - x: 16
+            "y": 0
+            width: 4
             height: 4
             content:
               "$ref": "#/spec/panels/rateLimitedRequests"
-          - x: 18
+          - x: 20
             "y": 0
-            width: 6
+            width: 4
             height: 4
             content:
               "$ref": "#/spec/panels/mySuccessRate"
@@ -317,13 +376,13 @@ spec:
             width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/usageByModel"
+              "$ref": "#/spec/panels/tokenUsageByModel"
           - x: 12
             "y": 0
             width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/requestTrends"
+              "$ref": "#/spec/panels/usageTrends"
 
     - kind: Grid
       spec:
@@ -337,7 +396,7 @@ spec:
             width: 24
             height: 8
             content:
-              "$ref": "#/spec/panels/hourlyUsageByModel"
+              "$ref": "#/spec/panels/hourlyTokenUsageByModel"
 
     - kind: Grid
       spec:
@@ -351,7 +410,7 @@ spec:
             width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/requestVolumeByModel"
+              "$ref": "#/spec/panels/tokenVolumeByModel"
           - x: 12
             "y": 0
             width: 12

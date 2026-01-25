@@ -261,6 +261,7 @@ Both Grafana and Perses include equivalent dashboards:
 
 #### Platform Admin Dashboard
 
+<<<<<<< HEAD
 | Section | Metrics |
 |---------|---------|
 | **Key Metrics** | Total Tokens, Total Requests, Token Rate, Request Rate, Success Rate, Active Users |
@@ -269,6 +270,9 @@ Both Grafana and Perses include equivalent dashboards:
 | **Model Metrics** | vLLM queue depth, inference latency, GPU cache usage, token throughput |
 | **Top Users** | By token usage, by declined requests |
 
+!!! info "Active Users Metric"
+    The "Active Users (5m)" panel shows users with activity in the **last 5 minutes**, not all-time unique users. This provides an accurate view of current platform usage.
+
 #### AI Engineer Dashboard
 
 | Section | Metrics |
@@ -276,6 +280,9 @@ Both Grafana and Perses include equivalent dashboards:
 | **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limited, Success Rate |
 | **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
 | **Detailed Analysis** | Token Volume by Model, Rate Limited by Model |
+
+!!! warning "Security Consideration"
+    The user dropdown in the AI Engineer Dashboard populates from Prometheus label values, which exposes all user IDs to anyone with dashboard access. For multi-tenant environments where user enumeration is a concern, consider restricting dashboard access via Grafana/Perses RBAC or provisioning per-user dashboards with static user filters.
 
 !!! info "Tokens vs Requests"
     Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
