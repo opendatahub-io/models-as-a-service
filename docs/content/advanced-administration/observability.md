@@ -120,9 +120,48 @@ For dashboard visualization, refer to the official documentation:
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
 - **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.19/html/monitoring_data_science_models/index)
 
-### Sample Dashboard
+### Included Dashboards
 
-A sample Grafana dashboard for token metrics is available:
+MaaS includes two Grafana dashboards for different personas:
+
+#### Platform Admin Dashboard
+
+Provides a comprehensive view of system health, usage across all users, and resource allocation:
+
+| Section | Metrics |
+|---------|---------|
+| **Key Metrics** | Total Tokens, Total Requests, Token Rate, Request Rate, Success Rate, Active Users |
+| **Traffic Analysis** | Token/Request Rate by Model, Error Rates, Token/Request Rate by Tier, P95 Latency |
+| **Error Breakdown** | Rate Limited Requests, Unauthorized Requests |
+| **Model Metrics** | vLLM queue depth, inference latency, GPU cache usage, token throughput |
+| **Top Users** | By token usage, by declined requests |
+
+#### AI Engineer Dashboard
+
+Personal usage view for individual developers:
+
+| Section | Metrics |
+|---------|---------|
+| **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limited, Success Rate |
+| **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
+| **Detailed Analysis** | Token Volume by Model, Rate Limited by Model |
+
+!!! info "Tokens vs Requests"
+    Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
+
+### Deploying Dashboards
+
+Dashboards are deployed automatically by `install-observability.sh`, or manually:
+
+    # Deploy Grafana operator and instance
+    kubectl apply -k deployment/components/observability/grafana/
+
+    # Deploy dashboards
+    kubectl apply -k deployment/components/observability/dashboards/
+
+### Sample Dashboard JSON
+
+For manual import, sample dashboard JSON files are available:
 
 - [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
