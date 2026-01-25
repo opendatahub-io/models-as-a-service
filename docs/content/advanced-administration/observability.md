@@ -118,9 +118,48 @@ For dashboard visualization options, see:
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
 - **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.19/html/monitoring_data_science_models/index)
 
-### Sample Dashboard
+### Included Dashboards
 
-A sample Grafana dashboard for token metrics is available:
+MaaS includes two Grafana dashboards for different personas:
+
+#### Platform Admin Dashboard
+
+Provides a comprehensive view of system health, usage across all users, and resource allocation:
+
+| Section | Metrics |
+|---------|---------|
+| **Key Metrics** | Total Tokens, Total Requests, Token Rate, Request Rate, Success Rate, Active Users |
+| **Traffic Analysis** | Token/Request Rate by Model, Error Rates, Token/Request Rate by Tier, P95 Latency |
+| **Error Breakdown** | Rate Limited Requests, Unauthorized Requests |
+| **Model Metrics** | vLLM queue depth, inference latency, GPU cache usage, token throughput |
+| **Top Users** | By token usage, by declined requests |
+
+#### AI Engineer Dashboard
+
+Personal usage view for individual developers:
+
+| Section | Metrics |
+|---------|---------|
+| **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limited, Success Rate |
+| **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
+| **Detailed Analysis** | Token Volume by Model, Rate Limited by Model |
+
+!!! info "Tokens vs Requests"
+    Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
+
+### Deploying Dashboards
+
+Dashboards are deployed automatically by `install-observability.sh`, or manually:
+
+    # Deploy Grafana operator and instance
+    kubectl apply -k deployment/components/observability/grafana/
+
+    # Deploy dashboards
+    kubectl apply -k deployment/components/observability/dashboards/
+
+### Sample Dashboard JSON
+
+For manual import, sample dashboard JSON files are available:
 
 - [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
@@ -136,9 +175,16 @@ To import into Grafana:
 
 | Metric | Type | Description | Use Case |
 |--------|------|-------------|----------|
-| `authorized_hits` | Counter | Total tokens consumed (from `usage.total_tokens`) | Billing, token quota tracking |
-| `authorized_calls` | Counter | Total requests allowed | Request counting, capacity planning |
-| `limited_calls` | Counter | Total requests rate-limited | Rate limit monitoring |
+| `authorized_hits` | Counter | Total tokens consumed (extracted from `usage.total_tokens` in LLM responses) | Billing, cost tracking |
+| `authorized_calls` | Counter | Total requests that were successfully authorized | Capacity planning, usage patterns |
+| `limited_calls` | Counter | Total requests denied due to rate limiting (HTTP 429) | Rate limit monitoring |
+
+All metrics include labels: `user`, `tier`, `model`, `limitador_namespace`
+
+!!! tip "When to use which metric"
+    - **Billing/Cost**: Use `authorized_hits` - represents actual token consumption
+    - **API Usage**: Use `authorized_calls` - represents number of API calls
+    - **Rate Limiting**: Use `limited_calls` - shows quota violations
 
 ### Latency Metrics
 
@@ -187,43 +233,58 @@ spec:
 
 ### Common Queries
 
-**Token-based queries:**
+**Token-based queries (billing/cost):**
 
-    # Token consumption per user
+    # Total tokens consumed per user
     sum by (user) (authorized_hits)
 
-    # P99 latency per user (filter out unauthenticated requests)
-    histogram_quantile(0.99, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!="",user!="unknown"}[5m])))
+    # Token consumption rate per model (tokens/sec)
+    sum by (model) (rate(authorized_hits[5m]))
 
     # Top 10 users by tokens consumed
     topk(10, sum by (user) (authorized_hits))
 
-    # Token rate per tier
-    sum by (tier) (rate(authorized_hits[5m]))
+    # Token consumption by tier
+    sum by (tier) (authorized_hits)
 
-**Request-based queries:**
-
-    # Request rate per tier
-    sum by (tier) (rate(authorized_calls[5m]))
+**Request-based queries (capacity/usage):**
 
     # Total requests per user
     sum by (user) (authorized_calls)
 
-**Rate limiting queries:**
+    # Request rate per tier (requests/sec)
+    sum by (tier) (rate(authorized_calls[5m]))
+
+    # Request rate per model
+    sum by (model) (rate(authorized_calls[5m]))
+
+    # Top 10 users by request count
+    topk(10, sum by (user) (authorized_calls))
+
+**Rate limiting and success metrics:**
+
+    # Success rate (percentage of requests not rate-limited)
+    sum(authorized_calls) / (sum(authorized_calls) + sum(limited_calls))
+
+    # Success rate by tier
+    sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))
 
     # Rate limit violations by tier
     sum by (tier) (rate(limited_calls[5m]))
 
-    # Rate limited requests per user
-    sum by (user) (limited_calls)
+    # Users hitting rate limits
+    topk(10, sum by (user) (limited_calls))
 
-**Success and latency metrics:**
-
-    # Success rate by tier (requests)
-    sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))
+**Latency queries:**
 
     # P99 latency by service
     histogram_quantile(0.99, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
+
+    # P50 (median) latency
+    histogram_quantile(0.5, sum by (le) (rate(istio_request_duration_milliseconds_bucket[5m])))
+
+    # P99 latency per user (filter out unauthenticated requests)
+    histogram_quantile(0.99, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!="",user!="unknown"}[5m])))
 
 !!! tip "Filtering Unauthenticated Requests"
     For per-user latency queries, use `user!="",user!="unknown"` to exclude requests that failed authentication (where the `X-MaaS-Username` header was not injected or has a default value). Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
