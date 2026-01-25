@@ -132,25 +132,34 @@ MaaS includes two Grafana dashboards for different personas:
 
 #### Platform Admin Dashboard
 
-Provides a comprehensive view of system health, usage across all users, and resource allocation:
+| Section | Description |
+|---------|-------------|
+| **Component Health** | Limitador, Authorino, MaaS API, and Gateway pod status |
+| **Alerts** | Firing alerts count and active alerts table |
+| **Key Metrics** | Total tokens, total requests, token rate, request rate, success rate, active users (5m) |
+| **Traffic Analysis** | Token rate by model, error rates, P95/P99 latency |
+| **Top Users** | Top 10 by requests, Top 10 by token usage |
+| **Token Consumption** | Token usage by tier and by user |
+| **Model Metrics** | vLLM metrics (queue depth, GPU cache, inference latency) |
+| **User Tracking** | Per-user token usage and rate limit violations |
 
-| Section | Metrics |
-|---------|---------|
-| **Key Metrics** | Total Tokens, Total Requests, Token Rate, Request Rate, Success Rate, Active Users |
-| **Traffic Analysis** | Token/Request Rate by Model, Error Rates, Token/Request Rate by Tier, P95 Latency |
-| **Error Breakdown** | Rate Limited Requests, Unauthorized Requests |
-| **Model Metrics** | vLLM queue depth, inference latency, GPU cache usage, token throughput |
-| **Top Users** | By token usage, by declined requests |
+!!! info "Active Users Metric"
+    The "Active Users (5m)" panel shows users with activity in the **last 5 minutes**, not all-time unique users. This provides an accurate view of current platform usage.
 
 #### AI Engineer Dashboard
 
-Personal usage view for individual developers:
+| Section | Description |
+|---------|-------------|
+| **My Usage Summary** | Total tokens, total requests, token rate, request rate, rate-limited requests, success rate |
+| **Usage Trends** | Token usage by model, usage trends (tokens vs rate-limited requests) |
+| **Hourly Patterns** | Hourly token usage breakdown by model |
+| **Detailed Analysis** | Token volume and rate-limited requests by model |
 
-| Section | Metrics |
-|---------|---------|
-| **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limited, Success Rate |
-| **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
-| **Detailed Analysis** | Token Volume by Model, Rate Limited by Model |
+!!! info "User Filtering"
+    The AI Engineer Dashboard includes a user dropdown to filter metrics. Select your user ID to see only your personal usage metrics.
+
+!!! warning "Security Consideration"
+    The user dropdown in the AI Engineer Dashboard populates from Prometheus label values, which exposes all user IDs to anyone with dashboard access. For multi-tenant environments where user enumeration is a concern, consider restricting dashboard access via Grafana/Perses RBAC or provisioning per-user dashboards with static user filters.
 
 !!! info "Tokens vs Requests"
     Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.

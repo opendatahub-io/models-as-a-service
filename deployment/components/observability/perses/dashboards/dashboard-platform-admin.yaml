@@ -161,11 +161,12 @@ spec:
                   query: ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"llm|kuadrant-system|maas-api|envoy-gateway-system"}
 
     # === Row: Key Metrics ===
-    totalAuthorizedHits:
+    totalTokensConsumed:
       kind: Panel
       spec:
         display:
-          name: "📊 Total Authorized Hits"
+          name: "📊 Total Tokens"
+          description: "Total tokens consumed by successful API requests."
         plugin:
           kind: StatChart
           spec:
@@ -181,11 +182,33 @@ spec:
                 spec:
                   query: sum(authorized_hits)
 
-    platformCurrentRate:
+    totalRequests:
       kind: Panel
       spec:
         display:
-          name: "⚡ Current Rate (5m avg)"
+          name: "📊 Total Requests"
+          description: "Total API requests that were successfully authorized."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(authorized_calls)
+
+    tokenRate:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Token Rate"
+          description: "Current token consumption rate (tokens per second) averaged over the last 5 minutes."
         plugin:
           kind: StatChart
           spec:
@@ -200,6 +223,27 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: sum(rate(authorized_hits[5m]))
+
+    requestRate:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Request Rate"
+          description: "Current request rate (requests per second) averaged over the last 5 minutes."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              decimalPlaces: 2
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(rate(authorized_calls[5m]))
 
     platformSuccessRate:
       kind: Panel
@@ -226,7 +270,8 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "👥 Active Users"
+          name: "👥 Active Users (5m)"
+          description: "Number of unique users with activity in the last 5 minutes."
         plugin:
           kind: StatChart
           spec:
@@ -239,7 +284,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: count(count by (user) (authorized_hits))
+                  query: count(count by (user) (rate(authorized_hits[5m]) > 0))
 
     p50Latency:
       kind: Panel
@@ -262,11 +307,12 @@ spec:
                   query: histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket[5m])) by (le))
 
     # === Row: Traffic Analysis ===
-    requestRateByModel:
+    tokenRateByModel:
       kind: Panel
       spec:
         display:
-          name: "📈 Request Rate by Model"
+          name: "📈 Token Rate by Model"
+          description: "Token consumption rate (tokens/s) broken down by model. Shows which models consume the most tokens."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -322,11 +368,12 @@ spec:
                   seriesNameFormat: "Rate Limited"
                   query: sum(rate(limited_calls[5m])) OR vector(0)
 
-    requestRateByTier:
+    tokenRateByTier:
       kind: Panel
       spec:
         display:
-          name: "📊 Request Rate by Tier"
+          name: "📊 Token Rate by Tier"
+          description: "Token consumption rate (tokens/s) broken down by user tier (free, premium, enterprise). Shows tier distribution."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -438,11 +485,11 @@ spec:
                   query: sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))
 
     # === Row: Top Users ===
-    topUsersByHits:
+    topUsersByRequests:
       kind: Panel
       spec:
         display:
-          name: "🏆 Top 10 Users by Hits"
+          name: "🏆 Top 10 Users by Requests"
           description: "Top 10 users ranked by total API requests made."
         plugin:
           kind: TimeSeriesChart
@@ -466,8 +513,8 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "🏆 Top 10 Users by Tokens"
-          description: "Top 10 users ranked by total API tokens consumed."
+          name: "🏆 Top 10 Users by Token Usage"
+          description: "Top 10 users ranked by total tokens consumed. Helps identify your highest-consuming users."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -536,11 +583,12 @@ spec:
                   query: sum by (user) (authorized_hits)
 
     # === Row: Detailed Breakdown ===
-    requestRateByUser:
+    tokenRateByUser:
       kind: Panel
       spec:
         display:
-          name: "👥 Request Rate by User"
+          name: "👥 Token Rate by User"
+          description: "Token consumption rate (tokens/s) broken down by individual user. Shows usage patterns over time."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -559,11 +607,12 @@ spec:
                   seriesNameFormat: "{{user}}"
                   query: sum by (user) (rate(authorized_hits[5m]))
 
-    requestVolumeByUserModelTier:
+    tokenVolumeByUserModelTier:
       kind: Panel
       spec:
         display:
-          name: "📋 Request Volume by User, Model & Tier"
+          name: "📋 Token Volume by User, Model & Tier"
+          description: "Token consumption broken down by user, model, and tier."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -784,11 +833,12 @@ spec:
                   query: sum(rate(vllm:generation_tokens_total{model_name=~"$model"}[5m])) or sum(rate(vllm:request_generation_tokens_sum{model_name=~"$model"}[5m]))
 
     # === Row: User Tracking ===
-    requestsAndErrorsPerUser:
+    tokenUsageAndRateLimitsPerUser:
       kind: Panel
       spec:
         display:
-          name: "👤 Requests & Errors per User"
+          name: "👤 Token Usage & Rate Limits per User"
+          description: "Token consumption rate and rate-limited requests per user."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -804,8 +854,8 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{user}} ✅"
-                  query: sum by (user) (rate(authorized_calls[5m]))
+                  seriesNameFormat: "{{user}} tokens/s"
+                  query: sum by (user) (rate(authorized_hits[5m]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -940,31 +990,43 @@ spec:
         items:
           - x: 0
             "y": 0
-            width: 5
+            width: 4
             height: 4
             content:
-              "$ref": "#/spec/panels/totalAuthorizedHits"
-          - x: 5
+              "$ref": "#/spec/panels/totalTokensConsumed"
+          - x: 4
             "y": 0
-            width: 5
+            width: 4
             height: 4
             content:
-              "$ref": "#/spec/panels/platformCurrentRate"
-          - x: 10
+              "$ref": "#/spec/panels/totalRequests"
+          - x: 8
             "y": 0
-            width: 5
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/tokenRate"
+          - x: 12
+            "y": 0
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/requestRate"
+          - x: 16
+            "y": 0
+            width: 4
             height: 4
             content:
               "$ref": "#/spec/panels/platformSuccessRate"
-          - x: 15
+          - x: 20
             "y": 0
             width: 4
             height: 4
             content:
               "$ref": "#/spec/panels/activeUsers"
-          - x: 19
-            "y": 0
-            width: 5
+          - x: 0
+            "y": 4
+            width: 8
             height: 4
             content:
               "$ref": "#/spec/panels/p50Latency"
@@ -981,7 +1043,7 @@ spec:
             width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/requestRateByModel"
+              "$ref": "#/spec/panels/tokenRateByModel"
           - x: 12
             "y": 0
             width: 12
@@ -993,7 +1055,7 @@ spec:
             width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/requestRateByTier"
+              "$ref": "#/spec/panels/tokenRateByTier"
           - x: 12
             "y": 8
             width: 12
@@ -1031,7 +1093,7 @@ spec:
             width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/topUsersByHits"
+              "$ref": "#/spec/panels/topUsersByRequests"
           - x: 12
             "y": 0
             width: 12
@@ -1071,13 +1133,13 @@ spec:
             width: 24
             height: 8
             content:
-              "$ref": "#/spec/panels/requestRateByUser"
+              "$ref": "#/spec/panels/tokenRateByUser"
           - x: 0
             "y": 8
             width: 24
             height: 8
             content:
-              "$ref": "#/spec/panels/requestVolumeByUserModelTier"
+              "$ref": "#/spec/panels/tokenVolumeByUserModelTier"
 
     - kind: Grid
       spec:
@@ -1147,7 +1209,7 @@ spec:
             width: 24
             height: 8
             content:
-              "$ref": "#/spec/panels/requestsAndErrorsPerUser"
+              "$ref": "#/spec/panels/tokenUsageAndRateLimitsPerUser"
 
     - kind: Grid
       spec:
