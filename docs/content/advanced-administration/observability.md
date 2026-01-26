@@ -66,31 +66,27 @@ ServiceMonitors are automatically deployed as part of `deploy-openshift.sh` to c
 
 To deploy the optional KServe ServiceMonitor:
 
-```bash
-kubectl apply -f docs/samples/observability/kserve-llm-models-servicemonitor.yaml
-```
+    kubectl apply -f docs/samples/observability/kserve-llm-models-servicemonitor.yaml
 
 **Manual ServiceMonitor Creation (Advanced):**
 
 If you need to create additional ServiceMonitors for custom services:
 
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: your-service-monitor
-  namespace: your-namespace  # Same namespace as the service
-  labels:
-    app: your-app
-spec:
-  selector:
-    matchLabels:
-      app: your-service
-  endpoints:
-  - port: http
-    path: /metrics
-    interval: 30s
-```
+    apiVersion: monitoring.coreos.com/v1
+    kind: ServiceMonitor
+    metadata:
+      name: your-service-monitor
+      namespace: your-namespace  # Same namespace as the service
+      labels:
+        app: your-app
+    spec:
+      selector:
+        matchLabels:
+          app: your-service
+      endpoints:
+      - port: http
+        path: /metrics
+        interval: 30s
 
 ## High Availability for MaaS Metrics
 
@@ -157,25 +153,23 @@ To import into Grafana:
 
 ### Common Queries
 
-```promql
-# Token consumption per user
-sum by (user) (authorized_hits)
+    # Token consumption per user
+    sum by (user) (authorized_hits)
 
-# Request rate per tier
-sum by (tier) (rate(authorized_calls[5m]))
+    # Request rate per tier
+    sum by (tier) (rate(authorized_calls[5m]))
 
-# Success rate by tier
-sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))
+    # Success rate by tier
+    sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))
 
-# P99 latency by service
-histogram_quantile(0.99, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
+    # P99 latency by service
+    histogram_quantile(0.99, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
 
-# Top 10 users by tokens consumed
-topk(10, sum by (user) (authorized_hits))
+    # Top 10 users by tokens consumed
+    topk(10, sum by (user) (authorized_hits))
 
-# Rate limit violations by tier
-sum by (tier) (rate(limited_calls[5m]))
-```
+    # Rate limit violations by tier
+    sum by (tier) (rate(limited_calls[5m]))
 
 ## Known Limitations
 
