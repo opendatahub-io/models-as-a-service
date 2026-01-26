@@ -14,12 +14,15 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -36,13 +39,44 @@ func serve() error {
 	cfg := config.Load()
 	flag.Parse()
 
-	log := logger.New(cfg.DebugMode)
+	var zapConfig zap.Config
+	if cfg.DebugMode {
+		zapConfig = zap.NewDevelopmentConfig()
+		zapConfig.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+		zapConfig.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	} else {
+		zapConfig = zap.NewProductionConfig()
+		zapConfig.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+		zapConfig.EncoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
+	}
+
+	// KServe-style configuration
+	zapConfig.EncoderConfig.TimeKey = "timestamp"
+	zapConfig.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	zapConfig.EncoderConfig.MessageKey = "message"
+	zapConfig.EncoderConfig.LevelKey = "level"
+	zapConfig.EncoderConfig.CallerKey = "caller"
+	zapConfig.EncoderConfig.StacktraceKey = "stacktrace"
+	zapConfig.OutputPaths = []string{"stdout"}
+	zapConfig.ErrorOutputPaths = []string{"stderr"}
+
+	baseLogger, err := zapConfig.Build(
+		zap.AddCaller(),
+		zap.AddStacktrace(zapcore.ErrorLevel),
+	)
+	if err != nil {
+		// Fallback to a basic logger if configuration fails
+		baseLogger = zap.NewExample()
+	}
+
 	defer func() {
-		if err := log.Sync(); err != nil {
+		if err := baseLogger.Sync(); err != nil {
 			// Can't use logger if sync failed
 			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
 		}
 	}()
+
+	log := zapr.NewLogger(baseLogger)
 
 	cfg.PrintDeprecationWarnings(log)
 
@@ -80,7 +114,7 @@ func serve() error {
 	}
 	defer func() {
 		if err := store.Close(); err != nil {
-			log.Error("Failed to close token store", "error", err)
+			log.Error(err, "Failed to close token store")
 		}
 	}()
 
@@ -131,7 +165,7 @@ func serve() error {
 //   - external: External database (PostgreSQL), supports multiple replicas
 //
 //nolint:ireturn // Returns MetadataStore interface by design for pluggable storage backends.
-func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
+func initStore(ctx context.Context, log logr.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
 	switch cfg.StorageMode {
 	case config.StorageModeInMemory, "":
 		log.Info("Using in-memory storage (data will be lost on restart). " +
@@ -159,7 +193,7 @@ func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api
 	}
 }
 
-func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, store api_keys.MetadataStore) error {
+func registerHandlers(ctx context.Context, log logr.Logger, router *gin.Engine, cfg *config.Config, store api_keys.MetadataStore) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
 
 	cluster, err := config.NewClusterConfig(cfg.Namespace, constant.DefaultResyncPeriod)
@@ -184,7 +218,10 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 		models.GatewayRef{Name: cfg.GatewayName, Namespace: cfg.GatewayNamespace},
 	)
 	if err != nil {
-		log.Fatal("Failed to create model manager", "error", err)
+		log.Error(err, "Failed to create model manager")
+		// Fatal usually exits, but logr doesn't have Fatal.
+		// We should exit manually.
+		os.Exit(1)
 	}
 
 	tokenManager := token.NewManager(

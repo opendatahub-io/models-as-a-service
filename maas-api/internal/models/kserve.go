@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/go-logr/logr"
 	kservev1beta1 "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
 	kservelistersv1beta1 "github.com/kserve/kserve/pkg/client/listers/serving/v1beta1"
@@ -12,8 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"knative.dev/pkg/apis"
 	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
-
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 type Manager struct {
@@ -21,11 +20,11 @@ type Manager struct {
 	llmIsvcLister   kservelistersv1alpha1.LLMInferenceServiceLister
 	httpRouteLister gatewaylisters.HTTPRouteLister
 	gatewayRef      GatewayRef
-	logger          *logger.Logger
+	logger          logr.Logger
 }
 
 func NewManager(
-	log *logger.Logger,
+	log logr.Logger,
 	isvcLister kservelistersv1beta1.InferenceServiceLister,
 	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister,
 	httpRouteLister gatewaylisters.HTTPRouteLister,
@@ -66,7 +65,7 @@ func (m *Manager) inferenceServicesToModels(items []*kservev1beta1.InferenceServ
 	for _, item := range items {
 		url := m.findInferenceServiceURL(item)
 		if url == nil {
-			m.logger.Debug("Failed to find URL for InferenceService")
+			m.logger.V(1).Info("Failed to find URL for InferenceService")
 		}
 
 		modelID := item.Name
@@ -98,7 +97,7 @@ func (m *Manager) findInferenceServiceURL(is *kservev1beta1.InferenceService) *a
 		return is.Status.Address.URL
 	}
 
-	m.logger.Debug("No URL found for InferenceService")
+	m.logger.V(1).Info("No URL found for InferenceService")
 	return nil
 }
 
@@ -108,7 +107,7 @@ func (m *Manager) checkInferenceServiceReadiness(is *kservev1beta1.InferenceServ
 	}
 
 	if is.Generation > 0 && is.Status.ObservedGeneration != is.Generation {
-		m.logger.Debug("ObservedGeneration is stale, not ready yet",
+		m.logger.V(1).Info("ObservedGeneration is stale, not ready yet",
 			"observed_generation", is.Status.ObservedGeneration,
 			"expected_generation", is.Generation,
 		)
@@ -116,7 +115,7 @@ func (m *Manager) checkInferenceServiceReadiness(is *kservev1beta1.InferenceServ
 	}
 
 	if len(is.Status.Conditions) == 0 {
-		m.logger.Debug("No conditions found for InferenceService")
+		m.logger.V(1).Info("No conditions found for InferenceService")
 		return false
 	}
 

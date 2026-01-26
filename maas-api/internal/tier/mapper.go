@@ -7,12 +7,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	corelisters "k8s.io/client-go/listers/core/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 // Mapper handles tier-to-group mapping lookups.
@@ -20,13 +20,10 @@ type Mapper struct {
 	tenantName      string
 	namespace       string
 	configMapLister corelisters.ConfigMapLister
-	logger          *logger.Logger
+	logger          logr.Logger
 }
 
-func NewMapper(log *logger.Logger, configMapLister corelisters.ConfigMapLister, tenantName, namespace string) *Mapper {
-	if log == nil {
-		log = logger.Production()
-	}
+func NewMapper(log logr.Logger, configMapLister corelisters.ConfigMapLister, tenantName, namespace string) *Mapper {
 	return &Mapper{
 		tenantName:      tenantName,
 		namespace:       namespace,
@@ -63,9 +60,8 @@ func (m *Mapper) GetTierForGroups(groups ...string) (*Tier, error) {
 		if k8serrors.IsNotFound(err) {
 			return nil, fmt.Errorf("tier mapping not found, provide configuration in %s", constant.TierMappingConfigMap)
 		}
-		m.logger.Error("Failed to load tier configuration from ConfigMap",
+		m.logger.Error(err, "Failed to load tier configuration from ConfigMap",
 			"configmap", constant.TierMappingConfigMap,
-			"error", err,
 		)
 		return nil, fmt.Errorf("failed to load tier configuration: %w", err)
 	}
@@ -102,7 +98,7 @@ func (m *Mapper) loadTierConfig() ([]Tier, error) {
 
 	configData, exists := cm.Data["tiers"]
 	if !exists {
-		m.logger.Warn("Tiers key not found in ConfigMap",
+		m.logger.V(1).Info("Tiers key not found in ConfigMap",
 			"configmap", constant.TierMappingConfigMap,
 		)
 		return nil, errors.New("tier to group mapping configuration not found")

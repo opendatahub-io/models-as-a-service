@@ -65,7 +65,7 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 // Uses the HTTP loopback approach to leverage the gateway's AuthPolicy as the single source of truth.
 func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken string) bool {
 	if model.URL == nil {
-		m.logger.Debug("Model URL is nil, denying access", "modelID", model.ID)
+		m.logger.V(1).Info("Model URL is nil, denying access", "modelID", model.ID)
 		return false
 	}
 
@@ -78,7 +78,7 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 
 	endpoint, errURL := url.JoinPath(model.URL.String(), "/v1/models")
 	if errURL != nil {
-		m.logger.Error("Failed to create endpoint", "modelID", model.ID, "model.URL", model.URL.String(), "errURL", errURL)
+		m.logger.Error(errURL, "Failed to create endpoint", "modelID", model.ID, "model.URL", model.URL.String())
 		return false
 	}
 
@@ -87,7 +87,7 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 		lastResult = m.doAuthCheck(ctx, endpoint, saToken, model.ID)
 		return lastResult != authRetry, nil
 	}); err != nil {
-		m.logger.Debug("Authorization check backoff failed", "modelID", model.ID, "error", err)
+		m.logger.V(1).Info("Authorization check backoff failed", "modelID", model.ID, "error", err)
 		return false // explicit fail-closed on error
 	}
 
@@ -99,7 +99,7 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string) authResult {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authCheckURL, nil)
 	if err != nil {
-		m.logger.Debug("Failed to create authorization request", "modelID", modelID, "error", err)
+		m.logger.V(1).Info("Failed to create authorization request", "modelID", modelID, "error", err)
 		return authRetry
 	}
 
@@ -116,12 +116,12 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 
 	resp, err := client.Do(req)
 	if err != nil {
-		m.logger.Debug("Authorization request failed", "modelID", modelID, "error", err)
+		m.logger.V(1).Info("Authorization request failed", "modelID", modelID, "error", err)
 		return authRetry
 	}
 	defer resp.Body.Close()
 
-	m.logger.Debug("Authorization check response",
+	m.logger.V(1).Info("Authorization check response",
 		"modelID", modelID,
 		"statusCode", resp.StatusCode,
 		"url", authCheckURL,
@@ -137,7 +137,7 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 	case resp.StatusCode == http.StatusNotFound:
 		// 404 means we cannot verify authorization - deny access (fail-closed)
 		// See: https://issues.redhat.com/browse/RHOAIENG-45883
-		m.logger.Debug("Model endpoint returned 404, denying access (cannot verify authorization)", "modelID", modelID)
+		m.logger.V(1).Info("Model endpoint returned 404, denying access (cannot verify authorization)", "modelID", modelID)
 		return authDenied
 
 	case resp.StatusCode == http.StatusMethodNotAllowed:
@@ -145,7 +145,7 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 		// proving it passed AuthorizationPolicies (which would return 401/403).
 		// The 405 indicates the HTTP method isn't enabled on this route/endpoint,
 		// not an authorization failure. Grant access since auth clearly succeeded.
-		m.logger.Debug("Model endpoint returned 405 - method not allowed but auth succeeded",
+		m.logger.V(1).Info("Model endpoint returned 405 - method not allowed but auth succeeded",
 			"modelID", modelID,
 			"url", authCheckURL,
 		)
@@ -153,7 +153,7 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 
 	default:
 		// Retry on server errors (5xx) or other unexpected codes
-		m.logger.Debug("Unexpected status code, retrying",
+		m.logger.V(1).Info("Unexpected status code, retrying",
 			"modelID", modelID,
 			"statusCode", resp.StatusCode,
 		)
@@ -181,7 +181,7 @@ func (m *Manager) llmInferenceServicesToModels(items []*kservev1alpha1.LLMInfere
 	for _, item := range items {
 		url := m.findLLMInferenceServiceURL(item)
 		if url == nil {
-			m.logger.Debug("Failed to find URL for LLMInferenceService",
+			m.logger.V(1).Info("Failed to find URL for LLMInferenceService",
 				"namespace", item.Namespace,
 				"name", item.Name,
 			)
@@ -221,7 +221,7 @@ func (m *Manager) findLLMInferenceServiceURL(llmIsvc *kservev1alpha1.LLMInferenc
 		return llmIsvc.Status.Addresses[0].URL
 	}
 
-	m.logger.Debug("No URL found for LLMInferenceService",
+	m.logger.V(1).Info("No URL found for LLMInferenceService",
 		"namespace", llmIsvc.Namespace,
 		"name", llmIsvc.Name,
 	)
@@ -256,7 +256,7 @@ func (m *Manager) checkLLMInferenceServiceReadiness(llmIsvc *kservev1alpha1.LLMI
 	}
 
 	if llmIsvc.Generation > 0 && llmIsvc.Status.ObservedGeneration != llmIsvc.Generation {
-		m.logger.Debug("ObservedGeneration is stale, not ready yet",
+		m.logger.V(1).Info("ObservedGeneration is stale, not ready yet",
 			"observed_generation", llmIsvc.Status.ObservedGeneration,
 			"expected_generation", llmIsvc.Generation,
 		)
@@ -264,7 +264,7 @@ func (m *Manager) checkLLMInferenceServiceReadiness(llmIsvc *kservev1alpha1.LLMI
 	}
 
 	if len(llmIsvc.Status.Conditions) == 0 {
-		m.logger.Debug("No conditions found for LLMInferenceService",
+		m.logger.V(1).Info("No conditions found for LLMInferenceService",
 			"namespace", llmIsvc.Namespace,
 			"name", llmIsvc.Name,
 		)
@@ -334,7 +334,7 @@ func (m *Manager) hasReferencedRouteAttachedToGateway(llmIsvc *kservev1alpha1.LL
 	for _, routeRef := range llmIsvc.Spec.Router.Route.HTTP.Refs {
 		route, err := m.httpRouteLister.HTTPRoutes(llmIsvc.Namespace).Get(routeRef.Name)
 		if err != nil {
-			m.logger.Debug("HTTPRoute not in cache",
+			m.logger.V(1).Info("HTTPRoute not in cache",
 				"namespace", llmIsvc.Namespace,
 				"name", routeRef.Name,
 				"error", err,
@@ -371,7 +371,7 @@ func (m *Manager) hasManagedRouteAttachedToGateway(llmIsvc *kservev1alpha1.LLMIn
 
 	routes, err := m.httpRouteLister.HTTPRoutes(llmIsvc.Namespace).List(selector)
 	if err != nil {
-		m.logger.Debug("Failed to list HTTPRoutes for LLM",
+		m.logger.V(1).Info("Failed to list HTTPRoutes for LLM",
 			"namespace", llmIsvc.Namespace,
 			"name", llmIsvc.Name,
 			"error", err,
