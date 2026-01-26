@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,7 +20,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	corelistersv1 "k8s.io/client-go/listers/core/v1"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 )
 
@@ -29,11 +29,11 @@ type Manager struct {
 	clientset            kubernetes.Interface
 	namespaceLister      corelistersv1.NamespaceLister
 	serviceAccountLister corelistersv1.ServiceAccountLister
-	logger               *logger.Logger
+	logger               logr.Logger
 }
 
 func NewManager(
-	log *logger.Logger,
+	log logr.Logger,
 	tenantName string,
 	tierMapper *tier.Mapper,
 	clientset kubernetes.Interface,
@@ -52,7 +52,7 @@ func NewManager(
 
 // GenerateToken creates a Service Account token in the namespace bound to the tier the user belongs to.
 func (m *Manager) GenerateToken(ctx context.Context, user *UserContext, expiration time.Duration) (*Token, error) {
-	log := m.logger.WithFields(
+	log := m.logger.WithValues(
 		"expiration", expiration.String(),
 	)
 
@@ -61,8 +61,8 @@ func (m *Manager) GenerateToken(ctx context.Context, user *UserContext, expirati
 		return nil, fmt.Errorf("failed to determine user tier for %s (groups: %v): %w", user.Username, user.Groups, err)
 	}
 
-	log = log.WithFields("tier", userTier.Name)
-	log.Debug("Determined user tier")
+	log = log.WithValues("tier", userTier.Name)
+	log.V(1).Info("Determined user tier")
 
 	namespace, errNs := m.ensureTierNamespace(ctx, userTier.Name)
 	if errNs != nil {
@@ -104,7 +104,7 @@ func (m *Manager) GenerateToken(ctx context.Context, user *UserContext, expirati
 	}
 	issuedAt := iat.Unix()
 
-	log.Debug("Successfully generated token",
+	log.V(1).Info("Successfully generated token",
 		"expires_at", token.Status.ExpirationTimestamp.Unix(),
 		"jti", jti,
 	)
@@ -129,7 +129,7 @@ func (m *Manager) RevokeTokens(ctx context.Context, user *UserContext) error {
 		return fmt.Errorf("failed to determine user tier for %s (groups: %v): %w", user.Username, user.Groups, err)
 	}
 
-	log = log.WithFields("tier", userTier.Name)
+	log = log.WithValues("tier", userTier.Name)
 	namespace, errNS := m.tierMapper.Namespace(userTier.Name)
 	if errNS != nil {
 		return fmt.Errorf("failed to determine namespace for tier %s: %w", userTier.Name, errNS)
@@ -142,7 +142,7 @@ func (m *Manager) RevokeTokens(ctx context.Context, user *UserContext) error {
 
 	_, err = m.serviceAccountLister.ServiceAccounts(namespace).Get(saName)
 	if apierrors.IsNotFound(err) {
-		log.Debug("Service account not found, nothing to revoke")
+		log.V(1).Info("Service account not found, nothing to revoke")
 		return nil
 	}
 
@@ -160,7 +160,7 @@ func (m *Manager) RevokeTokens(ctx context.Context, user *UserContext) error {
 		return fmt.Errorf("failed to recreate service account for user %s in namespace %s: %w", user.Username, namespace, err)
 	}
 
-	log.Debug("Successfully revoked all tokens for user")
+	log.V(1).Info("Successfully revoked all tokens for user")
 	return nil
 }
 
@@ -235,7 +235,7 @@ func (m *Manager) ensureServiceAccount(ctx context.Context, namespace, username,
 		return "", fmt.Errorf("failed to create service account %s in namespace %s: %w", saName, namespace, err)
 	}
 
-	m.logger.Debug("Created service account",
+	m.logger.V(1).Info("Created service account",
 		"tier", userTier,
 	)
 	return saName, nil
@@ -271,7 +271,7 @@ func (m *Manager) deleteServiceAccount(ctx context.Context, namespace, saName st
 		return fmt.Errorf("failed to delete service account %s in namespace %s: %w", saName, namespace, err)
 	}
 
-	m.logger.Debug("Deleted service account")
+	m.logger.V(1).Info("Deleted service account")
 	return nil
 }
 
@@ -331,13 +331,13 @@ func (m *Manager) Audience() string {
 func (m *Manager) HasValidAudience(tokenString string) bool {
 	claims, err := ExtractClaims(tokenString)
 	if err != nil {
-		m.logger.Warn("Failed to extract claims from token", "error", err)
+		m.logger.Error(err, "Failed to extract claims from token")
 		return false
 	}
 
 	aud, err := claims.GetAudience()
 	if err != nil {
-		m.logger.Warn("Failed to get audience from token claims", "error", err)
+		m.logger.Error(err, "Failed to get audience from token claims")
 		return false
 	}
 
@@ -346,6 +346,6 @@ func (m *Manager) HasValidAudience(tokenString string) bool {
 		return true
 	}
 
-	m.logger.Debug("Token audience mismatch", "expected", expected, "actual", aud)
+	m.logger.V(1).Info("Token audience mismatch", "expected", expected, "actual", aud)
 	return false
 }
