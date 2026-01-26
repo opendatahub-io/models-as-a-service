@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
 	"golang.org/x/sync/errgroup"
@@ -22,7 +23,6 @@ import (
 	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 // HTTP client configuration for model discovery.
@@ -45,19 +45,16 @@ type Manager struct {
 	llmIsvcLister   kservelistersv1alpha1.LLMInferenceServiceLister
 	httpRouteLister gatewaylisters.HTTPRouteLister
 	gatewayRef      GatewayRef
-	logger          *logger.Logger
+	logger          logr.Logger
 	httpClient      *http.Client
 }
 
 func NewManager(
-	log *logger.Logger,
+	log logr.Logger,
 	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister,
 	httpRouteLister gatewaylisters.HTTPRouteLister,
 	gatewayRef GatewayRef,
 ) (*Manager, error) {
-	if log == nil {
-		return nil, errors.New("log is required")
-	}
 	if llmIsvcLister == nil {
 		return nil, errors.New("llmIsvcLister is required")
 	}
@@ -141,7 +138,7 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLMInferenceService, saToken string) *Model {
 	addresses := m.getPrioritizedAddresses(llmIsvc)
 	if len(addresses) == 0 {
-		m.logger.Debug("No addresses available for LLMInferenceService",
+		m.logger.V(1).Info("No addresses available for LLMInferenceService",
 			"namespace", llmIsvc.Namespace,
 			"name", llmIsvc.Name,
 		)
@@ -161,7 +158,7 @@ func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLM
 
 		modelsEndpoint, err := url.JoinPath(addr.URL.String(), "/v1/models")
 		if err != nil {
-			m.logger.Debug("Failed to create endpoint URL",
+			m.logger.V(1).Info("Failed to create endpoint URL",
 				"namespace", llmIsvc.Namespace,
 				"name", llmIsvc.Name,
 				"address", addr.URL.String(),
@@ -173,7 +170,7 @@ func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLM
 
 		discoveredModels := m.fetchModelsWithRetry(ctx, saToken, llmIsvcMetadata)
 		if discoveredModels != nil {
-			m.logger.Debug("Successfully discovered models via address",
+			m.logger.V(1).Info("Successfully discovered models via address",
 				"namespace", llmIsvc.Namespace,
 				"name", llmIsvc.Name,
 				"address", addr.URL.String(),
@@ -182,7 +179,7 @@ func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLM
 			return m.enrichModel(discoveredModels, llmIsvcMetadata)
 		}
 
-		m.logger.Debug("Address failed, trying next",
+		m.logger.V(1).Info("Address failed, trying next",
 			"namespace", llmIsvc.Namespace,
 			"name", llmIsvc.Name,
 			"address", addr.URL.String(),
@@ -289,7 +286,7 @@ func (m *Manager) checkLLMInferenceServiceReadiness(llmIsvc *kservev1alpha1.LLMI
 	}
 
 	if llmIsvc.Generation > 0 && llmIsvc.Status.ObservedGeneration != llmIsvc.Generation {
-		m.logger.Debug("ObservedGeneration is stale, not ready yet",
+		m.logger.V(1).Info("ObservedGeneration is stale, not ready yet",
 			"observed_generation", llmIsvc.Status.ObservedGeneration,
 			"expected_generation", llmIsvc.Generation,
 		)
@@ -297,7 +294,7 @@ func (m *Manager) checkLLMInferenceServiceReadiness(llmIsvc *kservev1alpha1.LLMI
 	}
 
 	if len(llmIsvc.Status.Conditions) == 0 {
-		m.logger.Debug("No conditions found for LLMInferenceService",
+		m.logger.V(1).Info("No conditions found for LLMInferenceService",
 			"namespace", llmIsvc.Namespace,
 			"name", llmIsvc.Name,
 		)
@@ -367,7 +364,7 @@ func (m *Manager) hasReferencedRouteAttachedToGateway(llmIsvc *kservev1alpha1.LL
 	for _, routeRef := range llmIsvc.Spec.Router.Route.HTTP.Refs {
 		route, err := m.httpRouteLister.HTTPRoutes(llmIsvc.Namespace).Get(routeRef.Name)
 		if err != nil {
-			m.logger.Debug("HTTPRoute not in cache",
+			m.logger.V(1).Info("HTTPRoute not in cache",
 				"namespace", llmIsvc.Namespace,
 				"name", routeRef.Name,
 				"error", err,
@@ -404,7 +401,7 @@ func (m *Manager) hasManagedRouteAttachedToGateway(llmIsvc *kservev1alpha1.LLMIn
 
 	routes, err := m.httpRouteLister.HTTPRoutes(llmIsvc.Namespace).List(selector)
 	if err != nil {
-		m.logger.Debug("Failed to list HTTPRoutes for LLM",
+		m.logger.V(1).Info("Failed to list HTTPRoutes for LLM",
 			"namespace", llmIsvc.Namespace,
 			"name", llmIsvc.Name,
 			"error", err,
