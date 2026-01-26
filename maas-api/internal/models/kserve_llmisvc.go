@@ -16,6 +16,10 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 )
 
+// maxDiscoveryConcurrency limits parallel HTTP calls during model discovery
+// to avoid overwhelming model servers or hitting rate limits.
+const maxDiscoveryConcurrency = 10
+
 type GatewayRef struct {
 	Name      string
 	Namespace string
@@ -41,7 +45,7 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 	)
 
 	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(10) // bounded concurrency for HTTP calls
+	g.SetLimit(maxDiscoveryConcurrency)
 
 	for _, llmIsvc := range instanceLLMs {
 		g.Go(func() error {

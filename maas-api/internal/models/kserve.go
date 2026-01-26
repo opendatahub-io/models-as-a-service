@@ -19,6 +19,13 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
+// HTTP client configuration for model discovery.
+const (
+	httpClientTimeout   = 5 * time.Second
+	httpMaxIdleConns    = 100
+	httpIdleConnTimeout = 90 * time.Second
+)
+
 type Manager struct {
 	isvcLister      kservelistersv1beta1.InferenceServiceLister
 	llmIsvcLister   kservelistersv1alpha1.LLMInferenceServiceLister
@@ -52,14 +59,14 @@ func NewManager(
 		gatewayRef:      gatewayRef,
 		logger:          log,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: httpClientTimeout,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
 					InsecureSkipVerify: true, //nolint:gosec // To handle custom/self-signed certs we simply skip verification for now
 				},
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
+				MaxIdleConns:        httpMaxIdleConns,
+				MaxIdleConnsPerHost: maxDiscoveryConcurrency, // match goroutine limit
+				IdleConnTimeout:     httpIdleConnTimeout,
 			},
 		},
 	}, nil
