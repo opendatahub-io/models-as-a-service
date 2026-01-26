@@ -2,82 +2,82 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/architecture/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/quickstart/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/limitador-persistence/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/observability/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/storage-configuration/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/group-membership-known-issues/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-access-behavior/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-setup/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tier-concepts/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tier-configuration/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tier-modification-known-issues/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tier-overview/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tls-configuration/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/token-management/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/maas-setup/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/platform-setup/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/prerequisites/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/validation/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/user-guide/self-service-model-access/</loc>
-         <lastmod>2026-01-23</lastmod>
+         <lastmod>2026-01-26</lastmod>
     </url>
 </urlset>
