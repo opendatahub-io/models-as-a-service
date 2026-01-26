@@ -11,16 +11,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/lib/pq"
-
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 // PostgresStore implements MetadataStore using PostgreSQL.
 // It expects the schema to be managed by golang-migrate (see db/schema).
 type PostgresStore struct {
 	db     *sql.DB
-	logger *logger.Logger
+	logger logr.Logger
 }
 
 // Compile-time check that PostgresStore implements MetadataStore.
@@ -28,7 +27,7 @@ var _ MetadataStore = (*PostgresStore)(nil)
 
 // NewPostgresStore creates a new PostgreSQL-backed store.
 // The database connection and schema migration should be handled by the db package.
-func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
+func NewPostgresStore(db *sql.DB, log logr.Logger) *PostgresStore {
 	return &PostgresStore{
 		db:     db,
 		logger: log,
@@ -62,7 +61,7 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, na
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
 
-	s.logger.Debug("Stored API key", "id", keyID, "user", username)
+	s.logger.V(1).Info("Stored API key", "id", keyID, "user", username)
 	return nil
 }
 
@@ -371,7 +370,7 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 			// Auto-update status to expired
 			updateQuery := `UPDATE api_keys SET status = 'expired' WHERE id = $1 AND status = 'active'`
 			if _, err := s.db.ExecContext(ctx, updateQuery, k.ID); err != nil {
-				s.logger.Warn("Failed to update expired key status", "key_id", k.ID, "error", err)
+				s.logger.Info("WARNING: Failed to update expired key status", "key_id", k.ID, "error", err)
 			}
 			k.Status = StatusExpired
 		}

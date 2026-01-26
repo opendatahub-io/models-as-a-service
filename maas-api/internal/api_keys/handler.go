@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
@@ -22,14 +22,11 @@ type AdminChecker interface {
 
 type Handler struct {
 	service      *Service
-	logger       *logger.Logger
+	logger       logr.Logger
 	adminChecker AdminChecker
 }
 
-func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker) *Handler {
-	if log == nil {
-		log = logger.Production()
-	}
+func NewHandler(log logr.Logger, service *Service, adminChecker AdminChecker) *Handler {
 	if adminChecker == nil {
 		panic("adminChecker cannot be nil")
 	}
@@ -178,8 +175,7 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 	// Get paginated results with filters
 	result, err := h.service.List(c.Request.Context(), targetUsername, params, statusFilters)
 	if err != nil {
-		h.logger.Error("Failed to list API keys",
-			"error", err,
+		h.logger.Error(err, "Failed to list API keys",
 			"username", targetUsername,
 			"limit", params.Limit,
 			"offset", params.Offset,
@@ -218,16 +214,14 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 			return
 		}
-		h.logger.Error("Failed to get API key",
-			"error", err,
-		)
+		h.logger.Error(err, "Failed to get API key")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve API key"})
 		return
 	}
 
 	// Check authorization - user must own the key or be admin
 	if !h.isAuthorizedForKey(user, tok.Username) {
-		h.logger.Warn("Unauthorized API key access attempt",
+		h.logger.Info("WARNING: Unauthorized API key access attempt",
 			"requestingUser", user.Username,
 			"keyOwner", tok.Username,
 			"keyId", tokenID,
@@ -276,7 +270,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	// Create key for the authenticated user with their groups
 	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, req.Name, req.Description, expiresIn)
 	if err != nil {
-		h.logger.Error("Failed to create API key", "error", err)
+		h.logger.Error(err, "Failed to create API key")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -309,7 +303,7 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 
 	result, err := h.service.ValidateAPIKey(c.Request.Context(), req.Key)
 	if err != nil {
-		h.logger.Error("API key validation failed", "error", err)
+		h.logger.Error(err, "API key validation failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "validation failed"})
 		return
 	}
@@ -347,14 +341,14 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 			return
 		}
-		h.logger.Error("Failed to get API key for authorization check", "error", err, "keyId", keyID)
+		h.logger.Error(err, "Failed to get API key for authorization check", "keyId", keyID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve API key"})
 		return
 	}
 
 	// Check authorization - user must own the key or be admin
 	if !h.isAuthorizedForKey(user, keyMetadata.Username) {
-		h.logger.Warn("Unauthorized API key revocation attempt",
+		h.logger.Info("WARNING: Unauthorized API key revocation attempt",
 			"requestingUser", user.Username,
 			"keyOwner", keyMetadata.Username,
 			"keyId", keyID,
@@ -370,7 +364,7 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 			return
 		}
-		h.logger.Error("Failed to revoke API key", "error", err, "keyId", keyID)
+		h.logger.Error(err, "Failed to revoke API key", "keyId", keyID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke API key"})
 		return
 	}
@@ -380,7 +374,7 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	// Return the revoked key metadata (per OpenAPI spec)
 	revokedKey, err := h.service.GetAPIKey(c.Request.Context(), keyID)
 	if err != nil {
-		h.logger.Error("Failed to retrieve revoked key", "error", err, "keyId", keyID)
+		h.logger.Error(err, "Failed to retrieve revoked key", "keyId", keyID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Key revoked but failed to retrieve metadata"})
 		return
 	}
@@ -494,8 +488,7 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 		req.Pagination,
 	)
 	if err != nil {
-		h.logger.Error("Failed to search API keys",
-			"error", err,
+		h.logger.Error(err, "Failed to search API keys",
 			"username", targetUsername,
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search API keys"})
@@ -528,7 +521,7 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 
 	// Authorization: users can revoke own keys, admins can revoke any user's keys
 	if req.Username != user.Username && !h.isAdmin(user) {
-		h.logger.Warn("Unauthorized bulk revoke attempt",
+		h.logger.Info("WARNING: Unauthorized bulk revoke attempt",
 			"requestingUser", user.Username,
 			"targetUser", req.Username,
 		)
@@ -541,8 +534,7 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 	// Perform bulk revocation
 	count, err := h.service.BulkRevokeAPIKeys(c.Request.Context(), req.Username)
 	if err != nil {
-		h.logger.Error("Failed to bulk revoke API keys",
-			"error", err,
+		h.logger.Error(err, "Failed to bulk revoke API keys",
 			"targetUser", req.Username,
 			"requestingUser", user.Username,
 		)

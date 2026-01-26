@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/go-logr/zapr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 func createTestStore(t *testing.T) api_keys.MetadataStore {
@@ -44,7 +45,8 @@ func TestStoreValidation(t *testing.T) {
 
 func TestPostgresStoreFromURL(t *testing.T) {
 	ctx := context.Background()
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 
 	t.Run("InvalidURL", func(t *testing.T) {
 		_, err := api_keys.NewPostgresStoreFromURL(ctx, testLogger, "mysql://localhost:3306/db")

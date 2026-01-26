@@ -7,9 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 // Lister provides access to MaaSSubscription resources from an informer cache.
@@ -20,14 +19,11 @@ type Lister interface {
 // Selector handles subscription selection logic.
 type Selector struct {
 	lister Lister
-	logger *logger.Logger
+	logger logr.Logger
 }
 
 // NewSelector creates a new subscription selector.
-func NewSelector(log *logger.Logger, lister Lister) *Selector {
-	if log == nil {
-		log = logger.Production()
-	}
+func NewSelector(log logr.Logger, lister Lister) *Selector {
 	return &Selector{
 		lister: lister,
 		logger: log,
@@ -113,7 +109,7 @@ func (s *Selector) loadSubscriptions() ([]subscription, error) {
 	for _, obj := range objects {
 		sub, err := parseSubscription(obj)
 		if err != nil {
-			s.logger.Warn("Failed to parse subscription, skipping",
+			s.logger.Info("Failed to parse subscription, skipping",
 				"name", obj.GetName(),
 				"namespace", obj.GetNamespace(),
 				"error", err,

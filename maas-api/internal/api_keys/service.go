@@ -8,29 +8,18 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/go-logr/logr"
+
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 type Service struct {
 	store  MetadataStore
-	logger *logger.Logger
+	logger logr.Logger
 	config *config.Config
 }
 
-func NewService(store MetadataStore, cfg *config.Config) *Service {
-	return &Service{
-		store:  store,
-		logger: logger.Production(),
-		config: cfg,
-	}
-}
-
-// NewServiceWithLogger creates a new service with a custom logger (for testing).
-func NewServiceWithLogger(store MetadataStore, cfg *config.Config, log *logger.Logger) *Service {
-	if log == nil {
-		log = logger.Production()
-	}
+func NewService(store MetadataStore, cfg *config.Config, log logr.Logger) *Service {
 	return &Service{
 		store:  store,
 		logger: log,
@@ -168,7 +157,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		// Recover from panics to prevent crashing the entire process
 		defer func() {
 			if r := recover(); r != nil {
-				s.logger.Error("Panic in UpdateLastUsed goroutine", "panic", r, "key_id", metadata.ID)
+				s.logger.Error(fmt.Errorf("panic: %v", r), "Panic in UpdateLastUsed goroutine", "key_id", metadata.ID)
 			}
 		}()
 
@@ -178,7 +167,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 
 		if err := s.store.UpdateLastUsed(ctx, metadata.ID); err != nil {
 			// Log warning but don't fail validation - this is best-effort tracking
-			s.logger.Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
+			s.logger.Info("WARNING: Failed to update last_used_at", "key_id", metadata.ID, "error", err)
 		}
 	}()
 

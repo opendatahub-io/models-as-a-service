@@ -8,16 +8,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
+
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 func createTestService(t *testing.T) (*api_keys.Service, *api_keys.MockStore) {
 	t.Helper()
 	store := api_keys.NewMockStore()
 	cfg := &config.Config{}
-	svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
+	svc := api_keys.NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
 	return svc, store
 }
 
@@ -294,7 +296,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		cfg := &config.Config{
 			APIKeyMaxExpirationDays: 30, // 30 days max
 		}
-		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
+		svc := api_keys.NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
 
 		// Request 7 days - should succeed
 		expiresIn := 7 * 24 * time.Hour
@@ -310,7 +312,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		cfg := &config.Config{
 			APIKeyMaxExpirationDays: 30, // 30 days max
 		}
-		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
+		svc := api_keys.NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
 
 		// Request 60 days - should fail
 		expiresIn := 60 * 24 * time.Hour
@@ -327,7 +329,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		cfg := &config.Config{
 			APIKeyMaxExpirationDays: 30, // 30 days max
 		}
-		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
+		svc := api_keys.NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
 
 		// Request exactly 30 days - should succeed
 		expiresIn := 30 * 24 * time.Hour
@@ -342,7 +344,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		cfg := &config.Config{
 			APIKeyMaxExpirationDays: 30, // 30 days max
 		}
-		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
+		svc := api_keys.NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
 
 		// Request permanent key (nil expiration) - should succeed (max limit only applies to expiring keys)
 		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", nil)

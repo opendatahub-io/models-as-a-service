@@ -6,12 +6,12 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/env"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 const (
@@ -153,10 +153,10 @@ func (c *Config) handleDeprecatedFlags() {
 }
 
 // PrintDeprecationWarnings prints warnings for deprecated flags to stderr.
-func (c *Config) PrintDeprecationWarnings(log *logger.Logger) {
+func (c *Config) PrintDeprecationWarnings(log logr.Logger) {
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "port" {
-			log.Warn("WARNING: --port is deprecated, use --address with --secure=false to serve insecure HTTP traffic")
+			log.Info("WARNING: --port is deprecated, use --address with --secure=false to serve insecure HTTP traffic")
 		}
 	})
 }

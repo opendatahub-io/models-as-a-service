@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,12 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/openai/openai-go/v2"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"knative.dev/pkg/apis"
-
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 type authResult int
@@ -40,16 +38,13 @@ const (
 
 // Manager runs access validation (probe model endpoints) for models listed from MaaSModelRef.
 type Manager struct {
-	logger     *logger.Logger
+	logger     logr.Logger
 	httpClient *http.Client
 }
 
 // NewManager creates a Manager for filtering models by access. The client uses InsecureSkipVerify
 // for cluster-internal probes; auth is enforced by the gateway/model server.
-func NewManager(log *logger.Logger) (*Manager, error) {
-	if log == nil {
-		return nil, errors.New("log is required")
-	}
+func NewManager(log logr.Logger) (*Manager, error) {
 	return &Manager{
 		logger: log,
 		httpClient: &http.Client{
@@ -71,7 +66,7 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 	if len(models) == 0 {
 		return models
 	}
-	m.logger.Debug("FilterModelsByAccess: validating access for models", "count", len(models), "subscriptionHeaderProvided", subscriptionHeader != "")
+	m.logger.V(1).Info("FilterModelsByAccess: validating access for models", "count", len(models), "subscriptionHeaderProvided", subscriptionHeader != "")
 	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null when no models are accessible
 	out := []Model{}
 	var mu sync.Mutex
@@ -80,12 +75,12 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 	for i := range models {
 		model := models[i]
 		if model.URL == nil {
-			m.logger.Debug("FilterModelsByAccess: skipping model with no URL", "id", model.ID)
+			m.logger.V(1).Info("FilterModelsByAccess: skipping model with no URL", "id", model.ID)
 			continue
 		}
 		modelsEndpoint, err := url.JoinPath(model.URL.String(), "v1", "models")
 		if err != nil {
-			m.logger.Debug("FilterModelsByAccess: failed to build endpoint", "id", model.ID, "error", err)
+			m.logger.V(1).Info("FilterModelsByAccess: failed to build endpoint", "id", model.ID, "error", err)
 			continue
 		}
 		kind := model.Kind
@@ -110,16 +105,16 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 				out = append(out, converted...)
 				mu.Unlock()
 				for _, c := range converted {
-					m.logger.Debug("FilterModelsByAccess: access granted", "model", c.ID, "endpoint", modelsEndpoint)
+					m.logger.V(1).Info("FilterModelsByAccess: access granted", "model", c.ID, "endpoint", modelsEndpoint)
 				}
 			} else {
-				m.logger.Debug("FilterModelsByAccess: access denied or unreachable", "model", model.ID, "endpoint", modelsEndpoint)
+				m.logger.V(1).Info("FilterModelsByAccess: access denied or unreachable", "model", model.ID, "endpoint", modelsEndpoint)
 			}
 			return nil
 		})
 	}
 	_ = g.Wait()
-	m.logger.Debug("FilterModelsByAccess: complete", "input", len(models), "accessible", len(out))
+	m.logger.V(1).Info("FilterModelsByAccess: complete", "input", len(models), "accessible", len(out))
 	return out
 }
 
@@ -183,7 +178,7 @@ type modelMetadata struct {
 }
 
 func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, subscriptionHeader string, meta modelMetadata) []openai.Model {
-	m.logger.Debug("Validating access: probing model endpoint",
+	m.logger.V(1).Info("Validating access: probing model endpoint",
 		"service", meta.ServiceName,
 		"endpoint", meta.Endpoint,
 		"kind", meta.Kind,
@@ -209,22 +204,22 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, s
 		lastResult = authRes
 		return lastResult != authRetry, nil
 	}); err != nil {
-		m.logger.Debug("Access validation failed: model fetch backoff exhausted", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
+		m.logger.V(1).Info("Access validation failed: model fetch backoff exhausted", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
 		return nil // explicit fail-closed on error
 	}
 
 	if lastResult != authGranted {
-		m.logger.Debug("Access validation denied for model", "service", meta.ServiceName, "endpoint", meta.Endpoint)
+		m.logger.V(1).Info("Access validation denied for model", "service", meta.ServiceName, "endpoint", meta.Endpoint)
 		return nil
 	}
-	m.logger.Debug("Access validation granted for model", "service", meta.ServiceName, "endpoint", meta.Endpoint)
+	m.logger.V(1).Info("Access validation granted for model", "service", meta.ServiceName, "endpoint", meta.Endpoint)
 	return result
 }
 
 func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscriptionHeader string, meta modelMetadata) ([]openai.Model, authResult) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, meta.Endpoint, nil)
 	if err != nil {
-		m.logger.Debug("Access validation: failed to create GET request", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
+		m.logger.V(1).Info("Access validation: failed to create GET request", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
 		return nil, authRetry
 	}
 
@@ -236,12 +231,12 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 	// #nosec G704 -- Intentional HTTP request to probe model endpoint for authorization check
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		m.logger.Debug("Access validation: GET request failed", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
+		m.logger.V(1).Info("Access validation: GET request failed", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
 		return nil, authRetry
 	}
 	defer resp.Body.Close()
 
-	m.logger.Debug("Access validation: model endpoint response",
+	m.logger.V(1).Info("Access validation: model endpoint response",
 		"service", meta.ServiceName,
 		"endpoint", meta.Endpoint,
 		"statusCode", resp.StatusCode,
@@ -251,7 +246,7 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		if len(body) > 0 {
-			m.logger.Debug("Access validation: auth failure response body", "service", meta.ServiceName, "endpoint", meta.Endpoint, "bodyPreview", string(body))
+			m.logger.V(1).Info("Access validation: auth failure response body", "service", meta.ServiceName, "endpoint", meta.Endpoint, "bodyPreview", string(body))
 		}
 	}
 
@@ -259,19 +254,19 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		models, parseErr := m.parseModelsResponse(resp.Body, meta)
 		if parseErr != nil {
-			m.logger.Debug("Failed to parse models response", "service", meta.ServiceName, "error", parseErr)
+			m.logger.V(1).Info("Failed to parse models response", "service", meta.ServiceName, "error", parseErr)
 			return nil, authRetry
 		}
 		return models, authGranted
 
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		m.logger.Debug("Access validation: endpoint returned auth failure", "service", meta.ServiceName, "endpoint", meta.Endpoint, "statusCode", resp.StatusCode)
+		m.logger.V(1).Info("Access validation: endpoint returned auth failure", "service", meta.ServiceName, "endpoint", meta.Endpoint, "statusCode", resp.StatusCode)
 		return nil, authDenied
 
 	case resp.StatusCode == http.StatusNotFound:
 		// 404 means we cannot verify authorization - deny access (fail-closed)
 		// See: https://issues.redhat.com/browse/RHOAIENG-45883
-		m.logger.Debug("Access validation: endpoint returned 404, denying access (cannot verify authorization)", "service", meta.ServiceName, "endpoint", meta.Endpoint)
+		m.logger.V(1).Info("Access validation: endpoint returned 404, denying access (cannot verify authorization)", "service", meta.ServiceName, "endpoint", meta.Endpoint)
 		return nil, authDenied
 
 	case resp.StatusCode == http.StatusMethodNotAllowed:
@@ -279,7 +274,7 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 		// proving it passed AuthorizationPolicies (which would return 401/403).
 		// The 405 indicates the HTTP method isn't enabled on this route/endpoint,
 		// not an authorization failure.
-		m.logger.Debug("Model endpoint returned 405 - auth succeeded, using model name as fallback ID",
+		m.logger.V(1).Info("Model endpoint returned 405 - auth succeeded, using model name as fallback ID",
 			"service", meta.ServiceName,
 			"modelName", meta.ModelName,
 			"endpoint", meta.Endpoint,
@@ -291,7 +286,7 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 
 	default:
 		// Retry on server errors (5xx) or other unexpected codes
-		m.logger.Debug("Access validation: unexpected status code, will retry",
+		m.logger.V(1).Info("Access validation: unexpected status code, will retry",
 			"service", meta.ServiceName,
 			"endpoint", meta.Endpoint,
 			"statusCode", resp.StatusCode,
@@ -318,7 +313,7 @@ func (m *Manager) parseModelsResponse(body io.Reader, meta modelMetadata) ([]ope
 		return nil, fmt.Errorf("service %s (%s): failed to unmarshal models response: %w", meta.ServiceName, meta.Endpoint, err)
 	}
 
-	m.logger.Debug("Discovered models from service",
+	m.logger.V(1).Info("Discovered models from service",
 		"service", meta.ServiceName,
 		"endpoint", meta.Endpoint,
 		"modelCount", len(response.Data),

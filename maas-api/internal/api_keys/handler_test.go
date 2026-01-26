@@ -15,8 +15,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
+
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
@@ -93,8 +95,8 @@ func TestSearchAPIKeys_EmptyRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	testUser := &token.UserContext{
 		Username: "test-user",
@@ -139,8 +141,8 @@ func TestSearchAPIKeys_Pagination(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	testUser := &token.UserContext{
 		Username: "test-user",
@@ -243,8 +245,8 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	ctx := context.Background()
 	testUser := &token.UserContext{
@@ -369,8 +371,8 @@ func TestSearchAPIKeys_Sorting(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	ctx := context.Background()
 	testUser := &token.UserContext{
@@ -494,8 +496,8 @@ func TestSearchAPIKeys_AdminVsRegularUser(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	ctx := context.Background()
 
@@ -614,8 +616,8 @@ func TestSearchAPIKeys_AdminFiltersByUsernameAndStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	ctx := context.Background()
 
@@ -697,8 +699,8 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	ctx := context.Background()
 
@@ -851,8 +853,8 @@ func TestUserCanCreateOwnKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	regularUser := &token.UserContext{
 		Username: "alice",
@@ -890,8 +892,8 @@ func TestGetAPIKeyHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	// Create test keys for alice and bob
 	aliceKey := &ApiKey{
@@ -1011,8 +1013,8 @@ func testRevokeKeySuccess(t *testing.T, user *token.UserContext) {
 	t.Helper()
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+	service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+	handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 	// Create alice's key
 	err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
@@ -1054,8 +1056,8 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 	t.Run("RegularUserCannotRevokeOthersKey_IDOR_Protection", func(t *testing.T) {
 		store := NewMockStore()
 		cfg := &config.Config{}
-		service := NewServiceWithLogger(store, cfg, logger.Development())
-		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+		service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+		handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 		// Create alice's key
 		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
@@ -1099,8 +1101,8 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 	t.Run("NonExistentKeyReturns404", func(t *testing.T) {
 		store := NewMockStore()
 		cfg := &config.Config{}
-		service := NewServiceWithLogger(store, cfg, logger.Development())
-		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+		service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+		handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 		aliceUser := &token.UserContext{
 			Username: "alice",
@@ -1121,8 +1123,8 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 	t.Run("CannotRevokeAlreadyRevokedKey", func(t *testing.T) {
 		store := NewMockStore()
 		cfg := &config.Config{}
-		service := NewServiceWithLogger(store, cfg, logger.Development())
-		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+		service := NewService(store, cfg, zapr.NewLogger(zap.NewExample()))
+		handler := NewHandler(zapr.NewLogger(zap.NewExample()), service, newMockAdminChecker())
 
 		// Create and immediately revoke alice's key
 		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)

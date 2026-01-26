@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
@@ -38,9 +39,10 @@ func serve() error {
 	cfg := config.Load()
 	flag.Parse()
 
-	log := logger.New(cfg.DebugMode)
+	baseLogger, log := logger.New(cfg.DebugMode)
+
 	defer func() {
-		if err := log.Sync(); err != nil {
+		if err := baseLogger.Sync(); err != nil {
 			// Can't use logger if sync failed
 			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
 		}
@@ -74,7 +76,7 @@ func serve() error {
 
 	router := gin.Default()
 	if cfg.DebugMode {
-		log.Warn("Debug CORS policy active: allowing localhost origins only")
+		log.Info("WARNING: Debug CORS policy active: allowing localhost origins only")
 		router.Use(cors.New(debugCORSConfig()))
 	}
 
@@ -86,7 +88,7 @@ func serve() error {
 	}
 	defer func() {
 		if err := store.Close(); err != nil {
-			log.Error("Failed to close token store", "error", err)
+			log.Error(err, "Failed to close token store")
 		}
 	}()
 
@@ -133,12 +135,12 @@ func serve() error {
 // DBConnectionURL is validated in cfg.Validate() before this is called.
 //
 //nolint:ireturn // Returns MetadataStore interface by design.
-func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
+func initStore(ctx context.Context, log logr.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
 	log.Info("Connecting to PostgreSQL database...")
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL)
 }
 
-func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
+func registerHandlers(ctx context.Context, log logr.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
 
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
@@ -154,14 +156,14 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	modelManager, err := models.NewManager(log)
 	if err != nil {
-		log.Fatal("Failed to create model manager", "error", err)
+		return fmt.Errorf("failed to create model manager: %w", err)
 	}
 
 	tokenHandler := token.NewHandler(log, cfg.Name)
 
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister)
 
-	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, log)
+	apiKeyService := api_keys.NewService(store, cfg, log)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)

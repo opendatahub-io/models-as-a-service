@@ -14,8 +14,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
 	"k8s.io/utils/env"
 
+	"github.com/go-logr/logr"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/db/schema"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 const (
@@ -27,7 +27,7 @@ const (
 // NewPostgresStoreFromURL creates a PostgreSQL store from a connection URL.
 // It automatically applies database schema migrations on startup using golang-migrate.
 // URL format: postgresql://user:password@host:port/database
-func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseURL string) (*PostgresStore, error) {
+func NewPostgresStoreFromURL(ctx context.Context, log logr.Logger, databaseURL string) (*PostgresStore, error) {
 	databaseURL = strings.TrimSpace(databaseURL)
 
 	if !strings.HasPrefix(databaseURL, "postgresql://") && !strings.HasPrefix(databaseURL, "postgres://") {
@@ -59,7 +59,7 @@ func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseUR
 }
 
 // runMigrations applies database schema migrations using golang-migrate.
-func runMigrations(db *sql.DB, log *logger.Logger) error {
+func runMigrations(db *sql.DB, log logr.Logger) error {
 	// Create migration source from embedded schema files
 	source, err := iofs.New(schema.FS, ".")
 	if err != nil {
@@ -85,7 +85,7 @@ func runMigrations(db *sql.DB, log *logger.Logger) error {
 
 	version, dirty, _ := m.Version()
 	if dirty {
-		log.Warn("Database schema is in dirty state", "version", version)
+		log.Info("WARNING: Database schema is in dirty state", "version", version)
 	} else {
 		log.Info("Database schema applied", "version", version)
 	}

@@ -9,9 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/zapr"
 	"github.com/openai/openai-go/v2/packages/pagination"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,7 +22,6 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -178,7 +179,8 @@ func createMockModelServerWithSubscriptionCheck(t *testing.T, modelID string, re
 }
 
 func TestListingModels(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	strptr := func(s string) *string { return &s }
 
 	const (
@@ -399,7 +401,7 @@ func mustParseURL(rawURL string) *apis.URL {
 }
 
 func TestListingModelsWithSubscriptionHeader(t *testing.T) {
-	testLogger := logger.Development()
+	testLogger := zapr.NewLogger(zap.NewExample())
 
 	// Create mock servers that require specific subscription headers
 	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "premium")

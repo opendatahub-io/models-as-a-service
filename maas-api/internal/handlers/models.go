@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
 	"github.com/openai/openai-go/v2/packages/pagination"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -18,21 +18,18 @@ import (
 type ModelsHandler struct {
 	modelMgr             *models.Manager
 	subscriptionSelector *subscription.Selector
-	logger               *logger.Logger
+	logger               logr.Logger
 	maasModelRefLister   models.MaaSModelRefLister
 }
 
 // NewModelsHandler creates a new models handler.
 // GET /v1/models lists models from the MaaSModelRef lister when set; otherwise the list is empty.
 func NewModelsHandler(
-	log *logger.Logger,
+	log logr.Logger,
 	modelMgr *models.Manager,
 	subscriptionSelector *subscription.Selector,
 	maasModelRefLister models.MaaSModelRefLister,
 ) *ModelsHandler {
-	if log == nil {
-		log = logger.Production()
-	}
 	return &ModelsHandler{
 		modelMgr:             modelMgr,
 		subscriptionSelector: subscriptionSelector,
@@ -46,7 +43,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	// Require Authorization header and pass it through as-is to list and access validation.
 	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 	if authHeader == "" {
-		h.logger.Error("Authorization header missing")
+		h.logger.Error(nil, "Authorization header missing")
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": gin.H{
 				"message": "Authorization required",
@@ -67,7 +64,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		// Only needed when subscription selector is configured
 		userContextVal, exists := c.Get("user")
 		if !exists {
-			h.logger.Error("User context not found - ExtractUserInfo middleware not called")
+			h.logger.Error(nil, "User context not found - ExtractUserInfo middleware not called")
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": gin.H{
 					"message": "Internal server error",
@@ -77,7 +74,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		}
 		userContext, ok := userContextVal.(*token.UserContext)
 		if !ok {
-			h.logger.Error("Invalid user context type")
+			h.logger.Error(nil, "Invalid user context type")
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": gin.H{
 					"message": "Internal server error",
@@ -96,7 +93,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			// For consistency with inferencing (which uses Authorino and returns 403 for all
 			// subscription errors), we return 403 Forbidden for all subscription-related errors.
 			if errors.As(err, &multipleSubsErr) {
-				h.logger.Debug("User has multiple subscriptions, x-maas-subscription header required",
+				h.logger.V(1).Info("User has multiple subscriptions, x-maas-subscription header required",
 					"subscriptionCount", len(multipleSubsErr.Subscriptions),
 				)
 				c.JSON(http.StatusForbidden, gin.H{
@@ -108,7 +105,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 
 			if errors.As(err, &accessDeniedErr) {
-				h.logger.Debug("Access denied to subscription")
+				h.logger.V(1).Info("Access denied to subscription")
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{
 						"message": err.Error(),
@@ -118,7 +115,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 
 			if errors.As(err, &notFoundErr) {
-				h.logger.Debug("Subscription not found")
+				h.logger.V(1).Info("Subscription not found")
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{
 						"message": err.Error(),
@@ -128,7 +125,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 
 			if errors.As(err, &noSubErr) {
-				h.logger.Debug("No subscription found for user")
+				h.logger.V(1).Info("No subscription found for user")
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{
 						"message": err.Error(),
@@ -138,9 +135,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 
 			// Other errors are internal server errors
-			h.logger.Error("Subscription selection failed",
-				"error", err,
-			)
+			h.logger.Error(err, "Subscription selection failed")
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": gin.H{
 					"message": "Failed to select subscription",
@@ -158,10 +153,10 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null
 	modelList := []models.Model{}
 	if h.maasModelRefLister != nil {
-		h.logger.Debug("Listing models from MaaSModelRef cache (all namespaces)")
+		h.logger.V(1).Info("Listing models from MaaSModelRef cache (all namespaces)")
 		list, err := models.ListFromMaaSModelRefLister(h.maasModelRefLister)
 		if err != nil {
-			h.logger.Error("Listing from MaaSModelRef failed", "error", err)
+			h.logger.Error(err, "Listing from MaaSModelRef failed")
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": gin.H{
 					"message": "Failed to list models",
@@ -169,14 +164,15 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 				}})
 			return
 		}
-		h.logger.Debug("MaaSModelRef list succeeded, validating access by probing each model endpoint", "modelCount", len(list), "subscriptionHeaderProvided", selectedSubscription != "")
+		h.logger.V(1).Info("MaaSModelRef list succeeded, validating access by probing each model endpoint",
+			"modelCount", len(list), "subscriptionHeaderProvided", selectedSubscription != "")
 		modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, selectedSubscription)
-		h.logger.Debug("Access validation complete", "listed", len(list), "accessible", len(modelList))
+		h.logger.V(1).Info("Access validation complete", "listed", len(list), "accessible", len(modelList))
 	} else {
-		h.logger.Debug("MaaSModelRef lister not configured, returning empty model list")
+		h.logger.V(1).Info("MaaSModelRef lister not configured, returning empty model list")
 	}
 
-	h.logger.Debug("GET /v1/models returning models", "count", len(modelList))
+	h.logger.V(1).Info("GET /v1/models returning models", "count", len(modelList))
 	c.JSON(http.StatusOK, pagination.Page[models.Model]{
 		Object: "list",
 		Data:   modelList,
