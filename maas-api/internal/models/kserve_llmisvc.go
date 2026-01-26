@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
@@ -13,13 +15,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/utils/ptr"
 	"knative.dev/pkg/apis"
+	duckv1 "knative.dev/pkg/apis/duck/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 )
 
-// authResult represents the outcome of an authorization check attempt.
 type authResult int
 
 const (
@@ -28,12 +31,25 @@ const (
 	authRetry
 )
 
+const (
+	authCheckTimeout  = 3 * time.Second
+	authCheckEndpoint = "/v1/chat/completions"
+)
+
 type GatewayRef struct {
 	Name      string
 	Namespace string
 }
 
-// ListAvailableLLMs lists LLM models that the user has access to based on authorization checks.
+// accessibleLLM pairs an LLMInferenceService with its accessible URL.
+type accessibleLLM struct {
+	llmIsvc *kservev1alpha1.LLMInferenceService
+	url     *apis.URL
+}
+
+// ListAvailableLLMs lists LLM models that the user has access to.
+// Addresses are checked in priority order: external gateways first, then internal.
+// The returned model URL is the address that was actually accessible.
 func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Model, error) {
 	list, err := m.llmIsvcLister.List(labels.Everything())
 	if err != nil {
@@ -47,27 +63,35 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 		}
 	}
 
-	// Convert to models first, then filter based on authorization
-	allModels := m.llmInferenceServicesToModels(instanceLLMs)
-
-	// Filter models based on user authorization
-	var authorizedModels []Model
-	for _, model := range allModels {
-		if m.userCanAccessModel(ctx, model, saToken) {
-			authorizedModels = append(authorizedModels, model)
+	var authorized []accessibleLLM
+	for _, llmIsvc := range instanceLLMs {
+		if addr := m.getAccessibleAddress(ctx, llmIsvc, saToken); addr != nil {
+			authorized = append(authorized, accessibleLLM{llmIsvc: llmIsvc, url: addr.URL})
 		}
 	}
 
-	return authorizedModels, nil
+	return m.toModels(authorized), nil
 }
 
-// userCanAccessModel checks if the user can access a specific model by making an authorization request.
-// Uses the HTTP loopback approach to leverage the gateway's AuthPolicy as the single source of truth.
-func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken string) bool {
-	if model.URL == nil {
-		m.logger.Debug("Model URL is nil, denying access", "modelID", model.ID)
-		return false
+func (m *Manager) extractModelID(llmIsvc *kservev1alpha1.LLMInferenceService) string {
+	if llmIsvc.Spec.Model.Name != nil && *llmIsvc.Spec.Model.Name != "" {
+		return *llmIsvc.Spec.Model.Name
 	}
+	return llmIsvc.Name
+}
+
+// getAccessibleAddress returns the first accessible address for the LLMInferenceService, or nil if none.
+func (m *Manager) getAccessibleAddress(ctx context.Context, llmIsvc *kservev1alpha1.LLMInferenceService, saToken string) *duckv1.Addressable {
+	addresses := m.getPrioritizedAddresses(llmIsvc)
+	if len(addresses) == 0 {
+		m.logger.Debug("No addresses available for LLMInferenceService",
+			"namespace", llmIsvc.Namespace,
+			"name", llmIsvc.Name,
+		)
+		return nil
+	}
+
+	modelID := m.extractModelID(llmIsvc)
 
 	backoff := wait.Backoff{
 		Steps:    4,
@@ -76,37 +100,79 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 		Jitter:   0.1,
 	}
 
-	endpoint, errURL := url.JoinPath(model.URL.String(), "/v1/models")
-	if errURL != nil {
-		m.logger.Error("Failed to create endpoint", "modelID", model.ID, "model.URL", model.URL.String(), "errURL", errURL)
-		return false
-	}
-
-	lastResult := authDenied // fail-closed by default
+	var accessibleAddr *duckv1.Addressable
+	var lastResult authResult
 	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		lastResult = m.doAuthCheck(ctx, endpoint, saToken, model.ID)
+		lastResult, accessibleAddr = m.tryAuthWithAddresses(ctx, addresses, saToken, modelID)
 		return lastResult != authRetry, nil
 	}); err != nil {
-		m.logger.Debug("Authorization check backoff failed", "modelID", model.ID, "error", err)
-		return false // explicit fail-closed on error
+		m.logger.Debug("Authorization check backoff failed",
+			"namespace", llmIsvc.Namespace,
+			"name", llmIsvc.Name,
+			"error", err,
+		)
+		return nil
 	}
 
-	return lastResult == authGranted
+	return accessibleAddr
 }
 
-// doAuthCheck performs a single authorization check attempt.
-// Uses GET /v1/models as it's a standard OpenAI-compatible endpoint supported by all inference servers.
-func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string) authResult {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authCheckURL, nil)
+// tryAuthWithAddresses tries all addresses and returns granted if ANY succeeds.
+// This is important for multi-tenant scenarios where different gateways have different AuthPolicies -
+// a token denied by one gateway might be authorized by another.
+func (m *Manager) tryAuthWithAddresses(ctx context.Context, addresses []duckv1.Addressable, saToken, modelID string) (authResult, *duckv1.Addressable) {
+	var hasRetryableFailure bool
+
+	for i := range addresses {
+		addr := &addresses[i]
+		if addr.URL == nil {
+			continue
+		}
+
+		endpoint, err := url.JoinPath(addr.URL.String(), authCheckEndpoint)
+		if err != nil {
+			m.logger.Debug("Failed to create endpoint",
+				"modelID", modelID,
+				"url", addr.URL.String(),
+				"error", err,
+			)
+			continue
+		}
+
+		switch m.doAuthCheck(ctx, endpoint, saToken, modelID, addr.Name) {
+		case authGranted:
+			return authGranted, addr
+		case authRetry:
+			hasRetryableFailure = true
+		case authDenied:
+			m.logger.Debug("Address denied, trying next",
+				"modelID", modelID,
+				"address", addr.URL.String(),
+			)
+			continue
+		}
+	}
+
+	if hasRetryableFailure {
+		return authRetry, nil
+	}
+	return authDenied, nil
+}
+
+func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string, addressName *string) authResult {
+	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, authCheckURL, nil)
 	if err != nil {
-		m.logger.Debug("Failed to create authorization request", "modelID", modelID, "error", err)
+		m.logger.Debug("Failed to create authorization request",
+			"modelID", modelID,
+			"error", err,
+		)
 		return authRetry
 	}
 
 	req.Header.Set("Authorization", "Bearer "+saToken)
 
 	client := &http.Client{
-		Timeout: 3 * time.Second,
+		Timeout: authCheckTimeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true, //nolint:gosec // To handle custom/self-signed certs we simply skip verification for now
@@ -116,7 +182,12 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 
 	resp, err := client.Do(req)
 	if err != nil {
-		m.logger.Debug("Authorization request failed", "modelID", modelID, "error", err)
+		m.logger.Debug("Authorization request failed",
+			"modelID", modelID,
+			"url", authCheckURL,
+			"addressName", ptr.Deref(addressName, ""),
+			"error", err,
+		)
 		return authRetry
 	}
 	defer resp.Body.Close()
@@ -125,6 +196,7 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 		"modelID", modelID,
 		"statusCode", resp.StatusCode,
 		"url", authCheckURL,
+		"addressName", ptr.Deref(addressName, ""),
 	)
 
 	switch {
@@ -137,27 +209,69 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 	case resp.StatusCode == http.StatusNotFound:
 		// 404 means we cannot verify authorization - deny access (fail-closed)
 		// See: https://issues.redhat.com/browse/RHOAIENG-45883
-		m.logger.Debug("Model endpoint returned 404, denying access (cannot verify authorization)", "modelID", modelID)
+		m.logger.Debug("Model endpoint returned 404, denying access (cannot verify authorization)",
+			"modelID", modelID,
+			"addressName", ptr.Deref(addressName, ""),
+		)
 		return authDenied
 
 	case resp.StatusCode == http.StatusMethodNotAllowed:
-		// 405 Method Not Allowed means the request reached the gateway or model server,
-		// proving it passed AuthorizationPolicies (which would return 401/403).
-		// The 405 indicates the HTTP method isn't enabled on this route/endpoint,
-		// not an authorization failure. Grant access since auth clearly succeeded.
-		m.logger.Debug("Model endpoint returned 405 - method not allowed but auth succeeded",
+		// 405 Method Not Allowed - this should not happen, something is misconfigured
+		// Deny access as we cannot verify authorization
+		m.logger.Debug("UNEXPECTED: Model endpoint returned 405 Method Not Allowed - this indicates a configuration issue. "+
+			"OPTIONS requests should be supported by the gateway. Denying access as authorization cannot be verified",
 			"modelID", modelID,
+			"statusCode", resp.StatusCode,
 			"url", authCheckURL,
+			"addressName", ptr.Deref(addressName, ""),
 		)
-		return authGranted
+		return authDenied
 
 	default:
-		// Retry on server errors (5xx) or other unexpected codes
 		m.logger.Debug("Unexpected status code, retrying",
 			"modelID", modelID,
 			"statusCode", resp.StatusCode,
+			"addressName", ptr.Deref(addressName, ""),
 		)
 		return authRetry
+	}
+}
+
+// getPrioritizedAddresses returns addresses sorted by priority: external > internal > others.
+// status.URL is always appended last as a best-effort fallback.
+func (m *Manager) getPrioritizedAddresses(llmIsvc *kservev1alpha1.LLMInferenceService) []duckv1.Addressable {
+	var addresses []duckv1.Addressable
+
+	addresses = append(addresses, llmIsvc.Status.Addresses...)
+
+	if len(addresses) == 0 && llmIsvc.Status.Address != nil && llmIsvc.Status.Address.URL != nil {
+		addresses = append(addresses, *llmIsvc.Status.Address)
+	}
+
+	slices.SortStableFunc(addresses, func(a, b duckv1.Addressable) int {
+		return addressPriority(a) - addressPriority(b)
+	})
+
+	if llmIsvc.Status.URL != nil {
+		addresses = append(addresses, duckv1.Addressable{URL: llmIsvc.Status.URL})
+	}
+
+	return addresses
+}
+
+func addressPriority(addr duckv1.Addressable) int {
+	name := ""
+	if addr.Name != nil {
+		name = strings.ToLower(*addr.Name)
+	}
+
+	switch {
+	case strings.Contains(name, "external"):
+		return 0
+	case strings.Contains(name, "internal"):
+		return 1
+	default:
+		return 2
 	}
 }
 
@@ -175,57 +289,24 @@ func (m *Manager) partOfMaaSInstance(llmIsvc *kservev1alpha1.LLMInferenceService
 		m.hasManagedRouteAttachedToGateway(llmIsvc)
 }
 
-func (m *Manager) llmInferenceServicesToModels(items []*kservev1alpha1.LLMInferenceService) []Model {
+func (m *Manager) toModels(items []accessibleLLM) []Model {
 	models := make([]Model, 0, len(items))
 
 	for _, item := range items {
-		url := m.findLLMInferenceServiceURL(item)
-		if url == nil {
-			m.logger.Debug("Failed to find URL for LLMInferenceService",
-				"namespace", item.Namespace,
-				"name", item.Name,
-			)
-		}
-
-		modelID := item.Name
-		if item.Spec.Model.Name != nil && *item.Spec.Model.Name != "" {
-			modelID = *item.Spec.Model.Name
-		}
-
 		models = append(models, Model{
 			Model: openai.Model{
-				ID:      modelID,
+				ID:      m.extractModelID(item.llmIsvc),
 				Object:  "model",
-				OwnedBy: item.Namespace,
-				Created: item.CreationTimestamp.Unix(),
+				OwnedBy: item.llmIsvc.Namespace,
+				Created: item.llmIsvc.CreationTimestamp.Unix(),
 			},
-			URL:     url,
-			Ready:   m.checkLLMInferenceServiceReadiness(item),
-			Details: m.extractModelDetails(item),
+			URL:     item.url,
+			Ready:   m.checkLLMInferenceServiceReadiness(item.llmIsvc),
+			Details: m.extractModelDetails(item.llmIsvc),
 		})
 	}
 
 	return models
-}
-
-func (m *Manager) findLLMInferenceServiceURL(llmIsvc *kservev1alpha1.LLMInferenceService) *apis.URL {
-	if llmIsvc.Status.URL != nil {
-		return llmIsvc.Status.URL
-	}
-
-	if llmIsvc.Status.Address != nil && llmIsvc.Status.Address.URL != nil {
-		return llmIsvc.Status.Address.URL
-	}
-
-	if len(llmIsvc.Status.Addresses) > 0 {
-		return llmIsvc.Status.Addresses[0].URL
-	}
-
-	m.logger.Debug("No URL found for LLMInferenceService",
-		"namespace", llmIsvc.Namespace,
-		"name", llmIsvc.Name,
-	)
-	return nil
 }
 
 func (m *Manager) extractModelDetails(llmIsvc *kservev1alpha1.LLMInferenceService) *Details {
@@ -238,7 +319,6 @@ func (m *Manager) extractModelDetails(llmIsvc *kservev1alpha1.LLMInferenceServic
 	description := annotations[constant.AnnotationDescription]
 	displayName := annotations[constant.AnnotationDisplayName]
 
-	// Only return Details if at least one field is populated
 	if genaiUseCase == "" && description == "" && displayName == "" {
 		return nil
 	}
