@@ -5,15 +5,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-logr/zapr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/apis"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
@@ -36,7 +37,8 @@ func mustParseURL(rawURL string) *apis.URL {
 // TestListAvailableLLMs_AlwaysAllowed tests gateway/route matching logic
 // by using a mock server that always returns 200 (authorized).
 func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	// Mock server that always allows access
@@ -276,7 +278,8 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) {
 
 // TestListAvailableLLMs_Authorization tests that authorization is enforced correctly.
 func TestListAvailableLLMs_Authorization(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	// Create mock HTTP server to simulate gateway authorization responses.

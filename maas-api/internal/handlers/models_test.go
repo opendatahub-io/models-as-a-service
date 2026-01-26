@@ -7,21 +7,23 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/zapr"
 	"github.com/openai/openai-go/v2/packages/pagination"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"knative.dev/pkg/apis"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
 
 func TestListingModels(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	strptr := func(s string) *string { return &s }
 
 	// Create mock HTTP server to simulate authorization responses
