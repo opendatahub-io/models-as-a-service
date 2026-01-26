@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/zapr"
 	"github.com/golang-jwt/jwt/v5"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
+	"go.uber.org/zap"
 	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,7 +23,6 @@ import (
 	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
@@ -105,7 +106,8 @@ func SetupTestServer(_ *testing.T, config TestServerConfig) (*gin.Engine, *TestC
 
 // StubTokenProviderAPIs creates common test components for token tests.
 func StubTokenProviderAPIs(_ *testing.T, withTierConfig bool) (*token.Manager, *k8sfake.Clientset, func()) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 
 	var objects []runtime.Object
 	var configMaps []*corev1.ConfigMap
@@ -143,7 +145,8 @@ func StubTokenProviderAPIs(_ *testing.T, withTierConfig bool) (*token.Manager, *
 // SetupTestRouter creates a test router with token endpoints.
 // Returns the router and a cleanup function that must be called to close the store and remove the temp DB file.
 func SetupTestRouter(manager *token.Manager) (*gin.Engine, func() error) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -182,7 +185,8 @@ func SetupTierTestRouter(mapper *tier.Mapper) *gin.Engine {
 
 // CreateTestMapper creates a tier mapper for testing.
 func CreateTestMapper(withConfigMap bool) *tier.Mapper {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 
 	var configMaps []*corev1.ConfigMap
 

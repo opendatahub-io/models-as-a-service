@@ -11,7 +11,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"    // SQLite driver
 	"k8s.io/utils/env"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/go-logr/logr"
 )
 
 type DBType string
@@ -27,7 +27,7 @@ const (
 )
 
 // Currently supports PostgreSQL only.
-func NewExternalStore(ctx context.Context, log *logger.Logger, databaseURL string) (*SQLStore, error) {
+func NewExternalStore(ctx context.Context, log logr.Logger, databaseURL string) (*SQLStore, error) {
 	databaseURL = strings.TrimSpace(databaseURL)
 
 	if !strings.HasPrefix(databaseURL, "postgresql://") && !strings.HasPrefix(databaseURL, "postgres://") {
