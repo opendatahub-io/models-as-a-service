@@ -8,10 +8,11 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/zapr"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
@@ -19,7 +20,8 @@ import (
 func TestAPIEndpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	manager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
 	defer cleanup()
 

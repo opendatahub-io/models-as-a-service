@@ -6,19 +6,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/go-logr/logr"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 type Handler struct {
 	service *Service
-	logger  *logger.Logger
+	logger  logr.Logger
 }
 
-func NewHandler(log *logger.Logger, service *Service) *Handler {
-	if log == nil {
-		log = logger.Production()
-	}
+func NewHandler(log logr.Logger, service *Service) *Handler {
 	return &Handler{
 		service: service,
 		logger:  log,
@@ -76,9 +73,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 
 	tok, err := h.service.CreateAPIKey(c.Request.Context(), user, req.Name, req.Description, expiration)
 	if err != nil {
-		h.logger.Error("Failed to generate API key",
-			"error", err,
-		)
+		h.logger.Error(err, "Failed to generate API key")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate api key"})
 		return
 	}
@@ -108,9 +103,7 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 
 	tokens, err := h.service.ListAPIKeys(c.Request.Context(), user)
 	if err != nil {
-		h.logger.Error("Failed to list API keys",
-			"error", err,
-		)
+		h.logger.Error(err, "Failed to list API keys")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list api keys"})
 		return
 	}
@@ -131,9 +124,7 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 			return
 		}
-		h.logger.Error("Failed to get API key",
-			"error", err,
-		)
+		h.logger.Error(err, "Failed to get API key")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve API key"})
 		return
 	}
@@ -156,13 +147,11 @@ func (h *Handler) RevokeAllTokens(c *gin.Context) {
 	}
 
 	if err := h.service.RevokeAll(c.Request.Context(), user); err != nil {
-		h.logger.Error("Failed to revoke tokens",
-			"error", err,
-		)
+		h.logger.Error(err, "Failed to revoke tokens")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke tokens"})
 		return
 	}
 
-	h.logger.Debug("Successfully revoked tokens")
+	h.logger.V(1).Info("Successfully revoked tokens")
 	c.Status(http.StatusNoContent)
 }

@@ -5,21 +5,17 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/go-logr/logr"
 )
 
 // Handler handles subscription selection requests.
 type Handler struct {
 	selector *Selector
-	logger   *logger.Logger
+	logger   logr.Logger
 }
 
 // NewHandler creates a new subscription handler.
-func NewHandler(log *logger.Logger, selector *Selector) *Handler {
-	if log == nil {
-		log = logger.Production()
-	}
+func NewHandler(log logr.Logger, selector *Selector) *Handler {
 	return &Handler{
 		selector: selector,
 		logger:   log,
@@ -42,14 +38,14 @@ func NewHandler(log *logger.Logger, selector *Selector) *Handler {
 // Authorino pods. No additional authentication is needed as the groups/username
 // come from an already-authenticated auth.identity object.
 func (h *Handler) SelectSubscription(c *gin.Context) {
-	h.logger.Debug("Subscription selection request received",
+	h.logger.V(1).Info("Subscription selection request received",
 		"path", c.Request.URL.Path,
 		"method", c.Request.Method,
 	)
 
 	var req SelectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn("Invalid request body",
+		h.logger.Info("Invalid request body",
 			"error", err.Error(),
 		)
 		c.JSON(http.StatusOK, SelectResponse{
@@ -59,7 +55,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		return
 	}
 
-	h.logger.Debug("Processing subscription selection",
+	h.logger.V(1).Info("Processing subscription selection",
 		"username", req.Username,
 		"groups", req.Groups,
 		"requestedSubscription", req.RequestedSubscription,
@@ -73,7 +69,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		var multipleSubsErr *MultipleSubscriptionsError
 
 		if errors.As(err, &noSubErr) {
-			h.logger.Debug("No subscription found for user",
+			h.logger.V(1).Info("No subscription found for user",
 				"username", req.Username,
 				"groups", req.Groups,
 			)
@@ -85,7 +81,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		}
 
 		if errors.As(err, &notFoundErr) {
-			h.logger.Debug("Requested subscription not found",
+			h.logger.V(1).Info("Requested subscription not found",
 				"subscription", req.RequestedSubscription,
 			)
 			c.JSON(http.StatusOK, SelectResponse{
@@ -96,7 +92,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		}
 
 		if errors.As(err, &accessDeniedErr) {
-			h.logger.Debug("Access denied to subscription",
+			h.logger.V(1).Info("Access denied to subscription",
 				"username", req.Username,
 				"subscription", req.RequestedSubscription,
 			)
@@ -108,7 +104,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		}
 
 		if errors.As(err, &multipleSubsErr) {
-			h.logger.Debug("Multiple subscriptions found, explicit selection required",
+			h.logger.V(1).Info("Multiple subscriptions found, explicit selection required",
 				"username", req.Username,
 				"subscriptions", multipleSubsErr.Subscriptions,
 			)
@@ -120,8 +116,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		}
 
 		// All other errors are internal server errors
-		h.logger.Error("Subscription selection failed",
-			"error", err.Error(),
+		h.logger.Error(err, "Subscription selection failed",
 			"username", req.Username,
 		)
 		c.JSON(http.StatusOK, SelectResponse{
@@ -131,7 +126,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		return
 	}
 
-	h.logger.Debug("Subscription selected successfully",
+	h.logger.V(1).Info("Subscription selected successfully",
 		"username", req.Username,
 		"subscription", response.Name,
 		"organizationId", response.OrganizationID,
