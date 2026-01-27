@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Source helper functions for JWT decoding
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/deployment-helpers.sh"
+
 # MaaS Platform Deployment Validation Script
 # This script validates that the MaaS platform is correctly deployed and functional
 #
@@ -328,7 +332,7 @@ print_check "Gateway hostname"
 # Get cluster domain and construct the MaaS gateway hostname
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
 if [ -n "$CLUSTER_DOMAIN" ]; then
-    HOST="maas.${CLUSTER_DOMAIN}"
+    HOST="https://maas.${CLUSTER_DOMAIN}"
     print_success "Gateway hostname: $HOST"
 else
     print_fail "Could not determine cluster domain" "Cannot test API endpoints" "Check: kubectl get ingresses.config.openshift.io cluster"
@@ -405,11 +409,11 @@ else
                 if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
                     print_success "Authentication successful (HTTP $HTTP_CODE)"
                     
-                    # Decode token and extract tier information
+                    # Decode token and extract tier information using helper function
                     print_check "Token information"
-                    TOKEN_PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null || echo "")
+                    TOKEN_PAYLOAD=$(decode_jwt_payload "$TOKEN")
                     if [ -n "$TOKEN_PAYLOAD" ]; then
-                        SUB=$(echo "$TOKEN_PAYLOAD" | jq -r '.sub' 2>/dev/null || echo "")
+                        SUB=$(echo "$TOKEN_PAYLOAD" | jq -r '.sub // empty' 2>/dev/null)
                         if [ -n "$SUB" ] && [ "$SUB" != "null" ]; then
                             print_info "Token subject: $SUB"
                             
