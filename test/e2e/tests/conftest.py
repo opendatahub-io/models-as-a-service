@@ -11,15 +11,35 @@ def maas_api_base_url() -> str:
 
 @pytest.fixture(scope="session")
 def token(maas_api_base_url: str) -> str:
-    # Expect smoke.sh to have minted TOKEN already, but allow fallback
+    """
+    MaaS token for API authentication.
+    
+    Token is typically provided via TOKEN env var (set by smoke.sh).
+    
+    Fallback minting via oc whoami -t works for:
+    - Real users (Kubernetes identity tokens)
+    - Service accounts from maas-ci-test namespace (CI bypass policy)
+    
+    Fallback will FAIL for other service accounts due to security policy
+    that prevents SA tokens from minting new tokens.
+    
+    See: deployment/base/maas-api/policies/auth-policy-token-issuance.yaml
+    See: test/e2e/scripts/ci-auth-policy-bypass.yaml (CI exception)
+    """
     tok = os.environ.get("TOKEN", "")
     if tok:
-        print(f"[token] using env TOKEN (masked): {len(tok)}")
+        print(f"[token] using env TOKEN (len={len(tok)})")
         return tok
 
+    # Fallback: try to mint token
+    # Works for: real users, SAs from maas-ci-test namespace (CI bypass)
+    # Fails for: other service accounts (security policy)
+    print("[token] TOKEN env var not set, attempting fallback mint...")
+    
     free = os.popen("oc whoami -t").read().strip()
     if not free:
         raise RuntimeError("Could not obtain cluster token via `oc whoami -t`")
+    
     r = requests.post(
         f"{maas_api_base_url}/v1/tokens",
         headers={"Authorization": f"Bearer {free}", "Content-Type": "application/json"},
@@ -27,6 +47,12 @@ def token(maas_api_base_url: str) -> str:
         timeout=30,
         verify=False,
     )
+    if r.status_code == 403:
+        raise RuntimeError(
+            "Token minting failed with 403 Forbidden. "
+            "SA tokens can only mint if from maas-ci-test namespace (CI bypass policy). "
+            "For other SAs, ensure smoke.sh exports TOKEN before running pytest."
+        )
     r.raise_for_status()
     data = r.json()
     return data["token"]

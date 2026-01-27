@@ -1,0 +1,35 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: maas-api-token-issuance-auth-policy
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: maas-api-token-issuance-route
+  rules:
+    # Only allow k8s tokens (not SA tokens) for token issuance
+    # This prevents tokens from being used to issue more tokens
+    authentication:
+      cluster-identity:
+        kubernetesTokenReview:
+          audiences:
+            - https://kubernetes.default.svc
+    authorization:
+      # Block Kubernetes service account tokens from issuing MaaS tokens
+      # Only cluster-authenticated identities (OAuth, OIDC, LDAP, etc.) can issue tokens
+      allow-authenticated-users:
+        patternMatching:
+          patterns:
+            - selector: auth.identity.user.groups
+              operator: excl
+              value: "system:serviceaccounts"
+    response:
+      success:
+        headers:
+          X-MaaS-Username:
+            plain:
+              selector: auth.identity.user.username
+          X-MaaS-Group:
+            plain:
+              selector: auth.identity.user.groups.@tostr

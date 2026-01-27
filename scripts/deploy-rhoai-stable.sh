@@ -684,7 +684,7 @@ kubectl apply --server-side=true \
 # - This causes authentication to break after initial successful patching
 #
 # Solution:
-# - Annotate AuthPolicy with opendatahub.io/managed=false to prevent reconciliation
+# - Annotate AuthPolicies with opendatahub.io/managed=false to prevent reconciliation
 # - Patch with cluster-specific audience
 # - Verify the patch persisted after giving operator time to reconcile
 # - Warn user if operator reverts the change
@@ -700,13 +700,13 @@ if [[ -n "$AUD" && "$AUD" != "https://kubernetes.default.svc" ]]; then
     kubectl annotate authpolicy maas-api-auth-policy -n "$APPLICATIONS_NS" \
       opendatahub.io/managed="false" --overwrite 2>/dev/null || true
 
-    # Step 2: Patch AuthPolicy with cluster-specific audience
+    # Step 2: Patch main AuthPolicy with cluster-specific audience (accepts both OpenShift tokens and SA tokens)
     # The custom audience allows service account tokens from Hypershift/ROSA to be validated
     kubectl patch authpolicy maas-api-auth-policy -n "$APPLICATIONS_NS" --type=merge --patch-file <(echo "
 spec:
   rules:
     authentication:
-      openshift-identities:
+      default:
         kubernetesTokenReview:
           audiences:
             - $AUD
@@ -717,7 +717,7 @@ spec:
     # Wait briefly to allow operator reconciliation cycle to run, then check if our patch survived
     sleep 3
     ACTUAL_AUD=$(kubectl get authpolicy maas-api-auth-policy -n "$APPLICATIONS_NS" \
-      -o jsonpath='{.spec.rules.authentication.openshift-identities.kubernetesTokenReview.audiences[0]}' 2>/dev/null || echo "")
+      -o jsonpath='{.spec.rules.authentication.cluster-identity.kubernetesTokenReview.audiences[0]}' 2>/dev/null || echo "")
     if [[ "$ACTUAL_AUD" == "$AUD" ]]; then
       echo "  * Verified: Custom audience configuration persisted"
     else
@@ -727,6 +727,24 @@ spec:
     fi
   else
     echo "  WARNING: Could not find AuthPolicy 'maas-api-auth-policy' to patch. Skipping audience configuration."
+  fi
+
+  # Patch token issuance AuthPolicy (accepts only OpenShift tokens - prevents token-to-token issuance)
+  if wait_for_resource "authpolicy" "maas-api-token-issuance-auth-policy" "$APPLICATIONS_NS" 60; then
+    kubectl annotate authpolicy maas-api-token-issuance-auth-policy -n "$APPLICATIONS_NS" \
+      opendatahub.io/managed="false" --overwrite 2>/dev/null || true
+
+    kubectl patch authpolicy maas-api-token-issuance-auth-policy -n "$APPLICATIONS_NS" --type=merge --patch-file <(echo "
+spec:
+  rules:
+    authentication:
+      default:
+        kubernetesTokenReview:
+          audiences:
+            - $AUD")
+    echo "  * AuthPolicy 'maas-api-token-issuance-auth-policy' patched with custom audience."
+  else
+    echo "  WARNING: Could not find AuthPolicy 'maas-api-token-issuance-auth-policy' to patch. Skipping."
   fi
 fi
 

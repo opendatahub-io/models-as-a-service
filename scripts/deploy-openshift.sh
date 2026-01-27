@@ -312,7 +312,7 @@ kubectl rollout status deployment/maas-api -n "$MAAS_API_NAMESPACE" --timeout=18
   echo "   ⚠️  MaaS API rollout is taking longer than expected, continuing..."
 
 echo ""
-echo "1️⃣0️⃣ Patching AuthPolicy with correct audience..."
+echo "1️⃣0️⃣ Patching AuthPolicies with correct audience..."
 echo "   Attempting to detect audience..."
 TOKEN=$(kubectl create token default --duration=10m 2>/dev/null || echo "")
 if [ -z "$TOKEN" ]; then
@@ -338,10 +338,15 @@ else
 fi
 if [ -n "$AUD" ] && [ "$AUD" != "null" ]; then
     echo "   Detected audience: $AUD"
-    PATCH_JSON="[{\"op\":\"replace\",\"path\":\"/spec/rules/authentication/openshift-identities/kubernetesTokenReview/audiences/0\",\"value\":\"$AUD\"}]"
+    # Patch main AuthPolicy (accepts both OpenShift tokens and SA tokens)
+    PATCH_JSON="[{\"op\":\"replace\",\"path\":\"/spec/rules/authentication/default/kubernetesTokenReview/audiences/0\",\"value\":\"$AUD\"}]"
     kubectl patch authpolicy maas-api-auth-policy -n "$MAAS_API_NAMESPACE"  \
       --type='json' \
-      -p "$PATCH_JSON" 2>/dev/null && echo "   ✅ AuthPolicy patched" || echo "   ⚠️  Failed to patch AuthPolicy (may need manual configuration)"
+      -p "$PATCH_JSON" 2>/dev/null && echo "   ✅ maas-api-auth-policy patched" || echo "   ⚠️  Failed to patch maas-api-auth-policy (may need manual configuration)"
+    # Patch token issuance AuthPolicy (accepts only OpenShift tokens - prevents token-to-token issuance)
+    kubectl patch authpolicy maas-api-token-issuance-auth-policy -n "$MAAS_API_NAMESPACE"  \
+      --type='json' \
+      -p "$PATCH_JSON" 2>/dev/null && echo "   ✅ maas-api-token-issuance-auth-policy patched" || echo "   ⚠️  Failed to patch maas-api-token-issuance-auth-policy (may need manual configuration)"
 else
     echo "   ⚠️  Could not detect audience, skipping AuthPolicy patch"
     echo "      You may need to manually configure the audience later"

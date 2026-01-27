@@ -24,22 +24,32 @@ def test_healthz_or_404(maas_api_base_url: str):
     # If both fail:
     assert False, "Neither /health nor /healthz responded as expected"
 
-def test_mint_token(maas_api_base_url: str):
+def test_token_endpoint_requires_auth(maas_api_base_url: str):
     """
-    Security: /v1/tokens exists and is protected.
-    We call WITHOUT auth and expect 401/403.
-    If 200 (rare), verify a 'token' is present.
+    Security test: Verify /v1/tokens endpoint rejects unauthenticated requests.
+    
+    This test does NOT mint a token - it verifies the endpoint is protected.
+    Actual token minting is handled by:
+    - smoke.sh (mints before pytest runs)
+    - conftest.py fallback (for allowed users)
+    
+    Token minting is allowed for:
+    - Real users (Kubernetes identity tokens)
+    - Service accounts from maas-ci-test namespace (CI bypass policy)
+    
+    Expected: 401 Unauthorized or 403 Forbidden
     """
     url = f"{maas_api_base_url}/v1/tokens"
     r = requests.post(url, json={"expiration": "1m"}, timeout=20, verify=False)
-    msg = f"[token] POST {url} (no auth) -> {r.status_code}"
+    msg = f"[security] POST {url} (no auth) -> {r.status_code}"
     log.info(msg); print(msg)
 
     if r.status_code == 200:
+        # Unexpected: endpoint allowed unauthenticated access
         body = (r.json() or {})
         tok = body.get("token")
         head, tail = (tok or "")[:12], (tok or "")[-8:]
-        print(f"[token] minted len={len(tok) if tok else 0} head={head}…tail={tail}")
+        print(f"[security] WARNING: unauthenticated mint succeeded! len={len(tok) if tok else 0} head={head}…tail={tail}")
         assert tok, "200 from token endpoint but no 'token' field"
     else:
         assert r.status_code in (401, 403), f"unexpected {r.status_code}: {r.text[:400]}"
@@ -58,18 +68,25 @@ def test_models_catalog(model_catalog: dict):
 def test_chat_completions_gateway_alive(model_v1: str, headers: dict, model_name: str):
     """
     Gateway: /chat/completions reachable for the deployed model URL.
-    Allowed: 200 (backend answers) or 404 (path present but not wired here).
+    Allowed responses:
+    - 200: Backend answers successfully
+    - 404: Path present but not wired for this model
+    - 429: Rate limit hit (gateway is working, rate limiting is enforced)
     """
     r = chat("Say 'hello' in one word.", model_v1, headers, model_name=model_name)
     msg = f"[chat] POST /chat/completions -> {r.status_code}"
     log.info(msg); print(msg)
-    assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
+    assert r.status_code in (200, 404, 429), f"unexpected {r.status_code}: {r.text[:500]}"
 
 def test_legacy_completions_optionally(model_v1: str, headers: dict, model_name: str):
     """
-    Compatibility: /completions (legacy). 200 or 404 both OK.
+    Compatibility: /completions (legacy).
+    Allowed responses:
+    - 200: Backend answers successfully
+    - 404: Path not available for this model
+    - 429: Rate limit hit (gateway is working, rate limiting is enforced)
     """
     r = completions("Say hello in one word.", model_v1, headers, model_name=model_name)
     msg = f"[legacy] POST /completions -> {r.status_code}"
     log.info(msg); print(msg)
-    assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
+    assert r.status_code in (200, 404, 429), f"unexpected {r.status_code}: {r.text[:500]}"
