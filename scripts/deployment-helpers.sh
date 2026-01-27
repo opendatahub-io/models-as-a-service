@@ -1,5 +1,112 @@
 #!/bin/bash
 
+# Deployment Helper Functions
+# This file contains reusable helper functions for MaaS platform deployment scripts
+
+# ============================================================================
+# JWT Decoding Functions
+# ============================================================================
+
+# _base64_decode
+#   Cross-platform base64 decode wrapper.
+#   Linux uses 'base64 -d', macOS (BSD) uses 'base64 -D'.
+#   Reads from stdin and writes decoded output to stdout.
+_base64_decode() {
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    base64 -D 2>/dev/null
+  else
+    base64 -d 2>/dev/null
+  fi
+}
+
+# decode_jwt_payload <jwt_token>
+#   Decodes the payload (second part) of a JWT token.
+#   Handles base64url to standard base64 conversion and padding.
+#   Returns the decoded JSON payload.
+#   Works on both Linux and macOS.
+#
+# Usage:
+#   PAYLOAD=$(decode_jwt_payload "$TOKEN")
+#   echo "$PAYLOAD" | jq -r '.sub'
+#
+# Example:
+#   TOKEN="<header>.<payload>.<signature>"  # Your JWT token
+#   decode_jwt_payload "$TOKEN"  # Returns decoded JSON payload
+decode_jwt_payload() {
+  local jwt_token="$1"
+  
+  if [ -z "$jwt_token" ]; then
+    echo "" 
+    return 1
+  fi
+  
+  # Extract the payload (second part of JWT, separated by dots)
+  local payload_b64url
+  payload_b64url=$(echo "$jwt_token" | cut -d. -f2)
+  
+  if [ -z "$payload_b64url" ]; then
+    echo ""
+    return 1
+  fi
+  
+  # Convert base64url to standard base64:
+  # - Replace '-' with '+' and '_' with '/'
+  # - Add padding (base64 must be multiple of 4 chars)
+  local payload_b64
+  payload_b64=$(echo "$payload_b64url" | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}')
+  
+  # Decode base64 to JSON (cross-platform)
+  echo "$payload_b64" | _base64_decode
+}
+
+# get_jwt_claim <jwt_token> <claim_name>
+#   Extracts a specific claim from a JWT token payload.
+#   Returns the claim value or empty string if not found.
+#
+# Usage:
+#   SUB=$(get_jwt_claim "$TOKEN" "sub")
+#   AUD=$(get_jwt_claim "$TOKEN" "aud[0]")
+#
+# Example:
+#   get_jwt_claim "$TOKEN" "sub"  # Returns: system:serviceaccount:...
+get_jwt_claim() {
+  local jwt_token="$1"
+  local claim="$2"
+  
+  local payload
+  payload=$(decode_jwt_payload "$jwt_token")
+  
+  if [ -z "$payload" ]; then
+    echo ""
+    return 1
+  fi
+  
+  echo "$payload" | jq -r ".$claim // empty" 2>/dev/null
+}
+
+# get_cluster_audience
+#   Retrieves the default audience from the current Kubernetes cluster.
+#   Creates a temporary token and extracts the audience claim.
+#
+# Usage:
+#   AUD=$(get_cluster_audience)
+#   echo "Cluster audience: $AUD"
+get_cluster_audience() {
+  local temp_token
+  temp_token=$(kubectl create token default --duration=10m 2>/dev/null)
+  
+  if [ -z "$temp_token" ]; then
+    echo ""
+    return 1
+  fi
+  
+  get_jwt_claim "$temp_token" "aud[0]"
+}
+
+# ============================================================================
+# Version Management
+# ============================================================================
+
 # Minimum version requirements for operators
 export KUADRANT_MIN_VERSION="1.3.1"
 export AUTHORINO_MIN_VERSION="0.22.0"
@@ -202,13 +309,16 @@ wait_for_crd() {
   local crd="$1"
   local timeout="${2:-60}"  # timeout in seconds
   local interval=2
-  local elapsed=0
+  local end_time=$((SECONDS + timeout))
 
   echo "⏳ Waiting for CRD ${crd} to appear (timeout: ${timeout}s)…"
-  while [ $elapsed -lt $timeout ]; do
+  while [ $SECONDS -lt $end_time ]; do
     if kubectl get crd "$crd" &>/dev/null; then
       echo "✅ CRD ${crd} detected, waiting for it to become Established..."
-      if kubectl wait --for=condition=Established --timeout="${timeout}s" "crd/$crd" 2>/dev/null; then
+      # Pass remaining time, not full timeout
+      local remaining_time=$((end_time - SECONDS))
+      [ $remaining_time -lt 1 ] && remaining_time=1
+      if kubectl wait --for=condition=Established --timeout="${remaining_time}s" "crd/$crd" 2>/dev/null; then
         return 0
       else
         echo "❌ CRD ${crd} failed to become Established" >&2
@@ -216,7 +326,6 @@ wait_for_crd() {
       fi
     fi
     sleep $interval
-    elapsed=$((elapsed + interval))
   done
 
   echo "❌ Timed out after ${timeout}s waiting for CRD $crd to appear." >&2
@@ -287,7 +396,10 @@ wait_for_csv_with_min_version() {
       # Found a CSV with suitable version
       local installed_version=$(extract_version_from_csv "$csv_name")
       echo "✅ Found CSV: ${csv_name} (version: ${installed_version} >= ${min_version})"
-      wait_for_csv "$csv_name" "$namespace" "$timeout"
+      # Pass remaining time, not full timeout
+      local remaining_time=$((end_time - SECONDS))
+      [ $remaining_time -lt 1 ] && remaining_time=1
+      wait_for_csv "$csv_name" "$namespace" "$remaining_time"
       return $?
     fi
     
@@ -314,12 +426,13 @@ wait_for_csv() {
   local namespace="${2:-kuadrant-system}"
   local timeout="${3:-180}"  # timeout in seconds
   local interval=5
-  local elapsed=0
-  local last_status_print=0
+  local end_time=$((SECONDS + timeout))
+  local last_status_print=$SECONDS
 
   echo "⏳ Waiting for CSV ${csv_name} to succeed (timeout: ${timeout}s)..."
-  while [ $elapsed -lt $timeout ]; do
+  while [ $SECONDS -lt $end_time ]; do
     local phase=$(kubectl get csv -n "$namespace" "$csv_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    local elapsed=$((SECONDS - (end_time - timeout)))
 
     case "$phase" in
       "Succeeded")
@@ -332,15 +445,14 @@ wait_for_csv() {
         return 1
         ;;
       *)
-        if [ $((elapsed - last_status_print)) -ge 30 ]; then
+        if [ $((SECONDS - last_status_print)) -ge 30 ]; then
           echo "   CSV ${csv_name} status: ${phase} (${elapsed}s elapsed)"
-          last_status_print=$elapsed
+          last_status_print=$SECONDS
         fi
         ;;
     esac
 
     sleep $interval
-    elapsed=$((elapsed + interval))
   done
 
   echo "❌ Timed out after ${timeout}s waiting for CSV ${csv_name}" >&2

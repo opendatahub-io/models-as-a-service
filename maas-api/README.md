@@ -99,8 +99,10 @@ kustomize build ${PROJECT_DIR}/deployment/base/policies | kubectl apply --server
 Patch `AuthPolicy` with the correct audience for Openshift Identities:
 
 ```shell
+# JWT uses base64url encoding; convert to standard base64 before decoding
 AUD="$(kubectl create token default --duration=10m \
   | cut -d. -f2 \
+  | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}' \
   | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
 
 echo "Patching AuthPolicy with audience: $AUD"

@@ -495,16 +495,18 @@ sequenceDiagram
 
 **Metric Types**:
 1. **Request Counters**:
-   - `limitador_rate_limit_counter` - Requests per user/tier
-   - Labels: `user`, `tier`, `namespace`
+   - `authorized_calls` - Number of requests allowed (not rate-limited)
+   - `limited_calls` - Number of requests denied due to rate limiting
+   - Labels: `user`, `tier`, `model`, `limitador_namespace`
 
 2. **Token Counters**:
-   - `limitador_token_rate_limit_counter` - Tokens consumed per user/tier
-   - Labels: `user`, `tier`, `namespace`
+   - `authorized_hits` - Total tokens consumed (extracted from `usage.total_tokens` in model responses)
+   - Labels: `user`, `tier`, `model`, `limitador_namespace`
 
-3. **Telemetry Metrics** (via TelemetryPolicy):
-   - Custom metrics with model, user, and tier labels
-   - Exports: `model`, `tier`, `user`
+3. **Labels via TelemetryPolicy**:
+   - `user`: User identifier (extracted from `auth.identity.userid`)
+   - `tier`: User tier (extracted from `auth.identity.tier`)
+   - `model`: Model name (extracted from request path)
 
 ### Monitoring Setup
 
@@ -519,7 +521,7 @@ sequenceDiagram
 kubectl port-forward -n kuadrant-system svc/limitador-limitador 8080:8080
 
 # Query metrics
-curl http://localhost:8080/metrics | grep -E '(rate_limit|token_rate_limit)'
+curl http://localhost:8080/metrics | grep -E '(authorized_hits|authorized_calls|limited_calls)'
 ```
 
 ## Deployment Architecture

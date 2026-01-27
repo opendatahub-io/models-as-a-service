@@ -1,0 +1,32 @@
+# ServiceMonitor for KServe LLM models (vLLM, simulators, etc.)
+# Scrapes vLLM metrics from LLMInferenceService workload pods
+#
+# USAGE: Deploy this ServiceMonitor in the same namespace as your models.
+# This is a SAMPLE - modify the namespace and selector as needed for your deployment.
+#
+# To deploy:
+#   kubectl apply -f docs/samples/observability/kserve-llm-models-servicemonitor.yaml
+#
+# Prerequisites:
+#   - user-workload-monitoring must be enabled (see cluster-monitoring-config.yaml)
+#   - Models must have label: app.kubernetes.io/part-of: llminferenceservice
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kserve-llm-models
+  namespace: llm  # Change to match your model namespace
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  endpoints:
+    - interval: 30s
+      targetPort: 8000
+      path: /metrics
+      scheme: https
+      tlsConfig:
+        # KServe uses self-signed certs for internal TLS
+        insecureSkipVerify: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: llminferenceservice
