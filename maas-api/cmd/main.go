@@ -214,7 +214,6 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	// Create model manager with token manager (for Keycloak admin SA support)
 	modelManager, err := models.NewManagerWithTokenManager(
 		log,
-		cluster.InferenceServiceLister,
 		cluster.LLMInferenceServiceLister,
 		cluster.HTTPRouteLister,
 		models.GatewayRef{Name: cfg.GatewayName, Namespace: cfg.GatewayNamespace},

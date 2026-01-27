@@ -32,23 +32,6 @@ func NewModelsHandler(log *logger.Logger, modelMgr *models.Manager, tokenMgr *to
 	}
 }
 
-// ListModels handles GET /models.
-func (h *ModelsHandler) ListModels(c *gin.Context) {
-	modelList, err := h.modelMgr.ListAvailableModels()
-	if err != nil {
-		h.logger.Error("Failed to get available models",
-			"error", err,
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve models"})
-		return
-	}
-
-	c.JSON(http.StatusOK, pagination.Page[models.Model]{
-		Object: "list",
-		Data:   modelList,
-	})
-}
-
 // ListLLMs handles GET /v1/models.
 func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	// Extract authorization token from header

@@ -9,9 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
-	kservev1beta1 "github.com/kserve/kserve/pkg/apis/serving/v1beta1"
 	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
-	kservelistersv1beta1 "github.com/kserve/kserve/pkg/client/listers/serving/v1beta1"
 	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,7 +52,6 @@ type TestServerConfig struct {
 
 type TestClients struct {
 	K8sClient                 kubernetes.Interface
-	InferenceServiceLister    kservelistersv1beta1.InferenceServiceLister
 	LLMInferenceServiceLister kservelistersv1alpha1.LLMInferenceServiceLister
 	HTTPRouteLister           gatewaylisters.HTTPRouteLister
 }
@@ -78,7 +75,6 @@ func SetupTestServer(_ *testing.T, config TestServerConfig) (*gin.Engine, *TestC
 
 	var k8sObjects []runtime.Object
 	var llmIsvcs []*kservev1alpha1.LLMInferenceService
-	var isvcs []*kservev1beta1.InferenceService
 
 	for _, obj := range config.Objects {
 		gvk := obj.GetObjectKind().GroupVersionKind()
@@ -86,10 +82,6 @@ func SetupTestServer(_ *testing.T, config TestServerConfig) (*gin.Engine, *TestC
 		case gvk.Group == "serving.kserve.io" && gvk.Kind == "LLMInferenceService":
 			if llm, ok := obj.(*kservev1alpha1.LLMInferenceService); ok {
 				llmIsvcs = append(llmIsvcs, llm)
-			}
-		case gvk.Group == "serving.kserve.io" && gvk.Kind == "InferenceService":
-			if isvc, ok := obj.(*kservev1beta1.InferenceService); ok {
-				isvcs = append(isvcs, isvc)
 			}
 		default:
 			k8sObjects = append(k8sObjects, obj)
@@ -104,7 +96,6 @@ func SetupTestServer(_ *testing.T, config TestServerConfig) (*gin.Engine, *TestC
 	k8sClient := k8sfake.NewClientset(k8sObjects...)
 	clients := &TestClients{
 		K8sClient:                 k8sClient,
-		InferenceServiceLister:    NewInferenceServiceLister(ToRuntimeObjects(isvcs)...),
 		LLMInferenceServiceLister: NewLLMInferenceServiceLister(ToRuntimeObjects(llmIsvcs)...),
 		HTTPRouteLister:           NewHTTPRouteLister(),
 	}

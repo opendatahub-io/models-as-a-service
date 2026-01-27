@@ -163,7 +163,6 @@ func TestListingModels(t *testing.T) {
 
 	modelMgr, errMgr := models.NewManager(
 		testLogger,
-		clients.InferenceServiceLister,
 		clients.LLMInferenceServiceLister,
 		clients.HTTPRouteLister,
 		gatewayRef,

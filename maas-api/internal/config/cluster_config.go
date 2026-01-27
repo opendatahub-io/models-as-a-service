@@ -7,7 +7,6 @@ import (
 	kserveclient "github.com/kserve/kserve/pkg/client/clientset/versioned"
 	kserveinformers "github.com/kserve/kserve/pkg/client/informers/externalversions"
 	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
-	kservelistersv1beta1 "github.com/kserve/kserve/pkg/client/listers/serving/v1beta1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	corev1listers "k8s.io/client-go/listers/core/v1"
@@ -26,7 +25,6 @@ type ClusterConfig struct {
 	NamespaceLister      corev1listers.NamespaceLister
 	ServiceAccountLister corev1listers.ServiceAccountLister
 
-	InferenceServiceLister    kservelistersv1beta1.InferenceServiceLister
 	LLMInferenceServiceLister kservelistersv1alpha1.LLMInferenceServiceLister
 
 	HTTPRouteLister gatewaylisters.HTTPRouteLister
@@ -64,7 +62,6 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 	cmInformer := coreFactoryNs.Core().V1().ConfigMaps()
 	nsInformer := coreFactory.Core().V1().Namespaces()
 	saInformer := coreFactory.Core().V1().ServiceAccounts()
-	isvcInformer := kserveFactory.Serving().V1beta1().InferenceServices()
 	llmIsvcInformer := kserveFactory.Serving().V1alpha1().LLMInferenceServices()
 	httpRouteInformer := gatewayFactory.Gateway().V1().HTTPRoutes()
 
@@ -75,7 +72,6 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 		NamespaceLister:      nsInformer.Lister(),
 		ServiceAccountLister: saInformer.Lister(),
 
-		InferenceServiceLister:    isvcInformer.Lister(),
 		LLMInferenceServiceLister: llmIsvcInformer.Lister(),
 
 		HTTPRouteLister: httpRouteInformer.Lister(),
@@ -84,7 +80,6 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 			cmInformer.Informer().HasSynced,
 			nsInformer.Informer().HasSynced,
 			saInformer.Informer().HasSynced,
-			isvcInformer.Informer().HasSynced,
 			llmIsvcInformer.Informer().HasSynced,
 			httpRouteInformer.Informer().HasSynced,
 		},

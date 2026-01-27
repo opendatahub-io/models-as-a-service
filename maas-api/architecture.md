@@ -9,7 +9,7 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 - **Tier-Based Access Control**: Users are assigned to tiers (free, premium, enterprise) based on Kubernetes group membership
 - **Short-Lived Token Issuance**: Self-service ephemeral tokens with configurable expiration
 - **Rate & Token Limiting**: Per-tier request and token consumption limits
-- **Model Discovery**: Automatic listing of available KServe InferenceServices and LLMInferenceServices
+- **Model Discovery**: Automatic listing of available KServe LLMInferenceServices
 - **Usage Metrics**: Real-time telemetry with user, tier, and model tracking
 - **Kubernetes-Native**: Leverages Service Accounts, RBAC, and TokenReview for authentication
 
@@ -20,7 +20,7 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 - **Authorization**: Kubernetes SubjectAccessReview (RBAC)
 - **Gateway**: OpenShift Gateway API implementation
 - **Policies**: Kuadrant (AuthPolicy, RateLimitPolicy, TokenRateLimitPolicy, TelemetryPolicy)
-- **Model Serving**: KServe InferenceServices and LLMInferenceServices
+- **Model Serving**: KServe LLMInferenceServices
 - **Metrics**: Prometheus via Limitador and TelemetryPolicy
 - **Rate Limiting**: Limitador (part of Kuadrant)
 
@@ -29,7 +29,6 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 | Endpoint             | Method | Purpose                                | Request Body      | Response                    |
 |----------------------|--------|----------------------------------------|-------------------|-----------------------------|
 | `/health`            | GET    | Service health check                   | None              | Health status               |
-| `/models`            | GET    | List available InferenceServices       | None              | OpenAI-compatible list      |
 | `/v1/models`         | GET    | List available LLMInferenceServices    | None              | OpenAI-compatible list      |
 | `/v1/tokens`         | POST   | Issue ephemeral short-lived token      | `{"expiration"}` | Token with expiration       |
 | `/v1/tokens`         | DELETE | Revoke all ephemeral tokens for user   | None              | Success confirmation        |
@@ -56,7 +55,7 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 - **Token Manager**: Creates/revokes Service Account tokens
 - **Token Reviewer**: Validates tokens via Kubernetes TokenReview API
 - **Tier Mapper**: Maps user groups to tiers using ConfigMap
-- **Model Manager**: Discovers InferenceServices and LLMInferenceServices
+- **Model Manager**: Discovers LLMInferenceServices
 
 ### 2. Kuadrant Policy Engine
 
@@ -150,11 +149,10 @@ The tier configuration defines three tiers with increasing levels of access:
 ### 5. KServe Model Services
 
 **Supported CRDs**:
-- **InferenceService** (`serving.kserve.io/v1beta1`)
 - **LLMInferenceService** (`serving.kserve.io/v1alpha1`)
 
 **Model Discovery**:
-- Queries all namespaces for InferenceServices/LLMInferenceServices
+- Queries all namespaces for LLMInferenceServices
 - Extracts model ID from `spec.model.name` or falls back to `metadata.name`
 - Checks readiness via status conditions
 - Returns OpenAI-compatible model list with URL and ready status
@@ -388,9 +386,7 @@ sequenceDiagram
 
 ### Model Discovery
 
-**Endpoints**:
-- `GET /models` - List InferenceServices
-- `GET /v1/models` - List LLMInferenceServices
+**Endpoint**: `GET /v1/models` - List LLMInferenceServices
 
 **Response Format** (OpenAI-compatible):
 ```json
@@ -410,7 +406,7 @@ sequenceDiagram
 ```
 
 **Discovery Process**:
-1. Query Kubernetes for all InferenceServices or LLMInferenceServices across all namespaces
+1. Query Kubernetes for all LLMInferenceServices across all namespaces
 2. For each resource:
    - Extract model ID from `spec.model.name` or `metadata.name`
    - Determine URL from `status.url` or `status.addresses[0].url`
@@ -572,7 +568,7 @@ The MaaS API requires cluster-level permissions for:
 - **Token management**: Create, list, get, and delete Service Accounts and Service Account tokens
 - **Namespace management**: Create, list, get namespaces for tier isolation
 - **Authentication**: Create TokenReviews to validate user tokens
-- **Model discovery**: List and get InferenceServices and LLMInferenceServices across all namespaces
+- **Model discovery**: List and get LLMInferenceServices across all namespaces
 - **Tier configuration**: Read ConfigMaps for tier-to-group mapping
 
 **User Model Access RBAC**:

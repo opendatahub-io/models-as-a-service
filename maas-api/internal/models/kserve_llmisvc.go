@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,14 +11,17 @@ import (
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
 	"github.com/openai/openai-go/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"knative.dev/pkg/apis"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 // authResult represents the outcome of an authorization check attempt.
@@ -32,6 +36,56 @@ const (
 type GatewayRef struct {
 	Name      string
 	Namespace string
+}
+
+// tokenManagerInterface defines the interface needed for getting admin SA tokens.
+type tokenManagerInterface interface {
+	GetAdminServiceAccountToken(ctx context.Context, tierName string, ttl int) (string, error)
+	UseKeycloak() bool
+}
+
+type Manager struct {
+	llmIsvcLister   kservelistersv1alpha1.LLMInferenceServiceLister
+	httpRouteLister gatewaylisters.HTTPRouteLister
+	gatewayRef      GatewayRef
+	logger          *logger.Logger
+	tokenManager    tokenManagerInterface // Optional: for Keycloak admin SA token generation
+}
+
+func NewManager(
+	log *logger.Logger,
+	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister,
+	httpRouteLister gatewaylisters.HTTPRouteLister,
+	gatewayRef GatewayRef,
+) (*Manager, error) {
+	return NewManagerWithTokenManager(log, llmIsvcLister, httpRouteLister, gatewayRef, nil)
+}
+
+// NewManagerWithTokenManager creates a Manager with optional token manager for Keycloak admin SA support.
+func NewManagerWithTokenManager(
+	log *logger.Logger,
+	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister,
+	httpRouteLister gatewaylisters.HTTPRouteLister,
+	gatewayRef GatewayRef,
+	tokenMgr tokenManagerInterface,
+) (*Manager, error) {
+	if log == nil {
+		return nil, errors.New("log is required")
+	}
+	if llmIsvcLister == nil {
+		return nil, errors.New("llmIsvcLister is required")
+	}
+	if httpRouteLister == nil {
+		return nil, errors.New("httpRouteLister is required")
+	}
+
+	return &Manager{
+		llmIsvcLister:   llmIsvcLister,
+		httpRouteLister: httpRouteLister,
+		gatewayRef:      gatewayRef,
+		logger:          log,
+		tokenManager:    tokenMgr,
+	}, nil
 }
 
 // ListAvailableLLMs lists LLM models that the user has access to based on authorization checks.

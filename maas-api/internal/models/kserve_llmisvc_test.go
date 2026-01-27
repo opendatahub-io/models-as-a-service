@@ -254,7 +254,6 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			manager, errMgr := models.NewManager(
 				testLogger,
-				fixtures.NewInferenceServiceLister(),
 				fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects(tt.llmServices)...),
 				fixtures.NewHTTPRouteLister(fixtures.ToRuntimeObjects(tt.httpRoutes)...),
 				gateway,
@@ -310,7 +309,6 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 	t.Run("user with valid token has access", func(t *testing.T) {
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -327,7 +325,6 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 	t.Run("user with invalid token has no access", func(t *testing.T) {
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
