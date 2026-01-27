@@ -177,6 +177,23 @@ setup_vars_for_tests() {
     if [ "$INSECURE_HTTP" = "true" ]; then
         echo "⚠️  INSECURE_HTTP=true - will use HTTP for tests"
     fi
+
+    # Detect MAAS_API_BASE_URL while logged in as admin (non-admin users can't read cluster ingress)
+    CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || true)
+    if [ -z "$CLUSTER_DOMAIN" ]; then
+        echo "❌ ERROR: Failed to detect cluster ingress domain"
+        exit 1
+    fi
+    HOST="maas.${CLUSTER_DOMAIN}"
+    
+    if [ "$INSECURE_HTTP" = "true" ]; then
+        MAAS_API_BASE_URL="http://${HOST}/maas-api"
+    else
+        MAAS_API_BASE_URL="https://${HOST}/maas-api"
+    fi
+    export HOST
+    export MAAS_API_BASE_URL
+    echo "MAAS_API_BASE_URL: ${MAAS_API_BASE_URL}"
     
     echo "✅ Variables for tests setup completed"
 }
@@ -244,37 +261,59 @@ deploy_models
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
-# Setup all users first (while logged in as admin)
-print_header "Setting up test users"
-setup_test_user "tester-admin-user" "cluster-admin"
-setup_test_user "tester-edit-user" "edit"
-setup_test_user "tester-view-user" "view"
+# Setup HTPasswd identity provider and capture credentials
+print_header "Setting up HTPasswd Identity Provider"
+IDP_OUTPUT=$("$PROJECT_ROOT/test/e2e/scripts/setup-idp-openshift.sh" 2>&1) || {
+    echo "❌ ERROR: HTPasswd identity provider setup failed"
+    # Print output but filter out export statements containing credentials
+    echo "$IDP_OUTPUT" | grep -v '^export '
+    exit 1
+}
+# Print output but filter out export statements containing credentials
+echo "$IDP_OUTPUT" | grep -v '^export '
+
+# Extract and export credentials from the setup script output (silently)
+eval "$(echo "$IDP_OUTPUT" | grep '^export ')"
+
+if [ -z "${OPENSHIFT_ADMIN_USER:-}" ] || [ -z "${OPENSHIFT_ADMIN_PASS:-}" ]; then
+    echo "❌ ERROR: Failed to retrieve admin credentials from IDP setup"
+    exit 1
+fi
+echo "✅ HTPasswd identity provider setup completed"
+
+# Login as admin user for the next steps
+print_header "Logging in as admin user"
+echo "Logging in as ${OPENSHIFT_ADMIN_USER}..."
+if ! oc login -u "$OPENSHIFT_ADMIN_USER" -p "$OPENSHIFT_ADMIN_PASS" "$K8S_CLUSTER_URL" --insecure-skip-tls-verify=true; then
+    echo "❌ ERROR: Failed to login as admin user"
+    exit 1
+fi
+echo "✅ Logged in as ${OPENSHIFT_ADMIN_USER}"
 
 # Now run tests for each user
 print_header "Running tests for all users"
-
-# Test admin user
-print_header "Running Maas e2e Tests as admin user"
-ADMIN_TOKEN=$(oc create token tester-admin-user -n default)
-oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
 
 print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
 run_token_verification
 
+echo "Waiting for the rate limit to reset..."
 sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
 
-# Test edit user  
-print_header "Running Maas e2e Tests as edit user"
-EDIT_TOKEN=$(oc create token tester-edit-user -n default)
-oc login --token "$EDIT_TOKEN" --server "$K8S_CLUSTER_URL"
+# Test dev user (edit role)
+print_header "Running Maas e2e Tests as dev user"
+if [ -z "${OPENSHIFT_DEV_USER:-}" ] || [ -z "${OPENSHIFT_DEV_PASS:-}" ]; then
+    echo "❌ ERROR: Dev user credentials not available"
+    exit 1
+fi
+echo "Logging in as ${OPENSHIFT_DEV_USER}..."
+if ! oc login -u "$OPENSHIFT_DEV_USER" -p "$OPENSHIFT_DEV_PASS" "$K8S_CLUSTER_URL" --insecure-skip-tls-verify=true; then
+    echo "❌ ERROR: Failed to login as dev user"
+    exit 1
+fi
+echo "✅ Logged in as ${OPENSHIFT_DEV_USER}"
 run_smoke_tests
 
-# Test view user
-print_header "Running Maas e2e Tests as view user"
-VIEW_TOKEN=$(oc create token tester-view-user -n default)
-oc login --token "$VIEW_TOKEN" --server "$K8S_CLUSTER_URL"
-run_smoke_tests
 
 echo "🎉 Deployment completed successfully!"
