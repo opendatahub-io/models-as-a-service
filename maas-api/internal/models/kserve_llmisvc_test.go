@@ -293,7 +293,6 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) { //nolint:maintidx // ta
 			llmServices := tt.llmServices(mockServer.URL)
 			manager, errMgr := models.NewManager(
 				testLogger,
-				fixtures.NewInferenceServiceLister(),
 				fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects(llmServices)...),
 				fixtures.NewHTTPRouteLister(fixtures.ToRuntimeObjects(tt.httpRoutes)...),
 				gateway,
@@ -373,7 +372,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		llmService := makeLLMService("llama-2-7b-service", "model-serving", mockServer.URL, nil)
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -420,7 +418,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		llmService := makeLLMService("mistral-7b-service", "ml-team", mockServer.URL, nil)
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -477,7 +474,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService1, llmService2),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -541,7 +537,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -577,7 +572,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		llmService := makeLLMService("empty-service", "test-ns", mockServer.URL, nil)
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -608,7 +602,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -640,7 +633,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -672,7 +664,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		llmService := makeLLMService("timestamp-service", "test-ns", mockServer.URL, nil)
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -705,7 +696,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		llmService := makeLLMService("no-timestamp-service", "test-ns", mockServer.URL, nil)
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -740,7 +730,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		llmService := makeLLMService("fallback-test-service", "my-namespace", mockServer.URL, nil)
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(llmService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -784,7 +773,6 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(authService, unauthService),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -837,7 +825,6 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 	t.Run("user with valid token has access", func(t *testing.T) {
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
 			fixtures.NewHTTPRouteLister(),
 			gateway,
@@ -854,7 +841,6 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 	t.Run("user with invalid token has no access", func(t *testing.T) {
 		manager, errMgr := models.NewManager(
 			testLogger,
-			fixtures.NewInferenceServiceLister(),
 			fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
 			fixtures.NewHTTPRouteLister(),
 			gateway,

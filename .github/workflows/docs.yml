@@ -18,6 +18,12 @@ on:
 permissions:
   contents: write
 
+env:
+  # Set to 'false' to allow external link failures without failing the build
+  # Configure via: Settings → Secrets and variables → Actions → Variables → New repository variable ->
+  # Name: FAIL_ON_BROKEN_LINKS, Value: false
+  FAIL_ON_BROKEN_LINKS: ${{ vars.FAIL_ON_BROKEN_LINKS || 'true' }}
+
 concurrency:
   group: "pages"
   cancel-in-progress: false
@@ -30,11 +36,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check Markdown Links
+      - name: Check Internal Links
         uses: becheran/mlc@v1.2.0
         with:
-          # To skip checking http/https links, add: --offline
-          args: .
+          # Only check local/internal links - these must pass
+          args: --offline .
+
+      - name: Check External Links
+        run: |
+          # Install mlc
+          curl -sLO https://github.com/becheran/mlc/releases/download/v1.2.0/mlc-x86_64-linux
+          chmod +x mlc-x86_64-linux
+          sudo mv mlc-x86_64-linux /usr/local/bin/mlc
+          
+          # Run external link check and capture output
+          set +e
+          OUTPUT=$(mlc . 2>&1)
+          EXIT_CODE=$?
+          set -e
+          echo "$OUTPUT"
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "✅ All external links are valid"
+          else
+            echo "FAIL_ON_BROKEN_LINKS value: '$FAIL_ON_BROKEN_LINKS'"
+            if [ "$FAIL_ON_BROKEN_LINKS" == "true" ]; then
+              echo "❌ External link check failed. See broken links above."
+              exit 1
+            else
+              echo "::warning::Some external links may be broken (FAIL_ON_BROKEN_LINKS=false, continuing)"
+            fi
+          fi
+        shell: bash
 
   # Build job for PRs - just validates the docs build
   build-pr:

@@ -2,18 +2,32 @@ package models
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"knative.dev/pkg/apis"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+)
+
+// HTTP client configuration for model discovery.
+const (
+	httpClientTimeout   = 5 * time.Second
+	httpMaxIdleConns    = 100
+	httpIdleConnTimeout = 90 * time.Second
 )
 
 // maxDiscoveryConcurrency limits parallel HTTP calls during model discovery
@@ -23,6 +37,49 @@ const maxDiscoveryConcurrency = 10
 type GatewayRef struct {
 	Name      string
 	Namespace string
+}
+
+type Manager struct {
+	llmIsvcLister   kservelistersv1alpha1.LLMInferenceServiceLister
+	httpRouteLister gatewaylisters.HTTPRouteLister
+	gatewayRef      GatewayRef
+	logger          *logger.Logger
+	httpClient      *http.Client
+}
+
+func NewManager(
+	log *logger.Logger,
+	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister,
+	httpRouteLister gatewaylisters.HTTPRouteLister,
+	gatewayRef GatewayRef,
+) (*Manager, error) {
+	if log == nil {
+		return nil, errors.New("log is required")
+	}
+	if llmIsvcLister == nil {
+		return nil, errors.New("llmIsvcLister is required")
+	}
+	if httpRouteLister == nil {
+		return nil, errors.New("httpRouteLister is required")
+	}
+
+	return &Manager{
+		llmIsvcLister:   llmIsvcLister,
+		httpRouteLister: httpRouteLister,
+		gatewayRef:      gatewayRef,
+		logger:          log,
+		httpClient: &http.Client{
+			Timeout: httpClientTimeout,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // To handle custom/self-signed certs we simply skip verification for now
+				},
+				MaxIdleConns:        httpMaxIdleConns,
+				MaxIdleConnsPerHost: maxDiscoveryConcurrency, // match goroutine limit
+				IdleConnTimeout:     httpIdleConnTimeout,
+			},
+		},
+	}, nil
 }
 
 // ListAvailableLLMs discovers and returns models from authorized LLMInferenceServices.

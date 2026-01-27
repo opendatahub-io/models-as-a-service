@@ -178,7 +178,6 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	modelManager, err := models.NewManager(
 		log,
-		cluster.InferenceServiceLister,
 		cluster.LLMInferenceServiceLister,
 		cluster.HTTPRouteLister,
 		models.GatewayRef{Name: cfg.GatewayName, Namespace: cfg.GatewayNamespace},
