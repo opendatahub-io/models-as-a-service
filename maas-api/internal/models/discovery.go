@@ -149,22 +149,27 @@ func (m *Manager) parseModelsResponse(body io.Reader, llmIsvcName string) ([]ope
 	return response.Data, nil
 }
 
-func (m *Manager) enrichModels(discovered []openai.Model, svcMetadata llmInferenceServiceMetadata) []Model {
-	models := make([]Model, 0, len(discovered))
-	for _, dm := range discovered {
-		model := Model{
-			Model:   dm,
-			URL:     svcMetadata.URL,
-			Ready:   svcMetadata.Ready,
-			Details: svcMetadata.Details,
-		}
-		if model.OwnedBy == "" {
-			model.OwnedBy = svcMetadata.Namespace
-		}
-		if model.Created == 0 {
-			model.Created = svcMetadata.Created
-		}
-		models = append(models, model)
+func (m *Manager) enrichModel(discovered []openai.Model, llmIsvcMetadata llmInferenceServiceMetadata) *Model {
+	if len(discovered) == 0 {
+		return nil
 	}
-	return models
+
+	model := Model{
+		Model:   discovered[0],
+		URL:     llmIsvcMetadata.URL,
+		Ready:   llmIsvcMetadata.Ready,
+		Details: llmIsvcMetadata.Details,
+	}
+	if model.OwnedBy == "" {
+		model.OwnedBy = llmIsvcMetadata.Namespace
+	}
+	if model.Created == 0 {
+		model.Created = llmIsvcMetadata.Created
+	}
+
+	for i := 1; i < len(discovered); i++ {
+		model.Aliases = append(model.Aliases, discovered[i].ID)
+	}
+
+	return &model
 }

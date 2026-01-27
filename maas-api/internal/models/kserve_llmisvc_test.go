@@ -254,7 +254,7 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) { //nolint:maintidx // ta
 			expectMatch: []string{},
 		},
 		{
-			name:           "discovers multiple models from single service",
+			name:           "discovers model with aliases from single service",
 			serverModelIDs: []string{"base-model", "model-alias-1", "model-alias-2"},
 			llmServices: func(serverURL string) []*kservev1alpha1.LLMInferenceService {
 				return []*kservev1alpha1.LLMInferenceService{
@@ -275,7 +275,8 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) { //nolint:maintidx // ta
 					},
 				}
 			},
-			expectMatch: []string{"base-model", "model-alias-1", "model-alias-2"},
+			// First discovered model becomes canonical, rest become aliases
+			expectMatch: []string{"base-model"},
 		},
 	}
 
@@ -382,21 +383,18 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		discoveredModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
 		require.NoError(t, err)
 
-		require.Len(t, discoveredModels, 3, "Expected 3 models: base + 2 aliases")
+		require.Len(t, discoveredModels, 1, "Expected 1 canonical model with aliases")
 
-		modelIDs := make([]string, len(discoveredModels))
-		for i, m := range discoveredModels {
-			modelIDs[i] = m.ID
-		}
-		assert.ElementsMatch(t, []string{"meta-llama/Llama-2-7b-hf", "llama-2-sql", "llama-2-chat"}, modelIDs)
+		m := discoveredModels[0]
+		// First discovered model becomes canonical
+		assert.Equal(t, "meta-llama/Llama-2-7b-hf", m.ID, "First model should be canonical")
+		assert.ElementsMatch(t, []string{"llama-2-sql", "llama-2-chat"}, m.Aliases, "Other models should be aliases")
 
-		// All models should share the same service context (URL, Ready state)
-		for _, m := range discoveredModels {
-			assert.Equal(t, mockServer.URL, m.URL.String(), "All models should have the service URL")
-			assert.True(t, m.Ready, "All models should inherit Ready state from service")
-			// Server-provided owned_by is preserved
-			assert.Equal(t, "vllm", m.OwnedBy, "OwnedBy from server response should be preserved")
-		}
+		// Model should have service context
+		assert.Equal(t, mockServer.URL, m.URL.String(), "Model should have the service URL")
+		assert.True(t, m.Ready, "Model should inherit Ready state from service")
+		// Server-provided owned_by is preserved
+		assert.Equal(t, "vllm", m.OwnedBy, "OwnedBy from server response should be preserved")
 	})
 
 	t.Run("vLLM with many model aliases", func(t *testing.T) {
@@ -432,7 +430,15 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		discoveredModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
 		require.NoError(t, err)
 
-		require.Len(t, discoveredModels, 6, "Expected 6 models: 1 base + 5 aliases")
+		require.Len(t, discoveredModels, 1, "Expected 1 canonical model")
+
+		m := discoveredModels[0]
+		assert.Equal(t, "mistralai/Mistral-7B-v0.1", m.ID, "First model should be canonical")
+		assert.Len(t, m.Aliases, 5, "Expected 5 aliases")
+		assert.ElementsMatch(t, []string{
+			"mistral-code-review", "mistral-summarization", "mistral-translation-en-es",
+			"mistral-translation-en-de", "mistral-customer-support",
+		}, m.Aliases)
 	})
 
 	t.Run("multiple services each with multiple models", func(t *testing.T) {
@@ -481,31 +487,36 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		discoveredModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
 		require.NoError(t, err)
 
-		require.Len(t, discoveredModels, 5, "Expected 5 models total: 2 from service 1 + 3 from service 2")
+		require.Len(t, discoveredModels, 2, "Expected 2 canonical models: 1 from each service")
 
-		modelIDs := make([]string, len(discoveredModels))
-		for i, m := range discoveredModels {
-			modelIDs[i] = m.ID
+		// Find models by canonical ID
+		var llamaModel, mistralModel *models.Model
+		for i := range discoveredModels {
+			switch discoveredModels[i].ID {
+			case "llama-2-7b":
+				llamaModel = &discoveredModels[i]
+			case "mistral-7b":
+				mistralModel = &discoveredModels[i]
+			}
 		}
-		assert.ElementsMatch(t, []string{
-			"llama-2-7b", "llama-2-sql",
-			"mistral-7b", "mistral-code", "mistral-chat",
-		}, modelIDs)
+		require.NotNil(t, llamaModel, "Expected llama canonical model")
+		require.NotNil(t, mistralModel, "Expected mistral canonical model")
+
+		// Verify aliases
+		assert.ElementsMatch(t, []string{"llama-2-sql"}, llamaModel.Aliases)
+		assert.ElementsMatch(t, []string{"mistral-code", "mistral-chat"}, mistralModel.Aliases)
 
 		// Verify models are associated with correct service URLs
-		for _, m := range discoveredModels {
-			if m.ID == "llama-2-7b" || m.ID == "llama-2-sql" {
-				assert.Equal(t, mockServer1.URL, m.URL.String())
-			} else {
-				assert.Equal(t, mockServer2.URL, m.URL.String())
-			}
-			// Server-provided owned_by is preserved
-			assert.Equal(t, "vllm", m.OwnedBy, "Server-provided OwnedBy should be preserved")
-		}
+		assert.Equal(t, mockServer1.URL, llamaModel.URL.String())
+		assert.Equal(t, mockServer2.URL, mistralModel.URL.String())
+
+		// Server-provided owned_by is preserved
+		assert.Equal(t, "vllm", llamaModel.OwnedBy, "Server-provided OwnedBy should be preserved")
+		assert.Equal(t, "vllm", mistralModel.OwnedBy, "Server-provided OwnedBy should be preserved")
 	})
 
-	t.Run("service metadata is inherited by all discovered models", func(t *testing.T) {
-		// Test that Details from LLMInferenceService annotations are applied to all discovered models
+	t.Run("service metadata is inherited by discovered model", func(t *testing.T) {
+		// Test that Details from LLMInferenceService annotations are applied to the canonical model
 		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			response := `{
@@ -540,15 +551,17 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		discoveredModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
 		require.NoError(t, err)
 
-		require.Len(t, discoveredModels, 2)
+		require.Len(t, discoveredModels, 1)
 
-		// Both models should inherit the same Details from the service
-		for _, m := range discoveredModels {
-			require.NotNil(t, m.Details, "Expected Details to be set for model %s", m.ID)
-			assert.Equal(t, "Code Generation", m.Details.GenAIUseCase)
-			assert.Equal(t, "IBM Granite model family for code", m.Details.Description)
-			assert.Equal(t, "Granite Code Models", m.Details.DisplayName)
-		}
+		m := discoveredModels[0]
+		assert.Equal(t, "granite-7b-base", m.ID, "First model should be canonical")
+		assert.ElementsMatch(t, []string{"granite-7b-code"}, m.Aliases)
+
+		// Model should inherit Details from the service
+		require.NotNil(t, m.Details, "Expected Details to be set")
+		assert.Equal(t, "Code Generation", m.Details.GenAIUseCase)
+		assert.Equal(t, "IBM Granite model family for code", m.Details.Description)
+		assert.Equal(t, "Granite Code Models", m.Details.DisplayName)
 	})
 
 	t.Run("empty model list from server", func(t *testing.T) {
@@ -737,12 +750,13 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		discoveredModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
 		require.NoError(t, err)
 
-		require.Len(t, discoveredModels, 2)
+		require.Len(t, discoveredModels, 1)
 
-		// Both models should use namespace as OwnedBy since server returned empty
-		for _, m := range discoveredModels {
-			assert.Equal(t, "my-namespace", m.OwnedBy, "Namespace should be used as OwnedBy fallback for model %s", m.ID)
-		}
+		m := discoveredModels[0]
+		assert.Equal(t, "model-no-owner", m.ID)
+		assert.ElementsMatch(t, []string{"model-null-owner"}, m.Aliases)
+		// Model should use namespace as OwnedBy since server returned empty
+		assert.Equal(t, "my-namespace", m.OwnedBy, "Namespace should be used as OwnedBy fallback")
 	})
 
 	t.Run("partial authorization - one service authorized, one not", func(t *testing.T) {

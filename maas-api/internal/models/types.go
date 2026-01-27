@@ -18,12 +18,18 @@ type Details struct {
 }
 
 // Model extends openai.Model with additional fields.
+//
+// The ID field contains the canonical model identifier, which is used for metrics,
+// billing, and API responses. When a model server returns multiple model names
+// (e.g., vLLM served model names), the first discovered model becomes the canonical ID.
+// Alternative model names are stored in the Aliases field.
 type Model struct {
 	openai.Model `json:",inline"`
 
 	URL     *apis.URL `json:"url,omitempty"`
 	Ready   bool      `json:"ready"`
 	Details *Details  `json:"modelDetails,omitempty"`
+	Aliases []string  `json:"aliases,omitempty"`
 }
 
 // UnmarshalJSON implements custom JSON unmarshalling to work around openai.Model's

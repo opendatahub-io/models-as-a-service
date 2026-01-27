@@ -49,11 +49,11 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 
 	for _, llmIsvc := range instanceLLMs {
 		g.Go(func() error {
-			models := m.discoverModels(ctx, llmIsvc, saToken)
-			if len(models) > 0 {
+			model := m.discoverModel(ctx, llmIsvc, saToken)
+			if model != nil {
 				mu.Lock()
 				defer mu.Unlock()
-				authorizedModels = append(authorizedModels, models...)
+				authorizedModels = append(authorizedModels, *model)
 			}
 			return nil
 		})
@@ -64,9 +64,9 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 	return authorizedModels, nil
 }
 
-func (m *Manager) discoverModels(ctx context.Context, llmIsvc *kservev1alpha1.LLMInferenceService, saToken string) []Model {
-	svcMetadata := m.extractMetadata(llmIsvc)
-	if svcMetadata.URL == nil {
+func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLMInferenceService, saToken string) *Model {
+	llmIsvcMetadata := m.extractMetadata(llmIsvc)
+	if llmIsvcMetadata.URL == nil {
 		m.logger.Debug("LLMInferenceService has no URL, skipping",
 			"namespace", llmIsvc.Namespace,
 			"name", llmIsvc.Name,
@@ -74,7 +74,7 @@ func (m *Manager) discoverModels(ctx context.Context, llmIsvc *kservev1alpha1.LL
 		return nil
 	}
 
-	endpoint, err := url.JoinPath(svcMetadata.URL.String(), "/v1/models")
+	endpoint, err := url.JoinPath(llmIsvcMetadata.URL.String(), "/v1/models")
 	if err != nil {
 		m.logger.Error("Failed to create endpoint URL",
 			"namespace", llmIsvc.Namespace,
@@ -84,12 +84,12 @@ func (m *Manager) discoverModels(ctx context.Context, llmIsvc *kservev1alpha1.LL
 		return nil
 	}
 
-	discoveredModels := m.fetchModelsWithRetry(ctx, endpoint, saToken, svcMetadata)
+	discoveredModels := m.fetchModelsWithRetry(ctx, endpoint, saToken, llmIsvcMetadata)
 	if discoveredModels == nil {
 		return nil
 	}
 
-	return m.enrichModels(discoveredModels, svcMetadata)
+	return m.enrichModel(discoveredModels, llmIsvcMetadata)
 }
 
 func (m *Manager) extractMetadata(llmIsvc *kservev1alpha1.LLMInferenceService) llmInferenceServiceMetadata {

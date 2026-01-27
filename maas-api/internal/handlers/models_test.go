@@ -22,8 +22,19 @@ import (
 )
 
 // makeModelsResponse creates a JSON response for /v1/models endpoint.
-func makeModelsResponse(modelID string) []byte {
-	return fmt.Appendf(nil, `{"object":"list","data":[{"id":%q,"object":"model","created":1700000000,"owned_by":"test"}]}`, modelID)
+func makeModelsResponse(modelIDs ...string) []byte {
+	if len(modelIDs) == 0 {
+		return []byte(`{"object":"list","data":[]}`)
+	}
+	if len(modelIDs) == 1 {
+		return fmt.Appendf(nil, `{"object":"list","data":[{"id":%q,"object":"model","created":1700000000,"owned_by":"test"}]}`, modelIDs[0])
+	}
+	// Multiple models
+	data := make([]string, 0, len(modelIDs))
+	for _, id := range modelIDs {
+		data = append(data, fmt.Sprintf(`{"id":%q,"object":"model","created":1700000000,"owned_by":"test"}`, id))
+	}
+	return fmt.Appendf(nil, `{"object":"list","data":[%s]}`, strings.Join(data, ","))
 }
 
 // createMockModelServer creates a test server that returns a valid /v1/models response.
