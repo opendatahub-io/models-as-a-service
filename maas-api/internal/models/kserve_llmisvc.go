@@ -71,8 +71,18 @@ func NewManager(
 		httpClient: &http.Client{
 			Timeout: httpClientTimeout,
 			Transport: &http.Transport{
+				// TLS certificate verification is skipped for model discovery requests.
+				// Security context:
+				// - Traffic is cluster-internal only (gateway loopback to LLMInferenceService endpoints)
+				// - Kubernetes clusters often use self-signed or cluster-issued certificates
+				// - Authentication is enforced via Bearer token (ServiceAccount token in Authorization header)
+				// - Authorization is validated by the model server/gateway, not by this client
+				// An attacker capable of MITM within the cluster network would already have sufficient access
+				// to compromise the system through other means. This is a trade-off between security and convenience.
+				// Potential mitigation: Use the internal gateway Service (ClusterIP) instead of the
+				// external route/ingress URL to ensure traffic never leaves the cluster network.
 				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec // To handle custom/self-signed certs we simply skip verification for now
+					InsecureSkipVerify: true, //nolint:gosec // See security context above
 				},
 				MaxIdleConns:        httpMaxIdleConns,
 				MaxIdleConnsPerHost: maxDiscoveryConcurrency, // match goroutine limit

@@ -527,11 +527,10 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 		}))
 		defer mockServer.Close()
 
-		// Use correct annotation keys from constant package
 		annotations := map[string]string{
-			"opendatahub.io/genai-use-case": "Code Generation",
-			"openshift.io/description":      "IBM Granite model family for code",
-			"openshift.io/display-name":     "Granite Code Models",
+			constant.AnnotationGenAIUseCase: "Code Generation",
+			constant.AnnotationDescription:  "IBM Granite model family for code",
+			constant.AnnotationDisplayName:  "Granite Code Models",
 		}
 		llmService := makeLLMService("granite-service", "ibm-models", mockServer.URL, annotations)
 
