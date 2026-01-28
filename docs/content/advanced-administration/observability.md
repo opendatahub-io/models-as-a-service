@@ -5,16 +5,14 @@ This document covers the observability stack for the MaaS Platform, including me
 !!! warning "Important"
     [User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.20/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled in order to collect metrics.
 
-    Add `enableUserWorkload: true` to the `cluster-monitoring-config` in the `openshift-monitoring` namespace. See [cluster-monitoring-config.yaml](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/observability/cluster-monitoring-config.yaml) for an example.
+    Add `enableUserWorkload: true` to the `cluster-monitoring-config` in the `openshift-monitoring` namespace
 
 ## Overview
 
-As part of Dev Preview, MaaS Platform includes a basic observability stack that provides insights into system performance, usage patterns, and operational health.
+As part of Dev Preview MaaS Platform includes a basic observability stack that provides insights into system performance, usage patterns, and operational health. The observability stack consists of:
 
 !!! note
-    The observability stack will be enhanced in future releases.
-
-The observability stack consists of:
+   The observability stack will be enhanced in the future.
 
 - **Limitador**: Rate limiting service that exposes metrics
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
@@ -29,12 +27,10 @@ Limitador exposes several key metrics that are collected through a ServiceMonito
 
 #### Rate Limiting Metrics
 
-- `authorized_hits`: Total tokens consumed for authorized requests (extracted from `usage.total_tokens` in model responses)
-- `authorized_calls`: Number of requests allowed
-- `limited_calls`: Number of requests denied due to rate limiting
-
-!!! info "Token vs Request Metrics"
-    With `TokenRateLimitPolicy`, `authorized_hits` tracks **token consumption** (extracted from LLM response bodies), not request counts. Use `authorized_calls` for request counts.
+- `limitador_ratelimit_requests_total`: Total number of rate limit requests
+- `limitador_ratelimit_allowed_total`: Number of requests allowed
+- `limitador_ratelimit_denied_total`: Number of requests denied
+- `limitador_ratelimit_errors_total`: Number of rate limiting errors
 
 #### Performance Metrics
 
@@ -43,13 +39,11 @@ Limitador exposes several key metrics that are collected through a ServiceMonito
 - `limitador_ratelimit_cache_hits_total`: Cache hit rate
 - `limitador_ratelimit_cache_misses_total`: Cache miss rate
 
-#### Labels via TelemetryPolicy
+#### Tier-Based Metrics
 
-The TelemetryPolicy adds these labels to Limitador metrics:
-
-- `user`: User identifier (extracted from `auth.identity.userid`)
-- `tier`: User tier (extracted from `auth.identity.tier`)
-- `model`: Model name (extracted from request path)
+- `limitador_ratelimit_tier_requests_total`: Requests per tier
+- `limitador_ratelimit_tier_allowed_total`: Allowed requests per tier
+- `limitador_ratelimit_tier_denied_total`: Denied requests per tier
 
 ### ServiceMonitor Configuration
 
@@ -113,20 +107,19 @@ This Red Hat documentation provides:
 - Limitador custom resource updates
 - Production-ready setup instructions
 
-For local development and testing, you can also use our [Limitador Persistence](limitador-persistence.md) guide which includes a basic Redis setup script.
+For local development and testing, you can also use our [Limitador Persistence](limitador-persistence.md) guide which includes a basic Redis setup script that works with any Kubernetes cluster.
 
-## Visualization
+## Grafana Dashboards
 
-For dashboard visualization, refer to the official documentation:
+### MaaS Platform Overview Dashboard
 
-- **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
-- **Grafana**: [Grafana Documentation](https://grafana.com/docs/grafana/latest/)
+We are providing a basic dashboard for the MaaS Platform that can be used to get a quick
+overview of the system. Its definition can be found and imported from the following 
+link:
+[maas-token-metrics-dashboard.json](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
-### Sample Dashboard
-
-A sample Grafana dashboard for token metrics is available:
-
-- [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
+See more detailed description of the Grafana Dashboard in [its README of the 
+repository](https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/dashboards).
 
 To import into Grafana:
 
@@ -148,13 +141,54 @@ To import into Grafana:
 
 | Metric | Description | Labels |
 |--------|-------------|--------|
-| `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name` |
+| `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name`, `user` |
 | `vllm:e2e_request_latency_seconds` | Model inference latency | `model_name` |
+
+#### Per-User Latency Tracking
+
+The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to gateway latency metrics. This enables tracking request latency per authenticated user.
+
+**How it works:**
+
+1. The `gateway-auth-policy` injects the `X-MaaS-Username` header from the authenticated identity
+2. The Istio Telemetry resource extracts this header and adds it as a `user` label to the `REQUEST_DURATION` metric
+3. Prometheus scrapes these metrics from the Istio gateway
+
+**Configuration** (`deployment/base/observability/istio-telemetry.yaml`):
+
+```yaml
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: latency-per-user
+  namespace: openshift-ingress
+spec:
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: maas-default-gateway
+  metrics:
+  - providers:
+    - name: prometheus
+    overrides:
+    - match:
+        metric: REQUEST_DURATION
+        mode: CLIENT_AND_SERVER
+      tagOverrides:
+        user:
+          operation: UPSERT
+          value: request.headers["x-maas-username"]
+```
+
+!!! note "Security"
+    The `X-MaaS-Username` header is injected by the AuthPolicy from the authenticated identity, not from client input. This prevents users from spoofing the header to manipulate metrics attribution.
 
 ### Common Queries
 
     # Token consumption per user
     sum by (user) (authorized_hits)
+
+    # P99 latency per user (filter out unauthenticated requests)
+    histogram_quantile(0.99, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!="",user!="unknown"}[5m])))
 
     # Request rate per tier
     sum by (tier) (rate(authorized_calls[5m]))
@@ -171,6 +205,9 @@ To import into Grafana:
     # Rate limit violations by tier
     sum by (tier) (rate(limited_calls[5m]))
 
+!!! tip "Filtering Unauthenticated Requests"
+    For per-user latency queries, use `user!="",user!="unknown"` to exclude requests that failed authentication (where the `X-MaaS-Username` header was not injected or has a default value). Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
+
 ## Known Limitations
 
 ### Currently Blocked Features
@@ -179,8 +216,14 @@ Some dashboard features require upstream changes and are currently blocked:
 
 | Feature | Blocker | Workaround |
 |---------|---------|------------|
-| **Latency per user** | Istio metrics don't include `user` label | Requires EnvoyFilter to inject user context |
 | **Input/Output token breakdown per user** | vLLM doesn't label metrics with `user` | Total tokens available via `authorized_hits`; breakdown requires vLLM changes |
 
 !!! note "Total Tokens vs Token Breakdown"
     Total token consumption per user **is available** via `authorized_hits{user="..."}`. The blocked feature is specifically the input/output token breakdown (prompt vs generation tokens) per user, which requires vLLM to accept user context in requests.
+
+### Available Per-User Metrics
+
+| Feature | Metric | Label |
+|---------|--------|-------|
+| **Latency per user** | `istio_request_duration_milliseconds_bucket` | `user` |
+| **Token consumption per user** | `authorized_hits` | `user` |

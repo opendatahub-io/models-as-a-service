@@ -66,6 +66,10 @@ spec:
               value: post
     response:
       success:
+        headers:
+          X-MaaS-Username:
+            plain:
+              selector: auth.identity.userid
         filters:
           identity:
             json:

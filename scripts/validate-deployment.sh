@@ -19,6 +19,7 @@ INFERENCE_ENDPOINT="chat/completions"  # Default to chat completions
 CUSTOM_MODEL_PATH=""  # Custom path for model endpoint (overrides --endpoint)
 RATE_LIMIT_TEST_COUNT=10  # Default number of requests for rate limit testing
 MAX_TOKENS=50  # Default max_tokens for requests
+MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"  # Default namespace for MaaS API (use --namespace to override)
 
 # Show help if requested
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
@@ -46,6 +47,8 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "                            Default: 10"
     echo "  --max-tokens N            Maximum number of tokens to generate per request"
     echo "                            Default: 50"
+    echo "  -n, --namespace NS        Namespace where MaaS API is deployed"
+    echo "                            Default: opendatahub (or MAAS_API_NAMESPACE env var)"
     echo ""
     echo "Examples:"
     echo "  # Basic validation"
@@ -100,6 +103,14 @@ while [ $# -gt 0 ]; do
                 echo "Error: --max-tokens must be a positive integer"
                 exit 1
             fi
+            shift 2
+            ;;
+        --namespace|-n)
+            if [ -z "$2" ] || [ "${2#-}" != "$2" ]; then
+                echo "Error: --namespace requires a value (e.g., --namespace maas-api)" >&2
+                exit 1
+            fi
+            MAAS_API_NAMESPACE="$2"
             shift 2
             ;;
         -*)
@@ -223,13 +234,13 @@ fi
 # ==========================================
 print_header "1️⃣ Component Status Checks"
 
-# Check MaaS API pods (runs in opendatahub namespace)
+# Check MaaS API pods
 print_check "MaaS API pods"
-MAAS_PODS=$(kubectl get pods -n opendatahub -l app.kubernetes.io/name=maas-api --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+MAAS_PODS=$(kubectl get pods -n "$MAAS_API_NAMESPACE" -l app.kubernetes.io/name=maas-api --no-headers 2>/dev/null | grep -c "Running" || echo "0")
 if [ "$MAAS_PODS" -gt 0 ]; then
     print_success "MaaS API has $MAAS_PODS running pod(s)"
 else
-    print_fail "No MaaS API pods running" "Pods may be starting or failed" "Check: kubectl get pods -n opendatahub -l app.kubernetes.io/name=maas-api"
+    print_fail "No MaaS API pods running" "Pods may be starting or failed" "Check: kubectl get pods -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api"
 fi
 
 # Check Kuadrant pods
@@ -314,10 +325,10 @@ else
 fi
 
 print_check "HTTPRoute for maas-api"
-if kubectl get httproute maas-api-route -n opendatahub &>/dev/null; then
+if kubectl get httproute maas-api-route -n "$MAAS_API_NAMESPACE" &>/dev/null; then
     # Check if any parent has an Accepted condition with status True
     # HTTPRoutes can have multiple parents (Kuadrant policies + gateway controller)
-    HTTPROUTE_ACCEPTED=$(kubectl get httproute maas-api-route -n opendatahub -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null | grep -q "True" && echo "True" || echo "False")
+    HTTPROUTE_ACCEPTED=$(kubectl get httproute maas-api-route -n "$MAAS_API_NAMESPACE" -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null | grep -q "True" && echo "True" || echo "False")
     if [ "$HTTPROUTE_ACCEPTED" = "True" ]; then
         print_success "HTTPRoute maas-api-route is configured and accepted"
     else
@@ -325,7 +336,7 @@ if kubectl get httproute maas-api-route -n opendatahub &>/dev/null; then
         print_warning "HTTPRoute maas-api-route exists but acceptance status unclear" "This is usually fine if other checks pass"
     fi
 else
-    print_fail "HTTPRoute maas-api-route not found" "API routing may not be configured" "Check: kubectl get httproute -n opendatahub"
+    print_fail "HTTPRoute maas-api-route not found" "API routing may not be configured" "Check: kubectl get httproute -n $MAAS_API_NAMESPACE"
 fi
 
 print_check "Gateway hostname"
@@ -402,7 +413,7 @@ else
             if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
                 print_fail "Connection timeout or failed to reach endpoint" \
                     "The endpoint is not reachable. This is likely because:" \
-                    "1) The endpoint is behind a VPN or firewall, 2) DNS resolution failed, 3) Gateway/Route not properly configured. Check: kubectl get gateway -n openshift-ingress && kubectl get httproute -n opendatahub"
+                    "1) The endpoint is behind a VPN or firewall, 2) DNS resolution failed, 3) Gateway/Route not properly configured. Check: kubectl get gateway -n openshift-ingress && kubectl get httproute -n $MAAS_API_NAMESPACE"
                 TOKEN=""
             elif [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
                 TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token' 2>/dev/null || echo "")
@@ -432,17 +443,17 @@ else
                         print_warning "Could not decode token payload"
                     fi
                 else
-                    print_fail "Authentication response invalid" "Received HTTP $HTTP_CODE but no token in response" "Check MaaS API logs: kubectl logs -n opendatahub -l app.kubernetes.io/name=maas-api"
+                    print_fail "Authentication response invalid" "Received HTTP $HTTP_CODE but no token in response" "Check MaaS API logs: kubectl logs -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api"
                 fi
             elif [ "$HTTP_CODE" = "404" ]; then
                 print_fail "Endpoint not found (HTTP 404)" \
                     "Traffic is reaching the Gateway/pods but the path is incorrect" \
-                    "Check HTTPRoute configuration: kubectl describe httproute maas-api-route -n opendatahub"
+                    "Check HTTPRoute configuration: kubectl describe httproute maas-api-route -n $MAAS_API_NAMESPACE"
                 TOKEN=""
             elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ]; then
                 print_fail "Gateway/Service error (HTTP $HTTP_CODE)" \
                     "The Gateway is not able to reach the backend service" \
-                    "Check: 1) MaaS API pods are running: kubectl get pods -n opendatahub -l app.kubernetes.io/name=maas-api, 2) Service exists: kubectl get svc maas-api -n opendatahub, 3) HTTPRoute is configured: kubectl describe httproute maas-api-route -n opendatahub"
+                    "Check: 1) MaaS API pods are running: kubectl get pods -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api, 2) Service exists: kubectl get svc maas-api -n $MAAS_API_NAMESPACE, 3) HTTPRoute is configured: kubectl describe httproute maas-api-route -n $MAAS_API_NAMESPACE"
                 TOKEN=""
             else
                 print_fail "Authentication failed (HTTP $HTTP_CODE)" "Response: $(echo $RESPONSE_BODY | head -c 100)" "Check AuthPolicy and MaaS API service"
@@ -531,13 +542,13 @@ else
         elif [ "$HTTP_CODE" = "404" ]; then
             print_fail "Endpoint not found (HTTP 404)" \
                 "Path is incorrect - traffic reaching pods but wrong path" \
-                "Check HTTPRoute: kubectl describe httproute maas-api-route -n opendatahub"
+                "Check HTTPRoute: kubectl describe httproute maas-api-route -n $MAAS_API_NAMESPACE"
             MODEL_NAME=""
             MODEL_CHAT_ENDPOINT=""
         elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ]; then
             print_fail "Gateway/Service error (HTTP $HTTP_CODE)" \
                 "Gateway cannot reach backend service" \
-                "Check MaaS API pods and service: kubectl get pods,svc -n opendatahub -l app.kubernetes.io/name=maas-api"
+                "Check MaaS API pods and service: kubectl get pods,svc -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api"
             MODEL_NAME=""
             MODEL_CHAT_ENDPOINT=""
         else
