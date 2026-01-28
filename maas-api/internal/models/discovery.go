@@ -21,17 +21,20 @@ const (
 	authRetry
 )
 
+const maxModelsResponseBytes int64 = 4 << 20 // 4 MiB
+
 type llmInferenceServiceMetadata struct {
-	ServiceName string // LLMInferenceService resource name (for logging)
-	ModelName   string // from spec.model.name or fallback to service name
-	URL         *apis.URL
-	Ready       bool
-	Details     *Details
-	Namespace   string
-	Created     int64
+	ServiceName    string // LLMInferenceService resource name (for logging)
+	ModelName      string // from spec.model.name or fallback to service name
+	URL            *apis.URL
+	ModelsEndpoint string // full URL to /v1/models endpoint
+	Ready          bool
+	Details        *Details
+	Namespace      string
+	Created        int64
 }
 
-func (m *Manager) fetchModelsWithRetry(ctx context.Context, endpoint, saToken string, svc llmInferenceServiceMetadata) []openai.Model {
+func (m *Manager) fetchModelsWithRetry(ctx context.Context, saToken string, svc llmInferenceServiceMetadata) []openai.Model {
 	backoff := wait.Backoff{
 		Steps:    4,
 		Duration: 100 * time.Millisecond,
@@ -45,7 +48,7 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, endpoint, saToken st
 	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
 		var models []openai.Model
 		var authRes authResult
-		models, authRes = m.fetchModels(ctx, endpoint, saToken, svc)
+		models, authRes = m.fetchModels(ctx, saToken, svc)
 		if authRes == authGranted {
 			result = models
 		}
@@ -62,8 +65,8 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, endpoint, saToken st
 	return result
 }
 
-func (m *Manager) fetchModels(ctx context.Context, endpoint, saToken string, svc llmInferenceServiceMetadata) ([]openai.Model, authResult) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+func (m *Manager) fetchModels(ctx context.Context, saToken string, svc llmInferenceServiceMetadata) ([]openai.Model, authResult) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, svc.ModelsEndpoint, nil)
 	if err != nil {
 		m.logger.Debug("Failed to create request", "service", svc.ServiceName, "error", err)
 		return nil, authRetry
@@ -81,12 +84,12 @@ func (m *Manager) fetchModels(ctx context.Context, endpoint, saToken string, svc
 	m.logger.Debug("Models fetch response",
 		"service", svc.ServiceName,
 		"statusCode", resp.StatusCode,
-		"url", endpoint,
+		"endpoint", svc.ModelsEndpoint,
 	)
 
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		models, parseErr := m.parseModelsResponse(resp.Body, svc.ServiceName)
+		models, parseErr := m.parseModelsResponse(resp.Body, svc)
 		if parseErr != nil {
 			m.logger.Debug("Failed to parse models response", "service", svc.ServiceName, "error", parseErr)
 			return nil, authRetry
@@ -111,7 +114,7 @@ func (m *Manager) fetchModels(ctx context.Context, endpoint, saToken string, svc
 		m.logger.Debug("Model endpoint returned 405 - auth succeeded, using spec.model.name as fallback model ID",
 			"service", svc.ServiceName,
 			"modelName", svc.ModelName,
-			"url", endpoint,
+			"endpoint", svc.ModelsEndpoint,
 		)
 		return []openai.Model{{
 			ID:     svc.ModelName,
@@ -128,21 +131,27 @@ func (m *Manager) fetchModels(ctx context.Context, endpoint, saToken string, svc
 	}
 }
 
-func (m *Manager) parseModelsResponse(body io.Reader, llmIsvcName string) ([]openai.Model, error) {
-	data, err := io.ReadAll(body)
+func (m *Manager) parseModelsResponse(body io.Reader, svc llmInferenceServiceMetadata) ([]openai.Model, error) {
+	// Read max+1 so we can detect "over limit" instead of silently truncating.
+	limited := io.LimitReader(body, maxModelsResponseBytes+1)
+	data, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("service %s (%s): failed to read response body: %w", svc.ServiceName, svc.ModelsEndpoint, err)
+	}
+	if int64(len(data)) > maxModelsResponseBytes {
+		return nil, fmt.Errorf("service %s (%s): models response too large (> %d bytes)", svc.ServiceName, svc.ModelsEndpoint, maxModelsResponseBytes)
 	}
 
 	var response struct {
 		Data []openai.Model `json:"data"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal models response: %w", err)
+		return nil, fmt.Errorf("service %s (%s): failed to unmarshal models response: %w", svc.ServiceName, svc.ModelsEndpoint, err)
 	}
 
 	m.logger.Debug("Discovered models from service",
-		"llmIsvcName", llmIsvcName,
+		"service", svc.ServiceName,
+		"endpoint", svc.ModelsEndpoint,
 		"modelCount", len(response.Data),
 	)
 

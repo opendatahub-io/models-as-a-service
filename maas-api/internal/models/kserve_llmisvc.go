@@ -141,7 +141,7 @@ func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLM
 		return nil
 	}
 
-	endpoint, err := url.JoinPath(llmIsvcMetadata.URL.String(), "/v1/models")
+	modelsEndpoint, err := url.JoinPath(llmIsvcMetadata.URL.String(), "/v1/models")
 	if err != nil {
 		m.logger.Error("Failed to create endpoint URL",
 			"namespace", llmIsvc.Namespace,
@@ -150,8 +150,9 @@ func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLM
 		)
 		return nil
 	}
+	llmIsvcMetadata.ModelsEndpoint = modelsEndpoint
 
-	discoveredModels := m.fetchModelsWithRetry(ctx, endpoint, saToken, llmIsvcMetadata)
+	discoveredModels := m.fetchModelsWithRetry(ctx, saToken, llmIsvcMetadata)
 	if discoveredModels == nil {
 		return nil
 	}
