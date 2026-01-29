@@ -177,7 +177,23 @@ setup_vars_for_tests() {
     if [ "$INSECURE_HTTP" = "true" ]; then
         echo "⚠️  INSECURE_HTTP=true - will use HTTP for tests"
     fi
-    
+       
+    CLUSTER_DOMAIN="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
+    if [ -z "$CLUSTER_DOMAIN" ]; then
+        echo "❌ ERROR: Failed to detect cluster ingress domain (ingresses.config.openshift.io/cluster)"
+        exit 1
+    fi
+    export HOST="maas.${CLUSTER_DOMAIN}"
+
+    if [ "$INSECURE_HTTP" = "true" ]; then
+        export MAAS_API_BASE_URL="http://${HOST}/maas-api"
+    else
+        export MAAS_API_BASE_URL="https://${HOST}/maas-api"
+    fi
+
+    echo "HOST: ${HOST}"
+    echo "MAAS_API_BASE_URL: ${MAAS_API_BASE_URL}"
+
     echo "✅ Variables for tests setup completed"
 }
 
@@ -185,7 +201,7 @@ run_smoke_tests() {
     echo "-- Smoke Testing --"
     
     if [ "$SKIP_SMOKE" = false ]; then
-        if ! (cd "$PROJECT_ROOT" && bash test/e2e/smoke.sh); then
+        if ! (cd "$PROJECT_ROOT" && HOST="$HOST" MAAS_API_BASE_URL="$MAAS_API_BASE_URL" INSECURE_HTTP="$INSECURE_HTTP" bash test/e2e/smoke.sh); then
             echo "❌ ERROR: Smoke tests failed"
         else
             echo "✅ Smoke tests completed successfully"
