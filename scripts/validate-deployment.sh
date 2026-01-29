@@ -638,12 +638,28 @@ else
             fi
         done
         
+        # Rate Limiting Validation Logic:
+        # ┌─────────────────────────────────────────────────────────────────────────────────┐
+        # │ Condition                              │ Result                                 │
+        # ├─────────────────────────────────────────────────────────────────────────────────┤
+        # │ 429s received AND no failures          │ ✅ PASS - Rate limiting working        │
+        # │ 429s received BUT some failures        │ ❌ FAIL - Partial success, instability │
+        # │ All 200s, no 429s, no failures         │ ❌ FAIL - Rate limiting not enforced   │
+        # │ Some 200s, some failures, no 429s      │ ❌ FAIL - Inconclusive                 │
+        # │ All requests failed                    │ ❌ FAIL - Complete failure             │
+        # └─────────────────────────────────────────────────────────────────────────────────┘
         if [ "$RATE_LIMITED_COUNT" -gt 0 ]; then
-            print_success "Rate limiting is working ($SUCCESS_COUNT successful, $RATE_LIMITED_COUNT rate limited)"
+            if [ "$FAILED_COUNT" -gt 0 ]; then
+                print_fail "Rate limiting partially working but errors observed" \
+                    "$SUCCESS_COUNT succeeded, $RATE_LIMITED_COUNT rate limited, $FAILED_COUNT failed" \
+                    "Check auth service stability and model endpoint health"
+            else
+                print_success "Rate limiting is working ($SUCCESS_COUNT successful, $RATE_LIMITED_COUNT rate limited)"
+            fi
         elif [ "$SUCCESS_COUNT" -gt 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
-            print_warning "Rate limiting may not be enforced" "All $SUCCESS_COUNT requests succeeded without rate limiting"
+            print_fail "Rate limiting not enforced" "All $SUCCESS_COUNT requests succeeded without rate limiting" "Check TokenRateLimitPolicy and Limitador configuration"
         elif [ "$SUCCESS_COUNT" -gt 0 ]; then
-            print_warning "Rate limiting test inconclusive" "$SUCCESS_COUNT succeeded, $FAILED_COUNT failed (auth may still be stabilizing)"
+            print_fail "Rate limiting test inconclusive" "$SUCCESS_COUNT succeeded, $FAILED_COUNT failed (auth may still be stabilizing)" "Check TokenRateLimitPolicy and auth service health"
         else
             print_fail "Rate limiting test failed" "All $RATE_LIMIT_TEST_COUNT requests failed (got $FAILED_COUNT errors)" "Check TokenRateLimitPolicy, Limitador, and auth service health"
         fi

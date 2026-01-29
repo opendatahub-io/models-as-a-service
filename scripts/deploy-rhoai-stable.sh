@@ -57,6 +57,14 @@ set -e
 # Source common helper functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/deployment-helpers.sh"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+ENABLE_TLS_BACKEND=1
+# Respect INSECURE_HTTP env var (used by test scripts)
+# This provides consistency with prow_run_smoke_test.sh and smoke.sh
+if [[ "${INSECURE_HTTP:-}" == "true" ]]; then
+  ENABLE_TLS_BACKEND=0
+fi
 
 # Show help message
 show_help() {
@@ -126,6 +134,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -v|--verbose)
       VERBOSE_HELP=true
+      shift
+      ;;
+    --insecure)
+      ENABLE_TLS_BACKEND=0
       shift
       ;;
     -t|--operator-type)
@@ -666,6 +678,14 @@ fi
 export CERT_NAME
 echo "* TLS certificate secret: ${CERT_NAME:-<none>}"
 
+OVERLAY="overlays/tls-backend"
+if [[ "$ENABLE_TLS_BACKEND" -eq 0 ]]; then
+  OVERLAY="overlays/http-backend"
+  echo "   ⚠️  TLS disabled, applying HTTP backend overlay..."
+else
+  echo "   Applying TLS backend overlay..."
+fi
+
 echo
 echo "## Installing MaaS Gateway"
 echo "* Deploying maas-default-gateway..."
@@ -678,6 +698,26 @@ echo "## Applying usage policies (RateLimit and TokenRateLimit)"
 echo "* Deploying rate-limit and token-limit policies..."
 kubectl apply --server-side=true \
   -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/usage-policies?ref=${MAAS_REF}")
+
+# Configure Authorino for outbound TLS (Authorino → maas-api for tier lookups)
+# NOTE: For ODH/RHOAI deployments, Gateway → Authorino TLS is a platform pre-requisite
+# and is already configured. We only need to configure the outbound TLS here.
+# See: docs/content/configuration-and-management/tls-configuration.md
+if [[ "$ENABLE_TLS_BACKEND" -eq 1 ]]; then
+  echo "   Configuring Authorino CA bundle for outbound TLS..."
+  kubectl -n kuadrant-system set env deployment/authorino \
+    SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt 2>&1 || \
+    echo "   ⚠️  Authorino CA bundle configuration had issues (non-fatal)"
+
+  echo "   Waiting for Authorino deployment to pick up config..."
+  kubectl rollout status deployment/authorino -n kuadrant-system --timeout=120s 2>&1 || \
+    echo "   ⚠️  Authorino rollout taking longer than expected, continuing..."
+fi
+
+echo "   Waiting for MaaS API deployment to be ready..."
+kubectl rollout status deployment/maas-api -n "$APPLICATIONS_NS" --timeout=180s 2>&1 || \
+  echo "   ⚠️  MaaS API rollout is taking longer than expected, continuing..."
 
 # Fix audience for ROSA/non-standard clusters
 # =====================================================
