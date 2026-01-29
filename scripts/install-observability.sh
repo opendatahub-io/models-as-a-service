@@ -9,6 +9,14 @@
 
 set -e
 
+# Preflight checks
+for cmd in kubectl kustomize jq; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "❌ Required command '$cmd' not found. Please install it first."
+        exit 1
+    fi
+done
+
 # Parse arguments
 NAMESPACE="${MAAS_API_NAMESPACE:-maas-api}"
 OBSERVABILITY_STACK=""  # Empty = prompt if interactive
@@ -387,12 +395,14 @@ install_perses() {
         "$SCRIPT_DIR/installers/install-perses.sh"
     fi
 
-    # Wait for Perses CRDs
+    # Wait for Perses CRDs (all 3 are needed for instance, dashboards, and datasource)
     echo "   Waiting for Perses CRDs..."
-    wait_for_crd "perses.perses.dev" 120 || {
-        echo "   ❌ Perses CRDs not available. Please check Cluster Observability Operator installation."
-        return 1
-    }
+    for crd in perses.perses.dev persesdashboards.perses.dev persesdatasources.perses.dev; do
+        wait_for_crd "$crd" 120 || {
+            echo "   ❌ CRD $crd not available. Please check Cluster Observability Operator installation."
+            return 1
+        }
+    done
 
     # Deploy UIPlugin (enables Perses in OpenShift Console)
     echo "   Enabling Perses UIPlugin..."

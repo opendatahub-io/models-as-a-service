@@ -12,7 +12,7 @@ metadata:
 subjects:
 - kind: ServiceAccount
   name: grafana-sa
-  namespace: maas-api
+  namespace: maas-api  # Replaced by sed in install-observability.sh with $NAMESPACE
 roleRef:
   kind: ClusterRole
   name: cluster-monitoring-view
