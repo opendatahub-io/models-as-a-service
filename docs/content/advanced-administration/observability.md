@@ -3,7 +3,7 @@
 This document covers the observability stack for the MaaS Platform, including metrics collection, monitoring, and visualization.
 
 !!! warning "Important"
-    [User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.20/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled in order to collect metrics.
+    [User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled in order to collect metrics.
 
     Add `enableUserWorkload: true` to the `cluster-monitoring-config` in the `openshift-monitoring` namespace
 
@@ -116,7 +116,7 @@ For local development and testing, you can also use our [Limitador Persistence](
 For dashboard visualization options, see:
 
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
-- **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.19/html/monitoring_data_science_models/index)
+- **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25.1/html/monitoring_data_science_models/index)
 
 ### Included Dashboards
 
@@ -159,7 +159,7 @@ Dashboards are deployed automatically by `install-observability.sh`, or manually
 
 ### Sample Dashboard JSON
 
-For manual import, sample dashboard JSON files are available:
+For manual import, a sample dashboard JSON file is available:
 
 - [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
@@ -288,6 +288,23 @@ spec:
 
 !!! tip "Filtering Unauthenticated Requests"
     For per-user latency queries, use `user!="",user!="unknown"` to exclude requests that failed authentication (where the `X-MaaS-Username` header was not injected or has a default value). Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
+
+## Maintenance
+
+### Grafana Datasource Token Rotation
+
+The Grafana datasource uses a ServiceAccount token to authenticate with Prometheus. This token is valid for **30 days** and must be rotated periodically.
+
+**To rotate the token:**
+
+    # Delete the existing datasource
+    kubectl delete grafanadatasource prometheus -n maas-api
+
+    # Re-run the observability installer (creates new token)
+    ./scripts/install-observability.sh --stack grafana
+
+!!! tip "Production Recommendation"
+    For production deployments, consider automating token rotation using a CronJob or external secrets operator to avoid dashboard outages.
 
 ## Known Limitations
 

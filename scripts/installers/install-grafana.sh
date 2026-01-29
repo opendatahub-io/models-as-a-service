@@ -52,9 +52,10 @@ EOF
 
   echo "⏳ Waiting for Grafana operator to be ready..."
   
-  # Wait for CSV to succeed (more reliable than waiting for specific deployment name)
-  echo "   Waiting for Grafana operator CSV to succeed..."
-  for i in $(seq 1 60); do
+  # Wait for subscription to report its currentCSV (exact match, not grep)
+  echo "   Waiting for subscription to report CSV..."
+  CSV_NAME=""
+  for i in $(seq 1 30); do
     # Check if install plan needs approval
     INSTALL_PLAN=$(kubectl get subscription grafana-operator -n openshift-operators -o jsonpath='{.status.installPlanRef.name}' 2>/dev/null || true)
     if [ -n "$INSTALL_PLAN" ]; then
@@ -65,29 +66,37 @@ EOF
       fi
     fi
     
-    CSV_NAME=$(kubectl get csv -n openshift-operators --no-headers 2>/dev/null | grep -i grafana | awk '{print $1}' | head -1 || true)
+    # Get CSV name from subscription (not grep - exact match)
+    CSV_NAME=$(kubectl get subscription grafana-operator -n openshift-operators \
+        -o jsonpath='{.status.currentCSV}' 2>/dev/null || true)
     if [ -n "$CSV_NAME" ]; then
-      PHASE=$(kubectl get csv -n openshift-operators "$CSV_NAME" -o jsonpath='{.status.phase}' 2>/dev/null || true)
-      if [ "$PHASE" = "Succeeded" ]; then
-        echo "   ✅ CSV $CSV_NAME succeeded"
-        break
-      fi
-      echo "   CSV $CSV_NAME phase: $PHASE (attempt $i/60)"
-    else
-      echo "   Waiting for Grafana CSV to appear... (attempt $i/60)"
+      break
     fi
+    echo "   Waiting for subscription to report CSV... (attempt $i/30)"
+    sleep 2
+  done
+
+  if [ -z "$CSV_NAME" ]; then
+    echo "❌ Subscription never reported a CSV after 30 attempts"
+    exit 1
+  fi
+
+  # Wait for that specific CSV to succeed
+  echo "   Waiting for CSV $CSV_NAME to succeed..."
+  for i in $(seq 1 60); do
+    PHASE=$(kubectl get csv "$CSV_NAME" -n openshift-operators -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    if [ "$PHASE" = "Succeeded" ]; then
+      echo "   ✅ CSV $CSV_NAME succeeded"
+      break
+    fi
+    echo "   CSV $CSV_NAME phase: $PHASE (attempt $i/60)"
     sleep 5
   done
 
-  # Verify CSV actually succeeded (fail explicitly if it didn't)
-  CSV_NAME=$(kubectl get csv -n openshift-operators --no-headers 2>/dev/null | grep -i grafana | awk '{print $1}' | head -1 || true)
-  if [ -z "$CSV_NAME" ]; then
-    echo "❌ Grafana CSV not found after waiting"
-    exit 1
-  fi
-  PHASE=$(kubectl get csv -n openshift-operators "$CSV_NAME" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  # Verify CSV actually succeeded
+  PHASE=$(kubectl get csv "$CSV_NAME" -n openshift-operators -o jsonpath='{.status.phase}' 2>/dev/null || true)
   if [ "$PHASE" != "Succeeded" ]; then
-    echo "❌ Grafana CSV phase is '$PHASE', expected 'Succeeded'"
+    echo "❌ Grafana CSV $CSV_NAME phase is '$PHASE', expected 'Succeeded'"
     exit 1
   fi
 

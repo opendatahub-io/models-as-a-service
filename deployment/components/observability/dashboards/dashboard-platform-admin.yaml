@@ -228,7 +228,7 @@ spec:
           "id": 4,
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(authorized_calls) / (sum(authorized_calls) + sum(limited_calls))", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "(sum(authorized_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(1)", "instant": true, "refId": "A"}],
           "description": "Percentage of requests that were authorized (not rate-limited). < 90% indicates rate limiting is heavily affecting users.",
           "title": "✅ Success Rate",
           "type": "stat"

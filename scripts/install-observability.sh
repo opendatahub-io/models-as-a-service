@@ -262,6 +262,11 @@ install_grafana() {
         echo "   Waiting for Grafana pod... (attempt $i/24)"
         sleep 5
     done
+    # Verify pod is actually ready (fail if loop exhausted without success)
+    if ! kubectl get pods -l app=grafana -n "$NAMESPACE" -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
+        echo "   ❌ Grafana pod failed to become ready after 24 attempts"
+        return 1
+    fi
 
     # Configure Prometheus Datasource
     echo "   Configuring Prometheus datasource..."
@@ -274,8 +279,15 @@ install_grafana() {
         echo "   Waiting for grafana-sa ServiceAccount... (attempt $i/12)"
         sleep 5
     done
+    # Verify ServiceAccount exists (fail if loop exhausted without success)
+    if ! kubectl get sa grafana-sa -n "$NAMESPACE" &>/dev/null; then
+        echo "   ❌ grafana-sa ServiceAccount not found in namespace $NAMESPACE after 12 attempts"
+        return 1
+    fi
     
-    TOKEN=$(kubectl create token grafana-sa -n "$NAMESPACE" --duration=8760h 2>/dev/null || echo "")
+    # Token valid for 30 days. To rotate: delete the GrafanaDatasource and re-run this script.
+    # For production, consider automating rotation via CronJob or external secrets operator.
+    TOKEN=$(kubectl create token grafana-sa -n "$NAMESPACE" --duration=720h 2>/dev/null || echo "")
 
     if [ -z "$TOKEN" ]; then
         echo "   ⚠️  Could not create token for grafana-sa ServiceAccount"
@@ -338,7 +350,7 @@ EOF
 
     # Validate Grafana dashboards are synced
     echo "   Validating Grafana dashboards..."
-    VALIDATION_PASSED=true
+    VALIDATION_PASSED=false
     for attempt in $(seq 1 12); do
         sleep 3
         DASHBOARD_COUNT=$(kubectl get grafanadashboard -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ')
