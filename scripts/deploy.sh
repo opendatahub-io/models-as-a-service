@@ -36,21 +36,21 @@ esac
 # DEFAULT CONFIGURATION
 #──────────────────────────────────────────────────────────────
 
-DEPLOYMENT_MODE="operator"
-OPERATOR_TYPE="rhoai"
-RATE_LIMITER=""  # Auto-determined based on deployment mode
-NAMESPACE=""  # Auto-determined based on operator type
-SKIP_CERT_MANAGER="auto"
-SKIP_LWS="auto"
-ENABLE_TLS_BACKEND="true"
-TIMEOUT="$DEFAULT_TIMEOUT"
-VERBOSE="false"
-DRY_RUN="false"
-OPERATOR_CATALOG=""
-OPERATOR_IMAGE=""
-OPERATOR_CHANNEL=""
-MAAS_REF="main"
-CERT_NAME=""
+DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
+OPERATOR_TYPE="${OPERATOR_TYPE:-rhoai}"
+RATE_LIMITER="${RATE_LIMITER:-}"  # Auto-determined based on deployment mode
+NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
+SKIP_CERT_MANAGER="${SKIP_CERT_MANAGER:-auto}"
+SKIP_LWS="${SKIP_LWS:-auto}"
+ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
+TIMEOUT="${TIMEOUT:-$DEFAULT_TIMEOUT}"
+VERBOSE="${VERBOSE:-false}"
+DRY_RUN="${DRY_RUN:-false}"
+OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
+OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
+OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
+MAAS_REF="${MAAS_REF:-main}"
+CERT_NAME="${CERT_NAME:-}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -512,7 +512,7 @@ install_primary_operator() {
     rhoai)
       catalog_source="${OPERATOR_CATALOG:+${OPERATOR_TYPE}-custom-catalog}"
       catalog_source="${catalog_source:-redhat-operators}"
-      channel="${OPERATOR_CHANNEL:-fast-3.x}"
+      channel="${OPERATOR_CHANNEL:-fast}"
 
       log_info "Installing RHOAI operator..."
       # RHOAI operator goes in redhat-ods-operator namespace (not redhat-ods-applications)
