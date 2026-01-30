@@ -3,51 +3,98 @@ package models
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
-	"github.com/openai/openai-go/v2"
+	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/utils/ptr"
-	"knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
-type authResult int
-
+// HTTP client configuration for model discovery.
 const (
-	authGranted authResult = iota
-	authDenied
-	authRetry
+	httpClientTimeout   = 5 * time.Second
+	httpMaxIdleConns    = 100
+	httpIdleConnTimeout = 90 * time.Second
 )
 
-const (
-	authCheckTimeout  = 3 * time.Second
-	authCheckEndpoint = "/v1/chat/completions"
-)
+// maxDiscoveryConcurrency limits parallel HTTP calls during model discovery
+// to avoid overwhelming model servers or hitting rate limits.
+const maxDiscoveryConcurrency = 10
 
 type GatewayRef struct {
 	Name      string
 	Namespace string
 }
 
-// accessibleLLM pairs an LLMInferenceService with its accessible URL.
-type accessibleLLM struct {
-	llmIsvc *kservev1alpha1.LLMInferenceService
-	url     *apis.URL
+type Manager struct {
+	llmIsvcLister   kservelistersv1alpha1.LLMInferenceServiceLister
+	httpRouteLister gatewaylisters.HTTPRouteLister
+	gatewayRef      GatewayRef
+	logger          *logger.Logger
+	httpClient      *http.Client
 }
 
-// ListAvailableLLMs lists LLM models that the user has access to.
+func NewManager(
+	log *logger.Logger,
+	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister,
+	httpRouteLister gatewaylisters.HTTPRouteLister,
+	gatewayRef GatewayRef,
+) (*Manager, error) {
+	if log == nil {
+		return nil, errors.New("log is required")
+	}
+	if llmIsvcLister == nil {
+		return nil, errors.New("llmIsvcLister is required")
+	}
+	if httpRouteLister == nil {
+		return nil, errors.New("httpRouteLister is required")
+	}
+
+	return &Manager{
+		llmIsvcLister:   llmIsvcLister,
+		httpRouteLister: httpRouteLister,
+		gatewayRef:      gatewayRef,
+		logger:          log,
+		httpClient: &http.Client{
+			Timeout: httpClientTimeout,
+			Transport: &http.Transport{
+				// TLS certificate verification is skipped for model discovery requests.
+				// Security context:
+				// - Traffic is cluster-internal only (gateway loopback to LLMInferenceService endpoints)
+				// - Kubernetes clusters often use self-signed or cluster-issued certificates
+				// - Authentication is enforced via Bearer token (ServiceAccount token in Authorization header)
+				// - Authorization is validated by the model server/gateway, not by this client
+				// An attacker capable of MITM within the cluster network would already have sufficient access
+				// to compromise the system through other means. This is a trade-off between security and convenience.
+				// Potential mitigation: Use the internal gateway Service (ClusterIP) instead of the
+				// external route/ingress URL to ensure traffic never leaves the cluster network.
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // See security context above
+				},
+				MaxIdleConns:        httpMaxIdleConns,
+				MaxIdleConnsPerHost: maxDiscoveryConcurrency, // match goroutine limit
+				IdleConnTimeout:     httpIdleConnTimeout,
+			},
+		},
+	}, nil
+}
+
+// ListAvailableLLMs discovers and returns models from authorized LLMInferenceServices.
 // Addresses are checked in priority order: external gateways first, then internal.
 // The returned model URL is the address that was actually accessible.
 func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Model, error) {
@@ -63,25 +110,35 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 		}
 	}
 
-	var authorized []accessibleLLM
+	var (
+		authorizedModels []Model
+		mu               sync.Mutex
+	)
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxDiscoveryConcurrency)
+
 	for _, llmIsvc := range instanceLLMs {
-		if addr := m.getAccessibleAddress(ctx, llmIsvc, saToken); addr != nil {
-			authorized = append(authorized, accessibleLLM{llmIsvc: llmIsvc, url: addr.URL})
-		}
+		g.Go(func() error {
+			model := m.discoverModel(ctx, llmIsvc, saToken)
+			if model != nil {
+				mu.Lock()
+				defer mu.Unlock()
+				authorizedModels = append(authorizedModels, *model)
+			}
+			return nil
+		})
 	}
 
-	return m.toModels(authorized), nil
+	_ = g.Wait() // errors handled within goroutines
+
+	return authorizedModels, nil
 }
 
-func (m *Manager) extractModelID(llmIsvc *kservev1alpha1.LLMInferenceService) string {
-	if llmIsvc.Spec.Model.Name != nil && *llmIsvc.Spec.Model.Name != "" {
-		return *llmIsvc.Spec.Model.Name
-	}
-	return llmIsvc.Name
-}
-
-// getAccessibleAddress returns the first accessible address for the LLMInferenceService, or nil if none.
-func (m *Manager) getAccessibleAddress(ctx context.Context, llmIsvc *kservev1alpha1.LLMInferenceService, saToken string) *duckv1.Addressable {
+// discoverModel attempts to discover models from an LLMInferenceService by trying
+// addresses in priority order (external first, then internal). Returns the first
+// successful discovery result, or nil if all addresses fail.
+func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLMInferenceService, saToken string) *Model {
 	addresses := m.getPrioritizedAddresses(llmIsvc)
 	if len(addresses) == 0 {
 		m.logger.Debug("No addresses available for LLMInferenceService",
@@ -91,150 +148,67 @@ func (m *Manager) getAccessibleAddress(ctx context.Context, llmIsvc *kservev1alp
 		return nil
 	}
 
-	modelID := m.extractModelID(llmIsvc)
+	llmIsvcMetadata := m.extractMetadata(llmIsvc)
 
-	backoff := wait.Backoff{
-		Steps:    4,
-		Duration: 100 * time.Millisecond,
-		Factor:   2.0,
-		Jitter:   0.1,
-	}
-
-	var accessibleAddr *duckv1.Addressable
-	var lastResult authResult
-	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		lastResult, accessibleAddr = m.tryAuthWithAddresses(ctx, addresses, saToken, modelID)
-		return lastResult != authRetry, nil
-	}); err != nil {
-		m.logger.Debug("Authorization check backoff failed",
-			"namespace", llmIsvc.Namespace,
-			"name", llmIsvc.Name,
-			"error", err,
-		)
-		return nil
-	}
-
-	return accessibleAddr
-}
-
-// tryAuthWithAddresses tries all addresses and returns granted if ANY succeeds.
-// This is important for multi-tenant scenarios where different gateways have different AuthPolicies -
-// a token denied by one gateway might be authorized by another.
-func (m *Manager) tryAuthWithAddresses(ctx context.Context, addresses []duckv1.Addressable, saToken, modelID string) (authResult, *duckv1.Addressable) {
-	var hasRetryableFailure bool
-
+	// Try each address in priority order until one succeeds
 	for i := range addresses {
 		addr := &addresses[i]
 		if addr.URL == nil {
 			continue
 		}
 
-		endpoint, err := url.JoinPath(addr.URL.String(), authCheckEndpoint)
+		// Use this address for discovery
+		llmIsvcMetadata.URL = addr.URL
+
+		modelsEndpoint, err := url.JoinPath(addr.URL.String(), "/v1/models")
 		if err != nil {
-			m.logger.Debug("Failed to create endpoint",
-				"modelID", modelID,
-				"url", addr.URL.String(),
+			m.logger.Debug("Failed to create endpoint URL",
+				"namespace", llmIsvc.Namespace,
+				"name", llmIsvc.Name,
+				"address", addr.URL.String(),
 				"error", err,
 			)
 			continue
 		}
+		llmIsvcMetadata.ModelsEndpoint = modelsEndpoint
 
-		switch m.doAuthCheck(ctx, endpoint, saToken, modelID, addr.Name) {
-		case authGranted:
-			return authGranted, addr
-		case authRetry:
-			hasRetryableFailure = true
-		case authDenied:
-			m.logger.Debug("Address denied, trying next",
-				"modelID", modelID,
+		discoveredModels := m.fetchModelsWithRetry(ctx, saToken, llmIsvcMetadata)
+		if discoveredModels != nil {
+			m.logger.Debug("Successfully discovered models via address",
+				"namespace", llmIsvc.Namespace,
+				"name", llmIsvc.Name,
 				"address", addr.URL.String(),
+				"modelCount", len(discoveredModels),
 			)
-			continue
+			return m.enrichModel(discoveredModels, llmIsvcMetadata)
 		}
+
+		m.logger.Debug("Address failed, trying next",
+			"namespace", llmIsvc.Namespace,
+			"name", llmIsvc.Name,
+			"address", addr.URL.String(),
+		)
 	}
 
-	if hasRetryableFailure {
-		return authRetry, nil
-	}
-	return authDenied, nil
+	return nil
 }
 
-func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string, addressName *string) authResult {
-	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, authCheckURL, nil)
-	if err != nil {
-		m.logger.Debug("Failed to create authorization request",
-			"modelID", modelID,
-			"error", err,
-		)
-		return authRetry
+func (m *Manager) extractMetadata(llmIsvc *kservev1alpha1.LLMInferenceService) llmInferenceServiceMetadata {
+	return llmInferenceServiceMetadata{
+		ServiceName: llmIsvc.Name,
+		ModelName:   m.extractModelName(llmIsvc),
+		Ready:       m.checkLLMInferenceServiceReadiness(llmIsvc),
+		Details:     m.extractModelDetails(llmIsvc),
+		Namespace:   llmIsvc.Namespace,
+		Created:     llmIsvc.CreationTimestamp.Unix(),
 	}
+}
 
-	req.Header.Set("Authorization", "Bearer "+saToken)
-
-	client := &http.Client{
-		Timeout: authCheckTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, //nolint:gosec // To handle custom/self-signed certs we simply skip verification for now
-			},
-		},
+func (m *Manager) extractModelName(llmIsvc *kservev1alpha1.LLMInferenceService) string {
+	if llmIsvc.Spec.Model.Name != nil && *llmIsvc.Spec.Model.Name != "" {
+		return *llmIsvc.Spec.Model.Name
 	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		m.logger.Debug("Authorization request failed",
-			"modelID", modelID,
-			"url", authCheckURL,
-			"addressName", ptr.Deref(addressName, ""),
-			"error", err,
-		)
-		return authRetry
-	}
-	defer resp.Body.Close()
-
-	m.logger.Debug("Authorization check response",
-		"modelID", modelID,
-		"statusCode", resp.StatusCode,
-		"url", authCheckURL,
-		"addressName", ptr.Deref(addressName, ""),
-	)
-
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return authGranted
-
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return authDenied
-
-	case resp.StatusCode == http.StatusNotFound:
-		// 404 means we cannot verify authorization - deny access (fail-closed)
-		// See: https://issues.redhat.com/browse/RHOAIENG-45883
-		m.logger.Debug("Model endpoint returned 404, denying access (cannot verify authorization)",
-			"modelID", modelID,
-			"addressName", ptr.Deref(addressName, ""),
-		)
-		return authDenied
-
-	case resp.StatusCode == http.StatusMethodNotAllowed:
-		// 405 Method Not Allowed - this should not happen, something is misconfigured
-		// Deny access as we cannot verify authorization
-		m.logger.Debug("UNEXPECTED: Model endpoint returned 405 Method Not Allowed - this indicates a configuration issue. "+
-			"OPTIONS requests should be supported by the gateway. Denying access as authorization cannot be verified",
-			"modelID", modelID,
-			"statusCode", resp.StatusCode,
-			"url", authCheckURL,
-			"addressName", ptr.Deref(addressName, ""),
-		)
-		return authDenied
-
-	default:
-		m.logger.Debug("Unexpected status code, retrying",
-			"modelID", modelID,
-			"statusCode", resp.StatusCode,
-			"addressName", ptr.Deref(addressName, ""),
-		)
-		return authRetry
-	}
+	return llmIsvc.Name
 }
 
 // getPrioritizedAddresses returns addresses sorted by priority: external > internal > others.
@@ -287,26 +261,6 @@ func (m *Manager) partOfMaaSInstance(llmIsvc *kservev1alpha1.LLMInferenceService
 		m.hasHTTPRouteSpecRefToGateway(llmIsvc) ||
 		m.hasReferencedRouteAttachedToGateway(llmIsvc) ||
 		m.hasManagedRouteAttachedToGateway(llmIsvc)
-}
-
-func (m *Manager) toModels(items []accessibleLLM) []Model {
-	models := make([]Model, 0, len(items))
-
-	for _, item := range items {
-		models = append(models, Model{
-			Model: openai.Model{
-				ID:      m.extractModelID(item.llmIsvc),
-				Object:  "model",
-				OwnedBy: item.llmIsvc.Namespace,
-				Created: item.llmIsvc.CreationTimestamp.Unix(),
-			},
-			URL:     item.url,
-			Ready:   m.checkLLMInferenceServiceReadiness(item.llmIsvc),
-			Details: m.extractModelDetails(item.llmIsvc),
-		})
-	}
-
-	return models
 }
 
 func (m *Manager) extractModelDetails(llmIsvc *kservev1alpha1.LLMInferenceService) *Details {

@@ -1,0 +1,41 @@
+# Enable user-workload-monitoring for OpenShift
+# This allows Prometheus to scrape ServiceMonitors in user namespaces
+#
+# PREREQUISITE: User-workload-monitoring must be enabled for MaaS metrics to work.
+#
+# WARNING: This file is a REFERENCE TEMPLATE. Do NOT apply directly if your
+# cluster already has a cluster-monitoring-config ConfigMap, as it will
+# overwrite existing monitoring configuration (retention, storage, etc.)
+#
+# === Check if already enabled ===
+#   kubectl get configmap cluster-monitoring-config -n openshift-monitoring \
+#     -o jsonpath='{.data.config\.yaml}' | grep -q "enableUserWorkload: true" \
+#     && echo "Already enabled" || echo "Not enabled"
+#
+# === If ConfigMap does NOT exist (fresh cluster) ===
+#   kubectl apply -f docs/samples/observability/cluster-monitoring-config.yaml
+#
+# === If ConfigMap EXISTS (preserve existing config) ===
+#   # 1. Export existing config
+#   kubectl get configmap cluster-monitoring-config -n openshift-monitoring \
+#     -o jsonpath='{.data.config\.yaml}' > /tmp/monitoring-config.yaml
+#
+#   # 2. Add enableUserWorkload if not present
+#   grep -q "enableUserWorkload" /tmp/monitoring-config.yaml || \
+#     echo "enableUserWorkload: true" >> /tmp/monitoring-config.yaml
+#
+#   # 3. Re-create ConfigMap preserving all settings
+#   kubectl create configmap cluster-monitoring-config \
+#     --from-file=config.yaml=/tmp/monitoring-config.yaml \
+#     -n openshift-monitoring --dry-run=client -o yaml | kubectl apply -f -
+#
+# See also: https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/configuring-user-workload-monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true

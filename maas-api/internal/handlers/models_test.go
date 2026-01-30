@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,32 +21,63 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
 
-func TestListingModels(t *testing.T) {
-	testLogger := logger.Development()
-	strptr := func(s string) *string { return &s }
+// makeModelsResponse creates a JSON response for /v1/models endpoint.
+func makeModelsResponse(modelIDs ...string) []byte {
+	if len(modelIDs) == 0 {
+		return []byte(`{"object":"list","data":[]}`)
+	}
+	if len(modelIDs) == 1 {
+		return fmt.Appendf(nil, `{"object":"list","data":[{"id":%q,"object":"model","created":1700000000,"owned_by":"test"}]}`, modelIDs[0])
+	}
+	// Multiple models
+	data := make([]string, 0, len(modelIDs))
+	for _, id := range modelIDs {
+		data = append(data, fmt.Sprintf(`{"id":%q,"object":"model","created":1700000000,"owned_by":"test"}`, id))
+	}
+	return fmt.Appendf(nil, `{"object":"list","data":[%s]}`, strings.Join(data, ","))
+}
 
-	// Create mock HTTP server to simulate authorization responses
-	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Accept any Bearer token - the token exchange produces JWT tokens
+// createMockModelServer creates a test server that returns a valid /v1/models response.
+func createMockModelServer(t *testing.T, modelID string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
 		if strings.HasPrefix(authHeader, "Bearer ") && len(authHeader) > 7 {
 			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(makeModelsResponse(modelID))
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
 		}
 	}))
-	defer authServer.Close()
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestListingModels(t *testing.T) {
+	testLogger := logger.Development()
+	strptr := func(s string) *string { return &s }
 
 	const (
 		testGatewayName      = "test-gateway"
 		testGatewayNamespace = "test-gateway-ns"
 	)
 
+	// Create individual mock servers for each model that return valid /v1/models responses
+	llamaServer := createMockModelServer(t, "llama-7b")
+	gptServer := createMockModelServer(t, "gpt-3-turbo")
+	bertServer := createMockModelServer(t, "bert-base")
+	llamaPrivateServer := createMockModelServer(t, "llama-7b-private-url")
+	fallbackServer := createMockModelServer(t, "fallback-model-name")
+	metadataServer := createMockModelServer(t, "model-with-metadata")
+	partialMetadataServer := createMockModelServer(t, "model-with-partial-metadata")
+	emptyMetadataServer := createMockModelServer(t, "model-with-empty-metadata")
+
 	llmTestScenarios := []fixtures.LLMTestScenario{
 		{
 			Name:             "llama-7b",
 			Namespace:        "model-serving",
-			URL:              fixtures.PublicURL(authServer.URL),
+			URL:              fixtures.PublicURL(llamaServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -57,7 +89,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "gpt-3-turbo",
 			Namespace:        "openai-models",
-			URL:              fixtures.PublicURL(authServer.URL),
+			URL:              fixtures.PublicURL(gptServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -65,7 +97,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "bert-base",
 			Namespace:        "nlp-models",
-			URL:              fixtures.PublicURL(authServer.URL),
+			URL:              fixtures.PublicURL(bertServer.URL),
 			Ready:            false,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -73,7 +105,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "llama-7b-private-url",
 			Namespace:        "model-serving",
-			URL:              fixtures.AddressEntry(authServer.URL),
+			URL:              fixtures.AddressEntry(llamaPrivateServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -89,7 +121,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "fallback-model-name",
 			Namespace:        fixtures.TestNamespace,
-			URL:              fixtures.PublicURL(authServer.URL),
+			URL:              fixtures.PublicURL(fallbackServer.URL),
 			Ready:            true,
 			SpecModelName:    strptr("fallback-model-name"),
 			GatewayName:      testGatewayName,
@@ -98,7 +130,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "model-with-metadata",
 			Namespace:        "model-serving",
-			URL:              fixtures.PublicURL(authServer.URL),
+			URL:              fixtures.PublicURL(metadataServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -118,7 +150,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "model-with-partial-metadata",
 			Namespace:        "model-serving",
-			URL:              fixtures.PublicURL(authServer.URL),
+			URL:              fixtures.PublicURL(partialMetadataServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -136,7 +168,7 @@ func TestListingModels(t *testing.T) {
 		{
 			Name:             "model-with-empty-metadata",
 			Namespace:        "model-serving",
-			URL:              fixtures.PublicURL(authServer.URL),
+			URL:              fixtures.PublicURL(emptyMetadataServer.URL),
 			Ready:            true,
 			GatewayName:      testGatewayName,
 			GatewayNamespace: testGatewayNamespace,
@@ -163,7 +195,6 @@ func TestListingModels(t *testing.T) {
 
 	modelMgr, errMgr := models.NewManager(
 		testLogger,
-		clients.InferenceServiceLister,
 		clients.LLMInferenceServiceLister,
 		clients.HTTPRouteLister,
 		gatewayRef,

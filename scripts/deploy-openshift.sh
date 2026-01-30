@@ -320,20 +320,12 @@ if [ -z "$TOKEN" ]; then
     AUD=""
 else
     echo "   Token created successfully"
-    JWT_PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 2>/dev/null || echo "")
-    if [ -z "$JWT_PAYLOAD" ]; then
-        echo "   ⚠️  Could not extract JWT payload, skipping audience detection"
-        AUD=""
+    # Use helper function to decode JWT and extract audience
+    AUD=$(get_jwt_claim "$TOKEN" "aud[0]")
+    if [ -n "$AUD" ]; then
+        echo "   JWT decoded successfully"
     else
-        echo "   JWT payload extracted"
-        DECODED_PAYLOAD=$(echo "$JWT_PAYLOAD" | jq -Rr '@base64d | fromjson' || echo "")
-        if [ -z "$DECODED_PAYLOAD" ]; then
-            echo "   ⚠️  Could not decode base64 payload, skipping audience detection"
-            AUD=""
-        else
-            echo "   Payload decoded successfully"
-            AUD=$(echo "$DECODED_PAYLOAD" | jq -r '.aud[0]' 2>/dev/null || echo "")
-        fi
+        echo "   ⚠️  Could not decode JWT payload, skipping audience detection"
     fi
 fi
 if [ -n "$AUD" ] && [ "$AUD" != "null" ]; then

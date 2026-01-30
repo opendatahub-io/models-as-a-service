@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Source helper functions for JWT decoding
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/deployment-helpers.sh"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -104,8 +108,9 @@ fi
 
 echo -e "${GREEN}✓ Token obtained successfully from MaaS API${NC}"
 
-TOKEN_PAYLOAD=$(echo "$TOKEN" | jq -R 'split(".") | .[1] | @base64d' 2>/dev/null)
-if [ -z "$TOKEN_PAYLOAD" ] || [ "$TOKEN_PAYLOAD" = "null" ]; then
+# Use helper function to decode JWT payload
+TOKEN_PAYLOAD=$(decode_jwt_payload "$TOKEN")
+if [ -z "$TOKEN_PAYLOAD" ]; then
     echo -e "${YELLOW}Warning:${NC} Failed to decode MaaS token payload"
     USER_NAME="unknown"
 else

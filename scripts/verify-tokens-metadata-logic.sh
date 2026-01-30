@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Source helper functions for JWT decoding
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/deployment-helpers.sh"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -412,16 +416,11 @@ if [ "$temp_key_status" == "201" ]; then
     # Try to get jti directly from response (preferred)
     TEMP_KEY_JTI=$(echo "$temp_key_body" | jq -r '.jti // empty')
     
-    # If not found, extract from JWT token
+    # If not found, extract from JWT token using helper function
     if [ -z "$TEMP_KEY_JTI" ]; then
         JWT_TOKEN=$(echo "$temp_key_body" | jq -r '.token // empty')
         if [ -n "$JWT_TOKEN" ]; then
-            PAYLOAD=$(echo "$JWT_TOKEN" | cut -d'.' -f2)
-            case $((${#PAYLOAD} % 4)) in
-                2) PAYLOAD="${PAYLOAD}==" ;;
-                3) PAYLOAD="${PAYLOAD}=" ;;
-            esac
-            TEMP_KEY_JTI=$(echo "$PAYLOAD" | base64 -d 2>/dev/null | jq -r '.jti // empty' 2>/dev/null || echo "")
+            TEMP_KEY_JTI=$(get_jwt_claim "$JWT_TOKEN" "jti")
         fi
     fi
     
