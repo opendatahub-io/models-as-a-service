@@ -34,27 +34,27 @@ _base64_decode() {
 #   decode_jwt_payload "$TOKEN"  # Returns decoded JSON payload
 decode_jwt_payload() {
   local jwt_token="$1"
-  
+
   if [ -z "$jwt_token" ]; then
-    echo "" 
+    echo ""
     return 1
   fi
-  
+
   # Extract the payload (second part of JWT, separated by dots)
   local payload_b64url
   payload_b64url=$(echo "$jwt_token" | cut -d. -f2)
-  
+
   if [ -z "$payload_b64url" ]; then
     echo ""
     return 1
   fi
-  
+
   # Convert base64url to standard base64:
   # - Replace '-' with '+' and '_' with '/'
   # - Add padding (base64 must be multiple of 4 chars)
   local payload_b64
   payload_b64=$(echo "$payload_b64url" | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}')
-  
+
   # Decode base64 to JSON (cross-platform)
   echo "$payload_b64" | _base64_decode
 }
@@ -72,15 +72,15 @@ decode_jwt_payload() {
 get_jwt_claim() {
   local jwt_token="$1"
   local claim="$2"
-  
+
   local payload
   payload=$(decode_jwt_payload "$jwt_token")
-  
+
   if [ -z "$payload" ]; then
     echo ""
     return 1
   fi
-  
+
   echo "$payload" | jq -r ".$claim // empty" 2>/dev/null
 }
 
@@ -94,14 +94,36 @@ get_jwt_claim() {
 get_cluster_audience() {
   local temp_token
   temp_token=$(kubectl create token default --duration=10m 2>/dev/null)
-  
+
   if [ -z "$temp_token" ]; then
     echo ""
     return 1
   fi
-  
+
   get_jwt_claim "$temp_token" "aud[0]"
 }
+
+# ============================================================================
+# Constants and Configuration
+# ============================================================================
+
+# Timeout values (seconds)
+readonly DEFAULT_TIMEOUT=300
+readonly CSV_TIMEOUT=180
+readonly NAMESPACE_TIMEOUT=60
+readonly POD_READY_TIMEOUT=120
+readonly CRD_TIMEOUT=90
+readonly WEBHOOK_TIMEOUT=120
+readonly CUSTOM_RESOURCE_TIMEOUT=600
+
+# Logging levels
+readonly LOG_LEVEL_DEBUG=0
+readonly LOG_LEVEL_INFO=1
+readonly LOG_LEVEL_WARN=2
+readonly LOG_LEVEL_ERROR=3
+
+# Current log level (can be overridden by LOG_LEVEL env var)
+CURRENT_LOG_LEVEL=${LOG_LEVEL_INFO}
 
 # ============================================================================
 # Version Management
@@ -112,6 +134,30 @@ export KUADRANT_MIN_VERSION="1.3.1"
 export AUTHORINO_MIN_VERSION="0.22.0"
 export LIMITADOR_MIN_VERSION="0.16.0"
 export DNS_OPERATOR_MIN_VERSION="0.15.0"
+
+# ==========================================
+# Logging Functions
+# ==========================================
+
+log_debug() {
+  [[ ${CURRENT_LOG_LEVEL:-1} -le $LOG_LEVEL_DEBUG ]] || return 0
+  echo "[DEBUG] $*"
+}
+
+log_info() {
+  [[ ${CURRENT_LOG_LEVEL:-1} -le $LOG_LEVEL_INFO ]] || return 0
+  echo "[INFO] $*"
+}
+
+log_warn() {
+  [[ ${CURRENT_LOG_LEVEL:-1} -le $LOG_LEVEL_WARN ]] || return 0
+  echo "[WARN] $*" >&2
+}
+
+log_error() {
+  [[ ${CURRENT_LOG_LEVEL:-1} -le $LOG_LEVEL_ERROR ]] || return 0
+  echo "[ERROR] $*" >&2
+}
 
 # ==========================================
 # OLM Subscription and CSV Helper Functions
@@ -167,6 +213,167 @@ checkcsvexists() {
   local count
   count=$(kubectl get csv -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c "^${csv_prefix}" 2>/dev/null) || count=0
   echo "$count"
+}
+
+# ==========================================
+# Operator Installation Helper Functions
+# ==========================================
+
+# is_operator_installed operator_name namespace
+#   Checks if an operator subscription exists.
+#   Returns 0 if installed, 1 if not found.
+is_operator_installed() {
+  local operator_name=${1?operator name is required}; shift
+  local namespace=${1:-}  # namespace is optional
+
+  if [[ -n "$namespace" ]]; then
+    kubectl get subscription -n "$namespace" 2>/dev/null | grep -q "$operator_name"
+  else
+    kubectl get subscription --all-namespaces 2>/dev/null | grep -q "$operator_name"
+  fi
+}
+
+# should_install_operator operator_name skip_flag namespace
+#   Determines if an operator should be installed based on skip flag and existing installation.
+#   Returns 0 if should install, 1 if should skip.
+should_install_operator() {
+  local operator_name=${1?operator name is required}; shift
+  local skip_flag=${1?skip flag is required}; shift
+  local namespace=${1:-}  # namespace is optional
+
+  # Explicit skip
+  [[ "$skip_flag" == "true" ]] && return 1
+
+  # Auto mode: check if already installed
+  if [[ "$skip_flag" == "auto" ]]; then
+    is_operator_installed "$operator_name" "$namespace" && return 1
+  fi
+
+  return 0
+}
+
+# install_olm_operator operator_name namespace catalog_source channel starting_csv operatorgroup_target
+#   Generic function to install an OLM operator.
+#
+# Arguments:
+#   operator_name - Name of the operator (e.g., "rhods-operator")
+#   namespace - Target namespace for the operator
+#   catalog_source - CatalogSource name (e.g., "redhat-operators")
+#   channel - Subscription channel (e.g., "fast-3")
+#   starting_csv - Starting CSV (optional, can be empty)
+#   operatorgroup_target - Target namespace for OperatorGroup (optional, uses namespace if empty)
+install_olm_operator() {
+  local operator_name=${1?operator name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local catalog_source=${1?catalog source is required}; shift
+  local channel=${1?channel is required}; shift
+  local starting_csv=${1:-}; shift || true
+  local operatorgroup_target=${1:-}; shift || true
+
+  log_info "Installing operator: $operator_name in namespace: $namespace"
+
+  # Check if subscription already exists
+  if kubectl get subscription "$operator_name" -n "$namespace" &>/dev/null; then
+    log_info "Subscription $operator_name already exists in $namespace, skipping"
+    return 0
+  fi
+
+  # Create namespace if not exists
+  if ! kubectl get namespace "$namespace" &>/dev/null; then
+    log_info "Creating namespace: $namespace"
+    kubectl create namespace "$namespace"
+  fi
+
+  # Wait for namespace to be ready
+  wait_for_namespace "$namespace" 60
+
+  # Create OperatorGroup if needed
+  local og_count=$(kubectl get operatorgroup -n "$namespace" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$og_count" -eq 0 ]; then
+    # If operatorgroup_target is "AllNamespaces", omit targetNamespaces field
+    if [ "$operatorgroup_target" = "AllNamespaces" ]; then
+      log_info "Creating OperatorGroup in $namespace for AllNamespaces mode"
+      cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: ${namespace}-operatorgroup
+  namespace: ${namespace}
+spec: {}
+EOF
+    else
+      local og_target_ns="${operatorgroup_target:-$namespace}"
+      log_info "Creating OperatorGroup in $namespace targeting $og_target_ns"
+      cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: ${namespace}-operatorgroup
+  namespace: ${namespace}
+spec:
+  targetNamespaces:
+  - ${og_target_ns}
+EOF
+    fi
+  fi
+
+  # Create Subscription
+  log_info "Creating Subscription for $operator_name from $catalog_source (channel: $channel)"
+  local subscription_yaml="
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ${operator_name}
+  namespace: ${namespace}
+spec:
+  channel: ${channel}
+  name: ${operator_name}
+  source: ${catalog_source}
+  sourceNamespace: openshift-marketplace
+"
+
+  if [[ -n "$starting_csv" ]]; then
+    subscription_yaml="${subscription_yaml}  startingCSV: ${starting_csv}
+"
+  fi
+
+  echo "$subscription_yaml" | kubectl apply -f -
+
+  # Wait for subscription to be installed
+  log_info "Waiting for subscription to install..."
+  waitsubscriptioninstalled "$namespace" "$operator_name"
+
+  log_info "Operator $operator_name installed successfully"
+}
+
+# wait_for_custom_check description check_command timeout interval
+#   Waits for a custom check command to succeed.
+#
+# Arguments:
+#   description - Description of what we're waiting for
+#   check_command - Command to execute (should return 0 on success)
+#   timeout - Timeout in seconds
+#   interval - Check interval in seconds
+wait_for_custom_check() {
+  local description=${1?description is required}; shift
+  local check_command=${1?check command is required}; shift
+  local timeout=${1:-120}; shift || true
+  local interval=${1:-5}; shift || true
+
+  log_info "Waiting for: $description (timeout: ${timeout}s)"
+
+  local elapsed=0
+  while [ $elapsed -lt $timeout ]; do
+    if eval "$check_command"; then
+      log_info "$description - Ready"
+      return 0
+    fi
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+
+  log_warn "$description - Timeout after ${timeout}s"
+  return 1
 }
 
 # ==========================================
@@ -302,6 +509,66 @@ cleanup_maas_api_image() {
   if [ -n "${_MAAS_API_BACKUP:-}" ] && [ -f "$_MAAS_API_BACKUP" ]; then
     mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
   fi
+}
+
+# inject_maas_api_image_operator_mode namespace
+#   Patches the maas-api deployment with custom image when MAAS_API_IMAGE is set.
+#   Used in operator mode after the operator creates the deployment.
+#
+# Arguments:
+#   namespace - Namespace where maas-api is deployed (opendatahub or redhat-ods-applications)
+#
+# Environment:
+#   MAAS_API_IMAGE - Custom MaaS API container image
+#
+# Returns:
+#   0 on success, 0 if MAAS_API_IMAGE not set (skip), 1 on failure
+inject_maas_api_image_operator_mode() {
+  local namespace=${1?namespace is required}; shift
+
+  # Skip if MAAS_API_IMAGE is not set
+  if [ -z "${MAAS_API_IMAGE:-}" ]; then
+    echo "  * MAAS_API_IMAGE not set, using operator default"
+    return 0
+  fi
+
+  echo "  * Injecting custom MaaS API image: ${MAAS_API_IMAGE}"
+
+  # Wait for maas-api deployment to be created by the operator
+  echo "  * Waiting for maas-api deployment to be created by operator..."
+  local timeout=300
+  local elapsed=0
+  while [ $elapsed -lt $timeout ]; do
+    if kubectl get deployment maas-api -n "$namespace" >/dev/null 2>&1; then
+      echo "  * maas-api deployment found"
+      break
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+
+  if [ $elapsed -ge $timeout ]; then
+    echo "ERROR: Timeout waiting for maas-api deployment to be created" >&2
+    return 1
+  fi
+
+  # Patch the deployment with custom image
+  echo "  * Patching maas-api deployment with image: ${MAAS_API_IMAGE}"
+  kubectl patch deployment maas-api -n "$namespace" --type='json' -p="[
+    {\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/image\", \"value\": \"${MAAS_API_IMAGE}\"}
+  ]" || {
+    echo "ERROR: Failed to patch maas-api deployment" >&2
+    return 1
+  }
+
+  # Wait for rollout to complete
+  echo "  * Waiting for deployment rollout to complete..."
+  kubectl rollout status deployment/maas-api -n "$namespace" --timeout=180s || {
+    echo "WARNING: Deployment rollout did not complete within timeout (continuing anyway)" >&2
+  }
+
+  echo "  * Successfully injected custom MaaS API image"
+  return 0
 }
 
 # Helper function to wait for CRD to be established
@@ -627,16 +894,24 @@ wait_datasciencecluster_ready() {
       continue
     fi
 
-    local kserve_state kserve_ready maas_ready
+    local kserve_state kserve_ready maas_ready model_controller_ready
     kserve_state=$(echo "$dsc_json" | jq -r '.status.components.kserve.managementState // ""')
     kserve_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="KserveReady") | .status' | tail -n1)
     maas_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelsAsServiceReady") | .status' | tail -n1)
+    model_controller_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelControllerReady") | .status' | tail -n1)
 
-    if [[ "$kserve_state" == "Managed" && "$kserve_ready" == "True" && "$maas_ready" == "True" ]]; then
+    # v2 API: ModelsAsServiceReady doesn't exist, use ModelControllerReady instead
+    # v1 API: ModelsAsServiceReady exists
+    local maas_check="$maas_ready"
+    if [[ -z "$maas_ready" && -n "$model_controller_ready" ]]; then
+      maas_check="$model_controller_ready"
+    fi
+
+    if [[ "$kserve_state" == "Managed" && "$kserve_ready" == "True" && "$maas_check" == "True" ]]; then
       echo "  * KServe and ModelsAsService are ready in DataScienceCluster '$name'"
       return 0
     else
-      echo "  - KServe state: $kserve_state, KserveReady: $kserve_ready, ModelsAsServiceReady: $maas_ready"
+      echo "  - KServe state: $kserve_state, KserveReady: $kserve_ready, ModelsAsServiceReady: $maas_ready, ModelControllerReady: $model_controller_ready"
     fi
 
     sleep $interval

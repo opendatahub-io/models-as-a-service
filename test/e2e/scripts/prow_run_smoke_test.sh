@@ -21,14 +21,24 @@
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
+# CI/CD PIPELINE USAGE:
+#   # Test with pipeline-built images
+#   OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
+#   MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
+#   ./test/e2e/scripts/prow_run_smoke_test.sh
+#
 # ENVIRONMENT VARIABLES:
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
-#   SKIP_AUTH_CHECK - Skip Authorino auth readiness check (default: true, temporary workaround)
-#   MAAS_API_IMAGE - Custom image for MaaS API (e.g., quay.io/opendatahub/maas-api:pr-232)
+#   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
+#                    Example: quay.io/opendatahub/maas-api:pr-232
+#   OPERATOR_CATALOG - Custom operator catalog image (default: latest from main)
+#                      Example: quay.io/opendatahub/opendatahub-operator-catalog:pr-456
+#   OPERATOR_IMAGE - Custom operator image (default: uses catalog default)
+#                    Example: quay.io/opendatahub/opendatahub-operator:pr-456>>>>>>> a4f2ecd (feat: deployment script consolidation and CI/CD integration)
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
-#                    Affects both deploy-openshift.sh and smoke.sh
+#                    Affects both deploy.sh (via --disable-tls-backend) and smoke.sh
 # =============================================================================
 
 set -euo pipefail
@@ -62,6 +72,12 @@ SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
+
+# Image configuration (for CI/CD pipelines)
+# Default to latest from main branch if not specified
+OPERATOR_CATALOG=${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}
+export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}  # Optional: uses operator default if not set
+export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}  # Optional: uses catalog default if not set
 
 print_header() {
     echo ""
@@ -97,7 +113,28 @@ check_prerequisites() {
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform on OpenShift..."
-    if ! "$PROJECT_ROOT/scripts/deploy-rhoai-stable.sh" --operator-type odh --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:latest --channel fast; then
+    echo "Using operator catalog: ${OPERATOR_CATALOG}"
+    if [[ -n "${MAAS_API_IMAGE}" ]]; then
+        echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
+    fi
+    if [[ -n "${OPERATOR_IMAGE}" ]]; then
+        echo "Using custom operator image: ${OPERATOR_IMAGE}"
+    fi
+
+    # Build deploy.sh command with optional parameters
+    local deploy_cmd=(
+        "$PROJECT_ROOT/scripts/deploy.sh"
+        --operator-type odh
+        --operator-catalog "${OPERATOR_CATALOG}"
+        --channel fast
+    )
+
+    # Add optional operator image if specified
+    if [[ -n "${OPERATOR_IMAGE}" ]]; then
+        deploy_cmd+=(--operator-image "${OPERATOR_IMAGE}")
+    fi
+
+    if ! "${deploy_cmd[@]}"; then
         echo "❌ ERROR: MaaS platform deployment failed"
         exit 1
     fi
@@ -185,7 +222,7 @@ setup_vars_for_tests() {
     # Export INSECURE_HTTP for smoke.sh (it handles MAAS_API_BASE_URL detection)
     # HTTPS is the default for MaaS.
     # HTTP is used only when INSECURE_HTTP=true (opt-out mode).
-    # This aligns with deploy-openshift.sh which also respects INSECURE_HTTP
+    # This aligns with deploy.sh which also respects TLS configuration
     export INSECURE_HTTP
     if [ "$INSECURE_HTTP" = "true" ]; then
         echo "⚠️  INSECURE_HTTP=true - will use HTTP for tests"

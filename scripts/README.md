@@ -4,25 +4,32 @@ This directory contains scripts for deploying and validating the MaaS platform.
 
 ## Scripts
 
-### `deploy-openshift.sh`
-Complete automated deployment script for OpenShift clusters.
+### `deploy.sh` (Unified Deployment Script)
+Complete automated deployment script for OpenShift clusters supporting both operator-based and kustomize-based deployments.
 
 **Usage:**
 ```bash
-./scripts/deploy-openshift.sh
+# Deploy using RHOAI operator (default)
+./scripts/deploy.sh
+
+# Deploy using ODH operator
+./scripts/deploy.sh --operator-type odh
+
+# Deploy using kustomize
+./scripts/deploy.sh --deployment-mode kustomize
+
+# See all options
+./scripts/deploy.sh --help
 ```
 
 **What it does:**
-- Checks OpenShift version and applies necessary feature gates
-- Creates required namespaces
-- Installs dependencies (Kuadrant)
-- Deploys Gateway infrastructure
-- Deploys KServe components (if not already present)
-- Configures MaaS API
-- Generates a self-signed backend certificate and configures MaaS API for HTTPS
-- Applies policies (AuthPolicy, RateLimitPolicy, TelemetryPolicy)
-- Creates OpenShift Routes
-- Applies temporary workarounds for known issues
+- Validates configuration and prerequisites
+- Installs optional operators (cert-manager, LeaderWorkerSet) with auto-detection
+- Installs rate limiter (RHCL or upstream Kuadrant)
+- Installs primary operator (RHOAI or ODH) or deploys via kustomize
+- Applies custom resources (DSC, DSCI)
+- Configures TLS backend (enabled by default)
+- Supports custom operator catalogs and MaaS API images for PR testing
 
 **Requirements:**
 - OpenShift cluster (4.16+)
@@ -30,7 +37,25 @@ Complete automated deployment script for OpenShift clusters.
 - `kubectl` installed
 - `jq` installed
 - `kustomize` installed
-- `openssl` installed (used for MaaS API backend TLS)
+
+**Environment Variables:**
+- `MAAS_API_IMAGE` - Custom MaaS API container image (works in both operator and kustomize modes)
+- `OPERATOR_CATALOG` - Custom operator catalog for PR testing
+- `OPERATOR_IMAGE` - Custom operator image for PR testing
+- `LOG_LEVEL` - Logging verbosity (DEBUG, INFO, WARN, ERROR)
+
+**Advanced Usage:**
+```bash
+# Test MaaS API PR in operator mode
+MAAS_API_IMAGE=quay.io/user/maas-api:pr-123 \
+  ./scripts/deploy.sh --operator-type odh
+
+# Deploy with verbose logging
+LOG_LEVEL=DEBUG ./scripts/deploy.sh --verbose
+
+# Dry-run to preview deployment plan
+./scripts/deploy.sh --dry-run
+```
 
 ---
 
@@ -130,10 +155,25 @@ Installs individual dependencies (Kuadrant, ODH, etc.).
 
 ## Common Workflows
 
-### Initial Deployment
+### Initial Deployment (Operator Mode - Recommended)
 ```bash
-# 1. Deploy the platform
-./scripts/deploy-openshift.sh
+# 1. Deploy the platform using RHOAI operator
+./scripts/deploy.sh
+
+# 2. Validate the deployment
+./scripts/validate-deployment.sh
+
+# 3. Deploy a sample model
+kustomize build docs/samples/models/simulator | kubectl apply -f -
+
+# 4. Re-run validation to verify model
+./scripts/validate-deployment.sh
+```
+
+### Initial Deployment (Kustomize Mode)
+```bash
+# 1. Deploy the platform using kustomize
+./scripts/deploy.sh --deployment-mode kustomize
 
 # 2. Validate the deployment
 ./scripts/validate-deployment.sh
@@ -224,8 +264,31 @@ Scripts will automatically detect:
 You can override these by exporting before running:
 ```bash
 export CLUSTER_DOMAIN="apps.my-cluster.example.com"
-./scripts/deploy-openshift.sh
+./scripts/deploy.sh
 ```
+
+---
+
+## Testing
+
+### End-to-End Testing
+
+For comprehensive end-to-end testing including deployment, user setup, and smoke tests:
+
+```bash
+./test/e2e/scripts/prow_run_smoke_test.sh
+```
+
+This is the same script used in CI/CD pipelines. It supports testing custom images:
+
+```bash
+# Test PR-built images
+OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
+MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
+./test/e2e/scripts/prow_run_smoke_test.sh
+```
+
+See [test/e2e/README.md](../test/e2e/README.md) for complete testing documentation and CI/CD pipeline usage examples.
 
 ---
 
