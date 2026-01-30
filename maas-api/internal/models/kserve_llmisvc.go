@@ -150,14 +150,13 @@ func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLM
 
 	llmIsvcMetadata := m.extractMetadata(llmIsvc)
 
-	// Try each address in priority order until one succeeds
 	for i := range addresses {
 		addr := &addresses[i]
 		if addr.URL == nil {
 			continue
 		}
 
-		// Use this address for discovery
+		// Use top-level, advertised address for discovery
 		llmIsvcMetadata.URL = addr.URL
 
 		modelsEndpoint, err := url.JoinPath(addr.URL.String(), "/v1/models")
