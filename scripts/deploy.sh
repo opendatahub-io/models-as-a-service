@@ -72,9 +72,13 @@ OPTIONS:
       Only applies when --deployment-mode=operator
 
   --rate-limiter <rhcl|kuadrant>
-      Rate limiting component choice (default: rhcl)
-      - rhcl: Red Hat Connectivity Link (downstream, required for RHOAI)
-      - kuadrant: Kuadrant operator (upstream, supported for ODH only)
+      Rate limiting component (auto-determined by default)
+      - rhcl: Red Hat Connectivity Link (downstream)
+        Required for RHOAI operator mode
+        Default for: operator mode
+      - kuadrant: Kuadrant operator (upstream)
+        Supported for: ODH operator mode, kustomize mode
+        Default for: kustomize mode
 
   --enable-tls-backend
       Enable TLS backend for Authorino and MaaS API (default: enabled)
@@ -284,8 +288,8 @@ validate_configuration() {
     exit 1
   fi
 
-  # RHOAI requires RHCL
-  if [[ "$OPERATOR_TYPE" == "rhoai" && "$RATE_LIMITER" != "rhcl" ]]; then
+  # RHOAI requires RHCL (only applicable in operator mode)
+  if [[ "$DEPLOYMENT_MODE" == "operator" && "$OPERATOR_TYPE" == "rhoai" && "$RATE_LIMITER" != "rhcl" ]]; then
     log_error "RHOAI requires RHCL (Red Hat Connectivity Link)"
     log_error "Cannot use upstream Kuadrant with RHOAI"
     log_error "Use --rate-limiter rhcl or deploy ODH instead"
