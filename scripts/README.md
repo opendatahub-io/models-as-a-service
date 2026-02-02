@@ -4,8 +4,8 @@ This directory contains scripts for deploying and validating the MaaS platform.
 
 ## Scripts
 
-### `deploy.sh` (Unified Deployment Script)
-Complete automated deployment script for OpenShift clusters supporting both operator-based and kustomize-based deployments.
+### `deploy.sh` - Quick Deployment Script
+Automated deployment script for OpenShift clusters supporting both operator-based and kustomize-based deployments.
 
 **Usage:**
 ```bash

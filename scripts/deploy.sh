@@ -1,13 +1,15 @@
 #!/bin/bash
+################################################################################
+# MaaS Quick Deployment Script
 #
-# Unified deployment script for Models-as-a-Service
-#
-# This script consolidates deploy-rhoai-stable.sh and deploy-openshift.sh into a single
-# entry point with flexible configuration options.
+# This script is used for the quick deployment of all required objects for the
+# Models-as-a-Service (MaaS) platform.
 #
 # Usage: ./scripts/deploy.sh [OPTIONS]
 #
-# See --help for full documentation.
+# For manual installation instructions, please see:
+# https://opendatahub-io.github.io/models-as-a-service/latest/install/maas-setup/
+################################################################################
 
 set -euo pipefail
 
@@ -685,6 +687,10 @@ patch_operator_csv() {
     log_warn "Could not find CSV for $operator_prefix, skipping image patch"
     return 0
   fi
+
+  # Add managed: false annotation to prevent operator reconciliation from reverting the patch
+  log_info "Adding managed: false annotation to CSV $csv_name"
+  kubectl annotate csv "$csv_name" -n "$namespace" opendatahub.io/managed=false --overwrite
 
   kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
     {\"op\": \"replace\", \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/image\", \"value\": \"$operator_image\"}

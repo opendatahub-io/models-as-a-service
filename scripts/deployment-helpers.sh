@@ -604,14 +604,21 @@ extract_version_from_csv() {
 }
 
 # Helper function to compare semantic versions (returns 0 if version1 >= version2)
+#
+# NOTE: This comparison is intentionally simple and may have edge cases (e.g., comparing
+# 1.2.9 vs 1.2.10 with string comparison). The trade-off:
+# - Loose validation = resilient to minor/patch version updates, easier maintenance
+# - Strict semver = more accurate, but requires updates for every version bump
+# For a deployment script, we prefer resilience over strict accuracy. If false positives
+# become an issue in practice, we can implement proper semver comparison.
 version_compare() {
   local version1="$1"
   local version2="$2"
-  
+
   # Convert versions to comparable numbers (e.g., "1.2.3" -> "001002003")
   local v1=$(echo "$version1" | awk -F. '{printf "%03d%03d%03d", $1, $2, $3}')
   local v2=$(echo "$version2" | awk -F. '{printf "%03d%03d%03d", $1, $2, $3}')
-  
+
   [ "$v1" -ge "$v2" ]
 }
 
