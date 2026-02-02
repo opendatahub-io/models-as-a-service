@@ -74,7 +74,8 @@ OPTIONS:
   --rate-limiter <rhcl|kuadrant>
       Rate limiting component (auto-determined by default)
       - rhcl: Red Hat Connectivity Link (downstream)
-        Required for RHOAI operator mode
+        Required for: RHOAI operator mode
+        Supported for: RHOAI operator, ODH operator, kustomize modes
         Default for: operator mode
       - kuadrant: Kuadrant operator (upstream)
         Supported for: ODH operator mode, kustomize mode
@@ -641,6 +642,19 @@ EOF
 apply_kuadrant_cr() {
   local namespace=$1
 
+  log_info "Initializing Gateway API provider..."
+
+  # Create GatewayClass for OpenShift Gateway API controller
+  # This enables the built-in Gateway API implementation (OpenShift 4.14+)
+  cat <<EOF | kubectl apply -f -
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: openshift-default
+spec:
+  controllerName: "openshift.io/gateway-controller/v1"
+EOF
+
   log_info "Applying Kuadrant custom resource in $namespace..."
 
   cat <<EOF | kubectl apply -f -
@@ -652,11 +666,11 @@ metadata:
 spec: {}
 EOF
 
-  # Wait for Kuadrant to be ready (non-fatal - it requires Gateway API provider like Istio/Envoy Gateway)
+  # Wait for Kuadrant to be ready
   wait_for_custom_check "Kuadrant ready in $namespace" \
     "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
     120 \
-    10 || log_warn "Kuadrant not ready yet (requires Gateway API provider - Istio or Envoy Gateway)"
+    10 || log_warn "Kuadrant not ready yet - may need additional time for Gateway API provider initialization"
 }
 
 patch_operator_csv() {
@@ -735,7 +749,7 @@ configure_tls_backend() {
   kubectl rollout restart deployment/authorino -n "$authorino_namespace" 2>/dev/null || log_debug "authorino deployment not found or not yet ready"
 
   log_info "TLS backend configuration complete"
-  log_info "Tier lookup URL: https://maas-api.maas-api.svc.cluster.local:8443/v1/tiers/lookup"
+  log_info "Tier lookup URL: https://maas-api.${maas_namespace}.svc.cluster.local:8443/v1/tiers/lookup"
 }
 
 #──────────────────────────────────────────────────────────────
