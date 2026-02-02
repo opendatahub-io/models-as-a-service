@@ -908,9 +908,11 @@ wait_datasciencecluster_ready() {
     model_controller_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelControllerReady") | .status' | tail -n1)
 
     # v2 API: ModelsAsServiceReady doesn't exist, use ModelControllerReady instead
-    # v1 API: ModelsAsServiceReady exists
+    # v1 API: ModelsAsServiceReady exists but may stay False
+    # Use ModelControllerReady as fallback if ModelsAsServiceReady is not True
+    # This handles both v2 API (no ModelsAsServiceReady condition) and v1 API (condition exists but may stay False)
     local maas_check="$maas_ready"
-    if [[ -z "$maas_ready" && -n "$model_controller_ready" ]]; then
+    if [[ "$maas_ready" != "True" && "$model_controller_ready" == "True" ]]; then
       maas_check="$model_controller_ready"
     fi
 
@@ -926,6 +928,8 @@ wait_datasciencecluster_ready() {
   done
 
   echo "  ERROR: KServe and/or ModelsAsService did not become ready in DataScienceCluster/$name within $timeout seconds."
+  echo "  Final status: KServe=$kserve_state, KserveReady=$kserve_ready, ModelsAsServiceReady=$maas_ready, ModelControllerReady=$model_controller_ready"
+  echo "  Tip: Check 'kubectl describe datasciencecluster $name' for more details"
   return 1
 }
 

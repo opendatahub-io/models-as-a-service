@@ -296,18 +296,25 @@ validate_configuration() {
 
   # Auto-determine namespace if not specified
   if [[ -z "$NAMESPACE" ]]; then
-    case "$OPERATOR_TYPE" in
-      rhoai)
-        NAMESPACE="redhat-ods-applications"
-        ;;
-      odh)
-        NAMESPACE="opendatahub"
-        ;;
-      *)
-        NAMESPACE="opendatahub"
-        ;;
-    esac
-    log_debug "Using auto-determined namespace: $NAMESPACE"
+    if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
+      # Kustomize mode: use maas-api namespace (matching kustomize overlay default)
+      NAMESPACE="maas-api"
+      log_debug "Using auto-determined namespace for kustomize mode: $NAMESPACE"
+    else
+      # Operator mode: namespace depends on operator type
+      case "$OPERATOR_TYPE" in
+        rhoai)
+          NAMESPACE="redhat-ods-applications"
+          ;;
+        odh)
+          NAMESPACE="opendatahub"
+          ;;
+        *)
+          NAMESPACE="opendatahub"
+          ;;
+      esac
+      log_debug "Using auto-determined namespace for operator mode: $NAMESPACE"
+    fi
   fi
 
   log_info "Configuration validated successfully"
@@ -327,7 +334,9 @@ main() {
 
   log_info "Deployment configuration:"
   log_info "  Mode: $DEPLOYMENT_MODE"
-  log_info "  Operator: $OPERATOR_TYPE"
+  if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+    log_info "  Operator: $OPERATOR_TYPE"
+  fi
   log_info "  Rate Limiter: $RATE_LIMITER"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
@@ -667,10 +676,15 @@ EOF
   fi
 }
 
-apply_kuadrant_cr() {
-  local namespace=$1
+#──────────────────────────────────────────────────────────────
+# GATEWAY API SETUP
+#──────────────────────────────────────────────────────────────
 
-  log_info "Initializing Gateway API provider..."
+# setup_gateway_api
+#   Sets up the Gateway API infrastructure (GatewayClass).
+#   This is general Gateway API setup that can be used by any Gateway resources.
+setup_gateway_api() {
+  log_info "Setting up Gateway API infrastructure..."
 
   # Create GatewayClass for OpenShift Gateway API controller
   # This enables the built-in Gateway API implementation (OpenShift 4.14+)
@@ -682,6 +696,74 @@ metadata:
 spec:
   controllerName: "openshift.io/gateway-controller/v1"
 EOF
+}
+
+# setup_maas_gateway
+#   Creates the Gateway resource required by ModelsAsService component.
+#   ModelsAsService expects a gateway named "maas-default-gateway" in namespace "openshift-ingress".
+#
+#   This function:
+#   1. Creates a self-signed TLS certificate for the Gateway
+#   2. Creates the Gateway resource with HTTPS listener
+setup_maas_gateway() {
+  log_info "Setting up ModelsAsService gateway..."
+
+  # Create a self-signed certificate for the Gateway
+  # In production, this would be replaced with a proper certificate
+  log_info "Creating TLS certificate for MaaS gateway..."
+  kubectl create secret tls maas-gateway-tls \
+    --cert=<(openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=maas-gateway" -keyout /dev/stdout -out /dev/stdout 2>/dev/null | openssl x509) \
+    --key=<(openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=maas-gateway" -keyout /dev/stdout -out /dev/null 2>/dev/null) \
+    -n openshift-ingress \
+    --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || log_info "TLS secret already exists"
+
+  # Create the Gateway resource required by ModelsAsService
+  log_info "Creating maas-default-gateway resource..."
+  cat <<EOF | kubectl apply -f -
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: maas-default-gateway
+  namespace: openshift-ingress
+spec:
+  gatewayClassName: openshift-default
+  listeners:
+  - name: https
+    protocol: HTTPS
+    port: 443
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        name: maas-gateway-tls
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchExpressions:
+          - key: kubernetes.io/metadata.name
+            operator: In
+            values:
+            - openshift-ingress
+            - opendatahub
+            - redhat-ods-applications
+EOF
+}
+
+#──────────────────────────────────────────────────────────────
+# KUADRANT SETUP
+#──────────────────────────────────────────────────────────────
+
+apply_kuadrant_cr() {
+  local namespace=$1
+
+  log_info "Initializing Gateway API and ModelsAsService gateway..."
+
+  # Setup Gateway API infrastructure (can be used by any Gateway resources)
+  setup_gateway_api
+
+  # Setup ModelsAsService-specific gateway (required by ModelsAsService component)
+  setup_maas_gateway
 
   log_info "Applying Kuadrant custom resource in $namespace..."
 
