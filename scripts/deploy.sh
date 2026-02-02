@@ -567,6 +567,37 @@ install_primary_operator() {
 apply_custom_resources() {
   log_info "Applying custom resources..."
 
+  # Wait for webhook deployment to be ready before applying CRs
+  # This prevents "service not found" errors during conversion webhook calls
+  log_info "Waiting for operator webhook to be ready..."
+
+  local webhook_namespace
+  if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
+    webhook_namespace="redhat-ods-operator"
+  else
+    webhook_namespace="opendatahub-operator-system"
+  fi
+
+  local webhook_deployment
+  if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
+    webhook_deployment="rhods-operator-controller-manager"
+  else
+    webhook_deployment="opendatahub-operator-controller-manager"
+  fi
+
+  # Wait for webhook deployment to exist and be ready (ensures service + endpoints are ready)
+  wait_for_resource "deployment" "$webhook_deployment" "$webhook_namespace" 120 || {
+    log_warn "Webhook deployment not found after 120s, proceeding anyway..."
+  }
+
+  # Wait for deployment to be fully ready (replicas available)
+  if kubectl get deployment "$webhook_deployment" -n "$webhook_namespace" >/dev/null 2>&1; then
+    kubectl wait --for=condition=Available --timeout=120s \
+      deployment/"$webhook_deployment" -n "$webhook_namespace" 2>/dev/null || {
+      log_warn "Webhook deployment not fully ready, proceeding anyway..."
+    }
+  fi
+
   # Apply DSCInitialization
   apply_dsci
 
