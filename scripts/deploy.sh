@@ -43,14 +43,11 @@ NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
 SKIP_CERT_MANAGER="${SKIP_CERT_MANAGER:-auto}"
 SKIP_LWS="${SKIP_LWS:-auto}"
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
-TIMEOUT="${TIMEOUT:-$DEFAULT_TIMEOUT}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
-MAAS_REF="${MAAS_REF:-main}"
-CERT_NAME="${CERT_NAME:-}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -95,9 +92,6 @@ OPTIONS:
       Target namespace for deployment
       Default: redhat-ods-applications (RHOAI) or opendatahub (ODH)
 
-  --timeout <seconds>
-      Default timeout for operations (default: 300)
-
   --verbose
       Enable verbose/debug logging
 
@@ -118,13 +112,7 @@ ADVANCED OPTIONS (PR Testing):
 
   --channel <channel>
       Operator channel override
-      Default: fast-3 (RHOAI) or fast (ODH)
-
-  --maas-ref <git-ref>
-      Git ref for MaaS manifests (default: main)
-
-  --cert-name <name>
-      TLS certificate secret name (auto-detected by default)
+      Default: fast (RHOAI and ODH)
 
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE        Custom MaaS API container image
@@ -164,18 +152,33 @@ EOF
 # ARGUMENT PARSING
 #──────────────────────────────────────────────────────────────
 
+# Helper function to validate flag has a value
+require_flag_value() {
+  local flag=$1
+  local value=${2:-}
+
+  if [[ -z "$value" || "$value" == --* ]]; then
+    log_error "Flag $flag requires a value"
+    log_error "Use --help for usage information"
+    exit 1
+  fi
+}
+
 parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case $1 in
       --deployment-mode)
+        require_flag_value "$1" "${2:-}"
         DEPLOYMENT_MODE="$2"
         shift 2
         ;;
       --operator-type)
+        require_flag_value "$1" "${2:-}"
         OPERATOR_TYPE="$2"
         shift 2
         ;;
       --rate-limiter)
+        require_flag_value "$1" "${2:-}"
         RATE_LIMITER="$2"
         shift 2
         ;;
@@ -196,11 +199,8 @@ parse_arguments() {
         shift
         ;;
       --namespace)
+        require_flag_value "$1" "${2:-}"
         NAMESPACE="$2"
-        shift 2
-        ;;
-      --timeout)
-        TIMEOUT="$2"
         shift 2
         ;;
       --verbose)
@@ -214,23 +214,18 @@ parse_arguments() {
         shift
         ;;
       --operator-catalog)
+        require_flag_value "$1" "${2:-}"
         OPERATOR_CATALOG="$2"
         shift 2
         ;;
       --operator-image)
+        require_flag_value "$1" "${2:-}"
         OPERATOR_IMAGE="$2"
         shift 2
         ;;
       --channel)
+        require_flag_value "$1" "${2:-}"
         OPERATOR_CHANNEL="$2"
-        shift 2
-        ;;
-      --maas-ref)
-        MAAS_REF="$2"
-        shift 2
-        ;;
-      --cert-name)
-        CERT_NAME="$2"
         shift 2
         ;;
       --help|-h)
