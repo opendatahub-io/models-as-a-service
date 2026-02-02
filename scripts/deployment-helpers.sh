@@ -125,9 +125,9 @@ waitsubscriptioninstalled() {
   local name=${1?subscription name is required}; shift
 
   echo "  * Waiting for Subscription $ns/$name to start setup..."
-  kubectl wait subscription --timeout=300s -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'
+  kubectl wait subscription.operators.coreos.com --timeout=300s -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'
   local csv
-  csv=$(kubectl get subscription -n "$ns" "$name" -o jsonpath='{.status.currentCSV}')
+  csv=$(kubectl get subscription.operators.coreos.com -n "$ns" "$name" -o jsonpath='{.status.currentCSV}')
 
   # Because, sometimes, the CSV is not there immediately.
   while ! kubectl get -n "$ns" csv "$csv" > /dev/null 2>&1; do
@@ -154,7 +154,7 @@ checksubscriptionexists() {
   local op_cond=".spec.name == \"${operator_name}\""
   local query="${catalogns_cond} and ${catalog_cond} and ${op_cond}"
 
-  kubectl get subscriptions -A -ojson | jq ".items | map(select(${query})) | length"
+  kubectl get subscriptions.operators.coreos.com -A -ojson | jq ".items | map(select(${query})) | length"
 }
 
 # checkcsvexists csv_prefix
