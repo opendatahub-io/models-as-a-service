@@ -73,11 +73,11 @@ OPTIONS:
   --rate-limiter <rhcl|kuadrant>
       Rate limiting component (auto-determined by default)
       - rhcl: Red Hat Connectivity Link (downstream)
-        Requires: Istio or Service Mesh
-        Default for: RHOAI operator mode
+        Default for: operator mode (RHOAI and ODH)
+        Note: Works with OpenShift Gateway (shows warning without Istio)
       - kuadrant: Kuadrant operator (upstream)
-        Supports: OpenShift Gateway controller
-        Default for: ODH operator mode and kustomize mode
+        Default for: kustomize mode
+        Note: May have API compatibility issues with some operator versions
 
   --enable-tls-backend
       Enable TLS backend for Authorino and MaaS API (default: enabled)
@@ -124,13 +124,13 @@ ENVIRONMENT VARIABLES:
   LOG_LEVEL             Logging verbosity (DEBUG, INFO, WARN, ERROR)
 
 EXAMPLES:
-  # Deploy RHOAI (default, uses RHCL)
+  # Deploy RHOAI (default)
   ./scripts/deploy.sh
 
-  # Deploy ODH (uses Kuadrant)
+  # Deploy ODH
   ./scripts/deploy.sh --operator-type odh
 
-  # Deploy via Kustomize (uses Kuadrant)
+  # Deploy via Kustomize
   ./scripts/deploy.sh --deployment-mode kustomize
 
   # Test MaaS API PR #123
@@ -267,14 +267,14 @@ validate_configuration() {
 
   # Auto-determine rate limiter if not specified
   if [[ -z "$RATE_LIMITER" ]]; then
-    if [[ "$DEPLOYMENT_MODE" == "operator" && "$OPERATOR_TYPE" == "rhoai" ]]; then
-      # RHOAI operator mode: use RHCL (supports Istio/Service Mesh)
+    if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+      # Operator mode: default to RHCL (production/downstream)
       RATE_LIMITER="rhcl"
-      log_debug "Using auto-determined rate limiter for RHOAI operator mode: $RATE_LIMITER"
+      log_debug "Using auto-determined rate limiter for operator mode: $RATE_LIMITER"
     else
-      # ODH operator mode or Kustomize mode: use Kuadrant (supports OpenShift Gateway)
+      # Kustomize mode: default to Kuadrant (development/upstream)
       RATE_LIMITER="kuadrant"
-      log_debug "Using auto-determined rate limiter for $DEPLOYMENT_MODE mode with $OPERATOR_TYPE: $RATE_LIMITER"
+      log_debug "Using auto-determined rate limiter for kustomize mode: $RATE_LIMITER"
     fi
   fi
 

@@ -25,13 +25,13 @@ Our goal is to create a comprehensive platform for **Models as a Service** with 
 Use the unified deployment script for all deployment scenarios:
 
 ```bash
-# Deploy RHOAI (default, auto-selects RHCL for rate limiting)
+# Deploy RHOAI (default)
 ./scripts/deploy.sh
 
-# Deploy ODH (auto-selects Kuadrant for rate limiting)
+# Deploy ODH
 ./scripts/deploy.sh --operator-type odh
 
-# Deploy via Kustomize (auto-selects Kuadrant for rate limiting)
+# Deploy via Kustomize
 ./scripts/deploy.sh --deployment-mode kustomize
 ```
 
@@ -51,7 +51,7 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 |------|--------|---------|-------------|
 | `--deployment-mode` | `operator`, `kustomize` | `operator` | Deployment method |
 | `--operator-type` | `rhoai`, `odh` | `rhoai` | Which operator to install |
-| `--rate-limiter` | `rhcl`, `kuadrant` | auto | Rate limiting component (rhcl for RHOAI, kuadrant for ODH/kustomize) |
+| `--rate-limiter` | `rhcl`, `kuadrant` | auto | Rate limiting component (rhcl for operators, kuadrant for kustomize) |
 | `--enable-tls-backend` | flag | enabled | TLS for Authorino ↔ MaaS API |
 | `--skip-certmanager` | flag | auto-detect | Skip cert-manager installation |
 | `--skip-lws` | flag | auto-detect | Skip LeaderWorkerSet installation |
@@ -87,10 +87,10 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 #### Standard Deployments
 
 ```bash
-# Deploy RHOAI (uses RHCL for rate limiting)
+# Deploy RHOAI
 ./scripts/deploy.sh --operator-type rhoai
 
-# Deploy ODH (uses Kuadrant for rate limiting)
+# Deploy ODH
 ./scripts/deploy.sh --operator-type odh
 ```
 
