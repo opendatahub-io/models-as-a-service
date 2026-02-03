@@ -73,12 +73,11 @@ OPTIONS:
   --rate-limiter <rhcl|kuadrant>
       Rate limiting component (auto-determined by default)
       - rhcl: Red Hat Connectivity Link (downstream)
-        Required for: RHOAI operator mode
-        Supported for: RHOAI operator, ODH operator, kustomize modes
-        Default for: operator mode
+        Requires: Istio or Service Mesh
+        Default for: RHOAI operator mode
       - kuadrant: Kuadrant operator (upstream)
-        Supported for: ODH operator mode, kustomize mode
-        Default for: kustomize mode
+        Supports: OpenShift Gateway controller
+        Default for: ODH operator mode and kustomize mode
 
   --enable-tls-backend
       Enable TLS backend for Authorino and MaaS API (default: enabled)
@@ -125,13 +124,13 @@ ENVIRONMENT VARIABLES:
   LOG_LEVEL             Logging verbosity (DEBUG, INFO, WARN, ERROR)
 
 EXAMPLES:
-  # Deploy RHOAI (default)
+  # Deploy RHOAI (default, uses RHCL)
   ./scripts/deploy.sh
 
-  # Deploy ODH with upstream Kuadrant
-  ./scripts/deploy.sh --operator-type odh --rate-limiter kuadrant
+  # Deploy ODH (uses Kuadrant)
+  ./scripts/deploy.sh --operator-type odh
 
-  # Deploy via Kustomize
+  # Deploy via Kustomize (uses Kuadrant)
   ./scripts/deploy.sh --deployment-mode kustomize
 
   # Test MaaS API PR #123
@@ -268,14 +267,14 @@ validate_configuration() {
 
   # Auto-determine rate limiter if not specified
   if [[ -z "$RATE_LIMITER" ]]; then
-    if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
-      # Operator mode: default to RHCL (production/downstream)
+    if [[ "$DEPLOYMENT_MODE" == "operator" && "$OPERATOR_TYPE" == "rhoai" ]]; then
+      # RHOAI operator mode: use RHCL (supports Istio/Service Mesh)
       RATE_LIMITER="rhcl"
-      log_debug "Using auto-determined rate limiter for operator mode: $RATE_LIMITER"
+      log_debug "Using auto-determined rate limiter for RHOAI operator mode: $RATE_LIMITER"
     else
-      # Kustomize mode: default to Kuadrant (development/upstream)
+      # ODH operator mode or Kustomize mode: use Kuadrant (supports OpenShift Gateway)
       RATE_LIMITER="kuadrant"
-      log_debug "Using auto-determined rate limiter for kustomize mode: $RATE_LIMITER"
+      log_debug "Using auto-determined rate limiter for $DEPLOYMENT_MODE mode with $OPERATOR_TYPE: $RATE_LIMITER"
     fi
   fi
 
@@ -718,7 +717,8 @@ setup_maas_gateway() {
     --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || log_info "TLS secret already exists"
 
   # Create the Gateway resource required by ModelsAsService
-  log_info "Creating maas-default-gateway resource..."
+  # Allow routes from the deployment namespace (where HTTPRoute will be created)
+  log_info "Creating maas-default-gateway resource (allowing routes from namespace: $NAMESPACE)..."
   cat <<EOF | kubectl apply -f -
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -740,13 +740,8 @@ spec:
       namespaces:
         from: Selector
         selector:
-          matchExpressions:
-          - key: kubernetes.io/metadata.name
-            operator: In
-            values:
-            - openshift-ingress
-            - opendatahub
-            - redhat-ods-applications
+          matchLabels:
+            kubernetes.io/metadata.name: $NAMESPACE
 EOF
 }
 
