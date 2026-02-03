@@ -991,30 +991,37 @@ wait_authorino_ready() {
     return 1
   fi
 
-  # Then, wait for the auth service cluster to be healthy in the gateway
-  echo "  - Checking auth service cluster health in gateway..."
-  local gateway_pod
-  gateway_pod=$(kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-  
-  if [[ -z "$gateway_pod" ]]; then
-    echo "  WARNING: Could not find gateway pod, skipping cluster health check"
-    return 0
+  # Verify Gateway resource is ready
+  echo "  - Verifying Gateway resource is ready..."
+  local gateway_programmed
+  gateway_programmed=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || echo "")
+
+  if [[ "$gateway_programmed" != "True" ]]; then
+    echo "  WARNING: Gateway is not Programmed yet (status: ${gateway_programmed:-not found})"
+    echo "  WARNING: This may cause auth service routing issues"
+  else
+    echo "  * Gateway is Programmed and ready"
   fi
 
-  # Wait for auth cluster to show healthy
-  while [[ $elapsed -lt $timeout ]]; do
+  # Try to check auth service cluster health in gateway (Istio-specific, may not work with OpenShift Gateway)
+  echo "  - Checking if auth service is registered in gateway..."
+  local gateway_pod
+  gateway_pod=$(kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+
+  if [[ -z "$gateway_pod" ]]; then
+    echo "  - No dedicated gateway pod found (expected with OpenShift Gateway controller)"
+    echo "  - OpenShift Gateway uses shared router infrastructure"
+  else
+    # Try to check cluster health, but don't wait long since this might not work with OpenShift Gateway
     local health_status
-    health_status=$(kubectl exec -n openshift-ingress "$gateway_pod" -- pilot-agent request GET /clusters 2>/dev/null | grep "kuadrant-auth-service" | grep "health_flags" | head -1 || echo "")
-    
+    health_status=$(timeout 10s kubectl exec -n openshift-ingress "$gateway_pod" -- pilot-agent request GET /clusters 2>/dev/null | grep -E "kuadrant-auth-service|authorino.*authorization" | grep "health_flags" | head -1 || echo "")
+
     if [[ "$health_status" == *"healthy"* ]]; then
       echo "  * Auth service cluster is healthy in gateway"
-      break
+    else
+      echo "  - Gateway pod found but cluster health check not available (not Istio-based)"
     fi
-    
-    echo "  - Auth service cluster not healthy yet, waiting..."
-    sleep $interval
-    elapsed=$((elapsed + interval))
-  done
+  fi
 
   # Finally, verify auth requests are actually succeeding (not just cluster marked healthy)
   echo "  - Verifying auth requests are succeeding..."
