@@ -205,6 +205,7 @@ run_smoke_tests() {
     if [ "$SKIP_SMOKE" = false ]; then
         if ! (cd "$PROJECT_ROOT" && bash test/e2e/smoke.sh); then
             echo "❌ ERROR: Smoke tests failed"
+            exit 1
         else
             echo "✅ Smoke tests completed successfully"
         fi
