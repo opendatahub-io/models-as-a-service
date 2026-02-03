@@ -954,17 +954,33 @@ wait_authorino_ready() {
 
   echo "* Waiting for Authorino to be ready (timeout: ${timeout}s)..."
 
+  # Detect Authorino namespace based on which namespace has the Authorino CR
+  # RHCL uses rh-connectivity-link, upstream Kuadrant uses kuadrant-system
+  local authorino_namespace=""
+  for ns in rh-connectivity-link kuadrant-system; do
+    if kubectl get authorino -n "$ns" &>/dev/null; then
+      authorino_namespace="$ns"
+      echo "  - Found Authorino in namespace: $authorino_namespace"
+      break
+    fi
+  done
+
+  if [[ -z "$authorino_namespace" ]]; then
+    echo "  ERROR: Could not find Authorino CR in expected namespaces (rh-connectivity-link, kuadrant-system)"
+    return 1
+  fi
+
   # First, wait for Authorino CR to be ready
   echo "  - Checking Authorino CR status..."
   while [[ $elapsed -lt $timeout ]]; do
     local authorino_ready
-    authorino_ready=$(kubectl get authorino -n kuadrant-system -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-    
+    authorino_ready=$(kubectl get authorino -n "$authorino_namespace" -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+
     if [[ "$authorino_ready" == "True" ]]; then
       echo "  * Authorino CR is Ready"
       break
     fi
-    
+
     echo "  - Authorino CR not ready yet (status: ${authorino_ready:-not found}), waiting..."
     sleep $interval
     elapsed=$((elapsed + interval))
