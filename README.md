@@ -51,7 +51,7 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 |------|--------|---------|-------------|
 | `--deployment-mode` | `operator`, `kustomize` | `operator` | Deployment method |
 | `--operator-type` | `rhoai`, `odh` | `rhoai` | Which operator to install |
-| `--rate-limiter` | `rhcl`, `kuadrant` | auto | Rate limiting component (rhcl for operators, kuadrant for kustomize) |
+| `--policy-engine` | `rhcl`, `kuadrant` | auto | Gateway policy engine (rhcl for operators, kuadrant for kustomize) |
 | `--enable-tls-backend` | flag | enabled | TLS for Authorino ↔ MaaS API |
 | `--skip-certmanager` | flag | auto-detect | Skip cert-manager installation |
 | `--skip-lws` | flag | auto-detect | Skip LeaderWorkerSet installation |
@@ -77,7 +77,7 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 | `OPERATOR_CATALOG` | Custom operator catalog | `quay.io/opendatahub/catalog:pr-456` |
 | `OPERATOR_IMAGE` | Custom operator image | `quay.io/opendatahub/operator:pr-456` |
 | `OPERATOR_TYPE` | Operator type (rhoai/odh) | `odh` |
-| `RATE_LIMITER` | Rate limiter (rhcl/kuadrant) | `kuadrant` |
+| `POLICY_ENGINE` | Policy engine (rhcl/kuadrant) | `kuadrant` |
 | `LOG_LEVEL` | Logging verbosity | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 
 **Note:** TLS backend is enabled by default. Use `--disable-tls-backend` to disable.

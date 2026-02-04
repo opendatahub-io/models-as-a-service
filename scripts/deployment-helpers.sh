@@ -492,6 +492,79 @@ create_tls_secret() {
   fi
 }
 
+# create_gateway_route name namespace hostname service tls_secret
+#   Creates an OpenShift Route to expose a Gateway via the cluster's apps domain.
+#   Uses 'reencrypt' TLS termination for better security (trusted cert to clients).
+#
+# Arguments:
+#   name       - Name of the Route resource
+#   namespace  - Namespace for the Route
+#   hostname   - Hostname for the Route (e.g., maas.apps.cluster.domain)
+#   service    - Target Service name
+#   tls_secret - Name of the TLS secret containing the Gateway's certificate
+#
+# Returns:
+#   0 on success, 1 on failure
+create_gateway_route() {
+  local name=${1?route name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local hostname=${1?hostname is required}; shift
+  local service=${1?service name is required}; shift
+  local tls_secret=${1?tls secret name is required}
+
+  echo "  * Creating Route $name for $hostname..."
+
+  # Get the Gateway's TLS certificate for reencrypt mode
+  # This allows the Router to trust the Gateway's certificate
+  local dest_ca_cert
+  dest_ca_cert=$(kubectl get secret "$tls_secret" -n "$namespace" \
+    -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d || echo "")
+
+  if [[ -n "$dest_ca_cert" ]]; then
+    # Use reencrypt: Router terminates TLS with trusted cert, re-encrypts to Gateway
+    # This gives clients a trusted certificate instead of our self-signed one
+    cat <<EOF | kubectl apply -f -
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ${name}
+  namespace: ${namespace}
+spec:
+  host: ${hostname}
+  port:
+    targetPort: https
+  to:
+    kind: Service
+    name: ${service}
+    weight: 100
+  tls:
+    termination: reencrypt
+    destinationCACertificate: |
+$(echo "$dest_ca_cert" | sed 's/^/      /')
+EOF
+  else
+    # Fallback to passthrough if we can't get the certificate
+    echo "  WARNING: Could not retrieve TLS certificate from $tls_secret, using passthrough"
+    cat <<EOF | kubectl apply -f -
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ${name}
+  namespace: ${namespace}
+spec:
+  host: ${hostname}
+  port:
+    targetPort: https
+  to:
+    kind: Service
+    name: ${service}
+    weight: 100
+  tls:
+    termination: passthrough
+EOF
+  fi
+}
+
 # find_project_root [start_dir] [marker]
 #   Walks up the directory tree to find the project root.
 #   Returns the path containing the marker (default: .git)

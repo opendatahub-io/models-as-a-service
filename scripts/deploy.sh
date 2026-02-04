@@ -1,13 +1,49 @@
 #!/bin/bash
 ################################################################################
-# MaaS Quick Deployment Script
+# MaaS Deployment Script
 #
-# This script is used for the quick deployment of all required objects for the
-# Models-as-a-Service (MaaS) platform.
+# Unified deployment script for Models-as-a-Service (MaaS) platform.
+# Supports RHOAI and ODH operators with configurable rate limiting.
 #
-# Usage: ./scripts/deploy.sh [OPTIONS]
+# USAGE:
+#   ./scripts/deploy.sh [OPTIONS]
 #
-# For manual installation instructions, please see:
+# OPTIONS:
+#   --operator-type <rhoai|odh>   Operator to install (default: rhoai)
+#   --policy-engine <rhcl|kuadrant> Gateway policy engine (auto-determined)
+#   --enable-dashboard            Enable dashboard (disabled by default)
+#   --enable-tls-backend          Enable TLS for Authorino/MaaS API (default: on)
+#   --skip-certmanager            Skip cert-manager installation
+#   --skip-lws                    Skip LeaderWorkerSet installation
+#   --namespace <namespace>       Target namespace
+#   --verbose                     Enable debug logging
+#   --dry-run                     Show what would be done
+#   --help                        Show full help with all options
+#
+# ADVANCED OPTIONS (PR Testing):
+#   --operator-catalog <image>    Custom operator catalog image
+#   --operator-image <image>      Custom operator image (patches CSV)
+#   --channel <channel>           Operator channel override
+#
+# ENVIRONMENT VARIABLES:
+#   MAAS_API_IMAGE    Custom MaaS API container image
+#   OPERATOR_TYPE     Operator type (rhoai/odh)
+#   LOG_LEVEL         Logging verbosity (DEBUG, INFO, WARN, ERROR)
+#
+# EXAMPLES:
+#   # Deploy RHOAI (default)
+#   ./scripts/deploy.sh
+#
+#   # Deploy ODH
+#   ./scripts/deploy.sh --operator-type odh
+#
+#   # Deploy ODH with dashboard enabled
+#   ./scripts/deploy.sh --operator-type odh --enable-dashboard
+#
+#   # Test custom MaaS API image
+#   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh
+#
+# For detailed documentation, see:
 # https://opendatahub-io.github.io/models-as-a-service/latest/install/maas-setup/
 ################################################################################
 
@@ -40,10 +76,11 @@ esac
 
 DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
 OPERATOR_TYPE="${OPERATOR_TYPE:-rhoai}"
-RATE_LIMITER="${RATE_LIMITER:-}"  # Auto-determined based on deployment mode
+POLICY_ENGINE="${POLICY_ENGINE:-}"  # Auto-determined based on deployment mode (rhcl/kuadrant)
 NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
 SKIP_CERT_MANAGER="${SKIP_CERT_MANAGER:-auto}"
 SKIP_LWS="${SKIP_LWS:-auto}"
+ENABLE_DASHBOARD="${ENABLE_DASHBOARD:-false}"
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -70,8 +107,8 @@ OPTIONS:
       Which operator to install (default: rhoai)
       Only applies when --deployment-mode=operator
 
-  --rate-limiter <rhcl|kuadrant>
-      Rate limiting component (auto-determined by default)
+  --policy-engine <rhcl|kuadrant>
+      Gateway policy engine for AuthPolicy/RateLimitPolicy (auto-determined)
       - rhcl: Red Hat Connectivity Link (downstream)
         Default for: operator mode (RHOAI and ODH)
         Note: Works with OpenShift Gateway (shows warning without Istio)
@@ -88,6 +125,11 @@ OPTIONS:
 
   --skip-lws
       Skip LeaderWorkerSet installation (auto-detected by default)
+
+  --enable-dashboard
+      Enable dashboard component installation (disabled by default)
+      Dashboard includes BFF services that increase resource usage
+      Enable when you need the dashboard UI
 
   --namespace <namespace>
       Target namespace for deployment
@@ -120,7 +162,7 @@ ENVIRONMENT VARIABLES:
   OPERATOR_CATALOG      Custom operator catalog
   OPERATOR_IMAGE        Custom operator image
   OPERATOR_TYPE         Operator type (rhoai/odh)
-  RATE_LIMITER          Rate limiter (rhcl/kuadrant)
+  POLICY_ENGINE         Gateway policy engine (rhcl/kuadrant)
   LOG_LEVEL             Logging verbosity (DEBUG, INFO, WARN, ERROR)
 
 EXAMPLES:
@@ -178,9 +220,9 @@ parse_arguments() {
         OPERATOR_TYPE="$2"
         shift 2
         ;;
-      --rate-limiter)
+      --policy-engine|--rate-limiter)
         require_flag_value "$1" "${2:-}"
-        RATE_LIMITER="$2"
+        POLICY_ENGINE="$2"
         shift 2
         ;;
       --enable-tls-backend)
@@ -197,6 +239,10 @@ parse_arguments() {
         ;;
       --skip-lws)
         SKIP_LWS="true"
+        shift
+        ;;
+      --enable-dashboard)
+        ENABLE_DASHBOARD="true"
         shift
         ;;
       --namespace)
@@ -266,30 +312,30 @@ validate_configuration() {
   fi
 
   # Auto-determine rate limiter if not specified
-  if [[ -z "$RATE_LIMITER" ]]; then
+  if [[ -z "$POLICY_ENGINE" ]]; then
     if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
       # Operator mode: default to RHCL (production/downstream)
-      RATE_LIMITER="rhcl"
-      log_debug "Using auto-determined rate limiter for operator mode: $RATE_LIMITER"
+      POLICY_ENGINE="rhcl"
+      log_debug "Using auto-determined policy engine for operator mode: $POLICY_ENGINE"
     else
       # Kustomize mode: default to Kuadrant (development/upstream)
-      RATE_LIMITER="kuadrant"
-      log_debug "Using auto-determined rate limiter for kustomize mode: $RATE_LIMITER"
+      POLICY_ENGINE="kuadrant"
+      log_debug "Using auto-determined policy engine for kustomize mode: $POLICY_ENGINE"
     fi
   fi
 
   # Validate rate limiter choice
-  if [[ ! "$RATE_LIMITER" =~ ^(rhcl|kuadrant)$ ]]; then
-    log_error "Invalid rate limiter: $RATE_LIMITER"
+  if [[ ! "$POLICY_ENGINE" =~ ^(rhcl|kuadrant)$ ]]; then
+    log_error "Invalid policy engine: $POLICY_ENGINE"
     log_error "Must be 'rhcl' or 'kuadrant'"
     exit 1
   fi
 
   # RHOAI requires RHCL (only applicable in operator mode)
-  if [[ "$DEPLOYMENT_MODE" == "operator" && "$OPERATOR_TYPE" == "rhoai" && "$RATE_LIMITER" != "rhcl" ]]; then
+  if [[ "$DEPLOYMENT_MODE" == "operator" && "$OPERATOR_TYPE" == "rhoai" && "$POLICY_ENGINE" != "rhcl" ]]; then
     log_error "RHOAI requires RHCL (Red Hat Connectivity Link)"
     log_error "Cannot use upstream Kuadrant with RHOAI"
-    log_error "Use --rate-limiter rhcl or deploy ODH instead"
+    log_error "Use --policy-engine rhcl or deploy ODH instead"
     exit 1
   fi
 
@@ -336,7 +382,7 @@ main() {
   if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
     log_info "  Operator: $OPERATOR_TYPE"
   fi
-  log_info "  Rate Limiter: $RATE_LIMITER"
+  log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
 
@@ -371,7 +417,7 @@ deploy_via_operator() {
   install_optional_operators
 
   # Install rate limiter component
-  install_rate_limiter
+  install_policy_engine
 
   # Install primary operator
   install_primary_operator
@@ -404,7 +450,7 @@ deploy_via_kustomize() {
   }
 
   # Install rate limiter component (RHCL or Kuadrant)
-  install_rate_limiter
+  install_policy_engine
 
   # Set up MaaS API image if specified
   trap cleanup_maas_api_image EXIT INT TERM
@@ -523,14 +569,43 @@ patch_kuadrant_csv_for_gateway() {
 
   log_info "CSV patched for OpenShift Gateway controller"
 
-  # Wait for the operator deployment to restart with new env
-  sleep 5
+  # CRITICAL: Force delete the operator pod to pick up the new env var
+  # OLM updates the deployment spec but doesn't always trigger a pod restart
+  # The operator must have ISTIO_GATEWAY_CONTROLLER_NAMES set BEFORE Kuadrant CR is created
+  log_info "Forcing operator restart to apply new Gateway controller configuration..."
+  
+  local operator_deployment="${operator_prefix}-operator-controller-manager"
+  if kubectl get deployment "$operator_deployment" -n "$namespace" &>/dev/null; then
+    # Force delete the operator pod - this ensures the new env var is picked up
+    kubectl delete pod -n "$namespace" -l control-plane=controller-manager --force --grace-period=0 2>/dev/null || \
+      kubectl delete pod -n "$namespace" -l app.kubernetes.io/name="${operator_prefix}" --force --grace-period=0 2>/dev/null || \
+      kubectl delete pod -n "$namespace" -l app=kuadrant --force --grace-period=0 2>/dev/null || true
+    
+    # Wait for the new pod to be ready
+    log_info "Waiting for operator pod to restart..."
+    sleep 5
+    kubectl rollout status deployment/"$operator_deployment" -n "$namespace" --timeout=120s 2>/dev/null || \
+      log_warn "Operator rollout status check timed out"
+    
+    # Verify the env var is in the RUNNING pod
+    local pod_env
+    pod_env=$(kubectl exec -n "$namespace" deployment/"$operator_deployment" -- env 2>/dev/null | grep ISTIO_GATEWAY_CONTROLLER_NAMES || echo "")
+    
+    if [[ "$pod_env" == *"openshift.io/gateway-controller/v1"* ]]; then
+      log_info "Operator pod is running with OpenShift Gateway controller configuration"
+    else
+      log_warn "Operator pod may not have correct env yet: $pod_env"
+    fi
+  else
+    log_warn "Could not find operator deployment, waiting 30s for env propagation"
+    sleep 30
+  fi
 }
 
-install_rate_limiter() {
-  log_info "Installing rate limiter: $RATE_LIMITER"
+install_policy_engine() {
+  log_info "Installing policy engine: $POLICY_ENGINE"
 
-  case "$RATE_LIMITER" in
+  case "$POLICY_ENGINE" in
     rhcl)
       log_info "Installing RHCL (Red Hat Connectivity Link - downstream)"
       install_olm_operator \
@@ -707,6 +782,15 @@ EOF
 apply_dsc() {
   log_info "Applying DataScienceCluster..."
 
+  # Determine dashboard state based on flag
+  local dashboard_state="Removed"
+  if [[ "$ENABLE_DASHBOARD" == "true" ]]; then
+    dashboard_state="Managed"
+    log_info "Dashboard component will be enabled"
+  else
+    log_debug "Dashboard component disabled (use --enable-dashboard to enable)"
+  fi
+
   # RHOAI 3.x uses v2 API (MaaS auto-enabled when kserve is Managed)
   # ODH still uses v1 API (needs explicit modelsAsService configuration)
   if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
@@ -721,7 +805,7 @@ spec:
       managementState: Managed
       rawDeploymentServiceConfig: Headed
     dashboard:
-      managementState: Managed
+      managementState: ${dashboard_state}
 EOF
   else
     # ODH uses v1 API with explicit modelsAsService
@@ -738,7 +822,7 @@ spec:
       modelsAsService:
         managementState: Managed
     dashboard:
-      managementState: Managed
+      managementState: ${dashboard_state}
 EOF
   fi
 }
@@ -826,27 +910,24 @@ spec:
 EOF
 
   # Create OpenShift Route to expose the Gateway via the cluster's apps domain
-  # This allows maas.${cluster_domain} to route to the Gateway service
-  # Required because *.apps domain routes to OpenShift Router by default, not our Gateway
+  # This is REQUIRED because:
+  # 1. *.apps.cluster-domain DNS points to OpenShift Router by default
+  # 2. Without a Route, the Router doesn't know about maas.apps.cluster-domain
+  # 3. The Gateway's LoadBalancer has a different external address (ELB hostname)
+  # 4. The Route bridges: maas.apps.cluster-domain -> Router -> Gateway Service
+  #
+  # Note: The older scripts (deploy-rhoai-stable.sh, deploy-openshift.sh) didn't create
+  # a Route explicitly, but they may have relied on different access patterns or
+  # operator-managed routing. For this consolidated script, we create the Route
+  # to ensure maas.apps.cluster-domain works reliably.
   if [[ -n "$cluster_domain" ]]; then
     log_info "Creating OpenShift Route for Gateway (hostname: ${gateway_hostname})..."
-    cat <<EOF | kubectl apply -f -
-apiVersion: route.openshift.io/v1
-kind: Route
-metadata:
-  name: maas-gateway-route
-  namespace: openshift-ingress
-spec:
-  host: ${gateway_hostname}
-  port:
-    targetPort: https
-  to:
-    kind: Service
-    name: maas-default-gateway-openshift-default
-    weight: 100
-  tls:
-    termination: passthrough
-EOF
+    create_gateway_route \
+      "maas-gateway-route" \
+      "openshift-ingress" \
+      "${gateway_hostname}" \
+      "maas-default-gateway-openshift-default" \
+      "maas-gateway-tls"
   fi
 }
 
@@ -883,11 +964,13 @@ metadata:
 spec: {}
 EOF
 
-  # Wait for Kuadrant to be ready (longer timeout since it depends on Gateway API provider)
+  # Wait for Kuadrant to be ready
+  # With the CSV patch applied before this, the operator should recognize the Gateway controller
+  # and Kuadrant should become Ready quickly after Gateway is Programmed
   wait_for_custom_check "Kuadrant ready in $namespace" \
     "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-    300 \
-    10 || log_warn "Kuadrant not ready yet - AuthPolicy enforcement may fail on model HTTPRoutes"
+    60 \
+    5 || log_warn "Kuadrant not ready yet - AuthPolicy enforcement may fail on model HTTPRoutes"
 }
 
 patch_operator_csv() {
@@ -934,7 +1017,7 @@ configure_tls_backend() {
 
   # Determine Authorino namespace based on rate limiter
   local authorino_namespace
-  case "$RATE_LIMITER" in
+  case "$POLICY_ENGINE" in
     rhcl)
       authorino_namespace="rh-connectivity-link"
       ;;
@@ -942,7 +1025,7 @@ configure_tls_backend() {
       authorino_namespace="kuadrant-system"
       ;;
     *)
-      log_warn "Unknown rate limiter: $RATE_LIMITER, defaulting to kuadrant-system"
+      log_warn "Unknown policy engine: $POLICY_ENGINE, defaulting to kuadrant-system"
       authorino_namespace="kuadrant-system"
       ;;
   esac
