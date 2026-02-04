@@ -704,21 +704,54 @@ EOF
 #   This function:
 #   1. Creates a self-signed TLS certificate for the Gateway
 #   2. Creates the Gateway resource with HTTPS listener
+#   3. Creates an OpenShift Route to expose the Gateway via the cluster's apps domain
 setup_maas_gateway() {
   log_info "Setting up ModelsAsService gateway..."
 
+  # Get cluster domain for Gateway hostname
+  local cluster_domain
+  cluster_domain=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
+  if [[ -z "$cluster_domain" ]]; then
+    log_warn "Could not determine cluster domain, Gateway hostname will not be set"
+  fi
+  local gateway_hostname="maas.${cluster_domain}"
+
   # Create a self-signed certificate for the Gateway
   # In production, this would be replaced with a proper certificate
+  # NOTE: We generate key and cert together to ensure they match
   log_info "Creating TLS certificate for MaaS gateway..."
-  kubectl create secret tls maas-gateway-tls \
-    --cert=<(openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=maas-gateway" -keyout /dev/stdout -out /dev/stdout 2>/dev/null | openssl x509) \
-    --key=<(openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=maas-gateway" -keyout /dev/stdout -out /dev/null 2>/dev/null) \
-    -n openshift-ingress \
-    --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || log_info "TLS secret already exists"
+  local temp_dir
+  temp_dir=$(mktemp -d)
+  trap "rm -rf $temp_dir" RETURN
+
+  if ! kubectl get secret maas-gateway-tls -n openshift-ingress &>/dev/null; then
+    openssl req -x509 -newkey rsa:2048 -keyout "${temp_dir}/tls.key" -out "${temp_dir}/tls.crt" \
+      -days 365 -nodes -subj "/CN=${gateway_hostname:-maas-gateway}" 2>/dev/null
+    
+    if [[ -f "${temp_dir}/tls.crt" && -f "${temp_dir}/tls.key" ]]; then
+      kubectl create secret tls maas-gateway-tls \
+        --cert="${temp_dir}/tls.crt" \
+        --key="${temp_dir}/tls.key" \
+        -n openshift-ingress
+      log_info "TLS secret created successfully"
+    else
+      log_error "Failed to generate TLS certificate"
+      return 1
+    fi
+  else
+    log_info "TLS secret already exists"
+  fi
 
   # Create the Gateway resource required by ModelsAsService
   # Allow routes from the deployment namespace (where HTTPRoute will be created)
   log_info "Creating maas-default-gateway resource (allowing routes from namespace: $NAMESPACE)..."
+  
+  # Build hostname config if cluster domain is available
+  local hostname_config=""
+  if [[ -n "$cluster_domain" ]]; then
+    hostname_config="hostname: ${gateway_hostname}"
+  fi
+
   cat <<EOF | kubectl apply -f -
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -731,6 +764,7 @@ spec:
   - name: https
     protocol: HTTPS
     port: 443
+    ${hostname_config}
     tls:
       mode: Terminate
       certificateRefs:
@@ -743,6 +777,30 @@ spec:
           matchLabels:
             kubernetes.io/metadata.name: $NAMESPACE
 EOF
+
+  # Create OpenShift Route to expose the Gateway via the cluster's apps domain
+  # This allows maas.${cluster_domain} to route to the Gateway service
+  # Required because *.apps domain routes to OpenShift Router by default, not our Gateway
+  if [[ -n "$cluster_domain" ]]; then
+    log_info "Creating OpenShift Route for Gateway (hostname: ${gateway_hostname})..."
+    cat <<EOF | kubectl apply -f -
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: maas-gateway-route
+  namespace: openshift-ingress
+spec:
+  host: ${gateway_hostname}
+  port:
+    targetPort: https
+  to:
+    kind: Service
+    name: maas-default-gateway-openshift-default
+    weight: 100
+  tls:
+    termination: passthrough
+EOF
+  fi
 }
 
 #──────────────────────────────────────────────────────────────
