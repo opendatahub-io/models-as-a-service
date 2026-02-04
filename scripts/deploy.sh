@@ -726,7 +726,7 @@ setup_maas_gateway() {
 
   # Create the Gateway resource required by ModelsAsService
   # Allow routes from the deployment namespace (where HTTPRoute will be created)
-  log_info "Creating maas-default-gateway resource (allowing routes from namespace: $NAMESPACE)..."
+  log_info "Creating maas-default-gateway resource (allowing routes from all namespaces)..."
   
   # Build hostname config if cluster domain is available
   local hostname_config=""
@@ -754,10 +754,7 @@ spec:
         name: maas-gateway-tls
     allowedRoutes:
       namespaces:
-        from: Selector
-        selector:
-          matchLabels:
-            kubernetes.io/metadata.name: $NAMESPACE
+        from: All
 EOF
 
   # Create OpenShift Route to expose the Gateway via the cluster's apps domain
