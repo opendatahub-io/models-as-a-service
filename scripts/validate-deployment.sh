@@ -343,8 +343,67 @@ print_check "Gateway hostname"
 # Get cluster domain and construct the MaaS gateway hostname
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
 if [ -n "$CLUSTER_DOMAIN" ]; then
-    HOST="https://maas.${CLUSTER_DOMAIN}"
-    print_success "Gateway hostname: $HOST"
+    EXTERNAL_HOST="https://maas.${CLUSTER_DOMAIN}"
+    print_info "External gateway hostname: $EXTERNAL_HOST"
+    
+    # Check if external endpoint is reachable (important for CI environments)
+    print_info "Testing external endpoint reachability..."
+    REACHABILITY_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$EXTERNAL_HOST/maas-api/healthz" 2>/dev/null || echo "000")
+    
+    if [ "$REACHABILITY_CODE" != "000" ]; then
+        # External endpoint is reachable (any HTTP response means network connectivity works)
+        HOST="$EXTERNAL_HOST"
+        print_success "Gateway hostname: $HOST (external endpoint reachable)"
+    else
+        # External endpoint not reachable - try internal gateway access
+        print_warning "External endpoint not reachable (timeout)" "Attempting internal gateway access for CI environment"
+        
+        # Try to get the gateway's internal LoadBalancer IP or ClusterIP
+        GATEWAY_LB_IP=$(kubectl get svc -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+        GATEWAY_LB_HOSTNAME=$(kubectl get svc -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+        GATEWAY_CLUSTER_IP=$(kubectl get svc -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].spec.clusterIP}' 2>/dev/null || echo "")
+        
+        if [ -n "$GATEWAY_LB_HOSTNAME" ]; then
+            # Use LoadBalancer hostname (common in cloud environments)
+            HOST="https://${GATEWAY_LB_HOSTNAME}"
+            print_info "Using gateway LoadBalancer hostname: $HOST"
+        elif [ -n "$GATEWAY_LB_IP" ]; then
+            # Use LoadBalancer IP
+            HOST="https://${GATEWAY_LB_IP}"
+            print_info "Using gateway LoadBalancer IP: $HOST"
+        elif [ -n "$GATEWAY_CLUSTER_IP" ] && [ "$GATEWAY_CLUSTER_IP" != "None" ]; then
+            # Use ClusterIP (only works from within cluster)
+            HOST="https://${GATEWAY_CLUSTER_IP}"
+            print_info "Using gateway ClusterIP: $HOST"
+        else
+            # Fallback: try the OpenShift router's internal service
+            # The gateway hostname needs to be passed as Host header when using internal IP
+            ROUTER_IP=$(kubectl get svc -n openshift-ingress router-default -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+            if [ -n "$ROUTER_IP" ]; then
+                HOST="https://${ROUTER_IP}"
+                # Set a flag to use Host header in requests
+                export GATEWAY_HOST_HEADER="maas.${CLUSTER_DOMAIN}"
+                print_info "Using OpenShift router ClusterIP with Host header: $HOST (Host: $GATEWAY_HOST_HEADER)"
+            else
+                # Last resort: use external hostname and hope DNS resolves
+                HOST="$EXTERNAL_HOST"
+                print_warning "Could not find internal gateway access, using external hostname"
+            fi
+        fi
+        
+        # Verify internal access works
+        if [ -n "$GATEWAY_HOST_HEADER" ]; then
+            INTERNAL_CHECK=$(curl -sSk -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 -H "Host: $GATEWAY_HOST_HEADER" "$HOST/maas-api/healthz" 2>/dev/null || echo "000")
+        else
+            INTERNAL_CHECK=$(curl -sSk -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$HOST/maas-api/healthz" 2>/dev/null || echo "000")
+        fi
+        
+        if [ "$INTERNAL_CHECK" != "000" ]; then
+            print_success "Internal gateway access verified (HTTP $INTERNAL_CHECK)"
+        else
+            print_warning "Internal gateway access also timed out" "API endpoint tests may fail"
+        fi
+    fi
 else
     print_fail "Could not determine cluster domain" "Cannot test API endpoints" "Check: kubectl get ingresses.config.openshift.io cluster"
     HOST=""
@@ -391,6 +450,13 @@ if [ -z "$HOST" ]; then
 else
     print_info "Using gateway endpoint: $HOST"
     
+    # Build extra curl arguments for Host header (needed when using internal gateway access)
+    CURL_HOST_ARGS=""
+    if [ -n "$GATEWAY_HOST_HEADER" ]; then
+        CURL_HOST_ARGS="-H \"Host: ${GATEWAY_HOST_HEADER}\""
+        print_info "Using Host header: $GATEWAY_HOST_HEADER"
+    fi
+    
     # Test authentication endpoint
     print_check "Authentication endpoint"
     ENDPOINT="${HOST}/maas-api/v1/tokens"
@@ -399,12 +465,23 @@ else
     if command -v oc &> /dev/null; then
         OC_TOKEN=$(oc whoami -t 2>/dev/null || echo "")
         if [ -n "$OC_TOKEN" ]; then
-            TOKEN_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
-                -H "Authorization: Bearer ${OC_TOKEN}" \
-                -H "Content-Type: application/json" \
-                -X POST \
-                -d '{"expiration": "10m"}' \
-                "${ENDPOINT}" 2>/dev/null || echo "")
+            # Build curl command with optional Host header for internal gateway access
+            if [ -n "$GATEWAY_HOST_HEADER" ]; then
+                TOKEN_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
+                    -H "Host: ${GATEWAY_HOST_HEADER}" \
+                    -H "Authorization: Bearer ${OC_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -X POST \
+                    -d '{"expiration": "10m"}' \
+                    "${ENDPOINT}" 2>/dev/null || echo "")
+            else
+                TOKEN_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
+                    -H "Authorization: Bearer ${OC_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -X POST \
+                    -d '{"expiration": "10m"}' \
+                    "${ENDPOINT}" 2>/dev/null || echo "")
+            fi
             
             HTTP_CODE=$(echo "$TOKEN_RESPONSE" | tail -n1)
             RESPONSE_BODY=$(echo "$TOKEN_RESPONSE" | sed '$d')
@@ -474,10 +551,18 @@ else
         ENDPOINT="${HOST}/maas-api/v1/models"
         print_info "Testing: curl -sSk $ENDPOINT -H \"Content-Type: application/json\" -H \"Authorization: Bearer \$TOKEN\""
         
-        MODELS_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            "${ENDPOINT}" 2>/dev/null || echo "")
+        if [ -n "$GATEWAY_HOST_HEADER" ]; then
+            MODELS_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
+                -H "Host: ${GATEWAY_HOST_HEADER}" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${TOKEN}" \
+                "${ENDPOINT}" 2>/dev/null || echo "")
+        else
+            MODELS_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${TOKEN}" \
+                "${ENDPOINT}" 2>/dev/null || echo "")
+        fi
         HTTP_CODE=$(echo "$MODELS_RESPONSE" | tail -n1)
         RESPONSE_BODY=$(echo "$MODELS_RESPONSE" | sed '$d')
         
@@ -571,11 +656,25 @@ else
         
         print_info "Testing: curl -sSk -X POST ${MODEL_CHAT_ENDPOINT} -H \"Authorization: Bearer \$TOKEN\" -H \"Content-Type: application/json\" -d '${REQUEST_PAYLOAD}'"
         
-        INFERENCE_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "${REQUEST_PAYLOAD}" \
-            "${MODEL_CHAT_ENDPOINT}" 2>/dev/null || echo "")
+        # Note: MODEL_CHAT_ENDPOINT might use external URL from model catalog
+        # If using internal gateway access, we need to rewrite the model URL to use internal HOST
+        ACTUAL_MODEL_ENDPOINT="$MODEL_CHAT_ENDPOINT"
+        if [ -n "$GATEWAY_HOST_HEADER" ]; then
+            # Replace external hostname with internal HOST in model endpoint
+            ACTUAL_MODEL_ENDPOINT=$(echo "$MODEL_CHAT_ENDPOINT" | sed "s|https://${GATEWAY_HOST_HEADER}|${HOST}|g")
+            INFERENCE_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
+                -H "Host: ${GATEWAY_HOST_HEADER}" \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "${REQUEST_PAYLOAD}" \
+                "${ACTUAL_MODEL_ENDPOINT}" 2>/dev/null || echo "")
+        else
+            INFERENCE_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "${REQUEST_PAYLOAD}" \
+                "${MODEL_CHAT_ENDPOINT}" 2>/dev/null || echo "")
+        fi
         
         HTTP_CODE=$(echo "$INFERENCE_RESPONSE" | tail -n1)
         RESPONSE_BODY=$(echo "$INFERENCE_RESPONSE" | sed '$d')
@@ -614,16 +713,31 @@ else
         # Use the same request payload for rate limiting tests
         REQUEST_PAYLOAD="${DEFAULT_REQUEST_PAYLOAD//\$\{MODEL_NAME\}/$MODEL_NAME}"
         
+        # Use internal endpoint if configured
+        RATE_LIMIT_ENDPOINT="$MODEL_CHAT_ENDPOINT"
+        if [ -n "$GATEWAY_HOST_HEADER" ]; then
+            RATE_LIMIT_ENDPOINT=$(echo "$MODEL_CHAT_ENDPOINT" | sed "s|https://${GATEWAY_HOST_HEADER}|${HOST}|g")
+        fi
+        
         SUCCESS_COUNT=0
         RATE_LIMITED_COUNT=0
         FAILED_COUNT=0
         
         for i in $(seq 1 $RATE_LIMIT_TEST_COUNT); do
-            HTTP_CODE=$(curl -sSk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" \
-                -H "Authorization: Bearer ${TOKEN}" \
-                -H "Content-Type: application/json" \
-                -d "${REQUEST_PAYLOAD}" \
-                "${MODEL_CHAT_ENDPOINT}" 2>/dev/null || echo "000")
+            if [ -n "$GATEWAY_HOST_HEADER" ]; then
+                HTTP_CODE=$(curl -sSk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" \
+                    -H "Host: ${GATEWAY_HOST_HEADER}" \
+                    -H "Authorization: Bearer ${TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d "${REQUEST_PAYLOAD}" \
+                    "${RATE_LIMIT_ENDPOINT}" 2>/dev/null || echo "000")
+            else
+                HTTP_CODE=$(curl -sSk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" \
+                    -H "Authorization: Bearer ${TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d "${REQUEST_PAYLOAD}" \
+                    "${MODEL_CHAT_ENDPOINT}" 2>/dev/null || echo "000")
+            fi
             
             if [ "$HTTP_CODE" = "200" ]; then
                 ((SUCCESS_COUNT++))
@@ -671,10 +785,21 @@ else
         # Use the same request payload for unauthorized test
         REQUEST_PAYLOAD="${DEFAULT_REQUEST_PAYLOAD//\$\{MODEL_NAME\}/$MODEL_NAME}"
         
-        UNAUTH_CODE=$(curl -sSk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" \
-            -H "Content-Type: application/json" \
-            -d "${REQUEST_PAYLOAD}" \
-            "${MODEL_CHAT_ENDPOINT}" 2>/dev/null || echo "000")
+        # Use internal endpoint if configured
+        UNAUTH_ENDPOINT="$MODEL_CHAT_ENDPOINT"
+        if [ -n "$GATEWAY_HOST_HEADER" ]; then
+            UNAUTH_ENDPOINT=$(echo "$MODEL_CHAT_ENDPOINT" | sed "s|https://${GATEWAY_HOST_HEADER}|${HOST}|g")
+            UNAUTH_CODE=$(curl -sSk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" \
+                -H "Host: ${GATEWAY_HOST_HEADER}" \
+                -H "Content-Type: application/json" \
+                -d "${REQUEST_PAYLOAD}" \
+                "${UNAUTH_ENDPOINT}" 2>/dev/null || echo "000")
+        else
+            UNAUTH_CODE=$(curl -sSk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" \
+                -H "Content-Type: application/json" \
+                -d "${REQUEST_PAYLOAD}" \
+                "${MODEL_CHAT_ENDPOINT}" 2>/dev/null || echo "000")
+        fi
         
         if [ "$UNAUTH_CODE" = "401" ]; then
             print_success "Authorization is enforced (got 401 without token)"

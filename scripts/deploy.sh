@@ -718,28 +718,10 @@ setup_maas_gateway() {
 
   # Create a self-signed certificate for the Gateway
   # In production, this would be replaced with a proper certificate
-  # NOTE: We generate key and cert together to ensure they match
   log_info "Creating TLS certificate for MaaS gateway..."
-  local temp_dir
-  temp_dir=$(mktemp -d)
-  trap "rm -rf $temp_dir" RETURN
-
-  if ! kubectl get secret maas-gateway-tls -n openshift-ingress &>/dev/null; then
-    openssl req -x509 -newkey rsa:2048 -keyout "${temp_dir}/tls.key" -out "${temp_dir}/tls.crt" \
-      -days 365 -nodes -subj "/CN=${gateway_hostname:-maas-gateway}" 2>/dev/null
-    
-    if [[ -f "${temp_dir}/tls.crt" && -f "${temp_dir}/tls.key" ]]; then
-      kubectl create secret tls maas-gateway-tls \
-        --cert="${temp_dir}/tls.crt" \
-        --key="${temp_dir}/tls.key" \
-        -n openshift-ingress
-      log_info "TLS secret created successfully"
-    else
-      log_error "Failed to generate TLS certificate"
-      return 1
-    fi
-  else
-    log_info "TLS secret already exists"
+  if ! create_tls_secret "maas-gateway-tls" "openshift-ingress" "${gateway_hostname:-maas-gateway}"; then
+    log_error "Failed to create TLS secret for gateway"
+    return 1
   fi
 
   # Create the Gateway resource required by ModelsAsService
@@ -893,6 +875,12 @@ configure_tls_backend() {
       ;;
   esac
 
+  # Wait for Authorino deployment to be created by Kuadrant operator
+  # This is necessary because Kuadrant may not be fully ready yet (timing issue)
+  wait_for_resource "deployment" "authorino" "$authorino_namespace" 180 || {
+    log_warn "Authorino deployment not found, TLS configuration may fail"
+  }
+
   # Call TLS configuration script
   local tls_script="${project_root}/deployment/overlays/tls-backend/configure-authorino-tls.sh"
   if [[ ! -f "$tls_script" ]]; then
@@ -914,6 +902,10 @@ configure_tls_backend() {
   local maas_namespace="${NAMESPACE:-maas-api}"
   kubectl rollout restart deployment/maas-api -n "$maas_namespace" 2>/dev/null || log_debug "maas-api deployment not found or not yet ready"
   kubectl rollout restart deployment/authorino -n "$authorino_namespace" 2>/dev/null || log_debug "authorino deployment not found or not yet ready"
+  
+  # Wait for Authorino to be ready after restart
+  log_info "Waiting for Authorino deployment to be ready..."
+  kubectl rollout status deployment/authorino -n "$authorino_namespace" --timeout=120s 2>/dev/null || log_warn "Authorino rollout status check timed out"
 
   log_info "TLS backend configuration complete"
   log_info "Tier lookup URL: https://maas-api.${maas_namespace}.svc.cluster.local:8443/v1/tiers/lookup"

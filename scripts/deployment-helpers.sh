@@ -433,6 +433,65 @@ wait_for_resource() {
   return 1
 }
 
+# create_tls_secret name namespace cn
+#   Creates a self-signed TLS secret if it doesn't already exist.
+#   Uses OpenSSL to generate a matching key/cert pair.
+#
+# Arguments:
+#   name      - Name of the TLS secret
+#   namespace - Namespace to create the secret in
+#   cn        - Common Name for the certificate (e.g., hostname)
+#
+# Returns:
+#   0 on success (created or already exists), 1 on failure
+create_tls_secret() {
+  local name=${1?secret name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local cn=${1:-$name}  # default CN to secret name
+
+  # Check if secret already exists
+  if kubectl get secret "$name" -n "$namespace" &>/dev/null; then
+    echo "  * TLS secret $name already exists in $namespace"
+    return 0
+  fi
+
+  echo "  * Creating TLS secret $name in $namespace (CN=$cn)..."
+  
+  # Create temp directory for key/cert files
+  local temp_dir
+  temp_dir=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$temp_dir'" RETURN
+
+  # Generate self-signed certificate with matching key
+  if ! openssl req -x509 -newkey rsa:2048 \
+      -keyout "${temp_dir}/tls.key" \
+      -out "${temp_dir}/tls.crt" \
+      -days 365 -nodes \
+      -subj "/CN=${cn}" 2>/dev/null; then
+    echo "  ERROR: Failed to generate TLS certificate"
+    return 1
+  fi
+
+  # Verify files were created
+  if [[ ! -f "${temp_dir}/tls.crt" || ! -f "${temp_dir}/tls.key" ]]; then
+    echo "  ERROR: TLS certificate files not generated"
+    return 1
+  fi
+
+  # Create the secret
+  if kubectl create secret tls "$name" \
+      --cert="${temp_dir}/tls.crt" \
+      --key="${temp_dir}/tls.key" \
+      -n "$namespace"; then
+    echo "  * TLS secret $name created successfully"
+    return 0
+  else
+    echo "  ERROR: Failed to create TLS secret $name"
+    return 1
+  fi
+}
+
 # find_project_root [start_dir] [marker]
 #   Walks up the directory tree to find the project root.
 #   Returns the path containing the marker (default: .git)
