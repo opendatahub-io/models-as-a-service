@@ -797,6 +797,13 @@ apply_kuadrant_cr() {
   # Setup ModelsAsService-specific gateway (required by ModelsAsService component)
   setup_maas_gateway
 
+  # Wait for Gateway to be Programmed (required before Kuadrant can become ready)
+  # This ensures Service Mesh is installed and Gateway API provider is operational
+  log_info "Waiting for Gateway to be Programmed (Service Mesh initialization)..."
+  if ! kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=300s 2>/dev/null; then
+    log_warn "Gateway not yet Programmed after 300s - Kuadrant may take longer to become ready"
+  fi
+
   log_info "Applying Kuadrant custom resource in $namespace..."
 
   cat <<EOF | kubectl apply -f -
@@ -808,11 +815,11 @@ metadata:
 spec: {}
 EOF
 
-  # Wait for Kuadrant to be ready
+  # Wait for Kuadrant to be ready (longer timeout since it depends on Gateway API provider)
   wait_for_custom_check "Kuadrant ready in $namespace" \
     "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-    120 \
-    10 || log_warn "Kuadrant not ready yet - may need additional time for Gateway API provider initialization"
+    300 \
+    10 || log_warn "Kuadrant not ready yet - AuthPolicy enforcement may fail on model HTTPRoutes"
 }
 
 patch_operator_csv() {
