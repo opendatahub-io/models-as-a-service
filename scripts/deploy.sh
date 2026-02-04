@@ -465,6 +465,68 @@ install_optional_operators() {
 # RATE LIMITER INSTALLATION
 #──────────────────────────────────────────────────────────────
 
+# Patch Kuadrant/RHCL CSV to recognize OpenShift Gateway controller
+# This is required because Kuadrant needs to know about the Gateway API provider
+# Without this patch, Kuadrant shows "MissingDependency" and AuthPolicies won't be enforced
+patch_kuadrant_csv_for_gateway() {
+  local namespace=$1
+  local operator_prefix=$2
+
+  log_info "Patching $operator_prefix CSV for OpenShift Gateway controller..."
+
+  # Find the CSV
+  local csv_name
+  csv_name=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | awk '{print $1}' | head -1)
+
+  if [[ -z "$csv_name" ]]; then
+    log_warn "Could not find CSV for $operator_prefix in $namespace, skipping Gateway controller patch"
+    return 0
+  fi
+
+  # Check if ISTIO_GATEWAY_CONTROLLER_NAMES already has both values
+  local current_value
+  current_value=$(kubectl get csv "$csv_name" -n "$namespace" -o jsonpath='{.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[?(@.name=="ISTIO_GATEWAY_CONTROLLER_NAMES")].value}' 2>/dev/null || echo "")
+
+  if [[ "$current_value" == *"istio.io/gateway-controller"* && "$current_value" == *"openshift.io/gateway-controller"* ]]; then
+    log_debug "CSV already has correct ISTIO_GATEWAY_CONTROLLER_NAMES value"
+    return 0
+  fi
+
+  # Find the index of ISTIO_GATEWAY_CONTROLLER_NAMES env var
+  local env_index
+  env_index=$(kubectl get csv "$csv_name" -n "$namespace" -o json | jq '.spec.install.spec.deployments[0].spec.template.spec.containers[0].env | to_entries | .[] | select(.value.name=="ISTIO_GATEWAY_CONTROLLER_NAMES") | .key' 2>/dev/null || echo "")
+
+  if [[ -z "$env_index" ]]; then
+    # Env var doesn't exist, add it
+    log_debug "Adding ISTIO_GATEWAY_CONTROLLER_NAMES to CSV"
+    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p='[
+      {
+        "op": "add",
+        "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-",
+        "value": {
+          "name": "ISTIO_GATEWAY_CONTROLLER_NAMES",
+          "value": "istio.io/gateway-controller,openshift.io/gateway-controller/v1"
+        }
+      }
+    ]' 2>/dev/null || log_warn "Failed to add ISTIO_GATEWAY_CONTROLLER_NAMES to CSV"
+  else
+    # Env var exists, update it
+    log_debug "Updating ISTIO_GATEWAY_CONTROLLER_NAMES in CSV (index: $env_index)"
+    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
+      {
+        \"op\": \"replace\",
+        \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/${env_index}/value\",
+        \"value\": \"istio.io/gateway-controller,openshift.io/gateway-controller/v1\"
+      }
+    ]" 2>/dev/null || log_warn "Failed to update ISTIO_GATEWAY_CONTROLLER_NAMES in CSV"
+  fi
+
+  log_info "CSV patched for OpenShift Gateway controller"
+
+  # Wait for the operator deployment to restart with new env
+  sleep 5
+}
+
 install_rate_limiter() {
   log_info "Installing rate limiter: $RATE_LIMITER"
 
@@ -479,6 +541,9 @@ install_rate_limiter() {
         "" \
         "AllNamespaces"
 
+      # Patch RHCL CSV to recognize OpenShift Gateway controller
+      patch_kuadrant_csv_for_gateway "rh-connectivity-link" "rhcl-operator"
+
       # Apply RHCL/Kuadrant custom resource
       apply_kuadrant_cr "rh-connectivity-link"
       ;;
@@ -492,6 +557,9 @@ install_rate_limiter() {
         "stable" \
         "" \
         "AllNamespaces"
+
+      # Patch Kuadrant CSV to recognize OpenShift Gateway controller
+      patch_kuadrant_csv_for_gateway "kuadrant-system" "kuadrant-operator"
 
       # Apply Kuadrant custom resource
       apply_kuadrant_cr "kuadrant-system"
