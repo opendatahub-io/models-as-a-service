@@ -574,11 +574,13 @@ patch_kuadrant_csv_for_gateway() {
   # The operator must have ISTIO_GATEWAY_CONTROLLER_NAMES set BEFORE Kuadrant CR is created
   log_info "Forcing operator restart to apply new Gateway controller configuration..."
   
-  local operator_deployment="${operator_prefix}-operator-controller-manager"
+  # The kuadrant operator deployment is always named kuadrant-operator-controller-manager
+  # regardless of whether we're using rhcl-operator or kuadrant-operator
+  local operator_deployment="kuadrant-operator-controller-manager"
   if kubectl get deployment "$operator_deployment" -n "$namespace" &>/dev/null; then
     # Force delete the operator pod - this ensures the new env var is picked up
     kubectl delete pod -n "$namespace" -l control-plane=controller-manager --force --grace-period=0 2>/dev/null || \
-      kubectl delete pod -n "$namespace" -l app.kubernetes.io/name="${operator_prefix}" --force --grace-period=0 2>/dev/null || \
+      kubectl delete pod -n "$namespace" -l app.kubernetes.io/name=kuadrant-operator --force --grace-period=0 2>/dev/null || \
       kubectl delete pod -n "$namespace" -l app=kuadrant --force --grace-period=0 2>/dev/null || true
     
     # Wait for the new pod to be ready
@@ -965,11 +967,11 @@ spec: {}
 EOF
 
   # Wait for Kuadrant to be ready
-  # With the CSV patch applied before this, the operator should recognize the Gateway controller
-  # and Kuadrant should become Ready quickly after Gateway is Programmed
+  # With the CSV patch and operator restart applied before this, the operator should recognize
+  # the OpenShift Gateway controller and Kuadrant should become Ready after Gateway is Programmed
   wait_for_custom_check "Kuadrant ready in $namespace" \
     "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-    60 \
+    120 \
     5 || log_warn "Kuadrant not ready yet - AuthPolicy enforcement may fail on model HTTPRoutes"
 }
 
