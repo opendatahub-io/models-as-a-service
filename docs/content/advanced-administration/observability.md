@@ -116,7 +116,7 @@ For local development and testing, you can also use our [Limitador Persistence](
 For dashboard visualization options, see:
 
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
-- **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25.1/html/monitoring_data_science_models/index)
+- **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25/html/managing_and_monitoring_models/index)
 
 ### Included Dashboards
 
@@ -262,10 +262,11 @@ The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to 
 **Rate limiting and success metrics:**
 
     # Success rate (percentage of requests not rate-limited)
-    sum(authorized_calls) / (sum(authorized_calls) + sum(limited_calls))
+    # OR vector(1) returns 100% when no traffic (avoids div/0)
+    (sum(authorized_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(1)
 
     # Success rate by tier
-    sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))
+    (sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))) OR vector(1)
 
     # Rate limit violations by tier
     sum by (tier) (rate(limited_calls[5m]))

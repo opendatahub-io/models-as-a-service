@@ -432,6 +432,11 @@ install_perses() {
         echo "   Waiting for Perses pod... (attempt $i/30)"
         sleep 5
     done
+    # Verify Perses pod is actually ready (fail if loop exhausted without success)
+    if [ "$PERSES_PODS" -lt 1 ] 2>/dev/null; then
+        echo "   ❌ Perses pod failed to become ready after 30 attempts"
+        return 1
+    fi
 
     # Deploy dashboards to openshift-operators (where UIPlugin's Perses lives)
     echo "   Deploying Perses dashboards..."
@@ -489,7 +494,7 @@ if [[ "$OBSERVABILITY_STACK" == "grafana" || "$OBSERVABILITY_STACK" == "both" ]]
     GRAFANA_ROUTE=$(kubectl get route grafana-ingress -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
     if [ -n "$GRAFANA_ROUTE" ]; then
         echo "📊 Grafana URL: https://$GRAFANA_ROUTE"
-        echo "   🔐 Default Credentials: admin / admin"
+        echo "   🔐 Credentials: See deployment/components/observability/grafana/grafana-instance.yaml"
         echo ""
     fi
 fi
