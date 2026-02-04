@@ -9,7 +9,7 @@ This document covers the observability stack for the MaaS Platform, including me
 
 ## Overview
 
-As part of Dev Preview MaaS Platform includes a basic observability stack that provides insights into system performance, usage patterns, and operational health. The observability stack consists of:
+As part of Dev Preview, MaaS Platform includes a basic observability stack that provides insights into system performance, usage patterns, and operational health.
 
 !!! note
     The observability stack will be enhanced in future releases.
@@ -205,28 +205,26 @@ The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to 
 
 **Configuration** (`deployment/base/observability/istio-telemetry.yaml`):
 
-```yaml
-apiVersion: telemetry.istio.io/v1
-kind: Telemetry
-metadata:
-  name: latency-per-user
-  namespace: openshift-ingress
-spec:
-  selector:
-    matchLabels:
-      gateway.networking.k8s.io/gateway-name: maas-default-gateway
-  metrics:
-  - providers:
-    - name: prometheus
-    overrides:
-    - match:
-        metric: REQUEST_DURATION
-        mode: CLIENT_AND_SERVER
-      tagOverrides:
-        user:
-          operation: UPSERT
-          value: request.headers["x-maas-username"]
-```
+    apiVersion: telemetry.istio.io/v1
+    kind: Telemetry
+    metadata:
+      name: latency-per-user
+      namespace: openshift-ingress
+    spec:
+      selector:
+        matchLabels:
+          gateway.networking.k8s.io/gateway-name: maas-default-gateway
+      metrics:
+      - providers:
+        - name: prometheus
+        overrides:
+        - match:
+            metric: REQUEST_DURATION
+            mode: CLIENT_AND_SERVER
+          tagOverrides:
+            user:
+              operation: UPSERT
+              value: request.headers["x-maas-username"]
 
 !!! note "Security"
     The `X-MaaS-Username` header is injected by the AuthPolicy from the authenticated identity, not from client input. This prevents users from spoofing the header to manipulate metrics attribution.
