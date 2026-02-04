@@ -598,9 +598,14 @@ patch_kuadrant_csv_for_gateway() {
     else
       log_warn "Operator pod may not have correct env yet: $pod_env"
     fi
-  else
-    log_warn "Could not find operator deployment, waiting 30s for env propagation"
+    
+    # Give the operator time to fully initialize with the new Gateway controller configuration
+    # This is critical - the operator needs to register as a Gateway controller before Kuadrant CR is created
+    log_info "Waiting 30s for operator to fully initialize with Gateway controller configuration..."
     sleep 30
+  else
+    log_warn "Could not find operator deployment, waiting 60s for env propagation"
+    sleep 60
   fi
 }
 
@@ -967,11 +972,13 @@ spec: {}
 EOF
 
   # Wait for Kuadrant to be ready
-  # With the CSV patch and operator restart applied before this, the operator should recognize
-  # the OpenShift Gateway controller and Kuadrant should become Ready after Gateway is Programmed
+  # With the CSV patch, operator restart, and 30s initialization delay applied before this,
+  # the operator should recognize the OpenShift Gateway controller.
+  # Kuadrant becoming Ready confirms the Gateway controller is properly recognized.
+  # Using 300s timeout because CI environments can be slower than local testing.
   wait_for_custom_check "Kuadrant ready in $namespace" \
     "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-    120 \
+    300 \
     5 || log_warn "Kuadrant not ready yet - AuthPolicy enforcement may fail on model HTTPRoutes"
 }
 
