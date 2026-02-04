@@ -227,7 +227,7 @@ The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to 
               value: request.headers["x-maas-username"]
 
 !!! note "Security"
-    The `X-MaaS-Username` header is injected by the AuthPolicy from the authenticated identity, not from client input. This prevents users from spoofing the header to manipulate metrics attribution.
+    The `X-MaaS-Username` header should be injected server-side by AuthPolicy. Ensure your AuthPolicy injects this header from the authenticated identity (not client input) for accurate metrics attribution.
 
 ### Common Queries
 
