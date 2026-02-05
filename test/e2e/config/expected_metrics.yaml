@@ -1,0 +1,126 @@
+# Expected Metrics Configuration for MaaS Observability Tests
+# ==========================================================
+#
+# This file defines the expected metrics that should be available after
+# deploying the MaaS observability stack. Tests will FAIL with informative
+# messages if:
+#   - A metric is missing (not found in the endpoint)
+#   - A metric is missing expected labels
+#   - A Kubernetes resource (TelemetryPolicy, Telemetry) is not deployed
+#
+# Update this file when:
+#   - Adding new metrics to the observability stack
+#   - Changing metric names or labels
+#   - Adding new observability components
+
+# Kubernetes resources that must exist for observability
+resources:
+  telemetry_policy:
+    name: "user-group"
+    namespace: "openshift-ingress"
+    kind: "TelemetryPolicy"
+    api_group: "extensions.kuadrant.io/v1alpha1"
+    # Expected status condition
+    expected_condition:
+      type: "Enforced"
+      status: "True"
+
+  istio_telemetry:
+    name: "latency-per-user"
+    namespace: "openshift-ingress"
+    kind: "Telemetry"
+    api_group: "telemetry.istio.io/v1"
+
+  limitador_servicemonitor:
+    name: "limitador-metrics"
+    namespace: "kuadrant-system"
+    kind: "ServiceMonitor"
+    api_group: "monitoring.coreos.com/v1"
+
+# Metrics exposed by Limitador (rate limiting service)
+# These metrics are enriched with user/tier/model labels via TelemetryPolicy
+limitador:
+  # How to access metrics (for tests)
+  access:
+    service: "limitador-limitador"
+    namespace: "kuadrant-system"
+    port: 8080
+    path: "/metrics"
+
+  metrics:
+    - name: "authorized_hits"
+      type: "counter"
+      description: "Total tokens consumed (from usage.total_tokens in LLM response)"
+      labels:
+        required:
+          - "user"
+          - "tier"
+          - "model"
+        optional: []
+      # Example query: sum by (user) (authorized_hits)
+
+    - name: "authorized_calls"
+      type: "counter"
+      description: "Total number of requests that were authorized/allowed"
+      labels:
+        required:
+          - "user"
+          - "tier"
+          - "model"
+        optional: []
+      # Example query: sum by (tier) (rate(authorized_calls[5m]))
+
+    - name: "limited_calls"
+      type: "counter"
+      description: "Total number of requests that were rate-limited (HTTP 429)"
+      labels:
+        required:
+          - "user"
+          - "tier"
+          - "model"
+        optional: []
+      # Example query: sum by (tier) (rate(limited_calls[5m]))
+
+# Metrics from Istio Gateway (Envoy proxy)
+# The istio_telemetry resource adds 'user' label from X-MaaS-Username header
+istio_gateway:
+  # How to access metrics
+  access:
+    # These are scraped by Prometheus via ServiceMonitor
+    # Direct access requires port-forwarding to envoy stats endpoint
+    method: "prometheus_query"
+    # Or direct: service istio-gateway in openshift-ingress, port 15090, path /stats/prometheus
+
+  metrics:
+    - name: "istio_request_duration_milliseconds_bucket"
+      type: "histogram"
+      description: "Request duration histogram with user label for per-user latency tracking"
+      labels:
+        required:
+          - "user"  # Added by istio-telemetry.yaml from X-MaaS-Username header
+        optional:
+          - "destination_service_name"
+          - "response_code"
+          - "le"  # histogram bucket boundary
+      # Example query: histogram_quantile(0.99, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!=""}[5m])))
+
+# Labels injected by TelemetryPolicy (for documentation)
+# These are the labels that TelemetryPolicy extracts and adds to Limitador metrics
+telemetry_policy_labels:
+  user:
+    source: "auth.identity.userid"
+    description: "User identifier extracted from authenticated identity"
+
+  tier:
+    source: "auth.identity.tier"
+    description: "User's access tier (free, premium, enterprise)"
+
+  model:
+    source: "responseBodyJSON('/model')"
+    description: "Model name extracted from the response body"
+
+# Labels injected by Istio Telemetry resource
+istio_telemetry_labels:
+  user:
+    source: "request.headers['x-maas-username']"
+    description: "Username from X-MaaS-Username header (injected by AuthPolicy)"
