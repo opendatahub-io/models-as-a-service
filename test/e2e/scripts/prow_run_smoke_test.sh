@@ -139,24 +139,18 @@ deploy_maas_platform() {
         exit 1
     fi
     # Wait for DataScienceCluster's KServe and ModelsAsService to be ready
-    if ! wait_datasciencecluster_ready "default-dsc" 600; then
+    # Using 300s timeout to fit within Prow's 15m job limit
+    if ! wait_datasciencecluster_ready "default-dsc" 300; then
         echo "❌ ERROR: DataScienceCluster components did not become ready"
         exit 1
     fi
     
     # Wait for Authorino to be ready and auth service cluster to be healthy
-    # TODO(https://issues.redhat.com/browse/RHOAIENG-48760): Remove SKIP_AUTH_CHECK
-    # once the operator creates the gateway→Authorino TLS EnvoyFilter at Gateway/AuthPolicy creation
-    # time, not at first LLMInferenceService creation. Currently there's a chicken-egg problem where
-    # auth checks fail before any model is deployed because the TLS config doesn't exist yet.
-    if [[ "${SKIP_AUTH_CHECK:-false}" == "true" ]]; then
-        echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"
-        echo "   This is a temporary workaround for the gateway→Authorino TLS chicken-egg problem"
-    else
-        echo "Waiting for Authorino and auth service to be ready..."
-        if ! wait_authorino_ready 600; then
-            echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
-        fi
+    # Using 300s timeout to fit within Prow's 15m job limit
+    echo "Waiting for Authorino and auth service to be ready..."
+    if ! wait_authorino_ready 300; then
+        echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+    fi>>>>>>> 4c9064a (update operator mapping and move Configs to yamls)
     fi
     
     echo "✅ MaaS platform deployment completed"
@@ -196,8 +190,8 @@ validate_deployment() {
     echo "Deployment Validation"
     if [ "$SKIP_VALIDATION" = false ]; then
         if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
-            echo "⚠️  First validation attempt failed, waiting 60 seconds and retrying..."
-            sleep 60
+            echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
+            sleep 30
             if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
                 echo "❌ ERROR: Deployment validation failed after retry"
                 exit 1

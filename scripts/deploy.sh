@@ -10,11 +10,10 @@
 #
 # OPTIONS:
 #   --operator-type <rhoai|odh>   Operator to install (default: rhoai)
-#   --policy-engine <rhcl|kuadrant> Gateway policy engine (auto-determined)
-#   --enable-dashboard            Enable dashboard (disabled by default)
+#                                 Policy engine is auto-selected:
+#                                   odh → kuadrant (community v1.3.1)
+#                                   rhoai → rhcl (Red Hat Connectivity Link)
 #   --enable-tls-backend          Enable TLS for Authorino/MaaS API (default: on)
-#   --skip-certmanager            Skip cert-manager installation
-#   --skip-lws                    Skip LeaderWorkerSet installation
 #   --namespace <namespace>       Target namespace
 #   --verbose                     Enable debug logging
 #   --dry-run                     Show what would be done
@@ -31,14 +30,11 @@
 #   LOG_LEVEL         Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #
 # EXAMPLES:
-#   # Deploy RHOAI (default)
+#   # Deploy RHOAI (default, uses rhcl policy engine)
 #   ./scripts/deploy.sh
 #
-#   # Deploy ODH
+#   # Deploy ODH (uses kuadrant policy engine)
 #   ./scripts/deploy.sh --operator-type odh
-#
-#   # Deploy ODH with dashboard enabled
-#   ./scripts/deploy.sh --operator-type odh --enable-dashboard
 #
 #   # Test custom MaaS API image
 #   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh
@@ -76,11 +72,8 @@ esac
 
 DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
 OPERATOR_TYPE="${OPERATOR_TYPE:-rhoai}"
-POLICY_ENGINE="${POLICY_ENGINE:-}"  # Auto-determined based on deployment mode (rhcl/kuadrant)
+POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
 NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
-SKIP_CERT_MANAGER="${SKIP_CERT_MANAGER:-auto}"
-SKIP_LWS="${SKIP_LWS:-auto}"
-ENABLE_DASHBOARD="${ENABLE_DASHBOARD:-false}"
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -105,31 +98,15 @@ OPTIONS:
 
   --operator-type <rhoai|odh>
       Which operator to install (default: rhoai)
+      Policy engine is auto-selected based on operator type:
+      - rhoai → rhcl (Red Hat Connectivity Link)
+      - odh → kuadrant (community v1.3.1 with AuthPolicy v1)
+      - odh → kuadrant (upstream Kuadrant operator)
       Only applies when --deployment-mode=operator
-
-  --policy-engine <rhcl|kuadrant>
-      Gateway policy engine for AuthPolicy/RateLimitPolicy (auto-determined)
-      - rhcl: Red Hat Connectivity Link (downstream)
-        Default for: operator mode (RHOAI and ODH)
-        Note: Works with OpenShift Gateway (shows warning without Istio)
-      - kuadrant: Kuadrant operator (upstream)
-        Default for: kustomize mode
-        Note: May have API compatibility issues with some operator versions
 
   --enable-tls-backend
       Enable TLS backend for Authorino and MaaS API (default: enabled)
       Configures HTTPS tier lookup URL
-
-  --skip-certmanager
-      Skip cert-manager installation (auto-detected by default)
-
-  --skip-lws
-      Skip LeaderWorkerSet installation (auto-detected by default)
-
-  --enable-dashboard
-      Enable dashboard component installation (disabled by default)
-      Dashboard includes BFF services that increase resource usage
-      Enable when you need the dashboard UI
 
   --namespace <namespace>
       Target namespace for deployment
@@ -162,14 +139,13 @@ ENVIRONMENT VARIABLES:
   OPERATOR_CATALOG      Custom operator catalog
   OPERATOR_IMAGE        Custom operator image
   OPERATOR_TYPE         Operator type (rhoai/odh)
-  POLICY_ENGINE         Gateway policy engine (rhcl/kuadrant)
   LOG_LEVEL             Logging verbosity (DEBUG, INFO, WARN, ERROR)
 
 EXAMPLES:
-  # Deploy RHOAI (default)
+  # Deploy RHOAI (default, uses rhcl policy engine)
   ./scripts/deploy.sh
 
-  # Deploy ODH
+  # Deploy ODH (uses kuadrant policy engine)
   ./scripts/deploy.sh --operator-type odh
 
   # Deploy via Kustomize
@@ -183,9 +159,6 @@ EXAMPLES:
     --operator-type odh \\
     --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:pr-456 \\
     --operator-image quay.io/opendatahub/opendatahub-operator:pr-456
-
-  # Deploy without optional operators
-  ./scripts/deploy.sh --skip-certmanager --skip-lws
 
 For more information, see: https://github.com/opendatahub-io/models-as-a-service
 EOF
@@ -220,29 +193,12 @@ parse_arguments() {
         OPERATOR_TYPE="$2"
         shift 2
         ;;
-      --policy-engine|--rate-limiter)
-        require_flag_value "$1" "${2:-}"
-        POLICY_ENGINE="$2"
-        shift 2
-        ;;
       --enable-tls-backend)
         ENABLE_TLS_BACKEND="true"
         shift
         ;;
       --disable-tls-backend)
         ENABLE_TLS_BACKEND="false"
-        shift
-        ;;
-      --skip-certmanager)
-        SKIP_CERT_MANAGER="true"
-        shift
-        ;;
-      --skip-lws)
-        SKIP_LWS="true"
-        shift
-        ;;
-      --enable-dashboard)
-        ENABLE_DASHBOARD="true"
         shift
         ;;
       --namespace)
@@ -311,32 +267,24 @@ validate_configuration() {
     fi
   fi
 
-  # Auto-determine rate limiter if not specified
-  if [[ -z "$POLICY_ENGINE" ]]; then
-    if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
-      # Operator mode: default to RHCL (production/downstream)
-      POLICY_ENGINE="rhcl"
-      log_debug "Using auto-determined policy engine for operator mode: $POLICY_ENGINE"
-    else
-      # Kustomize mode: default to Kuadrant (development/upstream)
-      POLICY_ENGINE="kuadrant"
-      log_debug "Using auto-determined policy engine for kustomize mode: $POLICY_ENGINE"
-    fi
-  fi
-
-  # Validate rate limiter choice
-  if [[ ! "$POLICY_ENGINE" =~ ^(rhcl|kuadrant)$ ]]; then
-    log_error "Invalid policy engine: $POLICY_ENGINE"
-    log_error "Must be 'rhcl' or 'kuadrant'"
-    exit 1
-  fi
-
-  # RHOAI requires RHCL (only applicable in operator mode)
-  if [[ "$DEPLOYMENT_MODE" == "operator" && "$OPERATOR_TYPE" == "rhoai" && "$POLICY_ENGINE" != "rhcl" ]]; then
-    log_error "RHOAI requires RHCL (Red Hat Connectivity Link)"
-    log_error "Cannot use upstream Kuadrant with RHOAI"
-    log_error "Use --policy-engine rhcl or deploy ODH instead"
-    exit 1
+  # Auto-determine policy engine based on operator type
+  # - ODH uses community Kuadrant (v1.3.1 from upstream catalog has AuthPolicy v1)
+  # - RHOAI uses RHCL (Red Hat Connectivity Link - downstream)
+  if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+    case "$OPERATOR_TYPE" in
+      odh)
+        POLICY_ENGINE="kuadrant"
+        log_debug "Auto-selected policy engine for ODH: kuadrant (community v1.3.1)"
+        ;;
+      rhoai)
+        POLICY_ENGINE="rhcl"
+        log_debug "Auto-selected policy engine for RHOAI: rhcl (Red Hat Connectivity Link)"
+        ;;
+    esac
+  else
+    # Kustomize mode: default to kuadrant (community)
+    POLICY_ENGINE="kuadrant"
+    log_debug "Using auto-determined policy engine for kustomize mode: $POLICY_ENGINE"
   fi
 
   # Auto-determine namespace if not specified
@@ -480,31 +428,30 @@ deploy_via_kustomize() {
 #──────────────────────────────────────────────────────────────
 
 install_optional_operators() {
-  log_info "Checking optional operators..."
+  log_info "Installing optional operators in parallel..."
 
-  # cert-manager
-  if should_install_operator "openshift-cert-manager-operator" "$SKIP_CERT_MANAGER" "cert-manager-operator"; then
-    log_info "Installing cert-manager..."
-    install_olm_operator \
-      "openshift-cert-manager-operator" \
-      "cert-manager-operator" \
-      "redhat-operators" \
-      "stable-v1" \
-      "" \
-      "openshift-operators"
-  fi
+  local data_dir="${SCRIPT_DIR}/data"
 
-  # LeaderWorkerSet
-  if should_install_operator "leader-worker-set" "$SKIP_LWS" "openshift-lws-operator"; then
-    log_info "Installing LeaderWorkerSet..."
-    install_olm_operator \
-      "leader-worker-set" \
-      "openshift-lws-operator" \
-      "redhat-operators" \
-      "stable-v1.0" \
-      "" \
-      "openshift-lws-operator"
-  fi
+  # Apply both subscriptions in parallel (they're independent)
+  log_info "Applying cert-manager and LeaderWorkerSet subscriptions..."
+  kubectl apply -f "${data_dir}/cert-manager-subscription.yaml" &
+  local cert_manager_pid=$!
+  kubectl apply -f "${data_dir}/lws-subscription.yaml" &
+  local lws_pid=$!
+
+  # Wait for both apply commands to complete
+  wait $cert_manager_pid $lws_pid
+
+  # Wait for both subscriptions to be installed (can run in parallel too)
+  log_info "Waiting for operators to be installed..."
+  waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
+  local cert_wait_pid=$!
+  waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
+  local lws_wait_pid=$!
+
+  # Wait for both to complete
+  wait $cert_wait_pid $lws_wait_pid
+  log_info "Optional operators installed"
 }
 
 #──────────────────────────────────────────────────────────────
@@ -601,8 +548,8 @@ patch_kuadrant_csv_for_gateway() {
     
     # Give the operator time to fully initialize with the new Gateway controller configuration
     # This is critical - the operator needs to register as a Gateway controller before Kuadrant CR is created
-    log_info "Waiting 30s for operator to fully initialize with Gateway controller configuration..."
-    sleep 30
+    log_info "Waiting 15s for operator to fully initialize with Gateway controller configuration..."
+    sleep 15
   else
     log_warn "Could not find operator deployment, waiting 60s for env propagation"
     sleep 60
@@ -631,20 +578,60 @@ install_policy_engine() {
       ;;
 
     kuadrant)
-      log_info "Installing Kuadrant (upstream)"
+      log_info "Installing Kuadrant v1.3.1 (upstream community)"
+
+      # Create custom catalog for upstream Kuadrant v1.3.1
+      # This version provides AuthPolicy v1 API required by ODH
+      local kuadrant_catalog="kuadrant-operator-catalog"
+      local kuadrant_ns="kuadrant-system"
+
+      log_info "Creating Kuadrant v1.3.1 catalog source..."
+      kubectl create namespace "$kuadrant_ns" 2>/dev/null || true
+
+      cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: $kuadrant_catalog
+  namespace: $kuadrant_ns
+spec:
+  sourceType: grpc
+  image: quay.io/kuadrant/kuadrant-operator-catalog:v1.3.1
+  displayName: Kuadrant Operator Catalog
+  publisher: Kuadrant
+  updateStrategy:
+    registryPoll:
+      interval: 45m
+EOF
+
+      # Wait for catalog to be ready
+      log_info "Waiting for Kuadrant catalog to be ready..."
+      sleep 10
+
+      # Create OperatorGroup for Kuadrant
+      cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: kuadrant-operator-group
+  namespace: $kuadrant_ns
+spec: {}
+EOF
+
+      # Install Kuadrant operator from the custom catalog
       install_olm_operator \
         "kuadrant-operator" \
-        "kuadrant-system" \
-        "community-operators" \
+        "$kuadrant_ns" \
+        "$kuadrant_catalog" \
         "stable" \
         "" \
         "AllNamespaces"
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
-      patch_kuadrant_csv_for_gateway "kuadrant-system" "kuadrant-operator"
+      patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
 
       # Apply Kuadrant custom resource
-      apply_kuadrant_cr "kuadrant-system"
+      apply_kuadrant_cr "$kuadrant_ns"
       ;;
   esac
 }
@@ -672,9 +659,11 @@ install_primary_operator() {
     rhoai)
       catalog_source="${OPERATOR_CATALOG:+${OPERATOR_TYPE}-custom-catalog}"
       catalog_source="${catalog_source:-redhat-operators}"
-      channel="${OPERATOR_CHANNEL:-fast}"
+      # Use 'fast-3.x' channel for RHOAI v3 (with MaaS support)
+      # RHOAI 2.x (fast channel) does not support modelsAsService
+      channel="${OPERATOR_CHANNEL:-fast-3.x}"
 
-      log_info "Installing RHOAI operator..."
+      log_info "Installing RHOAI v3 operator..."
       # RHOAI operator goes in redhat-ods-operator namespace (not redhat-ods-applications)
       local operator_namespace="redhat-ods-operator"
       install_olm_operator \
@@ -770,6 +759,13 @@ apply_custom_resources() {
 apply_dsci() {
   log_info "Applying DSCInitialization..."
 
+  # Check if DSCI already exists (operator may create it automatically)
+  if kubectl get dscinitializations default-dsci &>/dev/null; then
+    log_info "DSCInitialization already exists, skipping creation (operator auto-created)"
+    return 0
+  fi
+
+  # Create DSCI only if it doesn't exist
   cat <<EOF | kubectl apply -f -
 apiVersion: dscinitialization.opendatahub.io/v1
 kind: DSCInitialization
@@ -779,7 +775,7 @@ spec:
   applicationsNamespace: ${NAMESPACE}
   monitoring:
     managementState: Managed
-    namespace: ${NAMESPACE}
+    namespace: ${NAMESPACE}-monitoring
     metrics: {}
   trustedCABundle:
     managementState: Managed
@@ -787,37 +783,18 @@ EOF
 }
 
 apply_dsc() {
-  log_info "Applying DataScienceCluster..."
+  log_info "Applying DataScienceCluster with ModelsAsService..."
 
-  # Determine dashboard state based on flag
-  local dashboard_state="Removed"
-  if [[ "$ENABLE_DASHBOARD" == "true" ]]; then
-    dashboard_state="Managed"
-    log_info "Dashboard component will be enabled"
-  else
-    log_debug "Dashboard component disabled (use --enable-dashboard to enable)"
+  # Check if a DataScienceCluster already exists, skip creation if so
+  if kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
+    log_info "DataScienceCluster already exists in the cluster. Skipping creation."
+    return 0
   fi
 
-  # RHOAI 3.x uses v2 API (MaaS auto-enabled when kserve is Managed)
-  # ODH still uses v1 API (needs explicit modelsAsService configuration)
-  if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
-    cat <<EOF | kubectl apply -f -
+  # Apply DSC with modelsAsService - this is required for MaaS deployment
+  # If the operator doesn't support modelsAsService, kubectl will fail with a clear error
+  cat <<EOF | kubectl apply --server-side=true -f -
 apiVersion: datasciencecluster.opendatahub.io/v2
-kind: DataScienceCluster
-metadata:
-  name: default-dsc
-spec:
-  components:
-    kserve:
-      managementState: Managed
-      rawDeploymentServiceConfig: Headed
-    dashboard:
-      managementState: ${dashboard_state}
-EOF
-  else
-    # ODH uses v1 API with explicit modelsAsService
-    cat <<EOF | kubectl apply -f -
-apiVersion: datasciencecluster.opendatahub.io/v1
 kind: DataScienceCluster
 metadata:
   name: default-dsc
@@ -829,9 +806,8 @@ spec:
       modelsAsService:
         managementState: Managed
     dashboard:
-      managementState: ${dashboard_state}
+      managementState: Removed
 EOF
-  fi
 }
 
 #──────────────────────────────────────────────────────────────
@@ -844,16 +820,11 @@ EOF
 setup_gateway_api() {
   log_info "Setting up Gateway API infrastructure..."
 
+  local data_dir="${SCRIPT_DIR}/data"
+
   # Create GatewayClass for OpenShift Gateway API controller
   # This enables the built-in Gateway API implementation (OpenShift 4.14+)
-  cat <<EOF | kubectl apply -f -
-apiVersion: gateway.networking.k8s.io/v1
-kind: GatewayClass
-metadata:
-  name: openshift-default
-spec:
-  controllerName: "openshift.io/gateway-controller/v1"
-EOF
+  kubectl apply -f "${data_dir}/gatewayclass.yaml"
 }
 
 # setup_maas_gateway
@@ -956,30 +927,44 @@ apply_kuadrant_cr() {
   # Wait for Gateway to be Programmed (required before Kuadrant can become ready)
   # This ensures Service Mesh is installed and Gateway API provider is operational
   log_info "Waiting for Gateway to be Programmed (Service Mesh initialization)..."
-  if ! kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=300s 2>/dev/null; then
+  if ! kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=120s 2>/dev/null; then
     log_warn "Gateway not yet Programmed after 300s - Kuadrant may take longer to become ready"
   fi
 
   log_info "Applying Kuadrant custom resource in $namespace..."
 
-  cat <<EOF | kubectl apply -f -
-apiVersion: kuadrant.io/v1beta1
-kind: Kuadrant
-metadata:
-  name: kuadrant
-  namespace: $namespace
-spec: {}
-EOF
+  local data_dir="${SCRIPT_DIR}/data"
+  kubectl apply -f "${data_dir}/kuadrant.yaml" -n "$namespace"
 
-  # Wait for Kuadrant to be ready
-  # With the CSV patch, operator restart, and 30s initialization delay applied before this,
-  # the operator should recognize the OpenShift Gateway controller.
-  # Kuadrant becoming Ready confirms the Gateway controller is properly recognized.
-  # Using 300s timeout because CI environments can be slower than local testing.
-  wait_for_custom_check "Kuadrant ready in $namespace" \
+  # Wait for Kuadrant to be ready (initial attempt - 60s)
+  # If it fails with MissingDependency, restart the operator and retry
+  log_info "Waiting for Kuadrant to become ready (initial check)..."
+  if ! wait_for_custom_check "Kuadrant ready in $namespace" \
     "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-    300 \
-    5 || log_warn "Kuadrant not ready yet - AuthPolicy enforcement may fail on model HTTPRoutes"
+    60 \
+    5; then
+    
+    # Check if it's a MissingDependency issue
+    local kuadrant_reason
+    kuadrant_reason=$(kubectl get kuadrant kuadrant -n "$namespace" -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}' 2>/dev/null || echo "")
+    
+    if [[ "$kuadrant_reason" == "MissingDependency" ]]; then
+      log_info "Kuadrant shows MissingDependency - restarting operator to re-register Gateway controller..."
+      kubectl delete pod -n "$namespace" -l control-plane=controller-manager --force --grace-period=0 2>/dev/null || true
+      sleep 15
+      
+      # Retry waiting for Kuadrant
+      log_info "Retrying Kuadrant readiness check after operator restart..."
+      wait_for_custom_check "Kuadrant ready in $namespace" \
+        "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
+        120 \
+        5 || log_warn "Kuadrant not ready yet - AuthPolicy enforcement may fail on model HTTPRoutes"
+    else
+      log_warn "Kuadrant not ready (reason: $kuadrant_reason) - AuthPolicy enforcement may fail"
+    fi
+  fi
+  
+  log_info "Kuadrant setup complete"
 }
 
 patch_operator_csv() {

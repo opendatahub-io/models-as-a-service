@@ -181,7 +181,7 @@ waitsubscriptioninstalled() {
   done
 
   echo "  * Waiting for Subscription setup to finish setup. CSV = $csv ..."
-  if ! kubectl wait -n "$ns" --for=jsonpath="{.status.phase}"=Succeeded csv "$csv" --timeout=600s; then
+  if ! kubectl wait -n "$ns" --for=jsonpath="{.status.phase}"=Succeeded csv "$csv" --timeout=300s; then
     echo "    * ERROR: Timeout while waiting for Subscription to finish installation."
     return 1
   fi
