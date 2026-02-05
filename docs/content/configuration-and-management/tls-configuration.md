@@ -194,15 +194,18 @@ kustomize build deployment/overlays/tls-backend | kubectl apply -f -
 
 ## Verifying TLS Configuration
 
+!!! note "Application namespace"
+    The `maas-api` service is deployed to the platform's application namespace: `redhat-ods-applications` for RHOAI or `opendatahub` for ODH. Adjust the namespace in the commands below accordingly.
+
 ### Check Certificate
 
 ```bash
 # View certificate details
-kubectl get secret maas-api-serving-cert -n maas-api -o jsonpath='{.data.tls\.crt}' \
+kubectl get secret maas-api-serving-cert -n <application-namespace> -o jsonpath='{.data.tls\.crt}' \
   | base64 -d | openssl x509 -text -noout
 
 # Check expiry
-kubectl get secret maas-api-serving-cert -n maas-api -o jsonpath='{.data.tls\.crt}' \
+kubectl get secret maas-api-serving-cert -n <application-namespace> -o jsonpath='{.data.tls\.crt}' \
   | base64 -d | openssl x509 -enddate -noout
 ```
 
@@ -211,9 +214,9 @@ kubectl get secret maas-api-serving-cert -n maas-api -o jsonpath='{.data.tls\.cr
 ```bash
 # From within the cluster
 kubectl run curl --rm -it --image=curlimages/curl -- \
-  curl -vk https://maas-api.maas-api.svc:8443/health
+  curl -vk https://maas-api.<application-namespace>.svc:8443/health
 
 # Check certificate chain
-openssl s_client -connect maas-api.maas-api.svc:8443 -servername maas-api.maas-api.svc
+openssl s_client -connect maas-api.<application-namespace>.svc:8443 -servername maas-api.<application-namespace>.svc
 ```
 

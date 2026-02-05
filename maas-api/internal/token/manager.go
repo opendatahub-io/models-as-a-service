@@ -79,7 +79,7 @@ func (m *Manager) GenerateToken(ctx context.Context, user *UserContext, expirati
 		return nil, fmt.Errorf("failed to create token for service account %s in namespace %s: %w", saName, namespace, errToken)
 	}
 
-	claims, err := extractClaims(token.Status.Token)
+	claims, err := ExtractClaims(token.Status.Token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract claims from new token: %w", err)
 	}
@@ -329,7 +329,7 @@ func (m *Manager) Audience() string {
 // HasValidAudience checks if the given JWT token has the expected service account audience.
 // Returns false if the token cannot be parsed or doesn't contain the expected audience.
 func (m *Manager) HasValidAudience(tokenString string) bool {
-	claims, err := extractClaims(tokenString)
+	claims, err := ExtractClaims(tokenString)
 	if err != nil {
 		m.logger.Warn("Failed to extract claims from token", "error", err)
 		return false

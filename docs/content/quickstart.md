@@ -14,6 +14,7 @@ This guide provides quickstart instructions for deploying the MaaS Platform infr
       - ODH 3.0 +
 - **RHCL requirements** (Note: This can be installed automatically by the script below):
       - RHCL 1.2 +
+- **Authorino TLS**: Listener TLS must be enabled on Authorino (see [Configure Authorino TLS](#configure-authorino-tls))
 - **Cluster admin** or equivalent permissions
 - **Required tools**:
       - `oc` (OpenShift CLI)
@@ -21,6 +22,17 @@ This guide provides quickstart instructions for deploying the MaaS Platform infr
       - `jq`
       - `kustomize` (v5.7.0+)
       - `gsed` (GNU sed) - **macOS only**: `brew install gnu-sed`
+
+## Configure Authorino TLS
+
+Before deploying MaaS, Authorino's listener TLS must be enabled. This is a platform prerequisite for secure `LLMInferenceService` communication:
+
+- **Gateway → Authorino (Listener TLS)**: Enable TLS on Authorino's gRPC listener for incoming authentication requests
+
+For step-by-step commands, see [TLS Configuration: Authorino TLS Configuration](configuration-and-management/tls-configuration.md#authorino-tls-configuration).
+
+!!! tip "Automated configuration"
+    The `deploy-rhoai-stable.sh` script automatically configures all remaining TLS settings after deployment, including Gateway TLS bootstrap and Authorino → maas-api outbound TLS.
 
 ## Quick Start
 
@@ -79,7 +91,7 @@ kubectl get pods -n redhat-ods-applications
 
 ## Model Setup (Optional)
 
-### Deploy Sample Models (Optional)
+### Deploy Sample Models
 
 #### Simulator Model (CPU)
 

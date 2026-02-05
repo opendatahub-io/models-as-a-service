@@ -105,8 +105,13 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 
 	modelList, err := h.modelMgr.ListAvailableLLMs(c.Request.Context(), saToken)
 	if err != nil {
+		claims, claimsErr := token.ExtractClaims(bearerToken)
+		if claimsErr != nil {
+			h.logger.Warn("Failed to extract claims from token", "error", claimsErr)
+		}
 		h.logger.Error("Failed to get available LLM models",
 			"error", err,
+			"jti", claims["jti"],
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{

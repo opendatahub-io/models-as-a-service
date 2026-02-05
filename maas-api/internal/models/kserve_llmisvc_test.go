@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -73,7 +75,7 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) { //nolint:maintidx // ta
 										Spec: &gwapiv1.HTTPRouteSpec{
 											CommonRouteSpec: gwapiv1.CommonRouteSpec{
 												ParentRefs: []gwapiv1.ParentReference{
-													{Name: "maas-gateway", Namespace: ptrTo(gwapiv1.Namespace("gateway-ns"))},
+													{Name: "maas-gateway", Namespace: ptr.To(gwapiv1.Namespace("gateway-ns"))},
 												},
 											},
 										},
@@ -117,7 +119,7 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) { //nolint:maintidx // ta
 					Spec: gwapiv1.HTTPRouteSpec{
 						CommonRouteSpec: gwapiv1.CommonRouteSpec{
 							ParentRefs: []gwapiv1.ParentReference{
-								{Name: "maas-gateway", Namespace: ptrTo(gwapiv1.Namespace("gateway-ns"))},
+								{Name: "maas-gateway", Namespace: ptr.To(gwapiv1.Namespace("gateway-ns"))},
 							},
 						},
 					},
@@ -159,7 +161,7 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) { //nolint:maintidx // ta
 					Spec: gwapiv1.HTTPRouteSpec{
 						CommonRouteSpec: gwapiv1.CommonRouteSpec{
 							ParentRefs: []gwapiv1.ParentReference{
-								{Name: "maas-gateway", Namespace: ptrTo(gwapiv1.Namespace("gateway-ns"))},
+								{Name: "maas-gateway", Namespace: ptr.To(gwapiv1.Namespace("gateway-ns"))},
 							},
 						},
 					},
@@ -245,7 +247,7 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) { //nolint:maintidx // ta
 					Spec: gwapiv1.HTTPRouteSpec{
 						CommonRouteSpec: gwapiv1.CommonRouteSpec{
 							ParentRefs: []gwapiv1.ParentReference{
-								{Name: "other-gateway", Namespace: ptrTo(gwapiv1.Namespace("gateway-ns"))},
+								{Name: "other-gateway", Namespace: ptr.To(gwapiv1.Namespace("gateway-ns"))},
 							},
 						},
 					},
@@ -817,7 +819,9 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 			},
 		},
 		Status: kservev1alpha1.LLMInferenceServiceStatus{
-			URL: mustParseURL(authServer.URL),
+			AddressStatus: duckv1.AddressStatus{
+				Addresses: makeAddresses("gateway-internal", authServer.URL),
+			},
 		},
 	}
 
@@ -851,6 +855,302 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 
 		assert.Empty(t, authorizedModels, "Expected 0 authorized models for invalid token")
 	})
+}
+
+// TestListAvailableLLMs_ExternalAddressTriedFirst tests that external addresses
+// are tried before internal addresses when discovering models.
+func TestListAvailableLLMs_ExternalAddressTriedFirst(t *testing.T) {
+	testLogger := logger.Development()
+	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
+
+	var callOrder []string
+	var callCount atomic.Int32
+
+	internalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callOrder = append(callOrder, "internal")
+		callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse("shared-model"))
+	}))
+	defer internalServer.Close()
+
+	externalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callOrder = append(callOrder, "external")
+		callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse("shared-model"))
+	}))
+	defer externalServer.Close()
+
+	llmService := &kservev1alpha1.LLMInferenceService{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-model", Namespace: "test-ns"},
+		Spec: kservev1alpha1.LLMInferenceServiceSpec{
+			Router: &kservev1alpha1.RouterSpec{
+				Gateway: &kservev1alpha1.GatewaySpec{
+					Refs: []kservev1alpha1.UntypedObjectReference{
+						{Name: "maas-gateway", Namespace: "gateway-ns"},
+					},
+				},
+			},
+		},
+		Status: kservev1alpha1.LLMInferenceServiceStatus{
+			AddressStatus: duckv1.AddressStatus{
+				Addresses: makeAddresses(
+					"gateway-internal", internalServer.URL,
+					"gateway-external", externalServer.URL,
+				),
+			},
+		},
+	}
+
+	manager, errMgr := models.NewManager(
+		testLogger,
+		fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
+		fixtures.NewHTTPRouteLister(),
+		gateway,
+	)
+	require.NoError(t, errMgr)
+
+	authorizedModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
+	require.NoError(t, err)
+
+	assert.Len(t, authorizedModels, 1)
+	assert.Equal(t, "shared-model", authorizedModels[0].ID)
+	assert.Equal(t, int32(1), callCount.Load(), "Should only call external (first in priority)")
+	assert.Equal(t, []string{"external"}, callOrder)
+}
+
+// TestListAvailableLLMs_FallbackToInternal tests that when external address fails,
+// the internal address is tried as fallback.
+func TestListAvailableLLMs_FallbackToInternal(t *testing.T) {
+	testLogger := logger.Development()
+	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
+
+	var callOrder []string
+
+	externalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callOrder = append(callOrder, "external")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer externalServer.Close()
+
+	internalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callOrder = append(callOrder, "internal")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse("shared-model"))
+	}))
+	defer internalServer.Close()
+
+	llmService := &kservev1alpha1.LLMInferenceService{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-model", Namespace: "test-ns"},
+		Spec: kservev1alpha1.LLMInferenceServiceSpec{
+			Router: &kservev1alpha1.RouterSpec{
+				Gateway: &kservev1alpha1.GatewaySpec{
+					Refs: []kservev1alpha1.UntypedObjectReference{
+						{Name: "maas-gateway", Namespace: "gateway-ns"},
+					},
+				},
+			},
+		},
+		Status: kservev1alpha1.LLMInferenceServiceStatus{
+			AddressStatus: duckv1.AddressStatus{
+				Addresses: makeAddresses(
+					"gateway-internal", internalServer.URL,
+					"gateway-external", externalServer.URL,
+				),
+			},
+		},
+	}
+
+	manager, errMgr := models.NewManager(
+		testLogger,
+		fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
+		fixtures.NewHTTPRouteLister(),
+		gateway,
+	)
+	require.NoError(t, errMgr)
+
+	authorizedModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
+	require.NoError(t, err)
+
+	assert.Len(t, authorizedModels, 1)
+	// Note: Due to retry backoff on 503, external may be called multiple times before falling back
+	assert.Contains(t, callOrder, "external", "Should try external first")
+	assert.Contains(t, callOrder, "internal", "Should fallback to internal on 503")
+}
+
+// TestListAvailableLLMs_DenialFromOneGatewaySuccessFromAnother tests multi-tenant
+// scenarios where different gateways have different AuthPolicies.
+func TestListAvailableLLMs_DenialFromOneGatewaySuccessFromAnother(t *testing.T) {
+	testLogger := logger.Development()
+	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
+
+	var callOrder []string
+
+	externalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callOrder = append(callOrder, "external")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer externalServer.Close()
+
+	internalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callOrder = append(callOrder, "internal")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse("shared-model"))
+	}))
+	defer internalServer.Close()
+
+	llmService := &kservev1alpha1.LLMInferenceService{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-model", Namespace: "test-ns"},
+		Spec: kservev1alpha1.LLMInferenceServiceSpec{
+			Router: &kservev1alpha1.RouterSpec{
+				Gateway: &kservev1alpha1.GatewaySpec{
+					Refs: []kservev1alpha1.UntypedObjectReference{
+						{Name: "maas-gateway", Namespace: "gateway-ns"},
+					},
+				},
+			},
+		},
+		Status: kservev1alpha1.LLMInferenceServiceStatus{
+			AddressStatus: duckv1.AddressStatus{
+				Addresses: makeAddresses(
+					"gateway-internal", internalServer.URL,
+					"gateway-external", externalServer.URL,
+				),
+			},
+		},
+	}
+
+	manager, errMgr := models.NewManager(
+		testLogger,
+		fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
+		fixtures.NewHTTPRouteLister(),
+		gateway,
+	)
+	require.NoError(t, errMgr)
+
+	authorizedModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
+	require.NoError(t, err)
+
+	assert.Len(t, authorizedModels, 1, "Should succeed via internal after external denied")
+	assert.Equal(t, []string{"external", "internal"}, callOrder, "Should try all addresses")
+}
+
+// TestListAvailableLLMs_AllAddressesDenied tests that when all addresses deny access,
+// the model is not returned.
+func TestListAvailableLLMs_AllAddressesDenied(t *testing.T) {
+	testLogger := logger.Development()
+	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
+
+	var callCount atomic.Int32
+
+	externalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer externalServer.Close()
+
+	internalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer internalServer.Close()
+
+	llmService := &kservev1alpha1.LLMInferenceService{
+		ObjectMeta: metav1.ObjectMeta{Name: "denied-model", Namespace: "test-ns"},
+		Spec: kservev1alpha1.LLMInferenceServiceSpec{
+			Router: &kservev1alpha1.RouterSpec{
+				Gateway: &kservev1alpha1.GatewaySpec{
+					Refs: []kservev1alpha1.UntypedObjectReference{
+						{Name: "maas-gateway", Namespace: "gateway-ns"},
+					},
+				},
+			},
+		},
+		Status: kservev1alpha1.LLMInferenceServiceStatus{
+			AddressStatus: duckv1.AddressStatus{
+				Addresses: makeAddresses(
+					"gateway-internal", internalServer.URL,
+					"gateway-external", externalServer.URL,
+				),
+			},
+		},
+	}
+
+	manager, errMgr := models.NewManager(
+		testLogger,
+		fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
+		fixtures.NewHTTPRouteLister(),
+		gateway,
+	)
+	require.NoError(t, errMgr)
+
+	authorizedModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
+	require.NoError(t, err)
+
+	assert.Empty(t, authorizedModels, "Should be denied when all addresses deny")
+	assert.Equal(t, int32(2), callCount.Load(), "Should try all addresses before denying")
+}
+
+// TestListAvailableLLMs_ModelURLUsesAccessibleAddress tests that the returned model
+// URL is the address that was actually accessible.
+func TestListAvailableLLMs_ModelURLUsesAccessibleAddress(t *testing.T) {
+	testLogger := logger.Development()
+	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
+
+	// External server that denies access - simulates inaccessible external endpoint
+	externalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer externalServer.Close()
+
+	// Internal server that allows access
+	internalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse("test-model"))
+	}))
+	defer internalServer.Close()
+
+	llmService := &kservev1alpha1.LLMInferenceService{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-model", Namespace: "test-ns"},
+		Spec: kservev1alpha1.LLMInferenceServiceSpec{
+			Router: &kservev1alpha1.RouterSpec{
+				Gateway: &kservev1alpha1.GatewaySpec{
+					Refs: []kservev1alpha1.UntypedObjectReference{
+						{Name: "maas-gateway", Namespace: "gateway-ns"},
+					},
+				},
+			},
+		},
+		Status: kservev1alpha1.LLMInferenceServiceStatus{
+			AddressStatus: duckv1.AddressStatus{
+				Addresses: []duckv1.Addressable{
+					{Name: ptr.To("gateway-external"), URL: mustParseURL(externalServer.URL)},
+					{Name: ptr.To("gateway-internal"), URL: mustParseURL(internalServer.URL)},
+				},
+			},
+		},
+	}
+
+	manager, errMgr := models.NewManager(
+		testLogger,
+		fixtures.NewLLMInferenceServiceLister(fixtures.ToRuntimeObjects([]*kservev1alpha1.LLMInferenceService{llmService})...),
+		fixtures.NewHTTPRouteLister(),
+		gateway,
+	)
+	require.NoError(t, errMgr)
+
+	authorizedModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
+	require.NoError(t, err)
+
+	require.Len(t, authorizedModels, 1)
+	assert.Equal(t, internalServer.URL, authorizedModels[0].URL.String(),
+		"Model URL should use the accessible address (internal, since external denied)")
 }
 
 // --- Test utilities ---
@@ -889,10 +1189,6 @@ func makeModelsResponse(modelIDs ...string) []byte {
 	return data
 }
 
-func ptrTo[T any](v T) *T {
-	return &v
-}
-
 func mustParseURL(rawURL string) *apis.URL {
 	if rawURL == "" {
 		return nil
@@ -902,4 +1198,22 @@ func mustParseURL(rawURL string) *apis.URL {
 		panic("test setup failed: invalid URL: " + err.Error())
 	}
 	return u
+}
+
+// makeAddresses creates a slice of duckv1.Addressable from name/URL pairs.
+func makeAddresses(pairs ...string) []duckv1.Addressable {
+	if len(pairs)%2 != 0 {
+		panic("makeAddresses requires name/URL pairs")
+	}
+	var addresses []duckv1.Addressable
+	for i := 0; i < len(pairs); i += 2 {
+		name := pairs[i]
+		urlStr := pairs[i+1]
+		addr := duckv1.Addressable{URL: mustParseURL(urlStr)}
+		if name != "" {
+			addr.Name = ptr.To(name)
+		}
+		addresses = append(addresses, addr)
+	}
+	return addresses
 }

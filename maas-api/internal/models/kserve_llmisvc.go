@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,7 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"knative.dev/pkg/apis"
+	duckv1 "knative.dev/pkg/apis/duck/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 
@@ -93,6 +95,8 @@ func NewManager(
 }
 
 // ListAvailableLLMs discovers and returns models from authorized LLMInferenceServices.
+// Addresses are checked in priority order: external gateways first, then internal.
+// The returned model URL is the address that was actually accessible.
 func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Model, error) {
 	list, err := m.llmIsvcLister.List(labels.Everything())
 	if err != nil {
@@ -131,40 +135,67 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Mode
 	return authorizedModels, nil
 }
 
+// discoverModel attempts to discover models from an LLMInferenceService by trying
+// addresses in priority order (external first, then internal). Returns the first
+// successful discovery result, or nil if all addresses fail.
 func (m *Manager) discoverModel(ctx context.Context, llmIsvc *kservev1alpha1.LLMInferenceService, saToken string) *Model {
+	addresses := m.getPrioritizedAddresses(llmIsvc)
+	if len(addresses) == 0 {
+		m.logger.Debug("No addresses available for LLMInferenceService",
+			"namespace", llmIsvc.Namespace,
+			"name", llmIsvc.Name,
+		)
+		return nil
+	}
+
 	llmIsvcMetadata := m.extractMetadata(llmIsvc)
-	if llmIsvcMetadata.URL == nil {
-		m.logger.Debug("LLMInferenceService has no URL, skipping",
+
+	for i := range addresses {
+		addr := &addresses[i]
+		if addr.URL == nil {
+			continue
+		}
+
+		// Use top-level, advertised address for discovery
+		llmIsvcMetadata.URL = addr.URL
+
+		modelsEndpoint, err := url.JoinPath(addr.URL.String(), "/v1/models")
+		if err != nil {
+			m.logger.Debug("Failed to create endpoint URL",
+				"namespace", llmIsvc.Namespace,
+				"name", llmIsvc.Name,
+				"address", addr.URL.String(),
+				"error", err,
+			)
+			continue
+		}
+		llmIsvcMetadata.ModelsEndpoint = modelsEndpoint
+
+		discoveredModels := m.fetchModelsWithRetry(ctx, saToken, llmIsvcMetadata)
+		if discoveredModels != nil {
+			m.logger.Debug("Successfully discovered models via address",
+				"namespace", llmIsvc.Namespace,
+				"name", llmIsvc.Name,
+				"address", addr.URL.String(),
+				"modelCount", len(discoveredModels),
+			)
+			return m.enrichModel(discoveredModels, llmIsvcMetadata)
+		}
+
+		m.logger.Debug("Address failed, trying next",
 			"namespace", llmIsvc.Namespace,
 			"name", llmIsvc.Name,
+			"address", addr.URL.String(),
 		)
-		return nil
 	}
 
-	modelsEndpoint, err := url.JoinPath(llmIsvcMetadata.URL.String(), "/v1/models")
-	if err != nil {
-		m.logger.Error("Failed to create endpoint URL",
-			"namespace", llmIsvc.Namespace,
-			"name", llmIsvc.Name,
-			"error", err,
-		)
-		return nil
-	}
-	llmIsvcMetadata.ModelsEndpoint = modelsEndpoint
-
-	discoveredModels := m.fetchModelsWithRetry(ctx, saToken, llmIsvcMetadata)
-	if discoveredModels == nil {
-		return nil
-	}
-
-	return m.enrichModel(discoveredModels, llmIsvcMetadata)
+	return nil
 }
 
 func (m *Manager) extractMetadata(llmIsvc *kservev1alpha1.LLMInferenceService) llmInferenceServiceMetadata {
 	return llmInferenceServiceMetadata{
 		ServiceName: llmIsvc.Name,
 		ModelName:   m.extractModelName(llmIsvc),
-		URL:         m.findLLMInferenceServiceURL(llmIsvc),
 		Ready:       m.checkLLMInferenceServiceReadiness(llmIsvc),
 		Details:     m.extractModelDetails(llmIsvc),
 		Namespace:   llmIsvc.Namespace,
@@ -177,6 +208,44 @@ func (m *Manager) extractModelName(llmIsvc *kservev1alpha1.LLMInferenceService) 
 		return *llmIsvc.Spec.Model.Name
 	}
 	return llmIsvc.Name
+}
+
+// getPrioritizedAddresses returns addresses sorted by priority: external > internal > others.
+// status.URL is always appended last as a best-effort fallback.
+func (m *Manager) getPrioritizedAddresses(llmIsvc *kservev1alpha1.LLMInferenceService) []duckv1.Addressable {
+	var addresses []duckv1.Addressable
+
+	addresses = append(addresses, llmIsvc.Status.Addresses...)
+
+	if len(addresses) == 0 && llmIsvc.Status.Address != nil && llmIsvc.Status.Address.URL != nil {
+		addresses = append(addresses, *llmIsvc.Status.Address)
+	}
+
+	slices.SortStableFunc(addresses, func(a, b duckv1.Addressable) int {
+		return addressPriority(a) - addressPriority(b)
+	})
+
+	if llmIsvc.Status.URL != nil {
+		addresses = append(addresses, duckv1.Addressable{URL: llmIsvc.Status.URL})
+	}
+
+	return addresses
+}
+
+func addressPriority(addr duckv1.Addressable) int {
+	name := ""
+	if addr.Name != nil {
+		name = strings.ToLower(*addr.Name)
+	}
+
+	switch {
+	case strings.Contains(name, "external"):
+		return 0
+	case strings.Contains(name, "internal"):
+		return 1
+	default:
+		return 2
+	}
 }
 
 // partOfMaaSInstance checks if the given LLMInferenceService is part of this "MaaS instance". This means that it is
@@ -193,26 +262,6 @@ func (m *Manager) partOfMaaSInstance(llmIsvc *kservev1alpha1.LLMInferenceService
 		m.hasManagedRouteAttachedToGateway(llmIsvc)
 }
 
-func (m *Manager) findLLMInferenceServiceURL(llmIsvc *kservev1alpha1.LLMInferenceService) *apis.URL {
-	if llmIsvc.Status.URL != nil {
-		return llmIsvc.Status.URL
-	}
-
-	if llmIsvc.Status.Address != nil && llmIsvc.Status.Address.URL != nil {
-		return llmIsvc.Status.Address.URL
-	}
-
-	if len(llmIsvc.Status.Addresses) > 0 {
-		return llmIsvc.Status.Addresses[0].URL
-	}
-
-	m.logger.Debug("No URL found for LLMInferenceService",
-		"namespace", llmIsvc.Namespace,
-		"name", llmIsvc.Name,
-	)
-	return nil
-}
-
 func (m *Manager) extractModelDetails(llmIsvc *kservev1alpha1.LLMInferenceService) *Details {
 	annotations := llmIsvc.GetAnnotations()
 	if annotations == nil {
@@ -223,7 +272,6 @@ func (m *Manager) extractModelDetails(llmIsvc *kservev1alpha1.LLMInferenceServic
 	description := annotations[constant.AnnotationDescription]
 	displayName := annotations[constant.AnnotationDisplayName]
 
-	// Only return Details if at least one field is populated
 	if genaiUseCase == "" && description == "" && displayName == "" {
 		return nil
 	}
