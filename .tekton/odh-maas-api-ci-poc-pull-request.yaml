@@ -1,20 +1,22 @@
 apiVersion: tekton.dev/v1
 kind: PipelineRun
+#test
 metadata:
   annotations:
     build.appstudio.openshift.io/repo: https://github.com/opendatahub-io/models-as-a-service?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
+    build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
-    pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "main"
+    pipelinesascode.tekton.dev/max-keep-runs: "4"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
+      == "konflux-its"
   creationTimestamp: null
   labels:
-    appstudio.openshift.io/application: opendatahub-builds
-    appstudio.openshift.io/component: odh-maas-api-ci
+    appstudio.openshift.io/application: poc
+    appstudio.openshift.io/component: odh-maas-api-ci-poc
     pipelines.appstudio.openshift.io/type: build
-  name: odh-maas-api-on-push
+  name: odh-maas-api-ci-poc-on-pull-request
   namespace: open-data-hub-tenant
 spec:
   params:
@@ -23,11 +25,16 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/maas-api:odh-stable
+    value: quay.io/opendatahub/maas-api:odh-pr
   - name: dockerfile
     value: maas-api/Dockerfile
   - name: path-context
     value: maas-api
+  - name: additional-tags
+    value:
+    - 'odh-pr-{{revision}}'
+  - name: pipeline-type
+    value: pull-request
   pipelineRef:
     resolver: git
     params:
