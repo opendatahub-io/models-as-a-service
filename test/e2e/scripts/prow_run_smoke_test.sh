@@ -34,6 +34,8 @@
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
+#   SKIP_AUTH_CHECK - Skip Authorino auth readiness check (default: true, temporary workaround)
+#   SKIP_OBSERVABILITY - Skip observability tests (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   OPERATOR_CATALOG - Custom operator catalog image (default: latest from main)
@@ -67,6 +69,7 @@ SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
+SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
 # Operator configuration
@@ -195,6 +198,15 @@ deploy_maas_platform() {
     echo "✅ MaaS platform deployment completed"
 }
 
+install_observability() {
+    echo "Installing observability components..."
+    if ! "$PROJECT_ROOT/scripts/install-observability.sh"; then
+        echo "❌ ERROR: Failed to deploy observability components"
+        exit 1
+    fi
+    echo "✅ Observability installation completed"
+}
+
 deploy_models() {
     echo "Deploying simulator Model"
     # Create llm namespace if it does not exist
@@ -297,6 +309,55 @@ run_smoke_tests() {
     fi
 }
 
+run_observability_tests() {
+    echo "-- Observability Testing --"
+    
+    if [ "$SKIP_OBSERVABILITY" = false ]; then
+        # Setup Python venv (reuse smoke.sh's venv setup logic)
+        local VENV_DIR="${PROJECT_ROOT}/test/e2e/.venv"
+        
+        if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
+            echo "[observability] Creating virtual environment at ${VENV_DIR}"
+            rm -rf "${VENV_DIR}"  # Clean up any corrupt/incomplete venv
+            python3 -m venv "${VENV_DIR}" --upgrade-deps
+        fi
+        
+        # Activate virtual environment
+        source "${VENV_DIR}/bin/activate"
+        
+        # Install dependencies
+        python -m pip install --upgrade pip --quiet
+        python -m pip install -r "${PROJECT_ROOT}/test/e2e/requirements.txt" --quiet
+        
+        # Run observability tests
+        echo "[observability] Running observability tests..."
+        local REPORTS_DIR="${PROJECT_ROOT}/test/e2e/reports"
+        mkdir -p "${REPORTS_DIR}"
+        
+        local USER
+        USER="$(oc whoami 2>/dev/null || echo 'unknown')"
+        local HTML="${REPORTS_DIR}/observability-${USER}.html"
+        local XML="${REPORTS_DIR}/observability-${USER}.xml"
+        
+        if pytest "${PROJECT_ROOT}/test/e2e/tests/test_observability.py" \
+            -v \
+            --tb=short \
+            "--junitxml=${XML}" \
+            --html="${HTML}" --self-contained-html \
+            2>&1; then
+            echo "✅ Observability tests completed successfully"
+        else
+            echo "❌ ERROR: Observability tests failed"
+            echo "  Reports: ${HTML}"
+            # Don't exit - continue with other tests
+        fi
+        
+        deactivate 2>/dev/null || true
+    else
+        echo "⏭️  Skipping observability tests"
+    fi
+}
+
 run_token_verification() {
     echo "-- Token Metadata Verification --"
     
@@ -340,6 +401,9 @@ print_header "Deploying Maas on OpenShift"
 check_prerequisites
 deploy_maas_platform
 
+print_header "Installing Observability"
+install_observability
+
 print_header "Deploying Models"  
 deploy_models
 
@@ -366,6 +430,10 @@ run_token_verification
 
 sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
+
+# Run observability tests (only once as admin, since they verify infrastructure)
+print_header "Running Observability Tests"
+run_observability_tests
 
 # Test edit user  
 print_header "Running Maas e2e Tests as edit user"
