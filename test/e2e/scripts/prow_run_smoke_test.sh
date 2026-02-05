@@ -25,6 +25,7 @@
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
+#   SKIP_AUTH_CHECK - Skip Authorino auth readiness check (default: true, temporary workaround)
 #   MAAS_API_IMAGE - Custom image for MaaS API (e.g., quay.io/opendatahub/maas-api:pr-232)
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects both deploy-openshift.sh and smoke.sh
@@ -59,6 +60,7 @@ source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
+SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
 print_header() {
@@ -106,9 +108,18 @@ deploy_maas_platform() {
     fi
     
     # Wait for Authorino to be ready and auth service cluster to be healthy
-    echo "Waiting for Authorino and auth service to be ready..."
-    if ! wait_authorino_ready 600; then
-        echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+    # TODO(https://issues.redhat.com/browse/RHOAIENG-48760): Remove SKIP_AUTH_CHECK
+    # once the operator creates the gateway→Authorino TLS EnvoyFilter at Gateway/AuthPolicy creation
+    # time, not at first LLMInferenceService creation. Currently there's a chicken-egg problem where
+    # auth checks fail before any model is deployed because the TLS config doesn't exist yet.
+    if [[ "${SKIP_AUTH_CHECK:-false}" == "true" ]]; then
+        echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"
+        echo "   This is a temporary workaround for the gateway→Authorino TLS chicken-egg problem"
+    else
+        echo "Waiting for Authorino and auth service to be ready..."
+        if ! wait_authorino_ready 600; then
+            echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+        fi
     fi
     
     echo "✅ MaaS platform deployment completed"

@@ -716,15 +716,29 @@ wait_authorino_ready() {
 
   # Finally, verify auth requests are actually succeeding (not just cluster marked healthy)
   echo "  - Verifying auth requests are succeeding..."
-  local cluster_domain
-  cluster_domain=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
-  
-  if [[ -z "$cluster_domain" ]]; then
-    echo "  WARNING: Could not determine cluster domain, skipping request verification"
-    return 0
+
+  # Get gateway URL from the gateway spec (aligned with verify-models-and-limits.sh)
+  local maas_url=""
+  local https_hostname
+  https_hostname=$(kubectl get gateway maas-default-gateway -n openshift-ingress \
+    -o jsonpath='{.spec.listeners[?(@.protocol=="HTTPS")].hostname}' 2>/dev/null | awk '{print $1}')
+
+  if [[ -n "$https_hostname" ]]; then
+    maas_url="https://${https_hostname}/maas-api/health"
+  else
+    local http_hostname
+    http_hostname=$(kubectl get gateway maas-default-gateway -n openshift-ingress \
+      -o jsonpath='{.spec.listeners[?(@.protocol=="HTTP")].hostname}' 2>/dev/null | awk '{print $1}')
+
+    if [[ -n "$http_hostname" ]]; then
+      maas_url="http://${http_hostname}/maas-api/health"
+    fi
   fi
 
-  local maas_url="https://maas.${cluster_domain}/maas-api/health"
+  if [[ -z "$maas_url" ]]; then
+    echo "  WARNING: Could not determine gateway URL, skipping request verification"
+    return 0
+  fi
   local consecutive_success=0
   local required_success=3
 
