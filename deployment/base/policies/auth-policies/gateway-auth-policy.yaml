@@ -67,6 +67,7 @@ spec:
     response:
       success:
         headers:
+          # Expose userid as header for Istio Telemetry to read into metrics
           X-MaaS-Username:
             plain:
               selector: auth.identity.userid
