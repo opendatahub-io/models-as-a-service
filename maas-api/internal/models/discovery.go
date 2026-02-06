@@ -55,7 +55,7 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, saToken string, svc 
 		lastResult = authRes
 		return lastResult != authRetry, nil
 	}); err != nil {
-		m.logger.Debug("Model fetch backoff failed", "service", svc.ServiceName, "error", err)
+		m.logger.V(1).Info("Model fetch backoff failed", "service", svc.ServiceName, "error", err)
 		return nil // explicit fail-closed on error
 	}
 
@@ -68,7 +68,7 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, saToken string, svc 
 func (m *Manager) fetchModels(ctx context.Context, saToken string, svc llmInferenceServiceMetadata) ([]openai.Model, authResult) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, svc.ModelsEndpoint, nil)
 	if err != nil {
-		m.logger.Debug("Failed to create request", "service", svc.ServiceName, "error", err)
+		m.logger.V(1).Info("Failed to create request", "service", svc.ServiceName, "error", err)
 		return nil, authRetry
 	}
 
@@ -76,12 +76,12 @@ func (m *Manager) fetchModels(ctx context.Context, saToken string, svc llmInfere
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		m.logger.Debug("Request failed", "service", svc.ServiceName, "error", err)
+		m.logger.V(1).Info("Request failed", "service", svc.ServiceName, "error", err)
 		return nil, authRetry
 	}
 	defer resp.Body.Close()
 
-	m.logger.Debug("Models fetch response",
+	m.logger.V(1).Info("Models fetch response",
 		"service", svc.ServiceName,
 		"statusCode", resp.StatusCode,
 		"endpoint", svc.ModelsEndpoint,
@@ -91,7 +91,7 @@ func (m *Manager) fetchModels(ctx context.Context, saToken string, svc llmInfere
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		models, parseErr := m.parseModelsResponse(resp.Body, svc)
 		if parseErr != nil {
-			m.logger.Debug("Failed to parse models response", "service", svc.ServiceName, "error", parseErr)
+			m.logger.V(1).Info("Failed to parse models response", "service", svc.ServiceName, "error", parseErr)
 			return nil, authRetry
 		}
 		return models, authGranted
@@ -102,7 +102,7 @@ func (m *Manager) fetchModels(ctx context.Context, saToken string, svc llmInfere
 	case resp.StatusCode == http.StatusNotFound:
 		// 404 means we cannot verify authorization - deny access (fail-closed)
 		// See: https://issues.redhat.com/browse/RHOAIENG-45883
-		m.logger.Debug("Model endpoint returned 404, denying access (cannot verify authorization)", "service", svc.ServiceName)
+		m.logger.V(1).Info("Model endpoint returned 404, denying access (cannot verify authorization)", "service", svc.ServiceName)
 		return nil, authDenied
 
 	case resp.StatusCode == http.StatusMethodNotAllowed:
@@ -111,7 +111,7 @@ func (m *Manager) fetchModels(ctx context.Context, saToken string, svc llmInfere
 		// The 405 indicates the HTTP method isn't enabled on this route/endpoint,
 		// not an authorization failure.
 		// Use spec.model.name as a best-effort fallback for model ID.
-		m.logger.Debug("Model endpoint returned 405 - auth succeeded, using spec.model.name as fallback model ID",
+		m.logger.V(1).Info("Model endpoint returned 405 - auth succeeded, using spec.model.name as fallback model ID",
 			"service", svc.ServiceName,
 			"modelName", svc.ModelName,
 			"endpoint", svc.ModelsEndpoint,
@@ -123,7 +123,7 @@ func (m *Manager) fetchModels(ctx context.Context, saToken string, svc llmInfere
 
 	default:
 		// Retry on server errors (5xx) or other unexpected codes
-		m.logger.Debug("Unexpected status code, retrying",
+		m.logger.V(1).Info("Unexpected status code, retrying",
 			"service", svc.ServiceName,
 			"statusCode", resp.StatusCode,
 		)
@@ -149,7 +149,7 @@ func (m *Manager) parseModelsResponse(body io.Reader, svc llmInferenceServiceMet
 		return nil, fmt.Errorf("service %s (%s): failed to unmarshal models response: %w", svc.ServiceName, svc.ModelsEndpoint, err)
 	}
 
-	m.logger.Debug("Discovered models from service",
+	m.logger.V(1).Info("Discovered models from service",
 		"service", svc.ServiceName,
 		"endpoint", svc.ModelsEndpoint,
 		"modelCount", len(response.Data),
