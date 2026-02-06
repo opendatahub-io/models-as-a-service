@@ -130,8 +130,10 @@ The script automates the manual validation steps above and provides detailed fee
 1. **Getting `501` Not Implemented errors**: Traffic is not making it to the Gateway.
       - [ ] Verify Gateway status and HTTPRoute configuration
 2. **Getting `401` Unauthorized errors when trying to get a token**: Authentication maas-api is not working.
-      - [ ] Verify `maas-api-auth-policy` AuthPolicy is applied
-      - [ ] Validate the AuthPolicy audience matches the token audience (audiences: ["https://kubernetes.default.svc", "maas-default-gateway-sa"])
+      - [ ] Verify `maas-api-auth-policy` and `maas-api-token-issuance-auth-policy` AuthPolicies are applied
+      - [ ] Validate the AuthPolicy audiences are configured correctly:
+        - `maas-api-auth-policy`: should accept both audiences (e.g., `["https://kubernetes.default.svc", "maas-default-gateway-sa"]`)
+        - `maas-api-token-issuance-auth-policy`: should accept only OpenShift tokens (e.g., `["https://kubernetes.default.svc"]`)
 3. **Getting `401` errors when trying to get models**: Authentication is not working for the models endpoint.
       - [ ] Create a new token (default expiration is 10 minutes)
       - [ ] Verify `gateway-auth-policy` AuthPolicy is applied

@@ -44,29 +44,56 @@ you must patch the `maas-api-auth-policy` to include your cluster's audience:
 AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
 
 echo "Cluster audience: ${AUD}"
+```
 
-# Patch the MaaS API AuthPolicy with your cluster's audience
+The Kustomize manifest uses the default audience for the installed MaaS API policies. If 
+the output of the previous script is different from a non-empty string and 
+`https://kubernetes.default.svc`, you are required to patch the MaaS API policies:
+
+```shell
+# Patch main AuthPolicy (accepts both OpenShift tokens and SA tokens)
 # For RHOAI installations:
-kubectl patch authpolicy maas-api-auth-policy -n redhat-ods-applications --type=merge --patch "
+kubectl patch authpolicy maas-api-auth-policy -n redhat-ods-applications --type=merge --patch-file <(echo "
 spec:
   rules:
     authentication:
-      openshift-identities:
+      cluster-identity:
         kubernetesTokenReview:
           audiences:
             - ${AUD}
-            - maas-default-gateway-sa"
+            - maas-default-gateway-sa")
 
 # For ODH installations:
-kubectl patch authpolicy maas-api-auth-policy -n opendatahub --type=merge --patch "
+kubectl patch authpolicy maas-api-auth-policy -n opendatahub --type=merge --patch-file <(echo "
 spec:
   rules:
     authentication:
-      openshift-identities:
+      cluster-identity:
         kubernetesTokenReview:
           audiences:
             - ${AUD}
-            - maas-default-gateway-sa"
+            - maas-default-gateway-sa")
+
+# Patch token issuance AuthPolicy (accepts only tokens for cluster users - prevents token-to-token issuance)
+# For RHOAI installations:
+kubectl patch authpolicy maas-api-token-issuance-auth-policy -n redhat-ods-applications --type=merge --patch-file <(echo "
+spec:
+  rules:
+    authentication:
+      cluster-identity:
+        kubernetesTokenReview:
+          audiences:
+            - ${AUD}")
+
+# For ODH installations:
+kubectl patch authpolicy maas-api-token-issuance-auth-policy -n opendatahub --type=merge --patch-file <(echo "
+spec:
+  rules:
+    authentication:
+      cluster-identity:
+        kubernetesTokenReview:
+          audiences:
+            - ${AUD}")
 ```
 
 ## Install Usage Policies

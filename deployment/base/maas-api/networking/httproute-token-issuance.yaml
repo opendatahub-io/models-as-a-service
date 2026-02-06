@@ -1,0 +1,39 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: maas-api-token-issuance-route
+spec:
+  parentRefs:
+    - name: maas-default-gateway
+      namespace: openshift-ingress
+  rules:
+    # Token issuance endpoint - requires stricter auth (legitimate users only)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /maas-api/v1/tokens
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /v1/tokens
+      backendRefs:
+        - name: maas-api
+          port: 8080
+          weight: 100
+    # API key creation endpoint - requires stricter auth (legitimate users only)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /maas-api/v1/api-keys
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /v1/api-keys
+      backendRefs:
+        - name: maas-api
+          port: 8080
+          weight: 100

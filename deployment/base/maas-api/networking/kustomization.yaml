@@ -5,4 +5,5 @@ metadata:
   name: maas-api-gw-api-routing-infra
 
 resources:
-- httproute.yaml
+  - httproute.yaml
+  - httproute-token-issuance.yaml

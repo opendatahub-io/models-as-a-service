@@ -10,7 +10,7 @@ spec:
   rules:
     # Allow any authenticated user to access the API
     authentication:
-      openshift-identities:
+      cluster-identity:
         kubernetesTokenReview:
           audiences:
             - https://kubernetes.default.svc
