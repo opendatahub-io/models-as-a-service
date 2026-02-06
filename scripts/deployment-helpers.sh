@@ -171,6 +171,7 @@ waitsubscriptioninstalled() {
   local name=${1?subscription name is required}; shift
 
   echo "  * Waiting for Subscription $ns/$name to start setup..."
+  # Use fully qualified resource name to avoid conflicts with Knative subscriptions
   kubectl wait subscription.operators.coreos.com --timeout=300s -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'
   local csv
   csv=$(kubectl get subscription.operators.coreos.com -n "$ns" "$name" -o jsonpath='{.status.currentCSV}')
@@ -200,6 +201,7 @@ checksubscriptionexists() {
   local op_cond=".spec.name == \"${operator_name}\""
   local query="${catalogns_cond} and ${catalog_cond} and ${op_cond}"
 
+  # Use fully qualified resource name to avoid conflicts with Knative subscriptions
   kubectl get subscriptions.operators.coreos.com -A -ojson | jq ".items | map(select(${query})) | length"
 }
 
@@ -226,10 +228,11 @@ is_operator_installed() {
   local operator_name=${1?operator name is required}; shift
   local namespace=${1:-}  # namespace is optional
 
+  # Use fully qualified resource name to avoid conflicts with Knative subscriptions
   if [[ -n "$namespace" ]]; then
-    kubectl get subscription -n "$namespace" 2>/dev/null | grep -q "$operator_name"
+    kubectl get subscription.operators.coreos.com -n "$namespace" 2>/dev/null | grep -q "$operator_name"
   else
-    kubectl get subscription --all-namespaces 2>/dev/null | grep -q "$operator_name"
+    kubectl get subscription.operators.coreos.com --all-namespaces 2>/dev/null | grep -q "$operator_name"
   fi
 }
 
@@ -252,7 +255,7 @@ should_install_operator() {
   return 0
 }
 
-# install_olm_operator operator_name namespace catalog_source channel starting_csv operatorgroup_target
+# install_olm_operator operator_name namespace catalog_source channel starting_csv operatorgroup_target source_namespace
 #   Generic function to install an OLM operator.
 #
 # Arguments:
@@ -262,6 +265,7 @@ should_install_operator() {
 #   channel - Subscription channel (e.g., "fast-3")
 #   starting_csv - Starting CSV (optional, can be empty)
 #   operatorgroup_target - Target namespace for OperatorGroup (optional, uses namespace if empty)
+#   source_namespace - Catalog source namespace (optional, defaults to openshift-marketplace)
 install_olm_operator() {
   local operator_name=${1?operator name is required}; shift
   local namespace=${1?namespace is required}; shift
@@ -269,11 +273,13 @@ install_olm_operator() {
   local channel=${1?channel is required}; shift
   local starting_csv=${1:-}; shift || true
   local operatorgroup_target=${1:-}; shift || true
+  local source_namespace=${1:-openshift-marketplace}; shift || true
 
   log_info "Installing operator: $operator_name in namespace: $namespace"
 
   # Check if subscription already exists
-  if kubectl get subscription "$operator_name" -n "$namespace" &>/dev/null; then
+  # Use fully qualified resource name to avoid conflicts with Knative subscriptions
+  if kubectl get subscription.operators.coreos.com "$operator_name" -n "$namespace" &>/dev/null; then
     log_info "Subscription $operator_name already exists in $namespace, skipping"
     return 0
   fi
@@ -329,7 +335,7 @@ spec:
   channel: ${channel}
   name: ${operator_name}
   source: ${catalog_source}
-  sourceNamespace: openshift-marketplace
+  sourceNamespace: ${source_namespace}
 "
 
   if [[ -n "$starting_csv" ]]; then
@@ -1180,13 +1186,21 @@ wait_authorino_ready() {
     echo "  WARNING: Could not determine gateway URL, skipping request verification"
     return 0
   fi
+
+  echo "  - Using gateway URL: $maas_url"
+  if [[ -z "$maas_url" ]]; then
+    echo "  WARNING: Could not determine gateway URL, skipping request verification"
+    return 0
+  fi
+
+  echo "  - Using gateway URL: $maas_url"
+>>>>>>> ea56772 (rebase PR and include changes from 381)
   local consecutive_success=0
   local required_success=3
 
   while [[ $elapsed -lt $timeout ]]; do
     # Make a test request - we expect 401 (auth working) not 500 (auth failing)
-    # Capture both response body and HTTP code
-    local response_file
+    # Capture both response body and HTTP code for better diagnostics    local response_file
     response_file=$(mktemp)
     local http_code
     http_code=$(curl -sSk -o "$response_file" -w "%{http_code}" "$maas_url" 2>&1)
@@ -1223,7 +1237,7 @@ wait_authorino_ready() {
       fi
       rm -f "$response_file"
     fi
-    
+
     sleep 2
     elapsed=$((elapsed + 2))
   done

@@ -9,7 +9,7 @@
 #   ./scripts/deploy.sh [OPTIONS]
 #
 # OPTIONS:
-#   --operator-type <rhoai|odh>   Operator to install (default: rhoai)
+#   --operator-type <odh|rhoai>   Operator to install (default: odh)
 #                                 Policy engine is auto-selected:
 #                                   odh → kuadrant (community v1.3.1)
 #                                   rhoai → rhcl (Red Hat Connectivity Link)
@@ -71,7 +71,7 @@ esac
 #──────────────────────────────────────────────────────────────
 
 DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
-OPERATOR_TYPE="${OPERATOR_TYPE:-rhoai}"
+OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
 NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
@@ -96,12 +96,11 @@ OPTIONS:
   --deployment-mode <operator|kustomize>
       Deployment method (default: operator)
 
-  --operator-type <rhoai|odh>
-      Which operator to install (default: rhoai)
+  --operator-type <odh|rhoai>
+      Which operator to install (default: odh)
       Policy engine is auto-selected based on operator type:
       - rhoai → rhcl (Red Hat Connectivity Link)
       - odh → kuadrant (community v1.3.1 with AuthPolicy v1)
-      - odh → kuadrant (upstream Kuadrant operator)
       Only applies when --deployment-mode=operator
 
   --enable-tls-backend
@@ -625,7 +624,8 @@ EOF
         "$kuadrant_catalog" \
         "stable" \
         "" \
-        "AllNamespaces"
+        "AllNamespaces" \
+        "$kuadrant_ns"
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
       patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
@@ -657,11 +657,20 @@ install_primary_operator() {
 
   case "$OPERATOR_TYPE" in
     rhoai)
-      catalog_source="${OPERATOR_CATALOG:+${OPERATOR_TYPE}-custom-catalog}"
-      catalog_source="${catalog_source:-redhat-operators}"
-      # Use 'fast-3.x' channel for RHOAI v3 (with MaaS support)
-      # RHOAI 2.x (fast channel) does not support modelsAsService
-      channel="${OPERATOR_CHANNEL:-fast-3.x}"
+      # Support custom catalog for RHOAI snapshot/development builds
+      # This allows testing with pre-release RHOAI versions that have modelsAsService support
+      if [[ -n "$OPERATOR_CATALOG" ]]; then
+        log_info "Using custom RHOAI catalog: $OPERATOR_CATALOG"
+        create_custom_catalogsource "rhoai-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
+        catalog_source="rhoai-custom-catalog"
+        # Custom catalogs typically use 'fast' channel
+        channel="${OPERATOR_CHANNEL:-fast}"
+      else
+        catalog_source="redhat-operators"
+        # Use 'fast-3.x' channel for RHOAI v3 (with MaaS support)
+        # RHOAI 2.x (fast channel) does not support modelsAsService
+        channel="${OPERATOR_CHANNEL:-fast-3.x}"
+      fi
 
       log_info "Installing RHOAI v3 operator..."
       # RHOAI operator goes in redhat-ods-operator namespace (not redhat-ods-applications)
@@ -681,12 +690,17 @@ install_primary_operator() {
       ;;
 
     odh)
-      catalog_source="${OPERATOR_CATALOG:+${OPERATOR_TYPE}-custom-catalog}"
-      catalog_source="${catalog_source:-community-operators}"
-      # Use 'fast' channel for custom catalogs, 'fast-3' for default
+      # Support custom catalog for ODH snapshot/development builds
+      # This allows testing with pre-release ODH versions (e.g., v3.3.0-snapshot)
       if [[ -n "$OPERATOR_CATALOG" ]]; then
+        log_info "Using custom ODH catalog: $OPERATOR_CATALOG"
+        create_custom_catalogsource "odh-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
+        catalog_source="odh-custom-catalog"
+        # Custom catalogs typically use 'fast' channel
         channel="${OPERATOR_CHANNEL:-fast}"
       else
+        catalog_source="community-operators"
+        # Use 'fast-3' channel for released versions
         channel="${OPERATOR_CHANNEL:-fast-3}"
       fi
 
@@ -791,23 +805,14 @@ apply_dsc() {
     return 0
   fi
 
-  # Apply DSC with modelsAsService - this is required for MaaS deployment
+  # Apply DSC with modelsAsService - this is REQUIRED for MaaS deployment
+  # Without modelsAsService, only KServe deploys (no maas-api, no HTTPRoutes, no AuthPolicy)
   # If the operator doesn't support modelsAsService, kubectl will fail with a clear error
-  cat <<EOF | kubectl apply --server-side=true -f -
-apiVersion: datasciencecluster.opendatahub.io/v2
-kind: DataScienceCluster
-metadata:
-  name: default-dsc
-spec:
-  components:
-    kserve:
-      managementState: Managed
-      rawDeploymentServiceConfig: Headed
-      modelsAsService:
-        managementState: Managed
-    dashboard:
-      managementState: Removed
-EOF
+  #
+  # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
+  #       Only ODH currently supports this feature
+  local data_dir="${SCRIPT_DIR}/data"
+  kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
 }
 
 #──────────────────────────────────────────────────────────────
@@ -886,27 +891,6 @@ spec:
       namespaces:
         from: All
 EOF
-
-  # Create OpenShift Route to expose the Gateway via the cluster's apps domain
-  # This is REQUIRED because:
-  # 1. *.apps.cluster-domain DNS points to OpenShift Router by default
-  # 2. Without a Route, the Router doesn't know about maas.apps.cluster-domain
-  # 3. The Gateway's LoadBalancer has a different external address (ELB hostname)
-  # 4. The Route bridges: maas.apps.cluster-domain -> Router -> Gateway Service
-  #
-  # Note: The older scripts (deploy-rhoai-stable.sh, deploy-openshift.sh) didn't create
-  # a Route explicitly, but they may have relied on different access patterns or
-  # operator-managed routing. For this consolidated script, we create the Route
-  # to ensure maas.apps.cluster-domain works reliably.
-  if [[ -n "$cluster_domain" ]]; then
-    log_info "Creating OpenShift Route for Gateway (hostname: ${gateway_hostname})..."
-    create_gateway_route \
-      "maas-gateway-route" \
-      "openshift-ingress" \
-      "${gateway_hostname}" \
-      "maas-default-gateway-openshift-default" \
-      "maas-gateway-tls"
-  fi
 }
 
 #──────────────────────────────────────────────────────────────
@@ -965,6 +949,34 @@ apply_kuadrant_cr() {
   fi
   
   log_info "Kuadrant setup complete"
+
+  # Deploy usage policies (TokenRateLimitPolicy)
+  deploy_usage_policies
+}
+
+# deploy_usage_policies
+#   Deploys rate limiting and token limiting policies for the gateway.
+#   These policies enable tier-based usage limits for API consumers.
+deploy_usage_policies() {
+  log_info "Deploying usage policies (TokenRateLimitPolicy)..."
+
+  local project_root
+  project_root="$(find_project_root)" || {
+    log_warn "Could not find project root, skipping usage policies deployment"
+    return 0
+  }
+
+  local policies_dir="$project_root/deployment/base/policies/usage-policies"
+  if [[ ! -d "$policies_dir" ]]; then
+    log_warn "Usage policies directory not found at $policies_dir, skipping"
+    return 0
+  fi
+
+  if kubectl apply --server-side=true -f <(kustomize build "$policies_dir") 2>&1 | while read -r line; do log_debug "$line"; done; then
+    log_info "Usage policies deployed successfully"
+  else
+    log_warn "Failed to deploy usage policies (non-fatal, rate limiting may not work)"
+  fi
 }
 
 patch_operator_csv() {
