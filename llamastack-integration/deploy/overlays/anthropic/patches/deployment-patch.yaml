@@ -1,0 +1,14 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: llamastack
+spec:
+  template:
+    containers:
+      - name: llamastack
+        env:
+          - name: ANTHROPIC_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: anthropic-api-key
+                key: api-key

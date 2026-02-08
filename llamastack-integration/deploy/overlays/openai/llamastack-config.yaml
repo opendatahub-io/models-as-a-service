@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llamastack-config
+data:
+  config.yaml: |
+    server:
+      port: 8000
+      # TLS will be handled via command line args from KServe
+
+    model_servers:
+      - model_server_id: openai-server
+        model_server_type: remote::openai
+        config:
+          api_key: "${OPENAI_API_KEY}"
+          base_url: "https://api.openai.com/v1"
+
+    models:
+      - model_id: gpt-4o
+        provider_resource_id: openai-server
+        metadata:
+          description: "OpenAI GPT-4o"
+          context_length: 128000
+
+      - model_id: gpt-4o-mini
+        provider_resource_id: openai-server
+        metadata:
+          description: "OpenAI GPT-4o Mini"
+          context_length: 128000
+
+      - model_id: gpt-3.5-turbo
+        provider_resource_id: openai-server
+        metadata:
+          description: "OpenAI GPT-3.5 Turbo"
+          context_length: 16385
+
+      - model_id: o1-preview
+        provider_resource_id: openai-server
+        metadata:
+          description: "OpenAI o1 Preview"
+          context_length: 128000
+
+    inference_api_providers:
+      - provider_id: openai-server
+        provider_type: remote::openai
+        config:
+          api_key: "${OPENAI_API_KEY}"
+          base_url: "https://api.openai.com/v1"

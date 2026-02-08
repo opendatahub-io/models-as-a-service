@@ -1,0 +1,315 @@
+# Llamastack Integration with Models-as-a-Service
+
+This integration provides direct compatibility between [Meta's Llamastack](https://llama-stack.readthedocs.io/) and the Models-as-a-Service (MaaS) platform. By configuring Llamastack to run natively with KServe patterns on port 8000 with HTTPS, it integrates seamlessly with MaaS without requiring wrapper services.
+
+## Overview
+
+The integration enables access to various LLM providers through Llamastack's unified interface while maintaining full compatibility with:
+
+- ✅ **MaaS Gateway** - Authentication, authorization, and routing
+- ✅ **Rate Limiting** - Tier-based usage controls
+- ✅ **Model Discovery** - Automatic detection via `/v1/models` endpoint
+- ✅ **Token Usage Tracking** - Monitoring and billing integration
+- ✅ **Health Monitoring** - KServe-compatible health checks
+- ✅ **TLS Security** - HTTPS with KServe certificates
+
+## Supported Providers
+
+This integration focuses on **external/cloud providers** that don't require local GPU resources:
+
+| Provider | Models Available | Example |
+|----------|-----------------|---------|
+| **Google Gemini** | Gemini 1.5 Pro, Flash, 2.0 Flash | `examples/gemini-pro/` |
+| **OpenAI** | GPT-4o, GPT-4o Mini, GPT-3.5 Turbo, o1 | `examples/openai-gpt4/` |
+| **Anthropic** | Claude 3.5 Sonnet, Haiku, Claude 3 Opus | `examples/anthropic-claude/` |
+
+## Architecture
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────────┐
+│   MaaS API      │    │   MaaS Gateway   │    │   Llamastack Pod   │
+│   (Discovery)   │◄──►│   (Auth/Route)   │◄──►│   (Provider Proxy)  │
+└─────────────────┘    └──────────────────┘    └─────────────────────┘
+                                                          │
+                                                          ▼
+                                               ┌─────────────────────┐
+                                               │  External Provider  │
+                                               │  (Gemini/OpenAI/    │
+                                               │   Anthropic)        │
+                                               └─────────────────────┘
+```
+
+### Key Components
+
+- **Base LLMInferenceService**: Standard KServe deployment template
+- **Provider Overlays**: Kustomize configurations for each external provider
+- **Configuration Management**: Llamastack YAML configs via ConfigMaps
+- **Secret Management**: API keys stored as Kubernetes secrets
+- **Health Monitoring**: `/v1/health` endpoint for liveness/readiness
+
+## Quick Start
+
+### Prerequisites
+
+- Kubernetes cluster with MaaS installed
+- `kubectl` configured to access your cluster
+- API key for your chosen provider (Gemini, OpenAI, or Anthropic)
+
+### Deploy with Google Gemini
+
+1. **Create API key secret:**
+   ```bash
+   kubectl create secret generic gemini-api-key \
+     --from-literal=api-key="YOUR_GEMINI_API_KEY" \
+     -n maas
+   ```
+
+2. **Deploy Llamastack:**
+   ```bash
+   cd llamastack-integration
+   kubectl apply -k deploy/overlays/gemini
+   ```
+
+3. **Verify deployment:**
+   ```bash
+   ./scripts/validate-deployment.sh gemini
+   ```
+
+4. **Test chat completion:**
+   ```bash
+   ./scripts/test-chat-completion.sh gemini
+   ```
+
+### Deploy with OpenAI
+
+Replace `gemini` with `openai` in the commands above and use `OPENAI_API_KEY`.
+
+### Deploy with Anthropic
+
+Replace `gemini` with `anthropic` in the commands above and use `ANTHROPIC_API_KEY`.
+
+## Directory Structure
+
+```
+llamastack-integration/
+├── README.md                          # This file
+├── deploy/
+│   ├── base/                          # Base LLMInferenceService template
+│   │   ├── llamastack.yaml           # Core deployment configuration
+│   │   └── kustomization.yaml        # Base kustomization
+│   └── overlays/                      # Provider-specific configurations
+│       ├── gemini/                    # Google Gemini configuration
+│       ├── openai/                    # OpenAI configuration
+│       └── anthropic/                 # Anthropic configuration
+├── examples/                          # Example deployments with docs
+│   ├── gemini-pro/README.md          # Gemini deployment guide
+│   ├── openai-gpt4/README.md         # OpenAI deployment guide
+│   └── anthropic-claude/README.md    # Anthropic deployment guide
+└── scripts/                           # Validation and testing scripts
+    ├── validate-deployment.sh         # Deployment validation
+    └── test-chat-completion.sh        # End-to-end testing
+```
+
+## Configuration
+
+### Base Configuration
+
+The base `llamastack.yaml` follows standard MaaS LLMInferenceService patterns:
+
+```yaml
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: llamastack
+  annotations:
+    alpha.maas.opendatahub.io/tiers: '[]'  # Available to all tiers
+spec:
+  router:
+    gateway:
+      refs:
+        - name: maas-default-gateway       # Connect to MaaS gateway
+          namespace: openshift-ingress
+  template:
+    containers:
+      - name: llamastack
+        image: "meta-llama/llamastack:latest"
+        ports:
+          - name: https
+            containerPort: 8000            # KServe standard port
+        # TLS, health checks, and configuration...
+```
+
+### Provider Configuration
+
+Each provider overlay includes:
+
+1. **Llamastack Configuration** (ConfigMap):
+   ```yaml
+   server:
+     port: 8000
+   model_servers:
+     - model_server_id: provider-server
+       model_server_type: remote::provider
+       config:
+         api_key: "${PROVIDER_API_KEY}"
+   models:
+     - model_id: provider-model
+       provider_resource_id: provider-server
+   ```
+
+2. **Secret Management** (API keys)
+3. **Environment Variables** (injected into pod)
+
+## Testing
+
+### Validation Script
+
+```bash
+./scripts/validate-deployment.sh [PROVIDER] [NAMESPACE]
+```
+
+Performs comprehensive checks:
+- LLMInferenceService status
+- Pod health and readiness
+- Health endpoint connectivity
+- Model discovery through MaaS API
+
+### Chat Completion Test
+
+```bash
+./scripts/test-chat-completion.sh [PROVIDER] [NAMESPACE] [MODEL]
+```
+
+Tests end-to-end functionality:
+- Authentication with MaaS
+- Chat completion requests
+- Token usage tracking
+- Response validation
+
+## Integration with MaaS
+
+### Model Discovery
+
+Llamastack exposes OpenAI-compatible `/v1/models` endpoint that MaaS automatically discovers:
+
+```bash
+# MaaS calls this endpoint to discover models
+GET https://llamastack-service:8000/v1/models
+```
+
+Response includes all configured models from the provider.
+
+### Chat Completions
+
+Chat requests are routed through the MaaS gateway to Llamastack:
+
+```bash
+# User request through MaaS gateway
+POST https://maas-gateway/v1/chat/completions
+Authorization: Bearer <maas-token>
+
+# Routed to Llamastack
+POST https://llamastack-service:8000/v1/chat/completions
+```
+
+### Authentication Flow
+
+1. User authenticates with MaaS API → receives token
+2. User sends requests to MaaS Gateway with token
+3. Gateway validates token and routes to Llamastack
+4. Llamastack forwards to external provider with API key
+
+### Rate Limiting
+
+Rate limits are enforced by MaaS based on user tier before reaching Llamastack.
+
+## Monitoring and Observability
+
+### Health Checks
+
+- **Liveness**: `GET /v1/health` - Pod restart if failing
+- **Readiness**: `GET /v1/health` - Traffic routing control
+
+### Metrics
+
+Llamastack provides token usage in responses:
+```json
+{
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 20,
+    "total_tokens": 30
+  }
+}
+```
+
+This integrates with MaaS billing and monitoring systems.
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Pod Not Starting**
+   ```bash
+   kubectl logs -n maas -l provider=<PROVIDER>
+   kubectl describe pod -n maas -l provider=<PROVIDER>
+   ```
+
+2. **Models Not Appearing**
+   - Check LLMInferenceService gateway reference
+   - Verify service health: `./scripts/validate-deployment.sh`
+   - Check MaaS model discovery logs
+
+3. **Authentication Failures**
+   - Verify API key in secret: `kubectl get secret <provider>-api-key -o yaml`
+   - Test API key directly with provider
+   - Check Llamastack logs for API errors
+
+4. **Rate Limiting Issues**
+   - Check user tier configuration
+   - Verify MaaS gateway policies
+   - Monitor token usage patterns
+
+### Debug Commands
+
+```bash
+# Check all resources for a provider
+kubectl get all -n maas -l provider=<PROVIDER>
+
+# View Llamastack configuration
+kubectl get configmap -n maas <provider>-llamastack-config -o yaml
+
+# Test health endpoint directly
+kubectl port-forward -n maas service/<provider>-llamastack 8443:443
+curl -k https://localhost:8443/v1/health
+```
+
+## Benefits
+
+- **Zero Infrastructure Changes** - Uses existing MaaS patterns
+- **No Wrapper Complexity** - Direct Llamastack integration
+- **Provider Flexibility** - Easy to add new providers
+- **Full Feature Compatibility** - All MaaS features work as-is
+- **Minimal Resource Requirements** - No GPU needed for external providers
+- **Standard Compliance** - Pure KServe LLMInferenceService
+
+## Contributing
+
+To add support for additional providers:
+
+1. Create new overlay directory: `deploy/overlays/new-provider/`
+2. Add Llamastack configuration with provider-specific settings
+3. Create example documentation: `examples/new-provider/README.md`
+4. Test with validation scripts
+
+## Security Considerations
+
+- API keys are stored as Kubernetes secrets
+- TLS encryption for all communications
+- MaaS authentication and authorization
+- Network policies for pod-to-pod communication
+- Regular secret rotation recommended
+
+## License
+
+This integration follows the same license as the parent Models-as-a-Service project.
