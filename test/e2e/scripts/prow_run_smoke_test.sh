@@ -84,25 +84,30 @@ OPERATOR_TYPE=${OPERATOR_TYPE:-odh}
 
 # Image configuration (for CI/CD pipelines)
 # OPERATOR_CATALOG: For ODH, defaults to snapshot catalog (required for v2 API / MaaS support)
-#                   For RHOAI, defaults to empty (uses redhat-operators)
+#                   For RHOAI, no default (uses redhat-operators from OCP marketplace)
 if [[ -z "${OPERATOR_CATALOG:-}" ]]; then
     if [[ "$OPERATOR_TYPE" == "odh" ]]; then
         # ODH requires v3+ for DataScienceCluster v2 API (MaaS support)
         # community-operators only has v2.x which doesn't have v2 API
         OPERATOR_CATALOG="quay.io/opendatahub/opendatahub-operator-catalog:latest"
     fi
+    # RHOAI: intentionally no default - uses redhat-operators from OCP marketplace
 fi
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}  # Optional: uses operator default if not set
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}  # Optional: uses catalog default if not set
 
-# Get Authorino namespace based on operator type
-# This must match the policy engine mapping in deploy.sh
-get_authorino_namespace() {
-    case "${OPERATOR_TYPE}" in
-        rhoai) echo "rh-connectivity-link" ;;
-        *)     echo "kuadrant-system" ;;
-    esac
-}
+# Compute namespaces based on operator type (matches deploy-rhoai-stable.sh behavior)
+# MaaS API is always deployed to the fixed application namespace, NOT the CI namespace
+case "${OPERATOR_TYPE}" in
+    rhoai)
+        AUTHORINO_NAMESPACE="rh-connectivity-link"
+        MAAS_NAMESPACE="redhat-ods-applications"
+        ;;
+    *)
+        AUTHORINO_NAMESPACE="kuadrant-system"
+        MAAS_NAMESPACE="opendatahub"
+        ;;
+esac
 
 print_header() {
     echo ""
@@ -155,12 +160,12 @@ deploy_maas_platform() {
     )
 
     # Add optional operator catalog if specified (otherwise uses default catalog)
-    if [[ -n "${OPERATOR_CATALOG}" ]]; then
+    if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
         deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
     fi
 
     # Add optional operator image if specified
-    if [[ -n "${OPERATOR_IMAGE}" ]]; then
+    if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         deploy_cmd+=(--operator-image "${OPERATOR_IMAGE}")
     fi
 
@@ -185,11 +190,8 @@ deploy_maas_platform() {
         echo "   This is a temporary workaround for the gateway→Authorino TLS chicken-egg problem"
     else
         # Using 300s timeout to fit within Prow's 15m job limit
-        # Namespace is derived from OPERATOR_TYPE (odh→kuadrant-system, rhoai→rh-connectivity-link)
-        local authorino_ns
-        authorino_ns="$(get_authorino_namespace)"
-        echo "Waiting for Authorino and auth service to be ready (namespace: ${authorino_ns})..."
-        if ! wait_authorino_ready "$authorino_ns" 300; then
+        echo "Waiting for Authorino and auth service to be ready (namespace: ${AUTHORINO_NAMESPACE})..."
+        if ! wait_authorino_ready "$AUTHORINO_NAMESPACE" 300; then
             echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
         fi
     fi
@@ -229,11 +231,13 @@ deploy_models() {
 
 validate_deployment() {
     echo "Deployment Validation"
+    echo "Using namespace: $MAAS_NAMESPACE"
+    
     if [ "$SKIP_VALIDATION" = false ]; then
-        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE"; then
             echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
             sleep 30
-            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE"; then
                 echo "❌ ERROR: Deployment validation failed after retry"
                 exit 1
             fi

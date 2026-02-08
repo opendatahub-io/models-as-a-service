@@ -286,27 +286,27 @@ validate_configuration() {
     log_debug "Using auto-determined policy engine for kustomize mode: $POLICY_ENGINE"
   fi
 
-  # Auto-determine namespace if not specified
-  if [[ -z "$NAMESPACE" ]]; then
-    if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
-      # Kustomize mode: use maas-api namespace (matching kustomize overlay default)
+  # Determine namespace based on deployment mode
+  if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
+    # Kustomize mode: use provided namespace or default to maas-api
+    if [[ -z "$NAMESPACE" ]]; then
       NAMESPACE="maas-api"
-      log_debug "Using auto-determined namespace for kustomize mode: $NAMESPACE"
-    else
-      # Operator mode: namespace depends on operator type
-      case "$OPERATOR_TYPE" in
-        rhoai)
-          NAMESPACE="redhat-ods-applications"
-          ;;
-        odh)
-          NAMESPACE="opendatahub"
-          ;;
-        *)
-          NAMESPACE="opendatahub"
-          ;;
-      esac
-      log_debug "Using auto-determined namespace for operator mode: $NAMESPACE"
     fi
+    log_debug "Using namespace for kustomize mode: $NAMESPACE"
+  else
+    # Operator mode: ALWAYS use fixed namespace based on operator type
+    # This matches upstream deploy-rhoai-stable.sh behavior where the
+    # applications namespace is determined by DSCInitialization, not env vars.
+    # The $NAMESPACE env var (e.g., from Prow CI) is intentionally ignored.
+    case "$OPERATOR_TYPE" in
+      rhoai)
+        NAMESPACE="redhat-ods-applications"
+        ;;
+      odh|*)
+        NAMESPACE="opendatahub"
+        ;;
+    esac
+    log_debug "Using fixed namespace for operator mode: $NAMESPACE"
   fi
 
   log_info "Configuration validated successfully"
@@ -1072,10 +1072,19 @@ configure_tls_backend() {
   fi
 
   log_info "Running TLS configuration script..."
-  if AUTHORINO_NAMESPACE="$authorino_namespace" "$tls_script" 2>&1 | while read -r line; do log_debug "$line"; done; then
+  # Capture output and exit code separately to avoid pipeline masking the script's exit status
+  # (piping to while-read would check while's exit status, not the script's)
+  local tls_output
+  local tls_rc=0
+  tls_output=$(AUTHORINO_NAMESPACE="$authorino_namespace" "$tls_script" 2>&1) || tls_rc=$?
+  
+  # Log each line of output
+  while read -r line; do log_debug "$line"; done <<< "$tls_output"
+  
+  if [[ $tls_rc -eq 0 ]]; then
     log_info "TLS configuration script completed successfully"
   else
-    log_warn "TLS configuration script had issues (non-fatal, continuing)"
+    log_warn "TLS configuration script had issues (exit code: $tls_rc, non-fatal, continuing)"
   fi
 
   # Restart deployments to pick up TLS config

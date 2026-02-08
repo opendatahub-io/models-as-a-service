@@ -236,7 +236,9 @@ print_header "1️⃣ Component Status Checks"
 
 # Check MaaS API pods
 print_check "MaaS API pods"
-MAAS_PODS=$(kubectl get pods -n "$MAAS_API_NAMESPACE" -l app.kubernetes.io/name=maas-api --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+MAAS_PODS=$(kubectl get pods -n "$MAAS_API_NAMESPACE" -l app.kubernetes.io/name=maas-api --no-headers 2>/dev/null | grep -c "Running" || true)
+# Ensure MAAS_PODS is a valid integer (fixes edge case with empty/multiline output)
+[[ "$MAAS_PODS" =~ ^[0-9]+$ ]] || MAAS_PODS=0
 if [ "$MAAS_PODS" -gt 0 ]; then
     print_success "MaaS API has $MAAS_PODS running pod(s)"
 else
