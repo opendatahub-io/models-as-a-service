@@ -1187,19 +1187,13 @@ wait_authorino_ready() {
   fi
 
   echo "  - Using gateway URL: $maas_url"
-  if [[ -z "$maas_url" ]]; then
-    echo "  WARNING: Could not determine gateway URL, skipping request verification"
-    return 0
-  fi
-
-  echo "  - Using gateway URL: $maas_url"
->>>>>>> ea56772 (rebase PR and include changes from 381)
   local consecutive_success=0
   local required_success=3
 
   while [[ $elapsed -lt $timeout ]]; do
     # Make a test request - we expect 401 (auth working) not 500 (auth failing)
-    # Capture both response body and HTTP code for better diagnostics    local response_file
+    # Capture both response body and HTTP code for better diagnostics
+    local response_file
     response_file=$(mktemp)
     local http_code
     http_code=$(curl -sSk -o "$response_file" -w "%{http_code}" "$maas_url" 2>&1)
