@@ -28,6 +28,7 @@
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
+#   SKIP_DEPLOY     - Skip platform deployment (default: false)
 #   OPERATOR_TYPE   - Operator to deploy: "odh" or "rhoai" (default: odh)
 #                     odh   → uses Kuadrant (upstream), Authorino in kuadrant-system
 #                     rhoai → uses RHCL (downstream), Authorino in rh-connectivity-link
@@ -71,6 +72,9 @@ SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
+
+# Track test failures - script continues but exits with error at end
+TESTS_FAILED=false
 
 # Operator configuration
 # OPERATOR_TYPE determines which operator and policy engine to use:
