@@ -1,0 +1,16 @@
+---
+# DataScienceCluster for RHOAI 3.x and ODH with ModelsAsService
+# Requires operator version that supports modelsAsService in DSC v2 API
+apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    kserve:
+      managementState: Managed
+      rawDeploymentServiceConfig: Headed
+      modelsAsService:
+        managementState: Managed
+    dashboard:
+      managementState: Removed

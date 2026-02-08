@@ -7,7 +7,7 @@ Enables end-to-end TLS for maas-api using OpenShift serving certificates.
 | File | Purpose |
 |------|---------|
 | `kustomization.yaml` | References base TLS overlay and policies, applies HTTPS patches |
-| `configure-authorino-tls.sh` | Configures operator-managed Authorino for TLS |
+| `configure-authorino-tls.sh` | Configures Authorino TLS settings and CA bundle for HTTPS tier lookup |
 
 
 ## Traffic Flow
@@ -25,6 +25,23 @@ Authorino → maas-api :8443 → /v1/tiers/lookup
 ```
 
 ## Usage
+
+### Using Unified Deployment Script (Recommended)
+
+```bash
+# TLS is enabled by default
+./scripts/deploy.sh --deployment-mode kustomize
+
+# Or explicitly enable TLS
+./scripts/deploy.sh --deployment-mode kustomize --enable-tls-backend
+```
+
+The deployment script automatically:
+1. Applies the kustomize overlay
+2. Configures Authorino for TLS using `configure-authorino-tls.sh`
+3. Restarts deployments to pick up certificates
+
+### Manual Deployment (Advanced)
 
 ```bash
 # Apply Kustomize overlay

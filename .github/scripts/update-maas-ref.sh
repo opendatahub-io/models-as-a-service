@@ -27,7 +27,7 @@ echo ""
 # List of specific files to update (to avoid false positives)
 FILES_TO_UPDATE=(
     "docs/content/quickstart.md"
-    "scripts/deploy-rhoai-stable.sh"
+    "scripts/deploy.sh"
 )
 
 UPDATED_COUNT=0

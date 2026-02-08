@@ -1,0 +1,7 @@
+---
+# Kuadrant CR - apply with: kubectl apply -f kuadrant.yaml -n <namespace>
+apiVersion: kuadrant.io/v1beta1
+kind: Kuadrant
+metadata:
+  name: kuadrant
+spec: {}

@@ -34,27 +34,27 @@ _base64_decode() {
 #   decode_jwt_payload "$TOKEN"  # Returns decoded JSON payload
 decode_jwt_payload() {
   local jwt_token="$1"
-  
+
   if [ -z "$jwt_token" ]; then
-    echo "" 
+    echo ""
     return 1
   fi
-  
+
   # Extract the payload (second part of JWT, separated by dots)
   local payload_b64url
   payload_b64url=$(echo "$jwt_token" | cut -d. -f2)
-  
+
   if [ -z "$payload_b64url" ]; then
     echo ""
     return 1
   fi
-  
+
   # Convert base64url to standard base64:
   # - Replace '-' with '+' and '_' with '/'
   # - Add padding (base64 must be multiple of 4 chars)
   local payload_b64
   payload_b64=$(echo "$payload_b64url" | tr '_-' '/+' | awk '{while(length($0)%4)$0=$0"=";print}')
-  
+
   # Decode base64 to JSON (cross-platform)
   echo "$payload_b64" | _base64_decode
 }
@@ -72,15 +72,15 @@ decode_jwt_payload() {
 get_jwt_claim() {
   local jwt_token="$1"
   local claim="$2"
-  
+
   local payload
   payload=$(decode_jwt_payload "$jwt_token")
-  
+
   if [ -z "$payload" ]; then
     echo ""
     return 1
   fi
-  
+
   echo "$payload" | jq -r ".$claim // empty" 2>/dev/null
 }
 
@@ -94,14 +94,36 @@ get_jwt_claim() {
 get_cluster_audience() {
   local temp_token
   temp_token=$(kubectl create token default --duration=10m 2>/dev/null)
-  
+
   if [ -z "$temp_token" ]; then
     echo ""
     return 1
   fi
-  
+
   get_jwt_claim "$temp_token" "aud[0]"
 }
+
+# ============================================================================
+# Constants and Configuration
+# ============================================================================
+
+# Timeout values (seconds)
+readonly DEFAULT_TIMEOUT=300
+readonly CSV_TIMEOUT=180
+readonly NAMESPACE_TIMEOUT=60
+readonly POD_READY_TIMEOUT=120
+readonly CRD_TIMEOUT=90
+readonly WEBHOOK_TIMEOUT=120
+readonly CUSTOM_RESOURCE_TIMEOUT=600
+
+# Logging levels
+readonly LOG_LEVEL_DEBUG=0
+readonly LOG_LEVEL_INFO=1
+readonly LOG_LEVEL_WARN=2
+readonly LOG_LEVEL_ERROR=3
+
+# Current log level (can be overridden by LOG_LEVEL env var)
+CURRENT_LOG_LEVEL=${LOG_LEVEL_INFO}
 
 # ============================================================================
 # Version Management
@@ -112,6 +134,30 @@ export KUADRANT_MIN_VERSION="1.3.1"
 export AUTHORINO_MIN_VERSION="0.22.0"
 export LIMITADOR_MIN_VERSION="0.16.0"
 export DNS_OPERATOR_MIN_VERSION="0.15.0"
+
+# ==========================================
+# Logging Functions
+# ==========================================
+
+log_debug() {
+  [[ ${CURRENT_LOG_LEVEL:-1} -le $LOG_LEVEL_DEBUG ]] || return 0
+  echo "[DEBUG] $*"
+}
+
+log_info() {
+  [[ ${CURRENT_LOG_LEVEL:-1} -le $LOG_LEVEL_INFO ]] || return 0
+  echo "[INFO] $*"
+}
+
+log_warn() {
+  [[ ${CURRENT_LOG_LEVEL:-1} -le $LOG_LEVEL_WARN ]] || return 0
+  echo "[WARN] $*" >&2
+}
+
+log_error() {
+  [[ ${CURRENT_LOG_LEVEL:-1} -le $LOG_LEVEL_ERROR ]] || return 0
+  echo "[ERROR] $*" >&2
+}
 
 # ==========================================
 # OLM Subscription and CSV Helper Functions
@@ -125,6 +171,7 @@ waitsubscriptioninstalled() {
   local name=${1?subscription name is required}; shift
 
   echo "  * Waiting for Subscription $ns/$name to start setup..."
+  # Use fully qualified resource name to avoid conflicts with Knative subscriptions
   kubectl wait subscription.operators.coreos.com --timeout=300s -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'
   local csv
   csv=$(kubectl get subscription.operators.coreos.com -n "$ns" "$name" -o jsonpath='{.status.currentCSV}')
@@ -135,7 +182,7 @@ waitsubscriptioninstalled() {
   done
 
   echo "  * Waiting for Subscription setup to finish setup. CSV = $csv ..."
-  if ! kubectl wait -n "$ns" --for=jsonpath="{.status.phase}"=Succeeded csv "$csv" --timeout=600s; then
+  if ! kubectl wait -n "$ns" --for=jsonpath="{.status.phase}"=Succeeded csv "$csv" --timeout=300s; then
     echo "    * ERROR: Timeout while waiting for Subscription to finish installation."
     return 1
   fi
@@ -154,6 +201,7 @@ checksubscriptionexists() {
   local op_cond=".spec.name == \"${operator_name}\""
   local query="${catalogns_cond} and ${catalog_cond} and ${op_cond}"
 
+  # Use fully qualified resource name to avoid conflicts with Knative subscriptions
   kubectl get subscriptions.operators.coreos.com -A -ojson | jq ".items | map(select(${query})) | length"
 }
 
@@ -167,6 +215,171 @@ checkcsvexists() {
   local count
   count=$(kubectl get csv -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c "^${csv_prefix}" 2>/dev/null) || count=0
   echo "$count"
+}
+
+# ==========================================
+# Operator Installation Helper Functions
+# ==========================================
+
+# is_operator_installed operator_name namespace
+#   Checks if an operator subscription exists.
+#   Returns 0 if installed, 1 if not found.
+is_operator_installed() {
+  local operator_name=${1?operator name is required}; shift
+  local namespace=${1:-}  # namespace is optional
+
+  # Use fully qualified resource name to avoid conflicts with Knative subscriptions
+  if [[ -n "$namespace" ]]; then
+    kubectl get subscription.operators.coreos.com -n "$namespace" 2>/dev/null | grep -q "$operator_name"
+  else
+    kubectl get subscription.operators.coreos.com --all-namespaces 2>/dev/null | grep -q "$operator_name"
+  fi
+}
+
+# should_install_operator operator_name skip_flag namespace
+#   Determines if an operator should be installed based on skip flag and existing installation.
+#   Returns 0 if should install, 1 if should skip.
+should_install_operator() {
+  local operator_name=${1?operator name is required}; shift
+  local skip_flag=${1?skip flag is required}; shift
+  local namespace=${1:-}  # namespace is optional
+
+  # Explicit skip
+  [[ "$skip_flag" == "true" ]] && return 1
+
+  # Auto mode: check if already installed
+  if [[ "$skip_flag" == "auto" ]]; then
+    is_operator_installed "$operator_name" "$namespace" && return 1
+  fi
+
+  return 0
+}
+
+# install_olm_operator operator_name namespace catalog_source channel starting_csv operatorgroup_target source_namespace
+#   Generic function to install an OLM operator.
+#
+# Arguments:
+#   operator_name - Name of the operator (e.g., "rhods-operator")
+#   namespace - Target namespace for the operator
+#   catalog_source - CatalogSource name (e.g., "redhat-operators")
+#   channel - Subscription channel (e.g., "fast-3")
+#   starting_csv - Starting CSV (optional, can be empty)
+#   operatorgroup_target - Target namespace for OperatorGroup (optional, uses namespace if empty)
+#   source_namespace - Catalog source namespace (optional, defaults to openshift-marketplace)
+install_olm_operator() {
+  local operator_name=${1?operator name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local catalog_source=${1?catalog source is required}; shift
+  local channel=${1?channel is required}; shift
+  local starting_csv=${1:-}; shift || true
+  local operatorgroup_target=${1:-}; shift || true
+  local source_namespace=${1:-openshift-marketplace}; shift || true
+
+  log_info "Installing operator: $operator_name in namespace: $namespace"
+
+  # Check if subscription already exists
+  # Use fully qualified resource name to avoid conflicts with Knative subscriptions
+  if kubectl get subscription.operators.coreos.com "$operator_name" -n "$namespace" &>/dev/null; then
+    log_info "Subscription $operator_name already exists in $namespace, skipping"
+    return 0
+  fi
+
+  # Create namespace if not exists
+  if ! kubectl get namespace "$namespace" &>/dev/null; then
+    log_info "Creating namespace: $namespace"
+    kubectl create namespace "$namespace"
+  fi
+
+  # Wait for namespace to be ready
+  wait_for_namespace "$namespace" 60
+
+  # Create OperatorGroup if needed
+  local og_count=$(kubectl get operatorgroup -n "$namespace" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$og_count" -eq 0 ]; then
+    # If operatorgroup_target is "AllNamespaces", omit targetNamespaces field
+    if [ "$operatorgroup_target" = "AllNamespaces" ]; then
+      log_info "Creating OperatorGroup in $namespace for AllNamespaces mode"
+      cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: ${namespace}-operatorgroup
+  namespace: ${namespace}
+spec: {}
+EOF
+    else
+      local og_target_ns="${operatorgroup_target:-$namespace}"
+      log_info "Creating OperatorGroup in $namespace targeting $og_target_ns"
+      cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: ${namespace}-operatorgroup
+  namespace: ${namespace}
+spec:
+  targetNamespaces:
+  - ${og_target_ns}
+EOF
+    fi
+  fi
+
+  # Create Subscription
+  log_info "Creating Subscription for $operator_name from $catalog_source (channel: $channel)"
+  local subscription_yaml="
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ${operator_name}
+  namespace: ${namespace}
+spec:
+  channel: ${channel}
+  name: ${operator_name}
+  source: ${catalog_source}
+  sourceNamespace: ${source_namespace}
+"
+
+  if [[ -n "$starting_csv" ]]; then
+    subscription_yaml="${subscription_yaml}  startingCSV: ${starting_csv}
+"
+  fi
+
+  echo "$subscription_yaml" | kubectl apply -f -
+
+  # Wait for subscription to be installed
+  log_info "Waiting for subscription to install..."
+  waitsubscriptioninstalled "$namespace" "$operator_name"
+
+  log_info "Operator $operator_name installed successfully"
+}
+
+# wait_for_custom_check description check_command timeout interval
+#   Waits for a custom check command to succeed.
+#
+# Arguments:
+#   description - Description of what we're waiting for
+#   check_command - Command to execute (should return 0 on success)
+#   timeout - Timeout in seconds
+#   interval - Check interval in seconds
+wait_for_custom_check() {
+  local description=${1?description is required}; shift
+  local check_command=${1?check command is required}; shift
+  local timeout=${1:-120}; shift || true
+  local interval=${1:-5}; shift || true
+
+  log_info "Waiting for: $description (timeout: ${timeout}s)"
+
+  local elapsed=0
+  while [ $elapsed -lt $timeout ]; do
+    if eval "$check_command"; then
+      log_info "$description - Ready"
+      return 0
+    fi
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+
+  log_warn "$description - Timeout after ${timeout}s"
+  return 1
 }
 
 # ==========================================
@@ -224,6 +437,143 @@ wait_for_resource() {
 
   echo "  WARNING: $kind/$name was not found within timeout."
   return 1
+}
+
+# create_tls_secret name namespace cn
+#   Creates a self-signed TLS secret if it doesn't already exist.
+#   Uses OpenSSL to generate a matching key/cert pair.
+#
+# Arguments:
+#   name      - Name of the TLS secret
+#   namespace - Namespace to create the secret in
+#   cn        - Common Name for the certificate (e.g., hostname)
+#
+# Returns:
+#   0 on success (created or already exists), 1 on failure
+create_tls_secret() {
+  local name=${1?secret name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local cn=${1:-$name}  # default CN to secret name
+
+  # Check if secret already exists
+  if kubectl get secret "$name" -n "$namespace" &>/dev/null; then
+    echo "  * TLS secret $name already exists in $namespace"
+    return 0
+  fi
+
+  echo "  * Creating TLS secret $name in $namespace (CN=$cn)..."
+  
+  # Create temp directory for key/cert files
+  local temp_dir
+  temp_dir=$(mktemp -d)
+  
+  # Helper to clean up temp directory
+  _cleanup_temp() { rm -rf "$temp_dir"; }
+
+  # Generate self-signed certificate with matching key
+  if ! openssl req -x509 -newkey rsa:2048 \
+      -keyout "${temp_dir}/tls.key" \
+      -out "${temp_dir}/tls.crt" \
+      -days 365 -nodes \
+      -subj "/CN=${cn}" 2>/dev/null; then
+    echo "  ERROR: Failed to generate TLS certificate"
+    _cleanup_temp
+    return 1
+  fi
+
+  # Verify files were created
+  if [[ ! -f "${temp_dir}/tls.crt" || ! -f "${temp_dir}/tls.key" ]]; then
+    echo "  ERROR: TLS certificate files not generated"
+    _cleanup_temp
+    return 1
+  fi
+
+  # Create the secret
+  if kubectl create secret tls "$name" \
+      --cert="${temp_dir}/tls.crt" \
+      --key="${temp_dir}/tls.key" \
+      -n "$namespace"; then
+    echo "  * TLS secret $name created successfully"
+    _cleanup_temp
+    return 0
+  else
+    echo "  ERROR: Failed to create TLS secret $name"
+    _cleanup_temp
+    return 1
+  fi
+}
+
+# create_gateway_route name namespace hostname service tls_secret
+#   Creates an OpenShift Route to expose a Gateway via the cluster's apps domain.
+#   Uses 'reencrypt' TLS termination for better security (trusted cert to clients).
+#
+# Arguments:
+#   name       - Name of the Route resource
+#   namespace  - Namespace for the Route
+#   hostname   - Hostname for the Route (e.g., maas.apps.cluster.domain)
+#   service    - Target Service name
+#   tls_secret - Name of the TLS secret containing the Gateway's certificate
+#
+# Returns:
+#   0 on success, 1 on failure
+create_gateway_route() {
+  local name=${1?route name is required}; shift
+  local namespace=${1?namespace is required}; shift
+  local hostname=${1?hostname is required}; shift
+  local service=${1?service name is required}; shift
+  local tls_secret=${1?tls secret name is required}
+
+  echo "  * Creating Route $name for $hostname..."
+
+  # Get the Gateway's TLS certificate for reencrypt mode
+  # This allows the Router to trust the Gateway's certificate
+  local dest_ca_cert
+  dest_ca_cert=$(kubectl get secret "$tls_secret" -n "$namespace" \
+    -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d || echo "")
+
+  if [[ -n "$dest_ca_cert" ]]; then
+    # Use reencrypt: Router terminates TLS with trusted cert, re-encrypts to Gateway
+    # This gives clients a trusted certificate instead of our self-signed one
+    cat <<EOF | kubectl apply -f -
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ${name}
+  namespace: ${namespace}
+spec:
+  host: ${hostname}
+  port:
+    targetPort: https
+  to:
+    kind: Service
+    name: ${service}
+    weight: 100
+  tls:
+    termination: reencrypt
+    destinationCACertificate: |
+$(echo "$dest_ca_cert" | sed 's/^/      /')
+EOF
+  else
+    # Fallback to passthrough if we can't get the certificate
+    echo "  WARNING: Could not retrieve TLS certificate from $tls_secret, using passthrough"
+    cat <<EOF | kubectl apply -f -
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ${name}
+  namespace: ${namespace}
+spec:
+  host: ${hostname}
+  port:
+    targetPort: https
+  to:
+    kind: Service
+    name: ${service}
+    weight: 100
+  tls:
+    termination: passthrough
+EOF
+  fi
 }
 
 # find_project_root [start_dir] [marker]
@@ -304,6 +654,66 @@ cleanup_maas_api_image() {
   fi
 }
 
+# inject_maas_api_image_operator_mode namespace
+#   Patches the maas-api deployment with custom image when MAAS_API_IMAGE is set.
+#   Used in operator mode after the operator creates the deployment.
+#
+# Arguments:
+#   namespace - Namespace where maas-api is deployed (opendatahub or redhat-ods-applications)
+#
+# Environment:
+#   MAAS_API_IMAGE - Custom MaaS API container image
+#
+# Returns:
+#   0 on success, 0 if MAAS_API_IMAGE not set (skip), 1 on failure
+inject_maas_api_image_operator_mode() {
+  local namespace=${1?namespace is required}; shift
+
+  # Skip if MAAS_API_IMAGE is not set
+  if [ -z "${MAAS_API_IMAGE:-}" ]; then
+    echo "  * MAAS_API_IMAGE not set, using operator default"
+    return 0
+  fi
+
+  echo "  * Injecting custom MaaS API image: ${MAAS_API_IMAGE}"
+
+  # Wait for maas-api deployment to be created by the operator
+  echo "  * Waiting for maas-api deployment to be created by operator..."
+  local timeout=300
+  local elapsed=0
+  while [ $elapsed -lt $timeout ]; do
+    if kubectl get deployment maas-api -n "$namespace" >/dev/null 2>&1; then
+      echo "  * maas-api deployment found"
+      break
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+
+  if [ $elapsed -ge $timeout ]; then
+    echo "ERROR: Timeout waiting for maas-api deployment to be created" >&2
+    return 1
+  fi
+
+  # Patch the deployment with custom image
+  echo "  * Patching maas-api deployment with image: ${MAAS_API_IMAGE}"
+  kubectl patch deployment maas-api -n "$namespace" --type='json' -p="[
+    {\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/image\", \"value\": \"${MAAS_API_IMAGE}\"}
+  ]" || {
+    echo "ERROR: Failed to patch maas-api deployment" >&2
+    return 1
+  }
+
+  # Wait for rollout to complete
+  echo "  * Waiting for deployment rollout to complete..."
+  kubectl rollout status deployment/maas-api -n "$namespace" --timeout=180s || {
+    echo "WARNING: Deployment rollout did not complete within timeout (continuing anyway)" >&2
+  }
+
+  echo "  * Successfully injected custom MaaS API image"
+  return 0
+}
+
 # Helper function to wait for CRD to be established
 wait_for_crd() {
   local crd="$1"
@@ -337,14 +747,21 @@ extract_version_from_csv() {
 }
 
 # Helper function to compare semantic versions (returns 0 if version1 >= version2)
+#
+# NOTE: This comparison is intentionally simple and may have edge cases (e.g., comparing
+# 1.2.9 vs 1.2.10 with string comparison). The trade-off:
+# - Loose validation = resilient to minor/patch version updates, easier maintenance
+# - Strict semver = more accurate, but requires updates for every version bump
+# For a deployment script, we prefer resilience over strict accuracy. If false positives
+# become an issue in practice, we can implement proper semver comparison.
 version_compare() {
   local version1="$1"
   local version2="$2"
-  
+
   # Convert versions to comparable numbers (e.g., "1.2.3" -> "001002003")
   local v1=$(echo "$version1" | awk -F. '{printf "%03d%03d%03d", $1, $2, $3}')
   local v2=$(echo "$version2" | awk -F. '{printf "%03d%03d%03d", $1, $2, $3}')
-  
+
   [ "$v1" -ge "$v2" ]
 }
 
@@ -627,16 +1044,26 @@ wait_datasciencecluster_ready() {
       continue
     fi
 
-    local kserve_state kserve_ready maas_ready
+    local kserve_state kserve_ready maas_ready model_controller_ready
     kserve_state=$(echo "$dsc_json" | jq -r '.status.components.kserve.managementState // ""')
     kserve_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="KserveReady") | .status' | tail -n1)
     maas_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelsAsServiceReady") | .status' | tail -n1)
+    model_controller_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelControllerReady") | .status' | tail -n1)
 
-    if [[ "$kserve_state" == "Managed" && "$kserve_ready" == "True" && "$maas_ready" == "True" ]]; then
+    # v2 API: ModelsAsServiceReady doesn't exist, use ModelControllerReady instead
+    # v1 API: ModelsAsServiceReady exists but may stay False
+    # Use ModelControllerReady as fallback if ModelsAsServiceReady is not True
+    # This handles both v2 API (no ModelsAsServiceReady condition) and v1 API (condition exists but may stay False)
+    local maas_check="$maas_ready"
+    if [[ "$maas_ready" != "True" && "$model_controller_ready" == "True" ]]; then
+      maas_check="$model_controller_ready"
+    fi
+
+    if [[ "$kserve_state" == "Managed" && "$kserve_ready" == "True" && "$maas_check" == "True" ]]; then
       echo "  * KServe and ModelsAsService are ready in DataScienceCluster '$name'"
       return 0
     else
-      echo "  - KServe state: $kserve_state, KserveReady: $kserve_ready, ModelsAsServiceReady: $maas_ready"
+      echo "  - KServe state: $kserve_state, KserveReady: $kserve_ready, ModelsAsServiceReady: $maas_ready, ModelControllerReady: $model_controller_ready"
     fi
 
     sleep $interval
@@ -644,10 +1071,12 @@ wait_datasciencecluster_ready() {
   done
 
   echo "  ERROR: KServe and/or ModelsAsService did not become ready in DataScienceCluster/$name within $timeout seconds."
+  echo "  Final status: KServe=$kserve_state, KserveReady=$kserve_ready, ModelsAsServiceReady=$maas_ready, ModelControllerReady=$model_controller_ready"
+  echo "  Tip: Check 'kubectl describe datasciencecluster $name' for more details"
   return 1
 }
 
-# wait_authorino_ready [timeout]
+# wait_authorino_ready <namespace> [timeout]
 #   Waits for Authorino to be ready and accepting requests.
 #   Note: Request are required because authorino will report ready status but still give 500 errors.
 #   
@@ -657,28 +1086,38 @@ wait_datasciencecluster_ready() {
 #   3. Auth requests are actually succeeding (not erroring)
 #
 # Arguments:
-#   timeout - Timeout in seconds (default: 120)
+#   namespace - Authorino namespace (required)
+#               "kuadrant-system" for Kuadrant (upstream/ODH)
+#               "rh-connectivity-link" for RHCL (downstream/RHOAI)
+#   timeout   - Timeout in seconds (default: 120)
 #
 # Returns:
 #   0 on success, 1 on failure
 wait_authorino_ready() {
-  local timeout=${1:-120}
+  local authorino_namespace="${1:?ERROR: namespace is required (kuadrant-system or rh-connectivity-link)}"
+  local timeout=${2:-120}
   local interval=5
   local elapsed=0
 
   echo "* Waiting for Authorino to be ready (timeout: ${timeout}s)..."
+  echo "  - Checking Authorino in namespace: $authorino_namespace"
+
+  if ! kubectl get authorino -n "$authorino_namespace" &>/dev/null; then
+    echo "  ERROR: No Authorino CR found in namespace: $authorino_namespace"
+    return 1
+  fi
 
   # First, wait for Authorino CR to be ready
   echo "  - Checking Authorino CR status..."
   while [[ $elapsed -lt $timeout ]]; do
     local authorino_ready
-    authorino_ready=$(kubectl get authorino -n kuadrant-system -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
-    
+    authorino_ready=$(kubectl get authorino -n "$authorino_namespace" -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+
     if [[ "$authorino_ready" == "True" ]]; then
       echo "  * Authorino CR is Ready"
       break
     fi
-    
+
     echo "  - Authorino CR not ready yet (status: ${authorino_ready:-not found}), waiting..."
     sleep $interval
     elapsed=$((elapsed + interval))
@@ -689,30 +1128,37 @@ wait_authorino_ready() {
     return 1
   fi
 
-  # Then, wait for the auth service cluster to be healthy in the gateway
-  echo "  - Checking auth service cluster health in gateway..."
-  local gateway_pod
-  gateway_pod=$(kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-  
-  if [[ -z "$gateway_pod" ]]; then
-    echo "  WARNING: Could not find gateway pod, skipping cluster health check"
-    return 0
+  # Verify Gateway resource is ready
+  echo "  - Verifying Gateway resource is ready..."
+  local gateway_programmed
+  gateway_programmed=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || echo "")
+
+  if [[ "$gateway_programmed" != "True" ]]; then
+    echo "  WARNING: Gateway is not Programmed yet (status: ${gateway_programmed:-not found})"
+    echo "  WARNING: This may cause auth service routing issues"
+  else
+    echo "  * Gateway is Programmed and ready"
   fi
 
-  # Wait for auth cluster to show healthy
-  while [[ $elapsed -lt $timeout ]]; do
+  # Try to check auth service cluster health in gateway (Istio-specific, may not work with OpenShift Gateway)
+  echo "  - Checking if auth service is registered in gateway..."
+  local gateway_pod
+  gateway_pod=$(kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+
+  if [[ -z "$gateway_pod" ]]; then
+    echo "  - No dedicated gateway pod found (expected with OpenShift Gateway controller)"
+    echo "  - OpenShift Gateway uses shared router infrastructure"
+  else
+    # Try to check cluster health, but don't wait long since this might not work with OpenShift Gateway
     local health_status
-    health_status=$(kubectl exec -n openshift-ingress "$gateway_pod" -- pilot-agent request GET /clusters 2>/dev/null | grep "kuadrant-auth-service" | grep "health_flags" | head -1 || echo "")
-    
+    health_status=$(timeout 10s kubectl exec -n openshift-ingress "$gateway_pod" -- pilot-agent request GET /clusters 2>/dev/null | grep -E "kuadrant-auth-service|authorino.*authorization" | grep "health_flags" | head -1 || echo "")
+
     if [[ "$health_status" == *"healthy"* ]]; then
       echo "  * Auth service cluster is healthy in gateway"
-      break
+    else
+      echo "  - Gateway pod found but cluster health check not available (not Istio-based)"
     fi
-    
-    echo "  - Auth service cluster not healthy yet, waiting..."
-    sleep $interval
-    elapsed=$((elapsed + interval))
-  done
+  fi
 
   # Finally, verify auth requests are actually succeeding (not just cluster marked healthy)
   echo "  - Verifying auth requests are succeeding..."
@@ -739,12 +1185,14 @@ wait_authorino_ready() {
     echo "  WARNING: Could not determine gateway URL, skipping request verification"
     return 0
   fi
+
+  echo "  - Using gateway URL: $maas_url"
   local consecutive_success=0
   local required_success=3
 
   while [[ $elapsed -lt $timeout ]]; do
     # Make a test request - we expect 401 (auth working) not 500 (auth failing)
-    # Capture both response body and HTTP code
+    # Capture both response body and HTTP code for better diagnostics
     local response_file
     response_file=$(mktemp)
     local http_code
@@ -782,7 +1230,7 @@ wait_authorino_ready() {
       fi
       rm -f "$response_file"
     fi
-    
+
     sleep 2
     elapsed=$((elapsed + 2))
   done

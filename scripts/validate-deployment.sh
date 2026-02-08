@@ -712,7 +712,7 @@ else
     echo "Common fixes:"
     echo "  - Wait for pods to start: kubectl get pods -A | grep -v Running"
     echo "  - Check operator logs: kubectl logs -n kuadrant-system -l app.kubernetes.io/name=kuadrant-operator"
-    echo "  - Re-run deployment: ./scripts/deploy-openshift.sh"
+    echo "  - Re-run deployment: ./scripts/deploy.sh"
     echo ""
     echo "Usage: ./scripts/validate-deployment.sh [MODEL_NAME]"
     echo "  MODEL_NAME: Optional. Specify a model to validate against"
