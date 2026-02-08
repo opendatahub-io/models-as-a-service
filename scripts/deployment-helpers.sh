@@ -466,8 +466,9 @@ create_tls_secret() {
   # Create temp directory for key/cert files
   local temp_dir
   temp_dir=$(mktemp -d)
-  # shellcheck disable=SC2064
-  trap "rm -rf '$temp_dir'" RETURN
+  
+  # Helper to clean up temp directory
+  _cleanup_temp() { rm -rf "$temp_dir"; }
 
   # Generate self-signed certificate with matching key
   if ! openssl req -x509 -newkey rsa:2048 \
@@ -476,12 +477,14 @@ create_tls_secret() {
       -days 365 -nodes \
       -subj "/CN=${cn}" 2>/dev/null; then
     echo "  ERROR: Failed to generate TLS certificate"
+    _cleanup_temp
     return 1
   fi
 
   # Verify files were created
   if [[ ! -f "${temp_dir}/tls.crt" || ! -f "${temp_dir}/tls.key" ]]; then
     echo "  ERROR: TLS certificate files not generated"
+    _cleanup_temp
     return 1
   fi
 
@@ -491,9 +494,11 @@ create_tls_secret() {
       --key="${temp_dir}/tls.key" \
       -n "$namespace"; then
     echo "  * TLS secret $name created successfully"
+    _cleanup_temp
     return 0
   else
     echo "  ERROR: Failed to create TLS secret $name"
+    _cleanup_temp
     return 1
   fi
 }
