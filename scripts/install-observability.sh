@@ -114,7 +114,8 @@ echo "1️⃣ Enabling user-workload-monitoring..."
 
 if kubectl get configmap cluster-monitoring-config -n openshift-monitoring &>/dev/null; then
     CURRENT_CONFIG=$(kubectl get configmap cluster-monitoring-config -n openshift-monitoring -o jsonpath='{.data.config\.yaml}' 2>/dev/null || echo "")
-    if echo "$CURRENT_CONFIG" | grep -q "enableUserWorkload: true"; then
+    # Use grep -v to exclude comment lines, then check for the actual setting
+    if echo "$CURRENT_CONFIG" | grep -v '^\s*#' | grep -q "enableUserWorkload: true"; then
         echo "   ✅ user-workload-monitoring already enabled"
     else
         echo "   Patching cluster-monitoring-config to enable user-workload-monitoring..."
@@ -123,7 +124,7 @@ if kubectl get configmap cluster-monitoring-config -n openshift-monitoring &>/de
             # ConfigMap exists but has no config.yaml data
             kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
                 --type merge -p '{"data":{"config.yaml":"enableUserWorkload: true\n"}}'
-        elif echo "$CURRENT_CONFIG" | grep -q "enableUserWorkload:"; then
+        elif echo "$CURRENT_CONFIG" | grep -v '^\s*#' | grep -q "enableUserWorkload:"; then
             # ConfigMap has enableUserWorkload set to something other than true (e.g., false)
             # Replace the existing value to avoid duplicate YAML keys
             NEW_CONFIG=$(echo "$CURRENT_CONFIG" | sed 's/enableUserWorkload:.*/enableUserWorkload: true/')

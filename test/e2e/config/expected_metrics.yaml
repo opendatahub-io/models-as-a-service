@@ -39,6 +39,8 @@ resources:
 
 # Metrics exposed by Limitador (rate limiting service)
 # These metrics are enriched with user/tier/model labels via TelemetryPolicy
+#
+# Reference: docs/content/advanced-administration/observability.md
 limitador:
   # How to access metrics (for tests)
   access:
@@ -47,62 +49,122 @@ limitador:
     port: 8080
     path: "/metrics"
 
-  metrics:
+  # Token Consumption Metrics (from observability.md "Key Metrics Reference")
+  # These are the primary metrics for billing and usage tracking
+  token_metrics:
     - name: "authorized_hits"
       type: "counter"
-      description: "Total tokens consumed (from usage.total_tokens in LLM response)"
+      description: "Total tokens consumed (from usage.total_tokens)"
       labels:
         required:
           - "user"
           - "tier"
           - "model"
-        optional: []
-      # Example query: sum by (user) (authorized_hits)
 
     - name: "authorized_calls"
       type: "counter"
-      description: "Total number of requests that were authorized/allowed"
+      description: "Total requests allowed"
       labels:
         required:
           - "user"
           - "tier"
           - "model"
-        optional: []
-      # Example query: sum by (tier) (rate(authorized_calls[5m]))
 
     - name: "limited_calls"
       type: "counter"
-      description: "Total number of requests that were rate-limited (HTTP 429)"
+      description: "Total requests rate-limited"
       labels:
         required:
           - "user"
           - "tier"
           - "model"
-        optional: []
-      # Example query: sum by (tier) (rate(limited_calls[5m]))
 
-# Metrics from Istio Gateway (Envoy proxy)
-# The istio_telemetry resource adds 'user' label from X-MaaS-Username header
-istio_gateway:
-  # How to access metrics
-  access:
-    # These are scraped by Prometheus via ServiceMonitor
-    # Direct access requires port-forwarding to envoy stats endpoint
-    method: "prometheus_query"
-    # Or direct: service istio-gateway in openshift-ingress, port 15090, path /stats/prometheus
+  # Rate Limiting Metrics (from observability.md "Limitador Metrics")
+  ratelimit_metrics:
+    - name: "limitador_ratelimit_requests_total"
+      type: "counter"
+      description: "Total number of rate limit requests"
 
-  metrics:
-    - name: "istio_request_duration_milliseconds_bucket"
+    - name: "limitador_ratelimit_allowed_total"
+      type: "counter"
+      description: "Number of requests allowed"
+
+    - name: "limitador_ratelimit_denied_total"
+      type: "counter"
+      description: "Number of requests denied"
+
+    - name: "limitador_ratelimit_errors_total"
+      type: "counter"
+      description: "Number of rate limiting errors"
+
+  # Performance Metrics (from observability.md)
+  performance_metrics:
+    - name: "limitador_ratelimit_duration_seconds"
       type: "histogram"
-      description: "Request duration histogram with user label for per-user latency tracking"
-      labels:
-        required:
-          - "user"  # Added by istio-telemetry.yaml from X-MaaS-Username header
-        optional:
-          - "destination_service_name"
-          - "response_code"
-          - "le"  # histogram bucket boundary
-      # Example query: histogram_quantile(0.99, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!=""}[5m])))
+      description: "Duration of rate limit checks"
+
+    - name: "limitador_ratelimit_active_connections"
+      type: "gauge"
+      description: "Number of active connections"
+
+    - name: "limitador_ratelimit_cache_hits_total"
+      type: "counter"
+      description: "Cache hit rate"
+
+    - name: "limitador_ratelimit_cache_misses_total"
+      type: "counter"
+      description: "Cache miss rate"
+
+  # Tier-Based Metrics (from observability.md)
+  tier_metrics:
+    - name: "limitador_ratelimit_tier_requests_total"
+      type: "counter"
+      description: "Requests per tier"
+
+    - name: "limitador_ratelimit_tier_allowed_total"
+      type: "counter"
+      description: "Allowed requests per tier"
+
+    - name: "limitador_ratelimit_tier_denied_total"
+      type: "counter"
+      description: "Denied requests per tier"
+
+  # Health Metrics
+  health_metrics:
+    - name: "limitador_up"
+      type: "gauge"
+      description: "Limitador is running"
+
+# Latency Metrics (from observability.md "Key Metrics Reference")
+# Reference: docs/content/advanced-administration/observability.md
+latency_metrics:
+  # Istio Gateway metrics
+  istio_gateway:
+    access:
+      method: "prometheus_query"
+      # Direct: service istio-gateway in openshift-ingress, port 15090, path /stats/prometheus
+
+    metrics:
+      - name: "istio_request_duration_milliseconds_bucket"
+        type: "histogram"
+        description: "Gateway-level latency histogram"
+        labels:
+          required:
+            - "destination_service_name"
+            - "user"  # Added by istio-telemetry.yaml from X-MaaS-Username header
+          optional:
+            - "response_code"
+            - "le"  # histogram bucket boundary
+
+  # vLLM Model metrics
+  vllm:
+    metrics:
+      - name: "vllm:e2e_request_latency_seconds"
+        type: "histogram"
+        description: "Model inference latency"
+        labels:
+          required:
+            - "model_name"
 
 # Labels injected by TelemetryPolicy (for documentation)
 # These are the labels that TelemetryPolicy extracts and adds to Limitador metrics
