@@ -728,6 +728,15 @@ install_primary_operator() {
 apply_custom_resources() {
   log_info "Applying custom resources..."
 
+  # Wait for CRDs to be established - this is critical!
+  # The operator creates CRDs when its CSV becomes active, but there can be a delay.
+  # Both CRDs are installed together, so waiting for DataScienceCluster is sufficient.
+  log_info "Waiting for operator CRDs to be established..."
+  wait_for_crd "datascienceclusters.datasciencecluster.opendatahub.io" 180 || {
+    log_error "DataScienceCluster CRD not available - operator may not have installed correctly"
+    return 1
+  }
+
   # Wait for webhook deployment to be ready before applying CRs
   # This prevents "service not found" errors during conversion webhook calls
   log_info "Waiting for operator webhook to be ready..."

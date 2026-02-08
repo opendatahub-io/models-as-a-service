@@ -83,8 +83,15 @@ INSECURE_HTTP=${INSECURE_HTTP:-false}
 OPERATOR_TYPE=${OPERATOR_TYPE:-odh}
 
 # Image configuration (for CI/CD pipelines)
-# OPERATOR_CATALOG: if set, deploy.sh creates a custom CatalogSource; if empty, uses default catalog
-OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
+# OPERATOR_CATALOG: For ODH, defaults to snapshot catalog (required for v2 API / MaaS support)
+#                   For RHOAI, defaults to empty (uses redhat-operators)
+if [[ -z "${OPERATOR_CATALOG:-}" ]]; then
+    if [[ "$OPERATOR_TYPE" == "odh" ]]; then
+        # ODH requires v3+ for DataScienceCluster v2 API (MaaS support)
+        # community-operators only has v2.x which doesn't have v2 API
+        OPERATOR_CATALOG="quay.io/opendatahub/opendatahub-operator-catalog:latest"
+    fi
+fi
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}  # Optional: uses operator default if not set
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}  # Optional: uses catalog default if not set
 
@@ -132,11 +139,11 @@ check_prerequisites() {
 deploy_maas_platform() {
     echo "Deploying MaaS platform on OpenShift..."
     echo "Using operator type: ${OPERATOR_TYPE}"
-    echo "Using operator catalog: ${OPERATOR_CATALOG}"
-    if [[ -n "${MAAS_API_IMAGE}" ]]; then
+    echo "Using operator catalog: ${OPERATOR_CATALOG:-"(default)"}"
+    if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
         echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
     fi
-    if [[ -n "${OPERATOR_IMAGE}" ]]; then
+    if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         echo "Using custom operator image: ${OPERATOR_IMAGE}"
     fi
 
@@ -169,13 +176,22 @@ deploy_maas_platform() {
     fi
     
     # Wait for Authorino to be ready and auth service cluster to be healthy
-    # Using 300s timeout to fit within Prow's 15m job limit
-    # Namespace is derived from OPERATOR_TYPE (odh→kuadrant-system, rhoai→rh-connectivity-link)
-    local authorino_ns
-    authorino_ns="$(get_authorino_namespace)"
-    echo "Waiting for Authorino and auth service to be ready (namespace: ${authorino_ns})..."
-    if ! wait_authorino_ready "$authorino_ns" 300; then
-        echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+    # TODO(https://issues.redhat.com/browse/RHOAIENG-48760): Remove SKIP_AUTH_CHECK
+    # once the operator creates the gateway→Authorino TLS EnvoyFilter at Gateway/AuthPolicy creation
+    # time, not at first LLMInferenceService creation. Currently there's a chicken-egg problem where
+    # auth checks fail before any model is deployed because the TLS config doesn't exist yet.
+    if [[ "${SKIP_AUTH_CHECK:-true}" == "true" ]]; then
+        echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"
+        echo "   This is a temporary workaround for the gateway→Authorino TLS chicken-egg problem"
+    else
+        # Using 300s timeout to fit within Prow's 15m job limit
+        # Namespace is derived from OPERATOR_TYPE (odh→kuadrant-system, rhoai→rh-connectivity-link)
+        local authorino_ns
+        authorino_ns="$(get_authorino_namespace)"
+        echo "Waiting for Authorino and auth service to be ready (namespace: ${authorino_ns})..."
+        if ! wait_authorino_ready "$authorino_ns" 300; then
+            echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+        fi
     fi
     
     echo "✅ MaaS platform deployment completed"
