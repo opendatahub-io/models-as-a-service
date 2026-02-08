@@ -309,13 +309,16 @@ wait_for_crd() {
   local crd="$1"
   local timeout="${2:-60}"  # timeout in seconds
   local interval=2
-  local elapsed=0
+  local end_time=$((SECONDS + timeout))
 
   echo "⏳ Waiting for CRD ${crd} to appear (timeout: ${timeout}s)…"
-  while [ $elapsed -lt $timeout ]; do
+  while [ $SECONDS -lt $end_time ]; do
     if kubectl get crd "$crd" &>/dev/null; then
       echo "✅ CRD ${crd} detected, waiting for it to become Established..."
-      if kubectl wait --for=condition=Established --timeout="${timeout}s" "crd/$crd" 2>/dev/null; then
+      # Pass remaining time, not full timeout
+      local remaining_time=$((end_time - SECONDS))
+      [ $remaining_time -lt 1 ] && remaining_time=1
+      if kubectl wait --for=condition=Established --timeout="${remaining_time}s" "crd/$crd" 2>/dev/null; then
         return 0
       else
         echo "❌ CRD ${crd} failed to become Established" >&2
@@ -323,7 +326,6 @@ wait_for_crd() {
       fi
     fi
     sleep $interval
-    elapsed=$((elapsed + interval))
   done
 
   echo "❌ Timed out after ${timeout}s waiting for CRD $crd to appear." >&2
@@ -396,6 +398,7 @@ wait_for_csv_with_min_version() {
       echo "✅ Found CSV: ${csv_name} (version: ${installed_version} >= ${min_version})"
       # Pass remaining time, not full timeout
       local remaining_time=$((end_time - SECONDS))
+      [ $remaining_time -lt 1 ] && remaining_time=1
       wait_for_csv "$csv_name" "$namespace" "$remaining_time"
       return $?
     fi
@@ -423,12 +426,13 @@ wait_for_csv() {
   local namespace="${2:-kuadrant-system}"
   local timeout="${3:-180}"  # timeout in seconds
   local interval=5
-  local elapsed=0
-  local last_status_print=0
+  local end_time=$((SECONDS + timeout))
+  local last_status_print=$SECONDS
 
   echo "⏳ Waiting for CSV ${csv_name} to succeed (timeout: ${timeout}s)..."
-  while [ $elapsed -lt $timeout ]; do
+  while [ $SECONDS -lt $end_time ]; do
     local phase=$(kubectl get csv -n "$namespace" "$csv_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    local elapsed=$((SECONDS - (end_time - timeout)))
 
     case "$phase" in
       "Succeeded")
@@ -441,15 +445,14 @@ wait_for_csv() {
         return 1
         ;;
       *)
-        if [ $((elapsed - last_status_print)) -ge 30 ]; then
+        if [ $((SECONDS - last_status_print)) -ge 30 ]; then
           echo "   CSV ${csv_name} status: ${phase} (${elapsed}s elapsed)"
-          last_status_print=$elapsed
+          last_status_print=$SECONDS
         fi
         ;;
     esac
 
     sleep $interval
-    elapsed=$((elapsed + interval))
   done
 
   echo "❌ Timed out after ${timeout}s waiting for CSV ${csv_name}" >&2
