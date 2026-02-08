@@ -39,7 +39,7 @@
 #   OPERATOR_CATALOG - Custom operator catalog image (default: latest from main)
 #                      Example: quay.io/opendatahub/opendatahub-operator-catalog:pr-456
 #   OPERATOR_IMAGE - Custom operator image (default: uses catalog default)
-#                    Example: quay.io/opendatahub/opendatahub-operator:pr-456>>>>>>> a4f2ecd (feat: deployment script consolidation and CI/CD integration)
+#                    Example: quay.io/opendatahub/opendatahub-operator:pr-456
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects both deploy.sh (via --disable-tls-backend) and smoke.sh
 # =============================================================================
@@ -83,8 +83,8 @@ INSECURE_HTTP=${INSECURE_HTTP:-false}
 OPERATOR_TYPE=${OPERATOR_TYPE:-odh}
 
 # Image configuration (for CI/CD pipelines)
-# Default to latest from main branch if not specified
-OPERATOR_CATALOG=${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}
+# OPERATOR_CATALOG: if set, deploy.sh creates a custom CatalogSource; if empty, uses default catalog
+OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}  # Optional: uses operator default if not set
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}  # Optional: uses catalog default if not set
 
@@ -144,9 +144,13 @@ deploy_maas_platform() {
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --operator-type "${OPERATOR_TYPE}"
-        --operator-catalog "${OPERATOR_CATALOG}"
         --channel fast
     )
+
+    # Add optional operator catalog if specified (otherwise uses default catalog)
+    if [[ -n "${OPERATOR_CATALOG}" ]]; then
+        deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
+    fi
 
     # Add optional operator image if specified
     if [[ -n "${OPERATOR_IMAGE}" ]]; then
@@ -172,7 +176,6 @@ deploy_maas_platform() {
     echo "Waiting for Authorino and auth service to be ready (namespace: ${authorino_ns})..."
     if ! wait_authorino_ready "$authorino_ns" 300; then
         echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
-    fi>>>>>>> 4c9064a (update operator mapping and move Configs to yamls)
     fi
     
     echo "✅ MaaS platform deployment completed"

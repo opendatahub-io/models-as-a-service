@@ -972,7 +972,15 @@ deploy_usage_policies() {
     return 0
   fi
 
-  if kubectl apply --server-side=true -f <(kustomize build "$policies_dir") 2>&1 | while read -r line; do log_debug "$line"; done; then
+  # Capture kubectl output and exit code separately (pipe to while obscures exit status)
+  local kubectl_output
+  kubectl_output=$(kustomize build "$policies_dir" | kubectl apply --server-side=true -f - 2>&1) || true
+  local kubectl_exit=${PIPESTATUS[1]}
+
+  # Log all output lines
+  while read -r line; do log_debug "$line"; done <<< "$kubectl_output"
+
+  if [[ $kubectl_exit -eq 0 ]]; then
     log_info "Usage policies deployed successfully"
   else
     log_warn "Failed to deploy usage policies (non-fatal, rate limiting may not work)"

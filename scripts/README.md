@@ -9,11 +9,11 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 
 **Usage:**
 ```bash
-# Deploy using RHOAI operator (default)
+# Deploy using ODH operator (default)
 ./scripts/deploy.sh
 
-# Deploy using ODH operator
-./scripts/deploy.sh --operator-type odh
+# Deploy using RHOAI operator
+./scripts/deploy.sh --operator-type rhoai
 
 # Deploy using kustomize
 ./scripts/deploy.sh --deployment-mode kustomize
@@ -157,7 +157,7 @@ Installs individual dependencies (Kuadrant, ODH, etc.).
 
 ### Initial Deployment (Operator Mode - Recommended)
 ```bash
-# 1. Deploy the platform using RHOAI operator
+# 1. Deploy the platform using ODH operator (default)
 ./scripts/deploy.sh
 
 # 2. Validate the deployment
