@@ -28,6 +28,9 @@
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
+#   OPERATOR_TYPE   - Operator to deploy: "odh" or "rhoai" (default: odh)
+#                     odh   → uses Kuadrant (upstream), Authorino in kuadrant-system
+#                     rhoai → uses RHCL (downstream), Authorino in rh-connectivity-link
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
@@ -73,11 +76,26 @@ SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
+# Operator configuration
+# OPERATOR_TYPE determines which operator and policy engine to use:
+#   odh   → Kuadrant (upstream) → kuadrant-system
+#   rhoai → RHCL (downstream)   → rh-connectivity-link
+OPERATOR_TYPE=${OPERATOR_TYPE:-odh}
+
 # Image configuration (for CI/CD pipelines)
 # Default to latest from main branch if not specified
 OPERATOR_CATALOG=${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}  # Optional: uses operator default if not set
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}  # Optional: uses catalog default if not set
+
+# Get Authorino namespace based on operator type
+# This must match the policy engine mapping in deploy.sh
+get_authorino_namespace() {
+    case "${OPERATOR_TYPE}" in
+        rhoai) echo "rh-connectivity-link" ;;
+        *)     echo "kuadrant-system" ;;
+    esac
+}
 
 print_header() {
     echo ""
@@ -113,6 +131,7 @@ check_prerequisites() {
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform on OpenShift..."
+    echo "Using operator type: ${OPERATOR_TYPE}"
     echo "Using operator catalog: ${OPERATOR_CATALOG}"
     if [[ -n "${MAAS_API_IMAGE}" ]]; then
         echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
@@ -124,7 +143,7 @@ deploy_maas_platform() {
     # Build deploy.sh command with optional parameters
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
-        --operator-type odh
+        --operator-type "${OPERATOR_TYPE}"
         --operator-catalog "${OPERATOR_CATALOG}"
         --channel fast
     )
@@ -147,8 +166,11 @@ deploy_maas_platform() {
     
     # Wait for Authorino to be ready and auth service cluster to be healthy
     # Using 300s timeout to fit within Prow's 15m job limit
-    echo "Waiting for Authorino and auth service to be ready..."
-    if ! wait_authorino_ready 300; then
+    # Namespace is derived from OPERATOR_TYPE (odh→kuadrant-system, rhoai→rh-connectivity-link)
+    local authorino_ns
+    authorino_ns="$(get_authorino_namespace)"
+    echo "Waiting for Authorino and auth service to be ready (namespace: ${authorino_ns})..."
+    if ! wait_authorino_ready "$authorino_ns" 300; then
         echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
     fi>>>>>>> 4c9064a (update operator mapping and move Configs to yamls)
     fi

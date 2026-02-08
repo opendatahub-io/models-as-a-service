@@ -1071,7 +1071,7 @@ wait_datasciencecluster_ready() {
   return 1
 }
 
-# wait_authorino_ready [timeout]
+# wait_authorino_ready <namespace> [timeout]
 #   Waits for Authorino to be ready and accepting requests.
 #   Note: Request are required because authorino will report ready status but still give 500 errors.
 #   
@@ -1081,30 +1081,24 @@ wait_datasciencecluster_ready() {
 #   3. Auth requests are actually succeeding (not erroring)
 #
 # Arguments:
-#   timeout - Timeout in seconds (default: 120)
+#   namespace - Authorino namespace (required)
+#               "kuadrant-system" for Kuadrant (upstream/ODH)
+#               "rh-connectivity-link" for RHCL (downstream/RHOAI)
+#   timeout   - Timeout in seconds (default: 120)
 #
 # Returns:
 #   0 on success, 1 on failure
 wait_authorino_ready() {
-  local timeout=${1:-120}
+  local authorino_namespace="${1:?ERROR: namespace is required (kuadrant-system or rh-connectivity-link)}"
+  local timeout=${2:-120}
   local interval=5
   local elapsed=0
 
   echo "* Waiting for Authorino to be ready (timeout: ${timeout}s)..."
+  echo "  - Checking Authorino in namespace: $authorino_namespace"
 
-  # Detect Authorino namespace based on which namespace has the Authorino CR
-  # RHCL uses rh-connectivity-link, upstream Kuadrant uses kuadrant-system
-  local authorino_namespace=""
-  for ns in rh-connectivity-link kuadrant-system; do
-    if kubectl get authorino -n "$ns" &>/dev/null; then
-      authorino_namespace="$ns"
-      echo "  - Found Authorino in namespace: $authorino_namespace"
-      break
-    fi
-  done
-
-  if [[ -z "$authorino_namespace" ]]; then
-    echo "  ERROR: Could not find Authorino CR in expected namespaces (rh-connectivity-link, kuadrant-system)"
+  if ! kubectl get authorino -n "$authorino_namespace" &>/dev/null; then
+    echo "  ERROR: No Authorino CR found in namespace: $authorino_namespace"
     return 1
   fi
 
