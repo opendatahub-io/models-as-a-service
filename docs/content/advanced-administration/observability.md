@@ -16,10 +16,34 @@ As part of Dev Preview, MaaS Platform includes a basic observability stack that 
 
 The observability stack consists of:
 
-- **Limitador**: Rate limiting service that exposes metrics
+- **Limitador**: Rate limiting service that exposes usage and rate-limit metrics (with labels from TelemetryPolicy)
+- **Istio Telemetry**: Adds `tier` to gateway latency metrics for per-tier latency (P50/P95/P99)
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
 - **ServiceMonitors**: Deployed to configure Prometheus metric scraping
 - **Visualization**: Grafana dashboards (see [Grafana documentation](https://grafana.com/docs/grafana/latest/))
+
+## Installation
+
+The observability stack is defined in `deployment/base/observability/`. It includes:
+
+| Resource | Purpose |
+|----------|---------|
+| **ServiceMonitor** (`servicemonitor.yaml`) | Configures Prometheus to scrape Limitador `/metrics` in `kuadrant-system`. |
+| **TelemetryPolicy** (`telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics (authorized_hits, authorized_calls, limited_calls). |
+| **Istio Telemetry** (`istio-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
+
+**Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Tier` is injected):
+
+    kustomize build deployment/base/observability | kubectl apply -f -
+
+When using the full deployment script, this is applied automatically:
+
+    ./scripts/deploy-openshift.sh
+
+!!! note "Prerequisites"
+    Gateway, AuthPolicy (gateway-auth-policy), and tier lookup must be deployed first. The AuthPolicy injects `X-MaaS-Tier`, which Istio Telemetry reads to label latency by tier. Without it, the `tier` label on gateway latency will be empty.
+
+**Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/components/observability/monitors/` if your deployment includes that component.
 
 ## Metrics Collection
 
@@ -46,6 +70,18 @@ Limitador exposes several key metrics that are collected through a ServiceMonito
 - `limitador_ratelimit_tier_requests_total`: Requests per tier
 - `limitador_ratelimit_tier_allowed_total`: Allowed requests per tier
 - `limitador_ratelimit_tier_denied_total`: Denied requests per tier
+
+#### MaaS usage metrics (Limitador + TelemetryPolicy)
+
+When Kuadrant TelemetryPolicy and TokenRateLimitPolicy are applied, Limitador exposes these metrics with `user`, `tier`, and `model` labels (from the gateway auth and response body). These are the primary metrics for usage dashboards and chargeback:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `authorized_hits` | Counter | `user`, `tier`, `model` | Total tokens consumed per request (from `usage.total_tokens`; input + output combined) |
+| `authorized_calls` | Counter | `user`, `tier`, `model` | Requests allowed (not rate-limited) |
+| `limited_calls` | Counter | `user`, `tier`, `model` | Requests denied due to token or rate limits |
+
+Gateway latency is labeled by **tier only** via Istio Telemetry (see [Per-Tier Latency Tracking](#per-tier-latency-tracking)); per-user latency is not exposed on the gateway histogram to keep cardinality bounded.
 
 ### ServiceMonitor Configuration
 
@@ -188,34 +224,35 @@ To import into Grafana:
 
 ### Token and Request Metrics
 
-| Metric | Type | Description | Use Case |
-|--------|------|-------------|----------|
-| `authorized_hits` | Counter | Total tokens consumed (extracted from `usage.total_tokens` in LLM responses) | Billing, cost tracking |
-| `authorized_calls` | Counter | Total requests that were successfully authorized | Capacity planning, usage patterns |
-| `limited_calls` | Counter | Total requests denied due to rate limiting (HTTP 429) | Rate limit monitoring |
-
-All metrics include labels: `user`, `tier`, `model`, `limitador_namespace`
+| Metric | Description | Labels |
+|--------|-------------|--------|
+| `authorized_hits` | Total tokens consumed (input + output combined, from `usage.total_tokens` in model responses) | `user`, `tier`, `model` |
+| `authorized_calls` | Total requests allowed | `user`, `tier`, `model` |
+| `limited_calls` | Total requests rate-limited | `user`, `tier`, `model` |
 
 !!! tip "When to use which metric"
     - **Billing/Cost**: Use `authorized_hits` - represents actual token consumption
     - **API Usage**: Use `authorized_calls` - represents number of API calls
     - **Rate Limiting**: Use `limited_calls` - shows quota violations
 
+!!! note "Total tokens only"
+    Token consumption is reported as **total tokens** (prompt + completion) per request. Separate input-token and output-token metrics are not available; the pipeline reads `usage.total_tokens` from the model response. Chargeback and usage tracking per user, per subscription (tier), and per model are supported using this metric.
+
 ### Latency Metrics
 
 | Metric | Description | Labels |
 |--------|-------------|--------|
-| `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name`, `user` |
+| `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name`, `tier` |
 | `vllm:e2e_request_latency_seconds` | Model inference latency | `model_name` |
 
-#### Per-User Latency Tracking
+#### Per-Tier Latency Tracking
 
-The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to gateway latency metrics. This enables tracking request latency per authenticated user.
+The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to gateway latency metrics. This enables tracking request latency per access tier (e.g. free, premium, enterprise). Gateway latency is labeled by **tier only** (not by user) to keep metric cardinality bounded and to align with latency-by-tier requirements (e.g. P50/P95/P99 per tier). Per-user metrics remain available from Limitador (`authorized_hits`, `authorized_calls`, `limited_calls`).
 
 **How it works:**
 
-1. The `gateway-auth-policy` injects the `X-MaaS-Username` header from the authenticated identity
-2. The Istio Telemetry resource extracts this header and adds it as a `user` label to the `REQUEST_DURATION` metric
+1. The `gateway-auth-policy` injects the `X-MaaS-Tier` header from the resolved tier
+2. The Istio Telemetry resource extracts this header and adds it as a `tier` label to the `REQUEST_DURATION` metric
 3. Prometheus scrapes these metrics from the Istio gateway
 
 **Configuration** (`deployment/base/observability/istio-telemetry.yaml`):
@@ -223,7 +260,7 @@ The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to 
     apiVersion: telemetry.istio.io/v1
     kind: Telemetry
     metadata:
-      name: latency-per-user
+      name: latency-per-tier
       namespace: openshift-ingress
     spec:
       selector:
@@ -237,12 +274,12 @@ The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to 
             metric: REQUEST_DURATION
             mode: CLIENT_AND_SERVER
           tagOverrides:
-            user:
+            tier:
               operation: UPSERT
-              value: request.headers["x-maas-username"]
+              value: request.headers["x-maas-tier"]
 
 !!! note "Security"
-    The `X-MaaS-Username` header should be injected server-side by AuthPolicy. Ensure your AuthPolicy injects this header from the authenticated identity (not client input) for accurate metrics attribution.
+    The `X-MaaS-Tier` header should be injected server-side by AuthPolicy. Ensure your AuthPolicy injects this header from the tier lookup (not client input) for accurate metrics attribution.
 
 ### Common Queries
 
@@ -297,11 +334,11 @@ The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to 
     # P50 (median) latency
     histogram_quantile(0.5, sum by (le) (rate(istio_request_duration_milliseconds_bucket[5m])))
 
-    # P99 latency per user (filter out unauthenticated requests)
-    histogram_quantile(0.99, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!="",user!="unknown"}[5m])))
+    # P99 latency per tier
+    histogram_quantile(0.99, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=""}[5m])))
 
-!!! tip "Filtering Unauthenticated Requests"
-    For per-user latency queries, use `user!="",user!="unknown"` to exclude requests that failed authentication (where the `X-MaaS-Username` header was not injected or has a default value). Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
+!!! tip "Filtering by tier"
+    For per-tier latency queries, use `tier!=""` to exclude requests where the `X-MaaS-Tier` header was not injected. Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
 
 ## Maintenance
 
@@ -333,9 +370,20 @@ Some dashboard features require upstream changes and are currently blocked:
 !!! note "Total Tokens vs Token Breakdown"
     Total token consumption per user **is available** via `authorized_hits{user="..."}`. The blocked feature is specifically the input/output token breakdown (prompt vs generation tokens) per user, which requires vLLM to accept user context in requests.
 
-### Available Per-User Metrics
+### Available Per-User and Per-Tier Metrics
 
 | Feature | Metric | Label |
 |---------|--------|-------|
-| **Latency per user** | `istio_request_duration_milliseconds_bucket` | `user` |
+| **Latency per tier** | `istio_request_duration_milliseconds_bucket` | `tier` |
 | **Token consumption per user** | `authorized_hits` | `user` |
+| **Token consumption per tier** | `authorized_hits` | `tier` |
+| **Token consumption per model** | `authorized_hits` | `model` |
+
+### Requirements Alignment
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| **Usage dashboards** (token consumption per user, per subscription/tier, per model) | Met | Grafana dashboard + `authorized_hits` with `user`, `tier`, `model`; Prometheus scrapes Limitador `/metrics`. |
+| **Latency by tier** (P50/P95/P99) | Met | `istio_request_duration_milliseconds_bucket` with `tier` label; tier-only avoids unbounded cardinality. |
+| **Export for chargeback** (CSV/API) | Not provided | No dedicated usage or chargeback API; data is available in Prometheus for custom export or reporting. |
+| **Input/output token split** | Not available | Only total tokens (`authorized_hits`); separate input and output counters would require pipeline or model-server support. |
