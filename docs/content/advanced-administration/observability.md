@@ -185,28 +185,26 @@ Personal usage view for individual developers:
 
 ### Prerequisites
 
-The install script **does not install** dashboard operators. You must pre-install:
-
-- **For Grafana dashboards**: Install the Grafana Operator in `openshift-operators` namespace
-    - Via OperatorHub: OpenShift Console → Operators → OperatorHub → Search "Grafana" → Install
-    - Via CLI: See [Grafana Operator docs](https://grafana.com/docs/grafana-cloud/monitor-infrastructure/kubernetes-monitoring/configuration/configure-infrastructure-manually/openshift/)
-- **For Perses dashboards**: [Cluster Observability Operator](https://docs.openshift.com/container-platform/latest/observability/cluster_observability_operator/cluster-observability-operator-overview.html) in `openshift-operators` namespace
-
-If the required operator is not installed, the script will skip dashboard deployment with a warning and continue with base observability setup.
+- **Grafana** must be installed (for example via your observability team's process, a centralized instance, or the [Grafana Operator](https://grafana.github.io/grafana-operator/docs/installation/)). The dashboard helper does **not** install Grafana; it only deploys MaaS dashboard definitions and **never fails** (warnings only if none or multiple instances are found).
+- Ensure the Grafana instance has label `app=grafana` so MaaS dashboard definitions attach.
+- Configure a **Prometheus or Thanos datasource** in Grafana; the MaaS dashboards use the default Prometheus datasource.
 
 ### Deploying Dashboards
 
-Once the operator is installed, dashboards are deployed by `install-observability.sh`:
+Monitoring is installed by `install-observability.sh`. Dashboards are installed by a **separate helper** that discovers Grafana cluster-wide:
 
-    ./scripts/install-observability.sh --stack grafana
+    ./scripts/install-grafana-dashboards.sh
 
-Or manually:
+**Behavior:** Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning (and, for multiple, lists them) and exits without error. Use flags to target a specific instance:
 
-    # Deploy Grafana instance (requires Grafana Operator pre-installed)
-    kubectl apply -k deployment/components/observability/grafana/
+    ./scripts/install-grafana-dashboards.sh --grafana-namespace maas-api
+    ./scripts/install-grafana-dashboards.sh --grafana-label app=grafana
 
-    # Deploy dashboards
-    kubectl apply -k deployment/components/observability/dashboards/
+To deploy only the dashboard manifests manually (same namespace as your Grafana):
+
+    kustomize build deployment/components/observability/dashboards | \
+      sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
+      kubectl apply -f -
 
 ### Sample Dashboard JSON
 
@@ -348,11 +346,8 @@ The Grafana datasource uses a ServiceAccount token to authenticate with Promethe
 
 **To rotate the token:**
 
-    # Delete the existing datasource
-    kubectl delete grafanadatasource prometheus -n maas-api
-
-    # Re-run the observability installer (creates new token)
-    ./scripts/install-observability.sh --stack grafana
+    # Delete the existing datasource and create a new one (or rotate the token per your Grafana setup).
+    # To re-deploy only MaaS dashboard definitions: ./scripts/install-grafana-dashboards.sh
 
 !!! tip "Production Recommendation"
     For production deployments, consider automating token rotation using a CronJob or external secrets operator to avoid dashboard outages.
