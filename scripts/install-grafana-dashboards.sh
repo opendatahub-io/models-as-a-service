@@ -111,18 +111,31 @@ fi
 
 if [ "$GRAFANA_COUNT" -gt 1 ] 2>/dev/null; then
     echo "⚠️  Multiple Grafana instances found ($GRAFANA_COUNT). Specify which one to use:"
-    echo "$GRAFANA_LIST" | while read -r line; do
-        ns=$(echo "$line" | awk '{print $1}')
-        name=$(echo "$line" | awk '{print $2}')
-        echo "   - namespace: $ns, name: $name"
-    done
+    if [ -n "$GRAFANA_NAMESPACE" ]; then
+        echo "$GRAFANA_LIST" | while read -r line; do
+            name=$(echo "$line" | awk '{print $1}')
+            echo "   - namespace: $GRAFANA_NAMESPACE, name: $name"
+        done
+    else
+        echo "$GRAFANA_LIST" | while read -r line; do
+            ns=$(echo "$line" | awk '{print $1}')
+            name=$(echo "$line" | awk '{print $2}')
+            echo "   - namespace: $ns, name: $name"
+        done
+    fi
     echo "   Use: $0 --grafana-namespace <namespace>   or   --grafana-label <key=value>"
     exit 0
 fi
 
-# Exactly one Grafana: get namespace (first column)
-TARGET_NS=$(echo "$GRAFANA_LIST" | awk '{print $1}')
-GRAFANA_NAME=$(echo "$GRAFANA_LIST" | awk '{print $2}')
+# Exactly one Grafana: resolve target namespace and resource name
+# With -n NS, kubectl output has only one column (name); with -A, output is namespace then name
+if [ -n "$GRAFANA_NAMESPACE" ]; then
+    TARGET_NS="$GRAFANA_NAMESPACE"
+    GRAFANA_NAME=$(echo "$GRAFANA_LIST" | awk '{print $1}')
+else
+    TARGET_NS=$(echo "$GRAFANA_LIST" | awk '{print $1}')
+    GRAFANA_NAME=$(echo "$GRAFANA_LIST" | awk '{print $2}')
+fi
 echo "   ✅ One Grafana instance found: $GRAFANA_NAME in namespace $TARGET_NS"
 
 # ==========================================
