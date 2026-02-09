@@ -380,6 +380,9 @@ deploy_via_operator() {
     configure_tls_backend
   fi
 
+  # Configure audience for non-standard clusters (Hypershift/ROSA)
+  configure_cluster_audience
+
   log_info "Operator deployment completed"
 }
 
@@ -1028,6 +1031,106 @@ patch_operator_csv() {
   ]"
 
   log_info "CSV $csv_name patched with image $operator_image"
+}
+
+#──────────────────────────────────────────────────────────────
+# AUDIENCE CONFIGURATION FOR HYPERSHIFT/ROSA CLUSTERS
+#──────────────────────────────────────────────────────────────
+
+# configure_cluster_audience
+#   Configures the AuthPolicy with the correct OIDC audience for the cluster.
+#   This is required for Hypershift/ROSA clusters which use non-standard audiences.
+#
+#   Background:
+#   - Standard Kubernetes clusters use audience: https://kubernetes.default.svc
+#   - Hypershift/ROSA clusters use custom OIDC providers with different audiences
+#   - Without this patch, JWT validation fails with HTTP 401
+#
+#   This function:
+#   1. Detects the cluster's OIDC audience from a service account token
+#   2. If non-standard, patches the AuthPolicy with the cluster-specific audience
+#   3. Annotates the AuthPolicy to prevent operator from reverting the patch
+configure_cluster_audience() {
+  log_info "Checking cluster OIDC audience..."
+
+  # Get cluster audience using helper from deployment-helpers.sh
+  local cluster_aud
+  cluster_aud=$(get_cluster_audience 2>/dev/null || echo "")
+
+  if [[ -z "$cluster_aud" ]]; then
+    log_warn "Could not determine cluster audience, skipping audience configuration"
+    return 0
+  fi
+
+  log_debug "Detected cluster audience: $cluster_aud"
+
+  # Check if this is a non-standard audience (Hypershift/ROSA)
+  if [[ "$cluster_aud" == "https://kubernetes.default.svc" ]]; then
+    log_info "Standard Kubernetes audience detected, no patching needed"
+    return 0
+  fi
+
+  log_info "Configuring AuthPolicy for non-standard cluster audience..."
+  log_info "  Detected audience: $cluster_aud"
+
+  # Wait for AuthPolicy to be created by the operator
+  local authpolicy_name="maas-api-auth-policy"
+  local wait_timeout=120
+  local elapsed=0
+
+  log_info "  Waiting for AuthPolicy '$authpolicy_name' to be created (timeout: ${wait_timeout}s)..."
+  while [[ $elapsed -lt $wait_timeout ]]; do
+    if kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
+      log_info "  Found AuthPolicy '$authpolicy_name'"
+      break
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+
+  if ! kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
+    log_warn "AuthPolicy '$authpolicy_name' not found after ${wait_timeout}s, skipping audience configuration"
+    log_warn "Authentication may fail on Hypershift/ROSA clusters"
+    return 0
+  fi
+
+  # Step 1: Annotate to prevent operator reconciliation from reverting our patch
+  log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
+  kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+    opendatahub.io/managed="false" --overwrite 2>/dev/null || true
+
+  # Step 2: Patch AuthPolicy with cluster-specific audience
+  log_info "  Patching AuthPolicy with cluster audience..."
+  if kubectl patch authpolicy "$authpolicy_name" -n "$NAMESPACE" --type=merge --patch-file <(cat <<EOF
+spec:
+  rules:
+    authentication:
+      openshift-identities:
+        kubernetesTokenReview:
+          audiences:
+            - $cluster_aud
+            - maas-default-gateway-sa
+EOF
+  ); then
+    log_info "  AuthPolicy '$authpolicy_name' patched with custom audience"
+  else
+    log_warn "  Failed to patch AuthPolicy with custom audience"
+    log_warn "  Authentication may fail on this cluster"
+    return 0
+  fi
+
+  # Step 3: Verify the patch persisted (operator might revert it)
+  sleep 3
+  local actual_aud
+  actual_aud=$(kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.rules.authentication.openshift-identities.kubernetesTokenReview.audiences[0]}' 2>/dev/null || echo "")
+
+  if [[ "$actual_aud" == "$cluster_aud" ]]; then
+    log_info "  Verified: Custom audience configuration persisted"
+  else
+    log_warn "  WARNING: AuthPolicy audience may have been reverted to: ${actual_aud}"
+    log_warn "  This may cause authentication failures on Hypershift/ROSA clusters"
+  fi
 }
 
 #──────────────────────────────────────────────────────────────
