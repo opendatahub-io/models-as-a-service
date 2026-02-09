@@ -3,7 +3,7 @@ package token
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha1" //nolint:gosec // SHA1 used for non-cryptographic hashing of usernames, not for security
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -295,9 +295,9 @@ func (m *Manager) sanitizeServiceAccountName(username string) (string, error) {
 		return "", fmt.Errorf("invalid username %q", username)
 	}
 
-	// Append a stable short hash to reduce collisions
-	sum := sha1.Sum([]byte(username)) //nolint:gosec // SHA1 used for non-cryptographic hashing, not for security
-	suffix := hex.EncodeToString(sum[:])[:8]
+	// Append a stable hash suffix to reduce collision risk across users
+	sum := sha256.Sum256([]byte(username))
+	suffix := hex.EncodeToString(sum[:])[:12] // 48-bit truncation
 
 	// Ensure total length <= 63 including hyphen and suffix
 	const maxLen = 63
