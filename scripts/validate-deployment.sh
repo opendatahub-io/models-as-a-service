@@ -50,6 +50,10 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  -n, --namespace NS        Namespace where MaaS API is deployed"
     echo "                            Default: opendatahub (or MAAS_API_NAMESPACE env var)"
     echo ""
+    echo "Environment (for non-admin users):"
+    echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
+    echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
+    echo ""
     echo "Examples:"
     echo "  # Basic validation"
     echo "  $0                                              # Validate using first available model (default chat format)"
@@ -342,14 +346,30 @@ else
 fi
 
 print_check "Gateway hostname"
-# Get cluster domain and construct the MaaS gateway hostname
-CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
-if [ -n "$CLUSTER_DOMAIN" ]; then
-    HOST="https://maas.${CLUSTER_DOMAIN}"
-    print_success "Gateway hostname: $HOST"
+# Resolve MaaS gateway host: prefer env override, then Gateway listener (no cluster-admin), then cluster ingress config
+if [ -n "${MAAS_GATEWAY_HOST:-}" ]; then
+    # Normalize to https://host (strip existing protocol if present)
+    HOST="${MAAS_GATEWAY_HOST#*://}"
+    HOST="https://${HOST}"
+    print_success "Gateway hostname (from MAAS_GATEWAY_HOST): $HOST"
 else
-    print_fail "Could not determine cluster domain" "Cannot test API endpoints" "Check: kubectl get ingresses.config.openshift.io cluster"
-    HOST=""
+    GATEWAY_HOSTNAME=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[?(@.protocol=="HTTPS")].hostname}' 2>/dev/null | awk '{print $1}')
+    if [ -z "$GATEWAY_HOSTNAME" ]; then
+        GATEWAY_HOSTNAME=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[0].hostname}' 2>/dev/null)
+    fi
+    if [ -n "$GATEWAY_HOSTNAME" ]; then
+        HOST="https://${GATEWAY_HOSTNAME}"
+        print_success "Gateway hostname: $HOST"
+    else
+        CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
+        if [ -n "$CLUSTER_DOMAIN" ]; then
+            HOST="https://maas.${CLUSTER_DOMAIN}"
+            print_success "Gateway hostname: $HOST"
+        else
+            print_fail "Could not determine cluster domain or gateway hostname" "Cannot test API endpoints" "As non-admin, set MAAS_GATEWAY_HOST (e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com) or ask an admin for the cluster domain"
+            HOST=""
+        fi
+    fi
 fi
 
 # ==========================================

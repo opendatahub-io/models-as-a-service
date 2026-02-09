@@ -260,11 +260,18 @@ All scripts require:
 Scripts will automatically detect:
 - `CLUSTER_DOMAIN`: OpenShift cluster domain from `ingresses.config.openshift.io/cluster`
 - OpenShift authentication token via `oc whoami -t`
+- Gateway hostname from the Gateway resource (no cluster-admin needed for `validate-deployment.sh`)
 
 You can override these by exporting before running:
 ```bash
 export CLUSTER_DOMAIN="apps.my-cluster.example.com"
 ./scripts/deploy.sh
+```
+
+**Non-admin users:** If you cannot read `ingresses.config.openshift.io/cluster`, the validation script will try the Gateway's listener hostname. If that is not available, set the gateway URL explicitly:
+```bash
+export MAAS_GATEWAY_HOST="https://maas.apps.your-cluster.example.com"
+./scripts/validate-deployment.sh
 ```
 
 ---
