@@ -849,9 +849,15 @@ setup_gateway_api() {
 #   ModelsAsService expects a gateway named "maas-default-gateway" in namespace "openshift-ingress".
 #
 #   This function:
-#   1. Creates a self-signed TLS certificate for the Gateway
-#   2. Creates the Gateway resource with HTTPS listener
-#   3. Creates an OpenShift Route to expose the Gateway via the cluster's apps domain
+#   1. Detects or uses the router's TLS certificate
+#   2. Creates the Gateway resource with both HTTP and HTTPS listeners
+#   3. Uses the kustomize manifest from deployment/base/networking/maas/
+#
+#   The Gateway includes:
+#   - HTTP listener (port 80) - required for model discovery URLs
+#   - HTTPS listener (port 443) - for secure API access
+#   - Annotations for operator management and TLS bootstrap
+#   - Labels for app identification
 setup_maas_gateway() {
   log_info "Setting up ModelsAsService gateway..."
 
@@ -859,50 +865,83 @@ setup_maas_gateway() {
   local cluster_domain
   cluster_domain=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
   if [[ -z "$cluster_domain" ]]; then
-    log_warn "Could not determine cluster domain, Gateway hostname will not be set"
-  fi
-  local gateway_hostname="maas.${cluster_domain}"
-
-  # Create a self-signed certificate for the Gateway
-  # In production, this would be replaced with a proper certificate
-  log_info "Creating TLS certificate for MaaS gateway..."
-  if ! create_tls_secret "maas-gateway-tls" "openshift-ingress" "${gateway_hostname:-maas-gateway}"; then
-    log_error "Failed to create TLS secret for gateway"
+    log_error "Could not determine cluster domain - required for Gateway hostname"
     return 1
   fi
-
-  # Create the Gateway resource required by ModelsAsService
-  # Allow routes from the deployment namespace (where HTTPRoute will be created)
-  log_info "Creating maas-default-gateway resource (allowing routes from all namespaces)..."
   
-  # Build hostname config if cluster domain is available
-  local hostname_config=""
-  if [[ -n "$cluster_domain" ]]; then
-    hostname_config="hostname: ${gateway_hostname}"
+  export CLUSTER_DOMAIN="$cluster_domain"
+  log_info "  Cluster domain: ${CLUSTER_DOMAIN}"
+
+  # Detect TLS certificate if not explicitly set (matches upstream deploy-rhoai-stable.sh logic)
+  local cert_name="${CERT_NAME:-}"
+  if [[ -z "$cert_name" ]]; then
+    log_info "  Detecting TLS certificate secret..."
+
+    # Primary: Get certificate from IngressController (most reliable source of truth)
+    cert_name=$(kubectl get ingresscontroller default -n openshift-ingress-operator \
+      -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null || echo "")
+    if [[ -n "$cert_name" ]] && kubectl get secret -n openshift-ingress "$cert_name" &>/dev/null; then
+      log_info "  * Found certificate from IngressController: ${cert_name}"
+    else
+      [[ -n "$cert_name" ]] && log_debug "  * IngressController cert '${cert_name}' not found, trying alternatives..."
+      cert_name=""
+    fi
+
+    # Fallback 1: Get certificate from router deployment
+    if [[ -z "$cert_name" ]]; then
+      cert_name=$(kubectl get deployment router-default -n openshift-ingress \
+        -o jsonpath='{.spec.template.spec.volumes[?(@.name=="default-certificate")].secret.secretName}' 2>/dev/null || echo "")
+      if [[ -n "$cert_name" ]] && kubectl get secret -n openshift-ingress "$cert_name" &>/dev/null; then
+        log_info "  * Found certificate from router deployment: ${cert_name}"
+      else
+        cert_name=""
+      fi
+    fi
+
+    # Fallback 2: Check known certificate secret names
+    if [[ -z "$cert_name" ]]; then
+      local cert_candidates=("default-gateway-cert" "router-certs-default")
+      for cert in "${cert_candidates[@]}"; do
+        if kubectl get secret -n openshift-ingress "$cert" &>/dev/null; then
+          cert_name="$cert"
+          log_info "  * Found TLS certificate secret: ${cert}"
+          break
+        fi
+      done
+    fi
+
+    # Warning if no certificate found
+    if [[ -z "$cert_name" ]]; then
+      log_warn "  No TLS certificate found. Creating self-signed certificate..."
+      local gateway_hostname="maas.${cluster_domain}"
+      if create_tls_secret "maas-gateway-tls" "openshift-ingress" "${gateway_hostname}"; then
+        cert_name="maas-gateway-tls"
+        log_info "  * Created self-signed certificate: ${cert_name}"
+      else
+        log_error "Failed to create TLS certificate for gateway"
+        return 1
+      fi
+    fi
   fi
 
-  cat <<EOF | kubectl apply -f -
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: maas-default-gateway
-  namespace: openshift-ingress
-spec:
-  gatewayClassName: openshift-default
-  listeners:
-  - name: https
-    protocol: HTTPS
-    port: 443
-    ${hostname_config}
-    tls:
-      mode: Terminate
-      certificateRefs:
-      - kind: Secret
-        name: maas-gateway-tls
-    allowedRoutes:
-      namespaces:
-        from: All
-EOF
+  export CERT_NAME="$cert_name"
+  log_info "  TLS certificate secret: ${CERT_NAME}"
+
+  # Create the Gateway resource using the kustomize manifest
+  # This includes both HTTP and HTTPS listeners, required annotations and labels
+  log_info "Creating maas-default-gateway resource (allowing routes from all namespaces)..."
+  
+  local maas_networking_dir="${SCRIPT_DIR}/../deployment/base/networking/maas"
+  if [[ -d "$maas_networking_dir" ]]; then
+    # Use local kustomize manifest with envsubst for variable substitution
+    kustomize build "$maas_networking_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME' | kubectl apply --server-side=true -f -
+  else
+    # Fallback: fetch from GitHub (for standalone script usage)
+    log_debug "  Local manifest not found, fetching from GitHub..."
+    kubectl apply --server-side=true \
+      -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/networking/maas?ref=main" | \
+           envsubst '$CLUSTER_DOMAIN $CERT_NAME')
+  fi
 }
 
 #──────────────────────────────────────────────────────────────
