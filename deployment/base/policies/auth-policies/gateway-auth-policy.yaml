@@ -72,7 +72,7 @@ spec:
               selector: auth.identity.userid
           X-MaaS-Tier:
             plain:
-              selector: auth.metadata.matchedTier["tier"]
+              selector: auth.metadata.matchedTier.tier
         filters:
           identity:
             json:
