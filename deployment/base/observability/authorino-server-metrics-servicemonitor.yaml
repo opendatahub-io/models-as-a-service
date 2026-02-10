@@ -1,0 +1,25 @@
+# ServiceMonitor for Authorino /server-metrics endpoint.
+# This scrapes auth evaluation metrics (auth_server_authconfig_total,
+# auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, etc.)
+# that are NOT collected by the Kuadrant-provided authorino-operator-monitor
+# (which only scrapes /metrics for controller-runtime stats).
+#
+# Note: If a Kuadrant update begins scraping /server-metrics natively, this
+# ServiceMonitor should be removed to avoid duplicate metrics.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: authorino-server-metrics
+  namespace: kuadrant-system
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      authorino-resource: authorino
+  endpoints:
+    - port: http
+      path: /server-metrics
+      interval: 30s
+      scrapeTimeout: 10s

@@ -167,14 +167,35 @@ done
 echo ""
 echo "3️⃣ Deploying TelemetryPolicy and ServiceMonitors..."
 
-# Deploy base observability resources (TelemetryPolicy + ServiceMonitors)
+# Deploy base observability resources (TelemetryPolicy + Istio Telemetry)
 # TelemetryPolicy is CRITICAL - it extracts user/tier/model labels for Limitador metrics
 BASE_OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/base/observability"
 if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     kustomize build "$BASE_OBSERVABILITY_DIR" | kubectl apply -f -
-    echo "   ✅ TelemetryPolicy and base ServiceMonitors deployed"
+    echo "   ✅ TelemetryPolicy and Istio Telemetry deployed"
 else
     echo "   ⚠️  Base observability directory not found - TelemetryPolicy may be missing!"
+fi
+
+# Deploy Limitador ServiceMonitor only if Kuadrant's own PodMonitor is NOT present.
+# When Kuadrant CR has spec.observability.enable=true, it creates kuadrant-limitador-monitor
+# which scrapes the same Limitador pod. Deploying both causes duplicate metrics.
+if kubectl get podmonitor kuadrant-limitador-monitor -n kuadrant-system &>/dev/null; then
+    echo "   ℹ️  Kuadrant PodMonitor detected - skipping Limitador ServiceMonitor (no duplicates)"
+else
+    kubectl apply -f "$BASE_OBSERVABILITY_DIR/servicemonitor.yaml"
+    echo "   ✅ Limitador ServiceMonitor deployed (Kuadrant PodMonitor not found)"
+fi
+
+# Deploy Authorino server-metrics ServiceMonitor.
+# The Kuadrant operator's authorino-operator-monitor only scrapes /metrics (controller-runtime).
+# This additional ServiceMonitor scrapes /server-metrics for auth evaluation metrics
+# (auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, etc.)
+if kubectl get service -n kuadrant-system -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
+    kubectl apply -f "$BASE_OBSERVABILITY_DIR/authorino-server-metrics-servicemonitor.yaml"
+    echo "   ✅ Authorino /server-metrics ServiceMonitor deployed"
+else
+    echo "   ⚠️  Authorino service not found - skipping Authorino server-metrics"
 fi
 
 # Deploy Istio Gateway metrics (if gateway exists)
@@ -206,9 +227,9 @@ echo ""
 
 echo "📝 Metrics collection configured:"
 echo "   Limitador: authorized_hits, authorized_calls, limited_calls, limitador_up"
-echo "   Authorino: authorino_authorization_response_duration_seconds"
+echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status"
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
-echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:gpu_cache_usage_perc"
+echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:kv_cache_usage_perc"
 echo ""
 
 echo "💡 To install MaaS Grafana dashboards (discovers Grafana cluster-wide, warn-only):"
