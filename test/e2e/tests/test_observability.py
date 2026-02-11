@@ -16,14 +16,13 @@ Configuration is loaded from: test/e2e/config/expected_metrics.yaml
 
 import json
 import logging
-import os
 import re
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
-import requests
 import yaml
 
 log = logging.getLogger(__name__)
@@ -78,6 +77,53 @@ def _get_resource_condition(kind: str, name: str, namespace: str, condition_type
     if rc == 0 and stdout.strip():
         return stdout.strip()
     return None
+
+
+def _query_prometheus(query: str, namespace: str = "openshift-user-workload-monitoring",
+                      pod: str = "prometheus-user-workload-0",
+                      container: str = "prometheus") -> dict | None:
+    """
+    Query Prometheus via kubectl exec.
+    Returns the JSON response or None if query failed.
+    
+    Args:
+        query: PromQL query string
+        namespace: Prometheus pod namespace
+        pod: Prometheus pod name
+        container: Container name within the pod
+    """
+    # URL-encode the query to avoid shell interpretation of special chars like {}
+    encoded_query = quote(query, safe="")
+    exec_cmd = [
+        "exec", "-n", namespace,
+        pod, "-c", container, "--",
+        "curl", "-s", f"http://localhost:9090/api/v1/query?query={encoded_query}"
+    ]
+    rc, stdout, stderr = _run_kubectl(exec_cmd, timeout=30)
+
+    if rc != 0:
+        log.warning(f"[prometheus] Query failed (ns={namespace}): {stderr}")
+        return None
+
+    try:
+        return json.loads(stdout)
+    except Exception as e:
+        log.warning(f"[prometheus] Failed to parse response: {e}")
+        return None
+
+
+def _query_platform_prometheus(query: str) -> dict | None:
+    """Query the platform Prometheus (openshift-monitoring) for infrastructure metrics.
+    
+    Istio gateway metrics, node metrics, and other platform metrics are scraped
+    by the platform Prometheus, not the user-workload Prometheus.
+    """
+    return _query_prometheus(
+        query,
+        namespace="openshift-monitoring",
+        pod="prometheus-k8s-0",
+        container="prometheus",
+    )
 
 
 # =============================================================================
@@ -156,70 +202,52 @@ class TestObservabilityResources:
 class TestLimitadorConfiguration:
     """Tests for verifying Limitador rate-limiting is properly configured."""
 
-    def test_limitador_has_limits_configured(self, expected_metrics_config):
+    def test_rate_limit_policies_enforced(self, expected_metrics_config):
         """
-        Verify that Limitador has rate limits configured.
+        Verify that rate-limiting policies exist and are enforced.
         
         This is a prerequisite for rate-limiting metrics to be generated.
-        If no limits are configured, authorized_calls/limited_calls metrics won't exist.
+        If no policies are enforced, authorized_calls/limited_calls metrics won't exist.
         """
-        cfg = expected_metrics_config["limitador"]["access"]
-        namespace = cfg["namespace"]
+        # Check for RateLimitPolicy or TokenRateLimitPolicy resources
+        policies_found = []
         
-        # Get Limitador pod
-        pod_cmd = [
-            "get", "pod", "-n", namespace,
-            "-l", "app=limitador",
-            "-o", "jsonpath={.items[0].metadata.name}"
-        ]
-        rc, pod_name, _ = _run_kubectl(pod_cmd)
-        if rc != 0 or not pod_name.strip():
+        for policy_kind in ["ratelimitpolicy", "tokenratelimitpolicy"]:
+            rc, output, _ = _run_kubectl([
+                "get", policy_kind, "-A",
+                "-o", "jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name}: "
+                "{.status.conditions[?(@.type=='Enforced')].status}{'\\n'}{end}"
+            ])
+            if rc == 0 and output.strip():
+                for line in output.strip().split("\n"):
+                    if line.strip():
+                        policies_found.append((policy_kind, line.strip()))
+        
+        if not policies_found:
             pytest.fail(
-                f"FAIL: Could not find Limitador pod in namespace '{namespace}'.\n"
-                f"  Check: kubectl get pods -n {namespace} -l app=limitador"
-            )
-        
-        pod_name = pod_name.strip()
-        
-        # Check /limits endpoint
-        exec_cmd = [
-            "exec", "-n", namespace, pod_name, "--",
-            "curl", "-s", "http://localhost:8080/limits"
-        ]
-        rc, limits_output, stderr = _run_kubectl(exec_cmd, timeout=30)
-        
-        if rc != 0:
-            pytest.fail(f"FAIL: Could not query Limitador limits: {stderr}")
-        
-        # Parse limits - should be a JSON array
-        limits_output = limits_output.strip()
-        
-        if not limits_output or limits_output == "[]" or limits_output == "null":
-            pytest.fail(
-                "FAIL: Limitador has NO rate limits configured!\n"
-                "  This means rate-limiting is not active despite policies being 'Enforced'.\n"
+                "FAIL: No RateLimitPolicy or TokenRateLimitPolicy found on the cluster!\n"
                 "  Rate-limiting metrics (authorized_calls, limited_calls) will NOT be generated.\n"
                 "  Check:\n"
-                "    1. RateLimitPolicy or TokenRateLimitPolicy is deployed\n"
-                "    2. Policy targets the correct Gateway\n"
-                "    3. Kuadrant operator logs: kubectl logs -n kuadrant-system -l control-plane=controller-manager\n"
-                "    4. Limitador logs: kubectl logs -n kuadrant-system -l app=limitador"
+                "    1. RateLimitPolicy is deployed: kubectl get ratelimitpolicy -A\n"
+                "    2. TokenRateLimitPolicy is deployed: kubectl get tokenratelimitpolicy -A\n"
+                "    3. Policies target the correct Gateway"
             )
         
-        try:
-            limits = json.loads(limits_output)
-            if isinstance(limits, list) and len(limits) > 0:
-                print(f"[limitador] Found {len(limits)} rate limit(s) configured")
-                log.info(f"[limitador] Limits: {limits}")
-            else:
-                pytest.fail(
-                    f"FAIL: Limitador limits response is empty or invalid: {limits_output[:200]}"
-                )
-        except json.JSONDecodeError:
-            # Not JSON - might be empty or error
+        # Verify at least one is enforced
+        enforced = [p for p in policies_found if "True" in p[1]]
+        if not enforced:
             pytest.fail(
-                f"FAIL: Limitador /limits returned invalid response: {limits_output[:200]}"
+                f"FAIL: Rate limit policies exist but none are enforced!\n"
+                f"  Found policies: {policies_found}\n"
+                f"  Check:\n"
+                f"    1. Gateway is ready\n"
+                f"    2. Kuadrant operator is reconciling\n"
+                f"    3. kubectl describe ratelimitpolicy -A"
             )
+        
+        print(f"[limitador] Found {len(enforced)} enforced rate limit policy(ies)")
+        for kind, info in enforced:
+            print(f"  {kind}: {info}")
 
 
 # =============================================================================
@@ -605,46 +633,44 @@ class TestMetricsAfterRequest:
                 f"    2. TokenRateLimitPolicy enforced: kubectl get tokenratelimitpolicy -A"
             )
 
-    def test_token_metrics_have_model_label(self, limitador_metrics_after_request, expected_metrics_config, make_test_request):
+    def test_authorized_hits_has_model_label(self, limitador_metrics_after_request, expected_metrics_config, make_test_request):
         """
-        Verify token consumption metrics have 'model' label.
+        Verify authorized_hits (token consumption) metric has 'model' label.
         Reference: observability.md Key Metrics Reference table.
+        
+        NOTE: Only authorized_hits has the 'model' label because it comes from
+        TokenRateLimitPolicy which extracts the model from the response body.
+        authorized_calls and limited_calls (from RateLimitPolicy) do NOT have
+        the 'model' label.
         """
         if make_test_request not in (200, 429):
             pytest.fail(f"FAIL: Test request did not succeed (status {make_test_request}). Cannot verify metrics.")
 
         metrics_text = limitador_metrics_after_request
-        token_metrics = ["authorized_hits", "authorized_calls", "limited_calls"]
-        metrics_verified = 0
-        
-        for metric_name in token_metrics:
-            if not self._metric_exists(limitador_metrics_after_request, metric_name):
-                continue
-            
-            has_label, sample = self._check_metric_label(metrics_text, metric_name, "model")
-            if not has_label:
-                pytest.fail(
-                    f"FAIL: Metric '{metric_name}' does not have 'model' label.\n"
-                    f"  Reference: observability.md Key Metrics Reference\n"
-                    f"  The TelemetryPolicy should inject 'model' label from responseBodyJSON('/model').\n"
-                    f"  Sample metric lines:\n{sample}\n"
-                    f"  Check:\n"
-                    f"    1. TelemetryPolicy is enforced: kubectl get telemetrypolicy -n openshift-ingress\n"
-                    f"    2. Response contains model field in JSON body"
-                )
-            metrics_verified += 1
-            print(f"[e2e] Metric '{metric_name}' has 'model' label ✓")
-        
-        # Fail if no metrics were found to verify
-        if metrics_verified == 0:
+        metric_name = "authorized_hits"
+
+        if not self._metric_exists(metrics_text, metric_name):
             pytest.fail(
-                f"FAIL: No token metrics found to verify 'model' label.\n"
-                f"  Expected at least one of: {token_metrics}\n"
-                f"  This indicates Limitador is not generating rate-limiting metrics.\n"
+                f"FAIL: Metric '{metric_name}' not found in Limitador.\n"
+                f"  Cannot verify 'model' label without the metric.\n"
                 f"  Check:\n"
-                f"    1. Limitador has limits: kubectl exec -n kuadrant-system <pod> -- curl -s http://localhost:8080/limits\n"
-                f"    2. TokenRateLimitPolicy enforced: kubectl get tokenratelimitpolicy -A"
+                f"    1. TokenRateLimitPolicy enforced: kubectl get tokenratelimitpolicy -A\n"
+                f"    2. Response contains usage.total_tokens field"
             )
+
+        has_label, sample = self._check_metric_label(metrics_text, metric_name, "model")
+        if not has_label:
+            pytest.fail(
+                f"FAIL: Metric '{metric_name}' does not have 'model' label.\n"
+                f"  Reference: observability.md Key Metrics Reference\n"
+                f"  The TelemetryPolicy should inject 'model' label from responseBodyJSON('/model').\n"
+                f"  Sample metric lines:\n{sample}\n"
+                f"  Check:\n"
+                f"    1. TelemetryPolicy is enforced: kubectl get telemetrypolicy -n openshift-ingress\n"
+                f"    2. Response contains model field in JSON body"
+            )
+
+        print(f"[e2e] Metric '{metric_name}' has 'model' label ✓")
 
 
 # =============================================================================
@@ -655,57 +681,27 @@ class TestPrometheusScrapingMetrics:
     """
     Tests for verifying metrics are being scraped by Prometheus.
     
-    These tests run AFTER TestLimitadorMetrics and TestMetricsAfterRequest
-    to ensure we first verify the source (Limitador) has metrics, then
-    verify Prometheus is scraping them.
+    Limitador metrics are scraped by user-workload Prometheus.
+    Istio gateway metrics are scraped by platform Prometheus (openshift-monitoring).
     """
 
-    def _query_prometheus(self, query: str) -> dict | None:
-        """
-        Query Prometheus via kubectl exec.
-        Returns the JSON response or None if query failed.
-        """
-        exec_cmd = [
-            "exec", "-n", "openshift-user-workload-monitoring",
-            "prometheus-user-workload-0", "-c", "prometheus", "--",
-            "curl", "-s", f"http://localhost:9090/api/v1/query?query={query}"
-        ]
-        rc, stdout, stderr = _run_kubectl(exec_cmd, timeout=30)
-        
-        if rc != 0:
-            log.warning(f"[prometheus] Query failed: {stderr}")
-            return None
-        
-        try:
-            return json.loads(stdout)
-        except Exception as e:
-            log.warning(f"[prometheus] Failed to parse response: {e}")
-            return None
-
-    def _metric_exists_in_prometheus(self, metric_name: str) -> tuple[bool, str]:
-        """
-        Check if a metric exists in Prometheus.
-        Returns (exists, message).
-        """
-        result = self._query_prometheus(metric_name)
-        
+    @staticmethod
+    def _metric_exists(query_fn, metric_name: str) -> tuple[bool, str]:
+        """Check if a metric exists using the given query function."""
+        result = query_fn(metric_name)
         if result is None:
             return False, "Could not query Prometheus"
-        
         if result.get("status") != "success":
             return False, f"Prometheus query failed: {result.get('error', 'unknown error')}"
-        
         data = result.get("data", {})
         results = data.get("result", [])
-        
         if len(results) > 0:
             return True, f"Found {len(results)} time series"
-        
         return False, "No data found (metric not scraped or no data yet)"
 
     def test_prometheus_user_workload_available(self):
         """Verify Prometheus user-workload-monitoring is accessible."""
-        result = self._query_prometheus("up")
+        result = _query_prometheus("up")
         
         if result is None:
             pytest.fail(
@@ -721,16 +717,13 @@ class TestPrometheusScrapingMetrics:
         print("[prometheus] User-workload-monitoring Prometheus is accessible")
 
     def test_limitador_metrics_scraped(self, expected_metrics_config):
-        """Verify Limitador metrics are being scraped by Prometheus."""
-        exists, message = self._metric_exists_in_prometheus("limitador_up")
+        """Verify Limitador metrics are being scraped by user-workload Prometheus."""
+        exists, message = self._metric_exists(_query_prometheus, "limitador_up")
         
         if not exists:
-            exists_any, msg_any = self._metric_exists_in_prometheus("{__name__=~\"limitador.*\"}")
-            
             pytest.fail(
                 f"FAIL: Limitador metrics are NOT being scraped by Prometheus.\n"
                 f"  Query result: {message}\n"
-                f"  Any limitador metrics: {msg_any}\n"
                 f"  This means the ServiceMonitor is not working correctly.\n"
                 f"  Check:\n"
                 f"    1. ServiceMonitor exists: kubectl get servicemonitor limitador-metrics -n kuadrant-system\n"
@@ -742,11 +735,11 @@ class TestPrometheusScrapingMetrics:
         print(f"[prometheus] Limitador metrics are being scraped: {message}")
 
     def test_authorized_calls_in_prometheus(self, expected_metrics_config, make_test_request):
-        """Verify authorized_calls metric appears in Prometheus after requests."""
+        """Verify authorized_calls metric appears in user-workload Prometheus after requests."""
         if make_test_request not in (200, 429):
             pytest.fail(f"FAIL: Test request did not succeed (status {make_test_request}). Cannot verify metrics.")
         
-        exists, message = self._metric_exists_in_prometheus("authorized_calls")
+        exists, message = self._metric_exists(_query_prometheus, "authorized_calls")
         
         if not exists:
             pytest.fail(
@@ -754,7 +747,7 @@ class TestPrometheusScrapingMetrics:
                 f"  Result: {message}\n"
                 f"  This means rate-limiting metrics are not being generated.\n"
                 f"  Check:\n"
-                f"    1. Limitador has limits configured: kubectl exec -n kuadrant-system <limitador-pod> -- curl -s http://localhost:8080/limits\n"
+                f"    1. RateLimitPolicy is enforced: kubectl get ratelimitpolicy -A\n"
                 f"    2. TokenRateLimitPolicy is enforced: kubectl get tokenratelimitpolicy -A\n"
                 f"    3. ServiceMonitor is scraping: kubectl get servicemonitor -n kuadrant-system"
             )
@@ -763,13 +756,13 @@ class TestPrometheusScrapingMetrics:
 
     def test_authorized_hits_in_prometheus(self, expected_metrics_config, make_test_request):
         """
-        Verify authorized_hits metric appears in Prometheus after requests.
+        Verify authorized_hits metric appears in user-workload Prometheus after requests.
         Reference: observability.md Key Metrics Reference - Token Consumption.
         """
         if make_test_request not in (200, 429):
             pytest.fail(f"FAIL: Test request did not succeed (status {make_test_request}). Cannot verify metrics.")
         
-        exists, message = self._metric_exists_in_prometheus("authorized_hits")
+        exists, message = self._metric_exists(_query_prometheus, "authorized_hits")
         
         if not exists:
             pytest.fail(
@@ -787,7 +780,7 @@ class TestPrometheusScrapingMetrics:
 
     def test_limited_calls_in_prometheus(self, expected_metrics_config, make_test_request):
         """
-        Verify limited_calls metric exists in Prometheus.
+        Verify limited_calls metric exists in user-workload Prometheus.
         Reference: observability.md Key Metrics Reference - Token Consumption.
         
         Smoke tests trigger rate limiting, so this metric MUST exist.
@@ -795,7 +788,7 @@ class TestPrometheusScrapingMetrics:
         if make_test_request not in (200, 429):
             pytest.fail(f"FAIL: Test request did not succeed (status {make_test_request}). Cannot verify metrics.")
         
-        exists, message = self._metric_exists_in_prometheus("limited_calls")
+        exists, message = self._metric_exists(_query_prometheus, "limited_calls")
         
         if not exists:
             pytest.fail(
@@ -815,25 +808,61 @@ class TestPrometheusScrapingMetrics:
         """
         Verify istio_request_duration_milliseconds_bucket is being scraped.
         Reference: observability.md Latency Metrics.
+        
+        NOTE: Istio gateway metrics are scraped by the platform Prometheus
+        (openshift-monitoring), not the user-workload Prometheus.
         """
         if make_test_request not in (200, 429):
             pytest.fail(f"FAIL: Test request did not succeed (status {make_test_request}). Cannot verify metrics.")
         
-        exists, message = self._metric_exists_in_prometheus("istio_request_duration_milliseconds_bucket")
+        exists, message = self._metric_exists(
+            _query_platform_prometheus,
+            "istio_request_duration_milliseconds_bucket"
+        )
         
         if not exists:
             pytest.fail(
-                f"FAIL: Metric 'istio_request_duration_milliseconds_bucket' not in Prometheus.\n"
+                f"FAIL: Metric 'istio_request_duration_milliseconds_bucket' not in platform Prometheus.\n"
                 f"  Reference: observability.md Latency Metrics\n"
                 f"  Result: {message}\n"
                 f"  This metric tracks gateway-level latency.\n"
                 f"  Check:\n"
-                f"    1. Istio Gateway ServiceMonitor exists\n"
-                f"    2. Gateway pods are exposing metrics: kubectl get svc -n openshift-ingress\n"
-                f"    3. Prometheus targets show Istio gateway"
+                f"    1. Istio Gateway ServiceMonitor exists: kubectl get servicemonitor -n openshift-ingress\n"
+                f"    2. Gateway pods are exposing metrics: kubectl get pods -n openshift-ingress\n"
+                f"    3. Platform Prometheus targets show Istio gateway"
             )
         
         print(f"[prometheus] istio_request_duration_milliseconds_bucket exists in Prometheus: {message}")
+
+    def test_istio_requests_total_in_prometheus(self, expected_metrics_config, make_test_request):
+        """
+        Verify istio_requests_total is being scraped by platform Prometheus.
+        Reference: observability.md Gateway Traffic Metrics.
+        
+        This metric is used in dashboards for error rate panels (4xx, 5xx, 401).
+        Scraped by platform Prometheus (openshift-monitoring).
+        """
+        if make_test_request not in (200, 429):
+            pytest.fail(f"FAIL: Test request did not succeed (status {make_test_request}). Cannot verify metrics.")
+        
+        exists, message = self._metric_exists(
+            _query_platform_prometheus,
+            "istio_requests_total"
+        )
+        
+        if not exists:
+            pytest.fail(
+                f"FAIL: Metric 'istio_requests_total' not in platform Prometheus.\n"
+                f"  Reference: observability.md Gateway Traffic Metrics\n"
+                f"  Result: {message}\n"
+                f"  This metric is used for error rate panels (4xx, 5xx, 401).\n"
+                f"  Check:\n"
+                f"    1. Istio Gateway ServiceMonitor exists: kubectl get servicemonitor -n openshift-ingress\n"
+                f"    2. Gateway pods are exposing metrics: kubectl get pods -n openshift-ingress\n"
+                f"    3. Platform Prometheus targets show Istio gateway"
+            )
+        
+        print(f"[prometheus] istio_requests_total exists in Prometheus: {message}")
 
 
 # =============================================================================
@@ -844,86 +873,71 @@ class TestIstioLatencyMetrics:
     """
     Tests for verifying Istio gateway latency metrics have correct labels.
     Reference: observability.md Latency Metrics table.
+    
+    NOTE: Istio gateway metrics are scraped by the platform Prometheus
+    (openshift-monitoring), not the user-workload Prometheus.
     """
 
-    def _query_prometheus(self, query: str) -> dict | None:
-        """Query Prometheus for metrics."""
-        exec_cmd = [
-            "exec", "-n", "openshift-user-workload-monitoring",
-            "prometheus-user-workload-0", "-c", "prometheus", "--",
-            "curl", "-s", f"http://localhost:9090/api/v1/query?query={query}"
-        ]
-        rc, stdout, stderr = _run_kubectl(exec_cmd, timeout=30)
-        
-        if rc != 0:
-            log.warning(f"[prometheus] Query failed: {stderr}")
-            return None
-        
-        try:
-            return json.loads(stdout)
-        except Exception as e:
-            log.warning(f"[prometheus] Failed to parse response: {e}")
-            return None
+    @staticmethod
+    def _metric_has_label(metric_name: str, label_name: str) -> tuple[bool, str]:
+        """Check if a metric in platform Prometheus has a specific label."""
+        result = _query_platform_prometheus(f'{metric_name}{{}}')
 
-    def _metric_has_label_in_prometheus(self, metric_name: str, label_name: str) -> tuple[bool, str]:
-        """Check if a metric in Prometheus has a specific label."""
-        # Query for the metric with the label
-        result = self._query_prometheus(f'{metric_name}{{}}')
-        
         if result is None:
-            return False, "Could not query Prometheus"
-        
+            return False, "Could not query platform Prometheus"
+
         if result.get("status") != "success":
             return False, f"Query failed: {result.get('error', 'unknown')}"
-        
+
         data = result.get("data", {})
         results = data.get("result", [])
-        
+
         if len(results) == 0:
             return False, "No metric data found"
-        
-        # Check if any result has the label
+
         for r in results:
             metric = r.get("metric", {})
             if label_name in metric:
                 return True, f"Found label '{label_name}' with value '{metric[label_name]}'"
-        
+
         return False, f"Label '{label_name}' not found in any time series"
 
-    def test_istio_latency_metric_has_user_label(self, make_test_request):
+    def test_istio_latency_metric_has_tier_label(self, make_test_request):
         """
-        Verify istio_request_duration_milliseconds_bucket has 'user' label.
+        Verify istio_request_duration_milliseconds_bucket has 'tier' label.
         Reference: observability.md Latency Metrics table.
         
-        This is injected by the Istio Telemetry resource from X-MaaS-Username header.
+        This is injected by the Istio Telemetry resource (latency-per-tier)
+        from the X-MaaS-Tier header set by AuthPolicy.
         """
         if make_test_request not in (200, 429):
             pytest.fail(f"FAIL: Test request did not succeed (status {make_test_request}). Cannot verify metrics.")
 
         metric_name = "istio_request_duration_milliseconds_bucket"
-        has_label, message = self._metric_has_label_in_prometheus(metric_name, "user")
+        has_label, message = self._metric_has_label(metric_name, "tier")
         
-        if message == "Could not query Prometheus":
+        if message == "Could not query platform Prometheus":
             pytest.fail(
-                f"FAIL: Cannot query Prometheus for Istio metrics.\n"
+                f"FAIL: Cannot query platform Prometheus for Istio metrics.\n"
                 f"  Check:\n"
-                f"    1. Prometheus pods are running: kubectl get pods -n openshift-user-workload-monitoring\n"
-                f"    2. User-workload-monitoring is enabled"
+                f"    1. Prometheus pods are running: kubectl get pods -n openshift-monitoring\n"
+                f"    2. Current user has cluster-admin privileges"
             )
         
         if not has_label:
             pytest.fail(
-                f"FAIL: Metric '{metric_name}' does not have 'user' label in Prometheus.\n"
+                f"FAIL: Metric '{metric_name}' does not have 'tier' label in Prometheus.\n"
                 f"  Reference: observability.md Latency Metrics table\n"
                 f"  Result: {message}\n"
-                f"  The Istio Telemetry resource should inject 'user' from X-MaaS-Username header.\n"
+                f"  The Istio Telemetry resource (latency-per-tier) should inject 'tier'\n"
+                f"  from the X-MaaS-Tier header set by AuthPolicy.\n"
                 f"  Check:\n"
-                f"    1. Telemetry resource exists: kubectl get telemetry -n openshift-ingress\n"
-                f"    2. AuthPolicy injects X-MaaS-Username header\n"
-                f"    3. Gateway metrics are being scraped by Prometheus"
+                f"    1. Telemetry resource exists: kubectl get telemetry latency-per-tier -n openshift-ingress\n"
+                f"    2. AuthPolicy injects X-MaaS-Tier header\n"
+                f"    3. Gateway metrics are being scraped by platform Prometheus"
             )
         
-        print(f"[e2e] Metric '{metric_name}' has 'user' label ✓")
+        print(f"[e2e] Metric '{metric_name}' has 'tier' label ✓")
 
     def test_istio_latency_metric_has_destination_service_label(self, make_test_request):
         """
@@ -934,14 +948,14 @@ class TestIstioLatencyMetrics:
             pytest.fail(f"FAIL: Test request did not succeed (status {make_test_request}). Cannot verify metrics.")
 
         metric_name = "istio_request_duration_milliseconds_bucket"
-        has_label, message = self._metric_has_label_in_prometheus(metric_name, "destination_service_name")
+        has_label, message = self._metric_has_label(metric_name, "destination_service_name")
         
-        if message == "Could not query Prometheus":
+        if message == "Could not query platform Prometheus":
             pytest.fail(
-                f"FAIL: Cannot query Prometheus for Istio metrics.\n"
+                f"FAIL: Cannot query platform Prometheus for Istio metrics.\n"
                 f"  Check:\n"
-                f"    1. Prometheus pods are running: kubectl get pods -n openshift-user-workload-monitoring\n"
-                f"    2. User-workload-monitoring is enabled"
+                f"    1. Prometheus pods are running: kubectl get pods -n openshift-monitoring\n"
+                f"    2. Current user has cluster-admin privileges"
             )
         
         if not has_label:
@@ -951,11 +965,46 @@ class TestIstioLatencyMetrics:
                 f"  Result: {message}\n"
                 f"  This is a standard Istio label that should be present.\n"
                 f"  Check:\n"
-                f"    1. Istio gateway metrics are being scraped\n"
-                f"    2. ServiceMonitor for Istio gateway exists"
+                f"    1. Istio gateway metrics are being scraped by platform Prometheus\n"
+                f"    2. ServiceMonitor for Istio gateway exists in openshift-ingress"
             )
         
         print(f"[e2e] Metric '{metric_name}' has 'destination_service_name' label ✓")
+
+    def test_istio_requests_total_has_response_code_label(self, make_test_request):
+        """
+        Verify istio_requests_total has 'response_code' label.
+        Reference: observability.md Gateway Traffic Metrics.
+        
+        This label is used in dashboard error rate panels to filter by
+        4xx, 5xx, and 401 status codes.
+        """
+        if make_test_request not in (200, 429):
+            pytest.fail(f"FAIL: Test request did not succeed (status {make_test_request}). Cannot verify metrics.")
+
+        metric_name = "istio_requests_total"
+        has_label, message = self._metric_has_label(metric_name, "response_code")
+
+        if message == "Could not query platform Prometheus":
+            pytest.fail(
+                f"FAIL: Cannot query platform Prometheus for Istio metrics.\n"
+                f"  Check:\n"
+                f"    1. Prometheus pods are running: kubectl get pods -n openshift-monitoring\n"
+                f"    2. Current user has cluster-admin privileges"
+            )
+
+        if not has_label:
+            pytest.fail(
+                f"FAIL: Metric '{metric_name}' does not have 'response_code' label.\n"
+                f"  Reference: observability.md Gateway Traffic Metrics\n"
+                f"  Result: {message}\n"
+                f"  This label is required for error rate panels (4xx, 5xx, 401).\n"
+                f"  Check:\n"
+                f"    1. Istio gateway metrics are being scraped by platform Prometheus\n"
+                f"    2. ServiceMonitor for Istio gateway exists in openshift-ingress"
+            )
+
+        print(f"[e2e] Metric '{metric_name}' has 'response_code' label ✓")
 
 
 # =============================================================================
@@ -965,56 +1014,42 @@ class TestIstioLatencyMetrics:
 class TestVLLMMetrics:
     """
     Tests for verifying vLLM model metrics have correct labels.
-    Reference: observability.md Latency Metrics table.
+    Reference: observability.md Model Latency Metrics table.
     
-    NOTE: These tests only apply to real vLLM models (not simulators).
-    The simulator model (llm-d-inference-sim) does NOT expose vLLM metrics.
+    vLLM metrics are scraped by user-workload Prometheus.
+    Both real vLLM models and the simulator (v0.7.1+) expose these metrics.
+    
+    NOTE: Histogram metrics must be queried with a suffix (_count, _bucket, _sum)
+    because Prometheus does not return results for the base histogram name.
     """
-
-    def _query_prometheus(self, query: str) -> dict | None:
-        """Query Prometheus for metrics."""
-        exec_cmd = [
-            "exec", "-n", "openshift-user-workload-monitoring",
-            "prometheus-user-workload-0", "-c", "prometheus", "--",
-            "curl", "-s", f"http://localhost:9090/api/v1/query?query={query}"
-        ]
-        rc, stdout, stderr = _run_kubectl(exec_cmd, timeout=30)
-        
-        if rc != 0:
-            return None
-        
-        try:
-            return json.loads(stdout)
-        except Exception:
-            return None
 
     def test_vllm_latency_metric_exists(self):
         """
         Verify vllm:e2e_request_latency_seconds metric is being scraped.
-        Reference: observability.md Latency Metrics table.
+        Reference: observability.md Model Latency Metrics table.
         
-        NOTE: This test only applies to real vLLM models.
-        Simulator models (llm-d-inference-sim) do NOT expose these metrics.
+        Queries _count suffix since Prometheus histograms require a suffix.
         """
-        metric_name = "vllm:e2e_request_latency_seconds"
-        result = self._query_prometheus(f'{metric_name}{{}}')
+        metric_name = "vllm:e2e_request_latency_seconds_count"
+        result = _query_prometheus(metric_name)
         
         if result is None:
-            pytest.skip("Could not query Prometheus for vLLM metrics")
+            pytest.fail("FAIL: Could not query Prometheus for vLLM metrics.")
         
         if result.get("status") != "success":
-            pytest.skip(f"Prometheus query failed: {result.get('error', 'unknown')}")
+            pytest.fail(f"FAIL: Prometheus query failed: {result.get('error', 'unknown')}")
         
         data = result.get("data", {})
         results = data.get("result", [])
         
         if len(results) == 0:
-            pytest.skip(
-                f"Metric '{metric_name}' not found in Prometheus.\n"
-                f"  This is EXPECTED if only simulator models are deployed.\n"
-                f"  Simulator (llm-d-inference-sim) does NOT expose vLLM metrics.\n"
-                f"  For real vLLM models, ensure ServiceMonitor is deployed:\n"
-                f"    kubectl apply -f docs/samples/observability/kserve-llm-models-servicemonitor.yaml"
+            pytest.fail(
+                f"FAIL: Metric '{metric_name}' not found in Prometheus.\n"
+                f"  Both real vLLM and simulator v0.7.1+ expose this metric.\n"
+                f"  Check:\n"
+                f"    1. Model pods are running: kubectl get pods -n llm\n"
+                f"    2. ServiceMonitor exists: kubectl get servicemonitor -n llm\n"
+                f"    3. Traffic has been sent to generate metrics (lazily registered)"
             )
         
         print(f"[e2e] Metric '{metric_name}' exists in Prometheus ✓")
@@ -1022,34 +1057,32 @@ class TestVLLMMetrics:
     def test_vllm_latency_metric_has_model_name_label(self):
         """
         Verify vllm:e2e_request_latency_seconds has 'model_name' label.
-        Reference: observability.md Latency Metrics table.
-        
-        NOTE: This test only applies to real vLLM models.
+        Reference: observability.md Model Latency Metrics table.
         """
-        metric_name = "vllm:e2e_request_latency_seconds"
-        result = self._query_prometheus(f'{metric_name}{{}}')
+        metric_name = "vllm:e2e_request_latency_seconds_count"
+        result = _query_prometheus(metric_name)
         
         if result is None or result.get("status") != "success":
-            pytest.skip("Could not query Prometheus for vLLM metrics")
+            pytest.fail("FAIL: Could not query Prometheus for vLLM metrics.")
         
         data = result.get("data", {})
         results = data.get("result", [])
         
         if len(results) == 0:
-            pytest.skip(
-                f"Metric '{metric_name}' not found.\n"
-                f"  Expected if only simulator models are deployed (simulators don't expose vLLM metrics)."
+            pytest.fail(
+                f"FAIL: Metric '{metric_name}' not found in Prometheus.\n"
+                f"  Cannot verify 'model_name' label without metric data."
             )
         
         # Check for model_name label
         for r in results:
             metric = r.get("metric", {})
             if "model_name" in metric:
-                print(f"[e2e] Metric '{metric_name}' has 'model_name' label ✓")
+                print(f"[e2e] Metric '{metric_name}' has 'model_name' label: '{metric['model_name']}' ✓")
                 return
         
         pytest.fail(
             f"FAIL: Metric '{metric_name}' does not have 'model_name' label.\n"
-            f"  Reference: observability.md Latency Metrics table\n"
+            f"  Reference: observability.md Model Latency Metrics table\n"
             f"  This label should be present on vLLM metrics."
         )

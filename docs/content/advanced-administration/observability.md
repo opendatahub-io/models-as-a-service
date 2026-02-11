@@ -374,11 +374,17 @@ To import into Grafana:
 !!! note "Total tokens only (input/output split not yet available)"
     Token consumption is reported as **total tokens** (prompt + completion) per request. The pipeline reads `usage.total_tokens` from the model response via Kuadrant's TokenRateLimitPolicy. Separate input-token (`prompt_tokens`) and output-token (`completion_tokens`) counters are **not yet available** at the gateway level; this would require upstream changes in the Kuadrant wasm-shim to send separate `hits_addend` values for each token type. Chargeback and usage tracking per user, per subscription (tier), and per model are supported using `authorized_hits`.
 
-### Latency Metrics
+### Gateway Traffic Metrics
 
 | Metric | Description | Labels |
 |--------|-------------|--------|
+| `istio_requests_total` | Total gateway requests (used for error rate tracking: 4xx, 5xx, 401) | `response_code`, `destination_service_name` |
 | `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name`, `tier` |
+
+### Model Latency Metrics
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
 | `vllm:e2e_request_latency_seconds` | Model inference latency | `model_name` |
 
 #### Per-Tier Latency Tracking
