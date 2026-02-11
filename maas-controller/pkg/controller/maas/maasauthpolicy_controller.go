@@ -51,6 +51,8 @@ type MaaSAuthPolicyReconciler struct {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop
+const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
+
 func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSAuthPolicy", req.NamespacedName)
 
@@ -65,6 +67,14 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if !policy.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, log, policy)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(policy, maasAuthPolicyFinalizer) {
+		controllerutil.AddFinalizer(policy, maasAuthPolicyFinalizer)
+		if err := r.Update(ctx, policy); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	refs, err := r.reconcileModelAuthPolicies(ctx, log, policy)
@@ -90,10 +100,14 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 	for _, modelName := range policy.Spec.ModelRefs {
 		httpRouteName, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, policy.Namespace, modelName)
 		if err != nil {
-			// If model is not found (deleted), skip it and clean up its generated policy
-			log.Info("skipping model (not found or being deleted), cleaning up generated policy", "model", modelName, "error", err)
-			r.deleteGeneratedAuthPolicyForModel(ctx, log, policy, modelName)
-			continue
+			if strings.Contains(err.Error(), "not found") {
+				// Model or HTTPRoute genuinely not found (deleted) — skip and clean up
+				log.Info("model not found, cleaning up generated policy", "model", modelName)
+				r.deleteGeneratedAuthPolicyForModel(ctx, log, policy, modelName)
+				continue
+			}
+			// Transient error (API timeout, RBAC, etc.) — don't delete, requeue
+			return nil, fmt.Errorf("failed to resolve HTTPRoute for model %s: %w", modelName, err)
 		}
 		refs = append(refs, authPolicyRef{
 			Name:      fmt.Sprintf("maas-auth-%s-model-%s", policy.Name, modelName),
@@ -229,7 +243,15 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			if existing.GetAnnotations()["maas.opendatahub.io/managed"] == "false" {
 				log.Info("AuthPolicy has maas.opendatahub.io/managed=false, skipping update", "name", authPolicyName, "model", modelName)
 			} else {
-				existing.SetAnnotations(authPolicy.GetAnnotations())
+				// Merge annotations to preserve existing ones (e.g. from Kuadrant or user)
+				mergedAnnotations := existing.GetAnnotations()
+				if mergedAnnotations == nil {
+					mergedAnnotations = make(map[string]string)
+				}
+				for k, v := range authPolicy.GetAnnotations() {
+					mergedAnnotations[k] = v
+				}
+				existing.SetAnnotations(mergedAnnotations)
 				existing.SetLabels(authPolicy.GetLabels())
 				if httpRouteNS == policy.Namespace {
 					if err := controllerutil.SetControllerReference(policy, existing, r.Scheme); err != nil {
@@ -346,19 +368,25 @@ func (r *MaaSAuthPolicyReconciler) deleteGeneratedAuthPolicyForModel(ctx context
 }
 
 func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) (ctrl.Result, error) {
-	for _, modelName := range policy.Spec.ModelRefs {
-		_, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, policy.Namespace, modelName)
-		if err != nil {
-			log.Info("failed to find HTTPRoute for model during deletion, trying policy namespace", "model", modelName, "error", err)
-			httpRouteNS = policy.Namespace
+	if controllerutil.ContainsFinalizer(policy, maasAuthPolicyFinalizer) {
+		for _, modelName := range policy.Spec.ModelRefs {
+			_, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, policy.Namespace, modelName)
+			if err != nil {
+				log.Info("failed to find HTTPRoute for model during deletion, trying policy namespace", "model", modelName, "error", err)
+				httpRouteNS = policy.Namespace
+			}
+			authPolicyName := fmt.Sprintf("maas-auth-%s-model-%s", policy.Name, modelName)
+			authPolicy := &unstructured.Unstructured{}
+			authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+			authPolicy.SetName(authPolicyName)
+			authPolicy.SetNamespace(httpRouteNS)
+			if err := r.Delete(ctx, authPolicy); err != nil && !apierrors.IsNotFound(err) {
+				log.Error(err, "failed to delete AuthPolicy", "name", authPolicyName, "namespace", httpRouteNS)
+				return ctrl.Result{}, err
+			}
 		}
-		authPolicyName := fmt.Sprintf("maas-auth-%s-model-%s", policy.Name, modelName)
-		authPolicy := &unstructured.Unstructured{}
-		authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-		authPolicy.SetName(authPolicyName)
-		authPolicy.SetNamespace(httpRouteNS)
-		if err := r.Delete(ctx, authPolicy); err != nil && !apierrors.IsNotFound(err) {
-			log.Error(err, "failed to delete AuthPolicy", "name", authPolicyName, "namespace", httpRouteNS)
+		controllerutil.RemoveFinalizer(policy, maasAuthPolicyFinalizer)
+		if err := r.Update(ctx, policy); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -429,7 +457,10 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 	if !found {
 		policy.Status.Conditions = append(policy.Status.Conditions, condition)
 	}
-	r.Status().Update(ctx, policy)
+	if err := r.Status().Update(ctx, policy); err != nil {
+		log := logr.FromContextOrDiscard(ctx)
+		log.Error(err, "failed to update MaaSAuthPolicy status", "name", policy.Name)
+	}
 }
 
 func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {

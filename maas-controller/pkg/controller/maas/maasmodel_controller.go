@@ -90,13 +90,16 @@ func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Auth for model routes is managed by MaaSAuthPolicy only (one AuthPolicy per route).
 
 	// Update status based on referenced model
+	modelStatusFailed := false
 	if err := r.updateModelStatus(ctx, log, model); err != nil {
 		log.Error(err, "failed to update model status")
-		// Don't fail reconciliation on status update errors
+		modelStatusFailed = true
 	}
 
-	// Update status - this will preserve HTTPRouteName and HTTPRouteNamespace set earlier
-	r.updateStatus(ctx, model, "Ready", "Successfully reconciled")
+	// Set Ready unless updateModelStatus failed in the current reconciliation
+	if !modelStatusFailed {
+		r.updateStatus(ctx, model, "Ready", "Successfully reconciled")
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -590,7 +593,10 @@ func (r *MaaSModelReconciler) updateStatus(ctx context.Context, model *maasv1alp
 		model.Status.Conditions = append(model.Status.Conditions, condition)
 	}
 
-	r.Status().Update(ctx, model)
+	if err := r.Status().Update(ctx, model); err != nil {
+		log := logr.FromContextOrDiscard(ctx)
+		log.Error(err, "failed to update MaaSModel status", "name", model.Name)
+	}
 }
 
 // Helper function to get pointer to value
@@ -623,7 +629,11 @@ func (r *MaaSModelReconciler) mapHTTPRouteToMaaSModels(ctx context.Context, obj 
 	}
 	var requests []reconcile.Request
 	for _, m := range models.Items {
-		if m.Spec.ModelRef.Namespace == route.Namespace {
+		ns := m.Spec.ModelRef.Namespace
+		if ns == "" {
+			ns = m.Namespace
+		}
+		if ns == route.Namespace {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
 			})

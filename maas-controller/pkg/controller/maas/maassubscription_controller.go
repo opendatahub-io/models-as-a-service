@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -49,6 +50,8 @@ type MaaSSubscriptionReconciler struct {
 //+kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
+const maasSubscriptionFinalizer = "maas.opendatahub.io/subscription-cleanup"
+
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSSubscription", req.NamespacedName)
@@ -65,6 +68,14 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Handle deletion
 	if !subscription.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, log, subscription)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
+		controllerutil.AddFinalizer(subscription, maasSubscriptionFinalizer)
+		if err := r.Update(ctx, subscription); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Reconcile TokenRateLimitPolicy for each model
@@ -86,10 +97,14 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 		// Find the MaaSModel to determine HTTPRoute name and namespace
 		httpRouteName, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, subscription.Namespace, modelRef.Name)
 		if err != nil {
-			// If model is not found (deleted), skip it and clean up its generated policy
-			log.Info("skipping model (not found or being deleted), cleaning up generated policy", "model", modelRef.Name, "error", err)
-			r.deleteGeneratedTRLPForModel(ctx, log, subscription, modelRef.Name)
-			continue
+			if strings.Contains(err.Error(), "not found") {
+				// Model or HTTPRoute genuinely not found (deleted) — skip and clean up
+				log.Info("model not found, cleaning up generated policy", "model", modelRef.Name)
+				r.deleteGeneratedTRLPForModel(ctx, log, subscription, modelRef.Name)
+				continue
+			}
+			// Transient error (API timeout, RBAC, etc.) — don't delete, requeue
+			return fmt.Errorf("failed to resolve HTTPRoute for model %s: %w", modelRef.Name, err)
 		}
 
 		policyName := fmt.Sprintf("subscription-%s-model-%s", subscription.Name, modelRef.Name)
@@ -247,7 +262,15 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			if existing.GetAnnotations()["maas.opendatahub.io/managed"] == "false" {
 				log.Info("TokenRateLimitPolicy has maas.opendatahub.io/managed=false, skipping update", "name", policyName, "model", modelRef.Name)
 			} else {
-				existing.SetAnnotations(policy.GetAnnotations())
+				// Merge annotations to preserve existing ones (e.g. from Kuadrant or user)
+				mergedAnnotations := existing.GetAnnotations()
+				if mergedAnnotations == nil {
+					mergedAnnotations = make(map[string]string)
+				}
+				for k, v := range policy.GetAnnotations() {
+					mergedAnnotations[k] = v
+				}
+				existing.SetAnnotations(mergedAnnotations)
 				existing.SetLabels(policy.GetLabels())
 				// Update owner references if in same namespace
 				if httpRouteNS == subscription.Namespace {
@@ -386,28 +409,33 @@ func (r *MaaSSubscriptionReconciler) findHTTPRouteForModel(ctx context.Context, 
 }
 
 func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) (ctrl.Result, error) {
-	// Clean up all TokenRateLimitPolicies for this subscription
-	for _, modelRef := range subscription.Spec.ModelRefs {
-		// Try to find the HTTPRoute to determine the correct namespace
-		// If we can't find it, try the subscription namespace as fallback
-		_, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, subscription.Namespace, modelRef.Name)
-		if err != nil {
-			log.Info("failed to find HTTPRoute for model during deletion, trying subscription namespace", "model", modelRef.Name, "error", err)
-			httpRouteNS = subscription.Namespace
+	if controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
+		// Clean up all TokenRateLimitPolicies for this subscription
+		for _, modelRef := range subscription.Spec.ModelRefs {
+			_, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, subscription.Namespace, modelRef.Name)
+			if err != nil {
+				log.Info("failed to find HTTPRoute for model during deletion, trying subscription namespace", "model", modelRef.Name, "error", err)
+				httpRouteNS = subscription.Namespace
+			}
+
+			policyName := fmt.Sprintf("subscription-%s-model-%s", subscription.Name, modelRef.Name)
+			policy := &unstructured.Unstructured{}
+			policy.SetGroupVersionKind(schema.GroupVersionKind{
+				Group:   "kuadrant.io",
+				Version: "v1alpha1",
+				Kind:    "TokenRateLimitPolicy",
+			})
+			policy.SetName(policyName)
+			policy.SetNamespace(httpRouteNS)
+
+			if err := r.Delete(ctx, policy); err != nil && !apierrors.IsNotFound(err) {
+				log.Error(err, "failed to delete TokenRateLimitPolicy", "name", policyName, "namespace", httpRouteNS)
+				return ctrl.Result{}, err
+			}
 		}
 
-		policyName := fmt.Sprintf("subscription-%s-model-%s", subscription.Name, modelRef.Name)
-		policy := &unstructured.Unstructured{}
-		policy.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "kuadrant.io",
-			Version: "v1alpha1",
-			Kind:    "TokenRateLimitPolicy",
-		})
-		policy.SetName(policyName)
-		policy.SetNamespace(httpRouteNS)
-
-		if err := r.Delete(ctx, policy); err != nil && !apierrors.IsNotFound(err) {
-			log.Error(err, "failed to delete TokenRateLimitPolicy", "name", policyName, "namespace", httpRouteNS)
+		controllerutil.RemoveFinalizer(subscription, maasSubscriptionFinalizer)
+		if err := r.Update(ctx, subscription); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -442,7 +470,10 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 		subscription.Status.Conditions = append(subscription.Status.Conditions, condition)
 	}
 
-	r.Status().Update(ctx, subscription)
+	if err := r.Status().Update(ctx, subscription); err != nil {
+		log := logr.FromContextOrDiscard(ctx)
+		log.Error(err, "failed to update MaaSSubscription status", "name", subscription.Name)
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.

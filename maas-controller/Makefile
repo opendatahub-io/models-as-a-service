@@ -23,7 +23,7 @@ IMAGE ?= quay.io/maas/maas-controller
 IMAGE_TAG ?= latest
 FULL_IMAGE := $(IMAGE):$(IMAGE_TAG)
 
-build: tidy
+build: tidy $(BUILD_DIR)
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/manager
 
 $(BUILD_DIR):
