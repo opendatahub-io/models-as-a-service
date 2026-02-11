@@ -10,13 +10,19 @@ This example shows how to deploy Llamastack with OpenAI models integrated into M
 
 ## Setup
 
-### 1. Create API Key Secret
+### 1. Set Environment Variable and Create Secret
 
-Replace `YOUR_OPENAI_API_KEY` with your actual OpenAI API key:
+First, set your API key as an environment variable:
 
 ```bash
-kubectl create secret generic openai-api-key \
-  --from-literal=api-key="YOUR_OPENAI_API_KEY" \
+export OPENAI_API_KEY="your-actual-openai-api-key-here"
+```
+
+Then create the secret:
+
+```bash
+kubectl create secret generic openai-openai-api-key \
+  --from-literal=api-key="$OPENAI_API_KEY" \
   -n llm
 ```
 
@@ -117,9 +123,9 @@ This deployment provides access to:
 kubectl logs -n llm -l provider=openai
 ```
 
-2. Verify the API key secret:
+2. Verify the API key secret contains actual key (not placeholder):
 ```bash
-kubectl get secret openai-api-key -n llm -o yaml
+kubectl get secret openai-openai-api-key -n llm -o jsonpath='{.data.api-key}' | base64 -d
 ```
 
 ### Models Not Appearing in MaaS
@@ -148,5 +154,12 @@ To remove the deployment:
 
 ```bash
 kubectl delete -k deploy/overlays/openai
-kubectl delete secret openai-api-key -n llm
+kubectl delete secret openai-openai-api-key -n llm
 ```
+
+## Security Notes
+
+- **Never commit API keys to git**: Use environment variables
+- **Verify key is set**: `echo $OPENAI_API_KEY` before deploying
+- **Rotate keys regularly**: Update both env var and secret
+- **Use dedicated keys**: Separate keys per environment (dev/staging/prod)

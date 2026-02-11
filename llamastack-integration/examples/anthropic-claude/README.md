@@ -10,13 +10,19 @@ This example shows how to deploy Llamastack with Anthropic Claude models integra
 
 ## Setup
 
-### 1. Create API Key Secret
+### 1. Set Environment Variable and Create Secret
 
-Replace `YOUR_ANTHROPIC_API_KEY` with your actual Anthropic API key:
+First, set your API key as an environment variable:
 
 ```bash
-kubectl create secret generic anthropic-api-key \
-  --from-literal=api-key="YOUR_ANTHROPIC_API_KEY" \
+export ANTHROPIC_API_KEY="your-actual-anthropic-api-key-here"
+```
+
+Then create the secret:
+
+```bash
+kubectl create secret generic anthropic-anthropic-api-key \
+  --from-literal=api-key="$ANTHROPIC_API_KEY" \
   -n llm
 ```
 
@@ -115,9 +121,9 @@ This deployment provides access to:
 kubectl logs -n llm -l provider=anthropic
 ```
 
-2. Verify the API key secret:
+2. Verify the API key secret contains actual key (not placeholder):
 ```bash
-kubectl get secret anthropic-api-key -n llm -o yaml
+kubectl get secret anthropic-anthropic-api-key -n llm -o jsonpath='{.data.api-key}' | base64 -d
 ```
 
 ### Models Not Appearing in MaaS
@@ -147,5 +153,12 @@ To remove the deployment:
 
 ```bash
 kubectl delete -k deploy/overlays/anthropic
-kubectl delete secret anthropic-api-key -n llm
+kubectl delete secret anthropic-anthropic-api-key -n llm
 ```
+
+## Security Notes
+
+- **Never commit API keys to git**: Use environment variables
+- **Verify key is set**: `echo $ANTHROPIC_API_KEY` before deploying
+- **Rotate keys regularly**: Update both env var and secret
+- **Use dedicated keys**: Separate keys per environment (dev/staging/prod)

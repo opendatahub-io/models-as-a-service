@@ -11,13 +11,19 @@ This example shows how to deploy Llamastack with Google Gemini models integrated
 
 ## Setup
 
-### 1. Create API Key Secret
+### 1. Set Environment Variable and Create Secret
 
-Replace `YOUR_GEMINI_API_KEY` with your actual Google Gemini API key:
+First, set your API key as an environment variable:
 
 ```bash
-kubectl create secret generic gemini-api-key \
-  --from-literal=api-key="YOUR_GEMINI_API_KEY" \
+export GEMINI_API_KEY="your-actual-gemini-api-key-here"
+```
+
+Then create the secret:
+
+```bash
+kubectl create secret generic gemini-gemini-api-key \
+  --from-literal=api-key="$GEMINI_API_KEY" \
   -n llm
 ```
 
@@ -116,9 +122,9 @@ This deployment provides access to:
 kubectl logs -n llm -l provider=gemini
 ```
 
-2. Verify the API key secret:
+2. Verify the API key secret contains actual key (not placeholder):
 ```bash
-kubectl get secret gemini-api-key -n llm -o yaml
+kubectl get secret gemini-gemini-api-key -n llm -o jsonpath='{.data.api-key}' | base64 -d
 ```
 
 ### Models Not Appearing in MaaS
@@ -147,5 +153,12 @@ To remove the deployment:
 
 ```bash
 kubectl delete -k deploy/overlays/gemini
-kubectl delete secret gemini-api-key -n llm
+kubectl delete secret gemini-gemini-api-key -n llm
 ```
+
+## Security Notes
+
+- **Never commit API keys to git**: Use environment variables
+- **Verify key is set**: `echo $GEMINI_API_KEY` before deploying
+- **Rotate keys regularly**: Update both env var and secret
+- **Use dedicated keys**: Separate keys per environment (dev/staging/prod)

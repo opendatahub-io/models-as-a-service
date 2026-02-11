@@ -57,36 +57,55 @@ This integration focuses on **external/cloud providers** that don't require loca
 
 ### Deploy with Google Gemini
 
-1. **Create API key secret:**
+1. **Set your API key environment variable:**
    ```bash
-   kubectl create secret generic gemini-api-key \
-     --from-literal=api-key="YOUR_GEMINI_API_KEY" \
+   export GEMINI_API_KEY="your-actual-gemini-api-key-here"
+   ```
+
+2. **Create API key secret:**
+   ```bash
+   kubectl create secret generic gemini-gemini-api-key \
+     --from-literal=api-key="$GEMINI_API_KEY" \
      -n llm
    ```
 
-2. **Deploy Llamastack:**
+3. **Deploy Llamastack:**
    ```bash
    cd llamastack-integration
    kubectl apply -k deploy/overlays/gemini
    ```
 
-3. **Verify deployment:**
+4. **Verify deployment:**
    ```bash
    ./scripts/validate-deployment.sh gemini
    ```
 
-4. **Test chat completion:**
+5. **Test chat completion:**
    ```bash
    ./scripts/test-chat-completion.sh gemini
    ```
 
 ### Deploy with OpenAI
 
-Replace `gemini` with `openai` in the commands above and use `OPENAI_API_KEY`.
+Follow the same pattern with OpenAI:
+```bash
+export OPENAI_API_KEY="your-actual-openai-api-key-here"
+kubectl create secret generic openai-openai-api-key \
+  --from-literal=api-key="$OPENAI_API_KEY" \
+  -n llm
+kubectl apply -k deploy/overlays/openai
+```
 
 ### Deploy with Anthropic
 
-Replace `gemini` with `anthropic` in the commands above and use `ANTHROPIC_API_KEY`.
+Follow the same pattern with Anthropic:
+```bash
+export ANTHROPIC_API_KEY="your-actual-anthropic-api-key-here"
+kubectl create secret generic anthropic-anthropic-api-key \
+  --from-literal=api-key="$ANTHROPIC_API_KEY" \
+  -n llm
+kubectl apply -k deploy/overlays/anthropic
+```
 
 ## Directory Structure
 
@@ -162,10 +181,10 @@ Each provider overlay includes:
    apiVersion: v1
    kind: Secret
    metadata:
-     name: provider-api-key
+     name: provider-provider-api-key
    type: Opaque
    stringData:
-     api-key: "YOUR_PROVIDER_API_KEY_HERE"
+     api-key: "${PROVIDER_API_KEY}"
    ```
 
 2. **Environment Variable Injection** (via JSON patch):
@@ -176,7 +195,7 @@ Each provider overlay includes:
        name: PROVIDER_API_KEY
        valueFrom:
          secretKeyRef:
-           name: provider-api-key
+           name: provider-provider-api-key
            key: api-key
    - op: replace
      path: /spec/model/name
@@ -281,14 +300,22 @@ This integrates with MaaS billing and monitoring systems.
    ```
 
 2. **Models Not Appearing**
-   - Check LLMInferenceService gateway reference
+   - **Common cause**: API key secret contains placeholder values
+   - **Check secret**: `kubectl get secret <provider>-<provider>-api-key -n llm -o jsonpath='{.data.api-key}' | base64 -d`
+   - **Fix with env vars**:
+     ```bash
+     export GEMINI_API_KEY="your-actual-key-here"
+     kubectl delete secret gemini-gemini-api-key -n llm
+     kubectl create secret generic gemini-gemini-api-key --from-literal=api-key="$GEMINI_API_KEY" -n llm
+     kubectl rollout restart deployment gemini-llamastack-kserve -n llm
+     ```
    - Verify service health: `./scripts/validate-deployment.sh`
-   - Check MaaS model discovery logs
 
 3. **Authentication Failures**
-   - Verify API key in secret: `kubectl get secret <provider>-api-key -o yaml`
+   - Verify API key in secret: `kubectl get secret <provider>-<provider>-api-key -n llm -o yaml`
    - Test API key directly with provider
-   - Check Llamastack logs for API errors
+   - **Ensure env var is set**: `echo $GEMINI_API_KEY` (should not be empty)
+   - Check Llamastack logs for API errors: `kubectl logs -n llm -l app.kubernetes.io/name=<provider>-llamastack`
 
 4. **Rate Limiting Issues**
    - Check user tier configuration
@@ -305,7 +332,7 @@ kubectl get all -n llm -l provider=<PROVIDER>
 kubectl logs -n llm -l provider=<PROVIDER>
 
 # Check API key secret
-kubectl get secret <provider>-api-key -n llm -o yaml
+kubectl get secret <provider>-<provider>-api-key -n llm -o yaml
 
 # Test health endpoint directly
 kubectl port-forward -n llm service/<provider>-llamastack 8443:443
@@ -332,11 +359,34 @@ To add support for additional providers:
 
 ## Security Considerations
 
-- API keys are stored as Kubernetes secrets
-- TLS encryption for all communications
-- MaaS authentication and authorization
-- Network policies for pod-to-pod communication
-- Regular secret rotation recommended
+- **API Key Management**:
+  - ✅ Use environment variables: `export GEMINI_API_KEY="..."`
+  - ✅ Verify before deploy: `echo $GEMINI_API_KEY` (ensure not empty)
+  - ❌ Never commit actual keys to git
+  - ❌ Avoid placeholder values in YAML files
+- **Infrastructure Security**:
+  - API keys are stored as Kubernetes secrets
+  - TLS encryption for all communications
+  - MaaS authentication and authorization
+  - Network policies for pod-to-pod communication
+  - Regular secret rotation recommended
+
+### Environment Variable Best Practices
+
+```bash
+# ✅ GOOD: Set environment variables first
+export GEMINI_API_KEY="your-actual-key-here"
+export OPENAI_API_KEY="your-actual-key-here"
+
+# ✅ GOOD: Use in commands
+kubectl create secret generic gemini-gemini-api-key --from-literal=api-key="$GEMINI_API_KEY" -n llm
+
+# ❌ BAD: Hard-coded placeholders
+kubectl create secret generic gemini-gemini-api-key --from-literal=api-key="YOUR_GEMINI_API_KEY_HERE" -n llm
+
+# ✅ GOOD: Verify before deployment
+if [ -z "$GEMINI_API_KEY" ]; then echo "Error: GEMINI_API_KEY not set"; exit 1; fi
+```
 
 ## License
 
