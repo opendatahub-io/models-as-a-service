@@ -7,11 +7,11 @@ metadata:
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
-  name: openshift-lws-operator-operatorgroup
+  name: leader-worker-set
   namespace: openshift-lws-operator
 spec:
   targetNamespaces:
-    - openshift-lws-operator
+  - openshift-lws-operator
 ---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
@@ -20,6 +20,7 @@ metadata:
   namespace: openshift-lws-operator
 spec:
   channel: stable-v1.0
+  installPlanApproval: Automatic
   name: leader-worker-set
   source: redhat-operators
   sourceNamespace: openshift-marketplace

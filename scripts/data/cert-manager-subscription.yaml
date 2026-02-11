@@ -7,11 +7,8 @@ metadata:
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
-  name: cert-manager-operator-operatorgroup
+  name: cert-manager-operator
   namespace: cert-manager-operator
-spec:
-  targetNamespaces:
-    - cert-manager-operator
 ---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
@@ -20,6 +17,7 @@ metadata:
   namespace: cert-manager-operator
 spec:
   channel: stable-v1
+  installPlanApproval: Automatic
   name: openshift-cert-manager-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace

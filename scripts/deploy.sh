@@ -453,6 +453,14 @@ install_optional_operators() {
 
   # Wait for both to complete
   wait $cert_wait_pid $lws_wait_pid
+
+  # Create LeaderWorkerSetOperator CR to activate the LWS controller-manager.
+  # The operator subscription alone only installs the operator pod; the CR is
+  # required to actually deploy the LWS API (controller-manager pods).
+  # See: https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/ai_workloads/leader-worker-set-operator
+  log_info "Activating LeaderWorkerSet API..."
+  kubectl apply -f "${data_dir}/lws-operator-cr.yaml"
+
   log_info "Optional operators installed"
 }
 
