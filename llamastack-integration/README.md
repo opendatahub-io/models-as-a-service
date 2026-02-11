@@ -61,7 +61,7 @@ This integration focuses on **external/cloud providers** that don't require loca
    ```bash
    kubectl create secret generic gemini-api-key \
      --from-literal=api-key="YOUR_GEMINI_API_KEY" \
-     -n maas
+     -n llm
    ```
 
 2. **Deploy Llamastack:**
@@ -114,7 +114,7 @@ llamastack-integration/
 
 ### Base Configuration
 
-The base `llamastack.yaml` follows standard MaaS LLMInferenceService patterns:
+The base `llamastack.yaml` uses LlamaStack's "starter" distribution with runtime TLS configuration:
 
 ```yaml
 apiVersion: serving.kserve.io/v1alpha1
@@ -133,32 +133,57 @@ spec:
     containers:
       - name: llamastack
         image: "meta-llama/llamastack:latest"
+        command: ["sh", "-c"]
+        args:
+        - |
+          CONFIG=$(python3 -c "from llama_stack.core.utils.config_resolution import resolve_config_or_distro; print(resolve_config_or_distro('starter'))")
+          python3 -c "
+          import yaml
+          with open('$CONFIG') as f:
+              config = yaml.safe_load(f)
+          config['server']['port'] = 8000
+          config['server']['tls_certfile'] = '/var/run/kserve/tls/tls.crt'
+          config['server']['tls_keyfile'] = '/var/run/kserve/tls/tls.key'
+          with open('/tmp/run-config.yaml', 'w') as f:
+              yaml.dump(config, f, default_flow_style=False)
+          "
+          exec llama stack run /tmp/run-config.yaml
         ports:
           - name: https
             containerPort: 8000            # KServe standard port
-        # TLS, health checks, and configuration...
 ```
 
 ### Provider Configuration
 
 Each provider overlay includes:
 
-1. **Llamastack Configuration** (ConfigMap):
+1. **API Key Secret**:
    ```yaml
-   server:
-     port: 8000
-   model_servers:
-     - model_server_id: provider-server
-       model_server_type: remote::provider
-       config:
-         api_key: "${PROVIDER_API_KEY}"
-   models:
-     - model_id: provider-model
-       provider_resource_id: provider-server
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: provider-api-key
+   type: Opaque
+   stringData:
+     api-key: "YOUR_PROVIDER_API_KEY_HERE"
    ```
 
-2. **Secret Management** (API keys)
-3. **Environment Variables** (injected into pod)
+2. **Environment Variable Injection** (via JSON patch):
+   ```yaml
+   - op: add
+     path: /spec/template/containers/0/env/-
+     value:
+       name: PROVIDER_API_KEY
+       valueFrom:
+         secretKeyRef:
+           name: provider-api-key
+           key: api-key
+   - op: replace
+     path: /spec/model/name
+     value: provider-model-name
+   ```
+
+The LlamaStack "starter" distribution automatically discovers and configures providers based on available API keys in the environment.
 
 ## Testing
 
@@ -251,8 +276,8 @@ This integrates with MaaS billing and monitoring systems.
 
 1. **Pod Not Starting**
    ```bash
-   kubectl logs -n maas -l provider=<PROVIDER>
-   kubectl describe pod -n maas -l provider=<PROVIDER>
+   kubectl logs -n llm -l provider=<PROVIDER>
+   kubectl describe pod -n llm -l provider=<PROVIDER>
    ```
 
 2. **Models Not Appearing**
@@ -274,13 +299,16 @@ This integrates with MaaS billing and monitoring systems.
 
 ```bash
 # Check all resources for a provider
-kubectl get all -n maas -l provider=<PROVIDER>
+kubectl get all -n llm -l provider=<PROVIDER>
 
-# View Llamastack configuration
-kubectl get configmap -n maas <provider>-llamastack-config -o yaml
+# View pod logs
+kubectl logs -n llm -l provider=<PROVIDER>
+
+# Check API key secret
+kubectl get secret <provider>-api-key -n llm -o yaml
 
 # Test health endpoint directly
-kubectl port-forward -n maas service/<provider>-llamastack 8443:443
+kubectl port-forward -n llm service/<provider>-llamastack 8443:443
 curl -k https://localhost:8443/v1/health
 ```
 

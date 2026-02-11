@@ -1,14 +1,11 @@
-apiVersion: serving.kserve.io/v1alpha1
-kind: LLMInferenceService
-metadata:
-  name: llamastack
-spec:
-  template:
-    containers:
-      - name: llamastack
-        env:
-          - name: ANTHROPIC_API_KEY
-            valueFrom:
-              secretKeyRef:
-                name: anthropic-api-key
-                key: api-key
+- op: add
+  path: /spec/template/containers/0/env/-
+  value:
+    name: ANTHROPIC_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: anthropic-anthropic-api-key
+        key: api-key
+- op: replace
+  path: /spec/model/name
+  value: claude-3-5-sonnet-20241022

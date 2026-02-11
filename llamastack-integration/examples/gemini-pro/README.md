@@ -18,7 +18,7 @@ Replace `YOUR_GEMINI_API_KEY` with your actual Google Gemini API key:
 ```bash
 kubectl create secret generic gemini-api-key \
   --from-literal=api-key="YOUR_GEMINI_API_KEY" \
-  -n maas
+  -n llm
 ```
 
 ### 2. Deploy Llamastack
@@ -33,8 +33,8 @@ kubectl apply -k deploy/overlays/gemini
 Check that the LLMInferenceService is ready:
 
 ```bash
-kubectl get llminferenceservice -n maas
-kubectl get pods -n maas -l provider=gemini
+kubectl get llminferenceservice -n llm
+kubectl get pods -n llm -l provider=gemini
 ```
 
 Wait for the pod to be in `Running` state and ready.
@@ -45,10 +45,10 @@ Wait for the pod to be in `Running` state and ready.
 
 ```bash
 # Get the service endpoint
-GEMINI_SERVICE=$(kubectl get svc -n maas -l provider=gemini -o jsonpath='{.items[0].metadata.name}')
+GEMINI_SERVICE=$(kubectl get svc -n llm -l provider=gemini -o jsonpath='{.items[0].metadata.name}')
 
 # Test health endpoint
-kubectl port-forward -n maas service/$GEMINI_SERVICE 8443:443 &
+kubectl port-forward -n llm service/$GEMINI_SERVICE 8443:443 &
 curl -k https://localhost:8443/v1/health
 ```
 
@@ -63,7 +63,7 @@ Get a token from MaaS API and check that Gemini models are discoverable:
 
 ```bash
 # Get MaaS API endpoint
-MAAS_API=$(kubectl get route -n maas maas-api -o jsonpath='{.spec.host}')
+MAAS_API=$(kubectl get route -n llm maas-api -o jsonpath='{.spec.host}')
 
 # Get token (replace with your authentication method)
 TOKEN=$(curl -X POST https://$MAAS_API/v1/tokens \
@@ -113,24 +113,24 @@ This deployment provides access to:
 
 1. Check the logs:
 ```bash
-kubectl logs -n maas -l provider=gemini
+kubectl logs -n llm -l provider=gemini
 ```
 
 2. Verify the API key secret:
 ```bash
-kubectl get secret gemini-api-key -n maas -o yaml
+kubectl get secret gemini-api-key -n llm -o yaml
 ```
 
 ### Models Not Appearing in MaaS
 
 1. Check that the LLMInferenceService has the correct gateway reference:
 ```bash
-kubectl describe llminferenceservice -n maas gemini-llamastack
+kubectl describe llminferenceservice -n llm gemini-llamastack
 ```
 
 2. Verify the service is healthy:
 ```bash
-kubectl get pods -n maas -l provider=gemini
+kubectl get pods -n llm -l provider=gemini
 ```
 
 ### Authentication Issues
@@ -147,5 +147,5 @@ To remove the deployment:
 
 ```bash
 kubectl delete -k deploy/overlays/gemini
-kubectl delete secret gemini-api-key -n maas
+kubectl delete secret gemini-api-key -n llm
 ```

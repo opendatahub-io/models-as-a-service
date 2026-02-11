@@ -4,7 +4,7 @@
     name: OPENAI_API_KEY
     valueFrom:
       secretKeyRef:
-        name: openai-api-key
+        name: openai-openai-api-key
         key: api-key
 - op: replace
   path: /spec/model/name

@@ -4,7 +4,7 @@
     name: GEMINI_API_KEY
     valueFrom:
       secretKeyRef:
-        name: gemini-api-key
+        name: gemini-gemini-api-key
         key: api-key
 - op: replace
   path: /spec/model/name

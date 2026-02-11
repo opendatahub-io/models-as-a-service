@@ -6,7 +6,7 @@
 set -e
 
 PROVIDER=${1:-"gemini"}
-NAMESPACE=${2:-"maas"}
+NAMESPACE=${2:-"llm"}
 MODEL=${3:-""}
 
 echo "🧪 Testing chat completion for provider: $PROVIDER"
@@ -38,7 +38,7 @@ print_info() {
 if [ -z "$MODEL" ]; then
     case "$PROVIDER" in
         "gemini")
-            MODEL="gemini-1.5-pro"
+            MODEL="gemini/models/gemini-2.5-flash"
             ;;
         "openai")
             MODEL="gpt-4o"
@@ -61,15 +61,21 @@ echo
 print_info "Step 1: Finding MaaS API endpoint"
 
 MAAS_API=""
-if kubectl get route maas-api -n "$NAMESPACE" &>/dev/null; then
-    MAAS_API="https://$(kubectl get route maas-api -n "$NAMESPACE" -o jsonpath='{.spec.host}')"
-elif kubectl get ingress maas-api -n "$NAMESPACE" &>/dev/null; then
-    MAAS_API="https://$(kubectl get ingress maas-api -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}')"
-fi
+# First check common MaaS namespaces
+for ns in maas openshift-operators kube-system default; do
+    if kubectl get route maas-api -n "$ns" &>/dev/null; then
+        MAAS_API="https://$(kubectl get route maas-api -n "$ns" -o jsonpath='{.spec.host}')"
+        break
+    elif kubectl get ingress maas-api -n "$ns" &>/dev/null; then
+        MAAS_API="https://$(kubectl get ingress maas-api -n "$ns" -o jsonpath='{.spec.rules[0].host}')"
+        break
+    fi
+done
 
+# Fallback: try using the well-known URL pattern
 if [ -z "$MAAS_API" ]; then
-    print_error "MaaS API endpoint not found"
-    exit 1
+    MAAS_API="http://maas.apps.ai-dev02.kni.syseng.devcluster.openshift.com"
+    print_warning "Using fallback MaaS API endpoint: $MAAS_API"
 fi
 
 print_success "Found MaaS API: $MAAS_API"
@@ -79,15 +85,21 @@ echo
 print_info "Step 2: Finding MaaS Gateway endpoint"
 
 MAAS_GATEWAY=""
-if kubectl get route maas-default-gateway -n openshift-ingress &>/dev/null; then
-    MAAS_GATEWAY="https://$(kubectl get route maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.host}')"
-elif kubectl get ingress maas-default-gateway -n openshift-ingress &>/dev/null; then
-    MAAS_GATEWAY="https://$(kubectl get ingress maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.rules[0].host}')"
-fi
+# Check common namespaces for gateway
+for ns in openshift-ingress maas kube-system; do
+    if kubectl get route maas-default-gateway -n "$ns" &>/dev/null; then
+        MAAS_GATEWAY="https://$(kubectl get route maas-default-gateway -n "$ns" -o jsonpath='{.spec.host}')"
+        break
+    elif kubectl get ingress maas-default-gateway -n "$ns" &>/dev/null; then
+        MAAS_GATEWAY="https://$(kubectl get ingress maas-default-gateway -n "$ns" -o jsonpath='{.spec.rules[0].host}')"
+        break
+    fi
+done
 
+# Fallback: use the same as API endpoint for basic testing
 if [ -z "$MAAS_GATEWAY" ]; then
-    print_error "MaaS Gateway endpoint not found"
-    exit 1
+    MAAS_GATEWAY="$MAAS_API"
+    print_warning "Using MaaS API as gateway endpoint: $MAAS_GATEWAY"
 fi
 
 print_success "Found MaaS Gateway: $MAAS_GATEWAY"
@@ -102,11 +114,11 @@ if command -v oc &>/dev/null; then
     OC_TOKEN=$(oc whoami -t 2>/dev/null || echo "")
     if [ -n "$OC_TOKEN" ]; then
         print_info "Using OpenShift token for authentication"
-        TOKEN_RESPONSE=$(curl -s -k -X POST "$MAAS_API/v1/tokens" \
-            -H "Authorization: Bearer $OC_TOKEN" 2>/dev/null || echo "FAILED")
+        TOKEN_RESPONSE=$(curl -s -k -H "Authorization: Bearer $OC_TOKEN" \
+            --json '{"expiration": "1h"}' "$MAAS_API/maas-api/v1/tokens" 2>/dev/null || echo "FAILED")
 
-        if echo "$TOKEN_RESPONSE" | grep -q "access_token"; then
-            TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r .access_token 2>/dev/null || echo "")
+        if echo "$TOKEN_RESPONSE" | grep -q "token"; then
+            TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r .token 2>/dev/null || echo "")
             print_success "Successfully obtained MaaS token"
         else
             print_error "Failed to get MaaS token. Response: $TOKEN_RESPONSE"
@@ -135,11 +147,14 @@ CHAT_REQUEST='{
   "temperature": 0.7
 }'
 
-print_info "Sending chat completion request to: $MAAS_GATEWAY/v1/chat/completions"
+# Construct provider-specific endpoint
+CHAT_ENDPOINT="$MAAS_GATEWAY/llm/${PROVIDER}-llamastack/v1/chat/completions"
+
+print_info "Sending chat completion request to: $CHAT_ENDPOINT"
 print_info "Request payload:"
 echo "$CHAT_REQUEST" | jq . 2>/dev/null || echo "$CHAT_REQUEST"
 
-CHAT_RESPONSE=$(curl -s -k -X POST "$MAAS_GATEWAY/v1/chat/completions" \
+CHAT_RESPONSE=$(curl -s -k -X POST "$CHAT_ENDPOINT" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "$CHAT_REQUEST" 2>/dev/null || echo "FAILED")
@@ -212,7 +227,7 @@ FOLLOWUP_REQUEST='{
   "temperature": 0.1
 }'
 
-FOLLOWUP_RESPONSE=$(curl -s -k -X POST "$MAAS_GATEWAY/v1/chat/completions" \
+FOLLOWUP_RESPONSE=$(curl -s -k -X POST "$CHAT_ENDPOINT" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "$FOLLOWUP_REQUEST" 2>/dev/null || echo "FAILED")

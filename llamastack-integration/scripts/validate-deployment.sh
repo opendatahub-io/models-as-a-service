@@ -6,7 +6,7 @@
 set -e
 
 PROVIDER=${1:-"gemini"}
-NAMESPACE=${2:-"maas"}
+NAMESPACE=${2:-"llm"}
 
 echo "🔍 Validating Llamastack deployment for provider: $PROVIDER"
 
@@ -61,7 +61,7 @@ fi
 echo
 print_info "Step 2: Checking pod status"
 
-POD_SELECTOR="provider=$PROVIDER"
+POD_SELECTOR="app.kubernetes.io/name=${PROVIDER}-llamastack"
 PODS=$(kubectl get pods -n "$NAMESPACE" -l "$POD_SELECTOR" --no-headers 2>/dev/null || echo "")
 
 if [ -z "$PODS" ]; then
@@ -107,7 +107,7 @@ cleanup_port_forward() {
 }
 trap cleanup_port_forward EXIT
 
-kubectl port-forward -n "$NAMESPACE" "service/$SERVICE_NAME" 8443:443 &
+kubectl port-forward -n "$NAMESPACE" "service/$SERVICE_NAME" 8443:8000 &
 PORT_FORWARD_PID=$!
 
 # Wait for port forward to be ready
@@ -116,7 +116,7 @@ sleep 3
 # Test health endpoint
 HEALTH_RESPONSE=$(curl -k -s https://localhost:8443/v1/health 2>/dev/null || echo "FAILED")
 
-if echo "$HEALTH_RESPONSE" | grep -q "ok"; then
+if echo "$HEALTH_RESPONSE" | grep -qi "ok"; then
     print_success "Health endpoint responding correctly"
 else
     print_error "Health endpoint failed. Response: $HEALTH_RESPONSE"
@@ -137,10 +137,21 @@ print_info "Step 4: Testing model discovery through MaaS API"
 
 # Try to get MaaS API endpoint
 MAAS_API=""
-if kubectl get route maas-api -n "$NAMESPACE" &>/dev/null; then
-    MAAS_API="https://$(kubectl get route maas-api -n "$NAMESPACE" -o jsonpath='{.spec.host}')"
-elif kubectl get ingress maas-api -n "$NAMESPACE" &>/dev/null; then
-    MAAS_API="https://$(kubectl get ingress maas-api -n "$NAMESPACE" -o jsonpath='{.spec.rules[0].host}')"
+# First check common MaaS namespaces
+for ns in maas openshift-operators kube-system default; do
+    if kubectl get route maas-api -n "$ns" &>/dev/null; then
+        MAAS_API="https://$(kubectl get route maas-api -n "$ns" -o jsonpath='{.spec.host}')"
+        break
+    elif kubectl get ingress maas-api -n "$ns" &>/dev/null; then
+        MAAS_API="https://$(kubectl get ingress maas-api -n "$ns" -o jsonpath='{.spec.rules[0].host}')"
+        break
+    fi
+done
+
+# Fallback: try using the well-known URL pattern
+if [ -z "$MAAS_API" ]; then
+    MAAS_API="http://maas.apps.ai-dev02.kni.syseng.devcluster.openshift.com"
+    print_warning "Using fallback MaaS API endpoint: $MAAS_API"
 fi
 
 if [ -n "$MAAS_API" ]; then
@@ -154,11 +165,11 @@ if [ -n "$MAAS_API" ]; then
         # Try OpenShift token
         OC_TOKEN=$(oc whoami -t 2>/dev/null || echo "")
         if [ -n "$OC_TOKEN" ]; then
-            TOKEN_RESPONSE=$(curl -s -k -X POST "$MAAS_API/v1/tokens" \
-                -H "Authorization: Bearer $OC_TOKEN" 2>/dev/null || echo "FAILED")
+            TOKEN_RESPONSE=$(curl -s -k -H "Authorization: Bearer $OC_TOKEN" \
+                --json '{"expiration": "1h"}' "$MAAS_API/maas-api/v1/tokens" 2>/dev/null || echo "FAILED")
 
-            if echo "$TOKEN_RESPONSE" | grep -q "access_token"; then
-                TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r .access_token 2>/dev/null || echo "")
+            if echo "$TOKEN_RESPONSE" | grep -q "token"; then
+                TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r .token 2>/dev/null || echo "")
                 print_success "Successfully obtained MaaS token"
             fi
         fi
@@ -166,7 +177,7 @@ if [ -n "$MAAS_API" ]; then
 
     if [ -n "$TOKEN" ]; then
         # Test model discovery
-        MODELS_RESPONSE=$(curl -s -k -H "Authorization: Bearer $TOKEN" "$MAAS_API/v1/models" 2>/dev/null || echo "FAILED")
+        MODELS_RESPONSE=$(curl -s -k -H "Authorization: Bearer $TOKEN" "$MAAS_API/maas-api/v1/models" 2>/dev/null || echo "FAILED")
 
         if echo "$MODELS_RESPONSE" | grep -q "data"; then
             print_success "Model discovery endpoint responding"
@@ -175,7 +186,7 @@ if [ -n "$MAAS_API" ]; then
             PROVIDER_MODELS=""
             case "$PROVIDER" in
                 "gemini")
-                    PROVIDER_MODELS="gemini-1.5-pro"
+                    PROVIDER_MODELS="gemini/models/gemini-2"
                     ;;
                 "openai")
                     PROVIDER_MODELS="gpt-4o"

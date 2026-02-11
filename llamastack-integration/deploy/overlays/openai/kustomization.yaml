@@ -13,6 +13,8 @@ patches:
       name: llamastack
     path: patches/deployment-patch.yaml
 
+namePrefix: openai-
+
 labels:
   - pairs:
       app.kubernetes.io/instance: openai-llamastack
