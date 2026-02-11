@@ -8,6 +8,7 @@
 # Usage: ./install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
 
 set -e
+set -o pipefail
 
 for cmd in kubectl kustomize; do
     if ! command -v "$cmd" &>/dev/null; then
@@ -153,7 +154,7 @@ echo "   Configure Prometheus/Thanos datasource in Grafana if not already done."
 echo ""
 
 # Optional: show route if present
-GRAFANA_ROUTE=$(kubectl get route -n "$TARGET_NS" -o jsonpath='{.items[0].spec.host}' 2>/dev/null || echo "")
+GRAFANA_ROUTE=$(kubectl get route -n "$TARGET_NS" -l app=grafana -o jsonpath='{.items[0].spec.host}' 2>/dev/null || kubectl get route grafana-route -n "$TARGET_NS" -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
 if [ -n "$GRAFANA_ROUTE" ]; then
     echo "   🌐 Grafana URL: https://$GRAFANA_ROUTE"
 fi

@@ -206,7 +206,7 @@ Dashboard panels use histogram `_sum` as primary data source. All queries work a
 | KV Cache | `kv_cache_usage_perc` |
 | Queue Wait Time | `request_queue_time_seconds_bucket` (vLLM/llm-d only) |
 
-See the [vLLM metrics documentation](https://docs.vllm.ai/en/stable/usage/metrics.html) for the full vLLM metric list and deprecation policy, and the [llm-d monitoring documentation](https://llm-d.ai/docs/usage/monitoring) for llm-d-specific setup.
+See the [vLLM metrics documentation](https://docs.vllm.ai/en/stable/usage/metrics/) for the full vLLM metric list and deprecation policy, and the [llm-d monitoring documentation](https://llm-d.ai/docs/usage/monitoring) for llm-d-specific setup.
 
 ### ServiceMonitor Configuration
 
