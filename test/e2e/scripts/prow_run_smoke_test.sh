@@ -347,6 +347,9 @@ run_observability_tests() {
         
         local USER
         USER="$(oc whoami 2>/dev/null || echo 'unknown')"
+        # Sanitize: replace colons and other filesystem-unsafe chars with dashes
+        USER="$(printf '%s' "$USER" | tr ':/@\\' '----' | sed 's/--*/-/g; s/^-//; s/-$//')"
+        USER="${USER:-unknown}"
         local HTML="${REPORTS_DIR}/observability-${USER}.html"
         local XML="${REPORTS_DIR}/observability-${USER}.xml"
         
