@@ -1,0 +1,434 @@
+# Perses Dashboard: AI Engineer Dashboard
+# Equivalent to Grafana AI Engineer Dashboard
+apiVersion: perses.dev/v1alpha1
+kind: PersesDashboard
+metadata:
+  name: ai-engineer-dashboard
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  display:
+    name: "AI Engineer Dashboard"
+    description: "API usage metrics for AI Engineers using MaaS platform"
+  duration: 1h
+  
+  # Variables for filtering
+  variables:
+    - kind: ListVariable
+      spec:
+        name: user
+        display:
+          name: "API Key / User"
+        allowMultiple: false
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: user
+            matchers:
+              - authorized_hits
+  
+  # ALL Panels
+  panels:
+    # === Row: My Usage Summary ===
+    myTotalTokens:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Total Tokens"
+          description: "Total API tokens you have consumed that were successfully authorized."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(authorized_hits{user=~"^$user$"})
+
+    myTotalRequests:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Total Requests"
+          description: "Total API requests you have made that were successfully authorized."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(authorized_calls{user=~"^$user$"})
+
+    tokenRate:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Token Rate"
+          description: "Your current token consumption rate (tokens per second) averaged over the last 5 minutes."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              decimalPlaces: 2
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(rate(authorized_hits{user=~"^$user$"}[5m]))
+
+    requestRate:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Request Rate"
+          description: "Your current request rate (requests per second) averaged over the last 5 minutes."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              decimalPlaces: 2
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(rate(authorized_calls{user=~"^$user$"}[5m]))
+
+    rateLimitedRequests:
+      kind: Panel
+      spec:
+        display:
+          name: "❌ Rate Limited Requests"
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum(limited_calls{user=~"^$user$"}) OR vector(0)
+
+    mySuccessRate:
+      kind: Panel
+      spec:
+        display:
+          name: "✅ My Success Rate"
+        plugin:
+          kind: GaugeChart
+          spec:
+            calculation: last-number
+            format:
+              unit: percent
+              decimalPlaces: 1
+            max: 100
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    100 * (sum(authorized_calls{user=~"^$user$"}) / 
+                    (sum(authorized_calls{user=~"^$user$"}) + sum(limited_calls{user=~"^$user$"}))) 
+                    OR vector(100)
+
+    # === Row: Usage Trends ===
+    tokenUsageByModel:
+      kind: Panel
+      spec:
+        display:
+          name: "📈 Token Usage by Model"
+          description: "Your token consumption broken down by model. Shows which models consume the most tokens."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model}}"
+                  query: sum by (model) (authorized_hits{user=~"^$user$"})
+
+    usageTrends:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Usage Trends (Tokens vs Rate Limited Requests)"
+          description: "Token consumption rate (authorized) and rate-limited request rate over time."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Tokens (authorized)"
+                  query: sum(rate(authorized_hits{user=~"^$user$"}[5m]))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Requests (rate limited)"
+                  query: sum(rate(limited_calls{user=~"^$user$"}[5m]))
+
+    # === Row: Hourly Usage Patterns ===
+    hourlyTokenUsageByModel:
+      kind: Panel
+      spec:
+        display:
+          name: "⏰ Hourly Token Usage by Model"
+          description: "Hourly token consumption broken down by model."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            visual:
+              display: bar
+              stack: all
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model}}"
+                  query: sum by (model) (increase(authorized_hits{user=~"^$user$"}[1h]))
+
+    # === Row: Detailed Analysis ===
+    tokenVolumeByModel:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Token Volume by Model (Selected Range)"
+          description: "Token volume per model over the selected time range."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            visual:
+              display: bar
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model}}"
+                  query: sum by (model) (increase(authorized_hits{user=~"^$user$"}[1h]))
+
+    rateLimitedByTier:
+      kind: Panel
+      spec:
+        display:
+          name: "❌ Rate Limited by Tier (Selected Range)"
+          description: "Rate-limited requests by tier. The limited_calls metric carries user and tier labels but not model."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{tier}} (limited)"
+                  query: sum by (tier) (increase(limited_calls{user=~"^$user$", tier!=""}[1h]))
+
+    # === Row: Usage Summary Table ===
+    usageSummaryByModelTier:
+      kind: Panel
+      spec:
+        display:
+          name: "🔍 My Usage Summary by Model & Tier"
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model}} / {{tier}}"
+                  query: sum by (model, tier) (authorized_hits{user=~"^$user$"})
+
+  # Layout definition
+  layouts:
+    - kind: Grid
+      spec:
+        display:
+          title: "📊 My Usage Summary"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/myTotalTokens"
+          - x: 4
+            "y": 0
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/myTotalRequests"
+          - x: 8
+            "y": 0
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/tokenRate"
+          - x: 12
+            "y": 0
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/requestRate"
+          - x: 16
+            "y": 0
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/rateLimitedRequests"
+          - x: 20
+            "y": 0
+            width: 4
+            height: 4
+            content:
+              "$ref": "#/spec/panels/mySuccessRate"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "📈 Usage Trends"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/tokenUsageByModel"
+          - x: 12
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/usageTrends"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "⏰ Hourly Usage Patterns"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/hourlyTokenUsageByModel"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "🔍 Detailed Analysis"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/tokenVolumeByModel"
+          - x: 12
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/rateLimitedByTier"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "📋 Usage Summary"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/usageSummaryByModelTier"

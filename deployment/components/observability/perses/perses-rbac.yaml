@@ -1,0 +1,34 @@
+# RBAC for Perses to query OpenShift Prometheus
+#
+# NOTE: This file is for STANDALONE mode only (kubectl apply -k).
+# For UIPlugin mode (recommended), the Cluster Observability Operator
+# handles RBAC automatically - do not apply this file.
+#
+# The Perses Operator does NOT auto-create a ServiceAccount,
+# so we must create it manually for standalone deployments.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: perses-sa
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+---
+# ClusterRoleBinding to allow Perses to query Prometheus metrics
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: perses-cluster-monitoring-view
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: perses-sa
+    namespace: maas-api
+

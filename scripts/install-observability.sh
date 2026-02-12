@@ -6,7 +6,9 @@
 # This script is idempotent - safe to run multiple times
 #
 # Usage: ./install-observability.sh [--namespace NAMESPACE]
-# For Grafana dashboards, run the helper: ./scripts/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
+# For dashboards, run the corresponding helper:
+#   Grafana: ./scripts/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
+#   Perses:  ./scripts/install-perses-dashboards.sh
 
 set -e
 set -o pipefail
@@ -33,8 +35,9 @@ show_help() {
     echo "Options:"
     echo "  -n, --namespace   Target namespace for observability (default: maas-api)"
     echo ""
-    echo "To install MaaS Grafana dashboards (separate step), run:"
+    echo "To install dashboards (separate step), run one of:"
     echo "  $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
+    echo "  $(dirname "$0")/install-perses-dashboards.sh"
     echo ""
     echo "Examples:"
     echo "  $0                    # Install monitoring only"
@@ -229,6 +232,7 @@ echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:kv_cache_usage_perc"
 echo ""
 
-echo "💡 To install MaaS Grafana dashboards (discovers Grafana cluster-wide, warn-only):"
-echo "   $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
+echo "💡 To install dashboards:"
+echo "   Grafana:  $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
+echo "   Perses:   $(dirname "$0")/install-perses-dashboards.sh"
 echo ""

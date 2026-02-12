@@ -22,7 +22,7 @@ The observability stack consists of:
 - **vLLM / llm-d / Simulator**: Expose inference metrics (TTFT, ITL, queue depth, token throughput, KV-cache usage); llm-d also exposes EPP routing metrics
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
 - **ServiceMonitors**: Deployed to configure Prometheus metric scraping
-- **Visualization**: Grafana dashboards (see [Grafana documentation](https://grafana.com/docs/grafana/latest/))
+- **Visualization**: Grafana dashboards or Perses dashboards (OpenShift Console integration)
 
 ### Component Metrics Status
 
@@ -259,14 +259,26 @@ For local development and testing, you can also use our [Limitador Persistence](
 
 ## Visualization
 
-For dashboard visualization options, see:
+MaaS provides two visualization options — choose one (or both):
+
+| Platform | Integration | Install Script |
+|----------|------------|----------------|
+| **Grafana** | Standalone Grafana Operator; GrafanaDashboard CRs | `./scripts/install-grafana-dashboards.sh` |
+| **Perses** | OpenShift Console native (via Cluster Observability Operator UIPlugin) | `./scripts/install-perses-dashboards.sh` |
+
+Both options deploy the same two dashboards (Platform Admin and AI Engineer) with equivalent metrics coverage. Choose based on your environment:
+
+- **Grafana**: Feature-rich, standalone UI. Best when a Grafana instance already exists or when you need advanced alerting, annotations, or external sharing.
+- **Perses**: CNCF native, integrated into the OpenShift Console. Best for OpenShift-native workflows where a separate Grafana instance is not desired.
+
+For general references:
 
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
 - **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25/html/managing_and_monitoring_models/index)
 
 ### Included Dashboards
 
-MaaS includes two Grafana dashboards for different personas:
+MaaS includes two dashboards for different personas (available in both Grafana and Perses):
 
 #### Platform Admin Dashboard
 
@@ -323,22 +335,37 @@ Personal usage view for individual developers:
 
 ### Prerequisites
 
+**For Grafana dashboards:**
+
 - **Grafana** must be installed (for example via your observability team's process, a centralized instance, or the [Grafana Operator](https://grafana.github.io/grafana-operator/docs/installation/)). The dashboard helper does **not** install Grafana; it only deploys MaaS dashboard definitions and **never fails** (warnings only if none or multiple instances are found).
 - Ensure the Grafana instance has label `app=grafana` so MaaS dashboard definitions attach.
 - Configure a **Prometheus or Thanos datasource** in Grafana; the MaaS dashboards use the default Prometheus datasource.
 
+**For Perses dashboards:**
+
+- **OpenShift 4.18+** with the Cluster Observability Operator available in the operator catalog. The install script handles operator installation, UIPlugin enablement, and dashboard deployment automatically.
+- Perses dashboards are accessed via the OpenShift Console (Observe → Dashboards → Perses tab).
+
 ### Deploying Dashboards
 
-Monitoring is installed by `install-observability.sh`. Dashboards are installed by a **separate helper** that discovers Grafana cluster-wide:
+Monitoring is installed by `install-observability.sh`. Dashboards are installed by **separate helpers** — one for each visualization platform:
+
+**Grafana:**
 
     ./scripts/install-grafana-dashboards.sh
 
-**Behavior:** Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning (and, for multiple, lists them) and exits without error. Use flags to target a specific instance:
+Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning and exits without error. Use flags to target a specific instance:
 
     ./scripts/install-grafana-dashboards.sh --grafana-namespace maas-api
     ./scripts/install-grafana-dashboards.sh --grafana-label app=grafana
 
-To deploy only the dashboard manifests manually (same namespace as your Grafana):
+**Perses:**
+
+    ./scripts/install-perses-dashboards.sh
+
+Installs the Cluster Observability Operator (if not present), enables the Perses UIPlugin in the OpenShift Console, and deploys PersesDashboard CRs to `openshift-operators`. After installation, dashboards are accessible at **Observe → Dashboards → Perses tab** in the OpenShift Console.
+
+**Manual Grafana import (dashboard JSON only):**
 
     kustomize build deployment/components/observability/dashboards | \
       sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
@@ -346,7 +373,7 @@ To deploy only the dashboard manifests manually (same namespace as your Grafana)
 
 ### Sample Dashboard JSON
 
-For manual import, a sample dashboard JSON file is available:
+For manual Grafana import, a sample dashboard JSON file is available:
 
 - [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
