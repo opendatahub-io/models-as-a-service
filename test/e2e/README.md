@@ -26,7 +26,9 @@ If MaaS is already deployed and you want to run specific tests:
 
 # Observability tests only (metrics, labels, Prometheus scraping)
 cd test/e2e
+python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
 export MAAS_API_BASE_URL="https://maas.$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')/maas-api"
 export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 pytest tests/test_observability.py -v

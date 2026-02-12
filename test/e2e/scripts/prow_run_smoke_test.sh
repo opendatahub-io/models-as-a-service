@@ -203,6 +203,10 @@ deploy_maas_platform() {
 }
 
 install_observability() {
+    if [[ "${SKIP_OBSERVABILITY}" == "true" ]]; then
+        echo "⏭️  Skipping observability installation (SKIP_OBSERVABILITY=true)"
+        return 0
+    fi
     echo "Installing observability components..."
     if ! "$PROJECT_ROOT/scripts/install-observability.sh"; then
         echo "❌ ERROR: Failed to deploy observability components"
@@ -353,7 +357,7 @@ run_observability_tests() {
         else
             echo "❌ ERROR: Observability tests failed"
             echo "  Reports: ${HTML}"
-            # Don't exit - continue with other tests
+            TESTS_FAILED=true
         fi
         
         deactivate 2>/dev/null || true
@@ -450,5 +454,10 @@ print_header "Running Maas e2e Tests as view user"
 VIEW_TOKEN=$(oc create token tester-view-user -n default)
 oc login --token "$VIEW_TOKEN" --server "$K8S_CLUSTER_URL"
 run_smoke_tests
+
+if [[ "${TESTS_FAILED}" == "true" ]]; then
+    echo "❌ Some tests failed — see reports above for details"
+    exit 1
+fi
 
 echo "🎉 Deployment completed successfully!"

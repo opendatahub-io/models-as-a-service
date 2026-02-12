@@ -61,6 +61,43 @@ def _run_kubectl(args: list[str], timeout: int = 30) -> tuple[int, str, str]:
         return -1, "", str(e)
 
 
+def _fetch_limitador_metrics(namespace: str, port: int, path: str) -> str:
+    """
+    Fetch raw Prometheus metrics text from a Limitador pod via kubectl exec.
+    Raises pytest.fail if the pod cannot be found or metrics cannot be fetched.
+    """
+    pod_cmd = [
+        "get", "pod", "-n", namespace,
+        "-l", "app=limitador",
+        "-o", "jsonpath={.items[0].metadata.name}"
+    ]
+    rc, pod_name, _ = _run_kubectl(pod_cmd)
+    if rc != 0 or not pod_name.strip():
+        pytest.fail(
+            f"FAIL: Could not find Limitador pod in namespace '{namespace}'.\n"
+            f"  Check: kubectl get pods -n {namespace} -l app=limitador"
+        )
+
+    pod_name = pod_name.strip()
+
+    exec_cmd = [
+        "exec", "-n", namespace, pod_name, "--",
+        "curl", "-s", f"http://localhost:{port}{path}"
+    ]
+    rc, metrics_text, stderr = _run_kubectl(exec_cmd, timeout=60)
+
+    if rc != 0:
+        pytest.fail(
+            f"FAIL: Could not fetch metrics from Limitador pod '{pod_name}'.\n"
+            f"  Error: {stderr}\n"
+            f"  Check: kubectl exec -n {namespace} {pod_name} -- "
+            f"curl -s http://localhost:{port}{path}"
+        )
+
+    log.info(f"[metrics] Fetched {len(metrics_text)} bytes from Limitador")
+    return metrics_text
+
+
 def _resource_exists(kind: str, name: str, namespace: str) -> bool:
     """Check if a Kubernetes resource exists."""
     rc, _, _ = _run_kubectl(["get", kind, name, "-n", namespace, "--no-headers"])
@@ -315,49 +352,13 @@ class TestLimitadorMetrics:
     @pytest.fixture(scope="class")
     def limitador_metrics(self, expected_metrics_config, make_test_request) -> str:
         """
-        Fetch raw metrics from Limitador via kubectl port-forward.
+        Fetch raw metrics from Limitador via kubectl exec.
         Returns the raw Prometheus metrics text.
-        
+
         Depends on make_test_request to ensure a request has been made first.
         """
         cfg = expected_metrics_config["limitador"]["access"]
-        service = cfg["service"]
-        namespace = cfg["namespace"]
-        port = cfg["port"]
-        path = cfg["path"]
-
-        # Use kubectl exec to curl metrics from within the cluster
-        # This avoids needing port-forward which can be flaky in CI
-        pod_cmd = [
-            "get", "pod", "-n", namespace,
-            "-l", "app=limitador",
-            "-o", "jsonpath={.items[0].metadata.name}"
-        ]
-        rc, pod_name, _ = _run_kubectl(pod_cmd)
-        if rc != 0 or not pod_name.strip():
-            pytest.fail(
-                f"FAIL: Could not find Limitador pod in namespace '{namespace}'.\n"
-                f"  Check: kubectl get pods -n {namespace} -l app=limitador"
-            )
-
-        pod_name = pod_name.strip()
-
-        # Curl metrics from localhost within the pod
-        exec_cmd = [
-            "exec", "-n", namespace, pod_name, "--",
-            "curl", "-s", f"http://localhost:{port}{path}"
-        ]
-        rc, metrics_text, stderr = _run_kubectl(exec_cmd, timeout=60)
-
-        if rc != 0:
-            pytest.fail(
-                f"FAIL: Could not fetch metrics from Limitador pod '{pod_name}'.\n"
-                f"  Error: {stderr}\n"
-                f"  Check: kubectl exec -n {namespace} {pod_name} -- curl -s http://localhost:{port}{path}"
-            )
-
-        log.info(f"[metrics] Fetched {len(metrics_text)} bytes from Limitador")
-        return metrics_text
+        return _fetch_limitador_metrics(cfg["namespace"], cfg["port"], cfg["path"])
 
     def _metric_exists(self, metrics_text: str, metric_name: str) -> bool:
         """Check if a metric exists in the Prometheus metrics text."""
@@ -514,7 +515,7 @@ def make_test_request(headers, model_v1, model_name, authpolicy_enforced):
     """
     from tests.test_helper import chat
 
-    log.info(f"[e2e] Making test request to generate metrics...")
+    log.info("[e2e] Making test request to generate metrics...")
     print(f"[e2e] Making test request to model '{model_name}'...")
 
     try:
@@ -552,36 +553,7 @@ class TestMetricsAfterRequest:
     def limitador_metrics_after_request(self, make_test_request, expected_metrics_config) -> str:
         """Fetch Limitador metrics after making a test request."""
         cfg = expected_metrics_config["limitador"]["access"]
-        namespace = cfg["namespace"]
-        port = cfg["port"]
-        path = cfg["path"]
-
-        # Get pod name
-        pod_cmd = [
-            "get", "pod", "-n", namespace,
-            "-l", "app=limitador",
-            "-o", "jsonpath={.items[0].metadata.name}"
-        ]
-        rc, pod_name, _ = _run_kubectl(pod_cmd)
-        if rc != 0 or not pod_name.strip():
-            pytest.fail(
-                f"FAIL: Could not find Limitador pod for metrics verification.\n"
-                f"  Check: kubectl get pods -n {namespace} -l app=limitador"
-            )
-
-        pod_name = pod_name.strip()
-
-        # Fetch metrics
-        exec_cmd = [
-            "exec", "-n", namespace, pod_name, "--",
-            "curl", "-s", f"http://localhost:{port}{path}"
-        ]
-        rc, metrics_text, stderr = _run_kubectl(exec_cmd, timeout=60)
-
-        if rc != 0:
-            pytest.fail(f"FAIL: Could not fetch metrics from Limitador: {stderr}")
-
-        return metrics_text
+        return _fetch_limitador_metrics(cfg["namespace"], cfg["port"], cfg["path"])
 
     def _metric_exists(self, metrics_text: str, metric_name: str) -> bool:
         """Check if a metric exists in Prometheus format text."""
@@ -595,7 +567,7 @@ class TestMetricsAfterRequest:
         pattern = rf'^{metric_name}\{{[^}}]*{label_name}="[^"]+"'
         has_label = bool(re.search(pattern, metrics_text, re.MULTILINE))
         
-        sample_lines = [l for l in metrics_text.split("\n") if l.startswith(metric_name)][:3]
+        sample_lines = [line for line in metrics_text.split("\n") if line.startswith(metric_name)][:3]
         sample = "\n".join(sample_lines) if sample_lines else "(no metrics found)"
         
         return has_label, sample
@@ -969,10 +941,10 @@ class TestIstioLatencyMetrics:
         
         if message == "Could not query platform Prometheus":
             pytest.fail(
-                f"FAIL: Cannot query platform Prometheus for Istio metrics.\n"
-                f"  Check:\n"
-                f"    1. Prometheus pods are running: kubectl get pods -n openshift-monitoring\n"
-                f"    2. Current user has cluster-admin privileges"
+                "FAIL: Cannot query platform Prometheus for Istio metrics.\n"
+                "  Check:\n"
+                "    1. Prometheus pods are running: kubectl get pods -n openshift-monitoring\n"
+                "    2. Current user has cluster-admin privileges"
             )
         
         if not has_label:
@@ -980,12 +952,12 @@ class TestIstioLatencyMetrics:
                 f"FAIL: Metric '{metric_name}' does not have 'tier' label in Prometheus.\n"
                 f"  Reference: observability.md Latency Metrics table\n"
                 f"  Result: {message}\n"
-                f"  The Istio Telemetry resource (latency-per-tier) should inject 'tier'\n"
-                f"  from the X-MaaS-Tier header set by AuthPolicy.\n"
-                f"  Check:\n"
-                f"    1. Telemetry resource exists: kubectl get telemetry latency-per-tier -n openshift-ingress\n"
-                f"    2. AuthPolicy injects X-MaaS-Tier header\n"
-                f"    3. Gateway metrics are being scraped by platform Prometheus"
+                "  The Istio Telemetry resource (latency-per-tier) should inject 'tier'\n"
+                "  from the X-MaaS-Tier header set by AuthPolicy.\n"
+                "  Check:\n"
+                "    1. Telemetry resource exists: kubectl get telemetry latency-per-tier -n openshift-ingress\n"
+                "    2. AuthPolicy injects X-MaaS-Tier header\n"
+                "    3. Gateway metrics are being scraped by platform Prometheus"
             )
         
         print(f"[e2e] Metric '{metric_name}' has 'tier' label ✓")
@@ -1003,10 +975,10 @@ class TestIstioLatencyMetrics:
         
         if message == "Could not query platform Prometheus":
             pytest.fail(
-                f"FAIL: Cannot query platform Prometheus for Istio metrics.\n"
-                f"  Check:\n"
-                f"    1. Prometheus pods are running: kubectl get pods -n openshift-monitoring\n"
-                f"    2. Current user has cluster-admin privileges"
+                "FAIL: Cannot query platform Prometheus for Istio metrics.\n"
+                "  Check:\n"
+                "    1. Prometheus pods are running: kubectl get pods -n openshift-monitoring\n"
+                "    2. Current user has cluster-admin privileges"
             )
         
         if not has_label:
@@ -1014,10 +986,10 @@ class TestIstioLatencyMetrics:
                 f"FAIL: Metric '{metric_name}' does not have 'destination_service_name' label.\n"
                 f"  Reference: observability.md Latency Metrics table\n"
                 f"  Result: {message}\n"
-                f"  This is a standard Istio label that should be present.\n"
-                f"  Check:\n"
-                f"    1. Istio gateway metrics are being scraped by platform Prometheus\n"
-                f"    2. ServiceMonitor for Istio gateway exists in openshift-ingress"
+                "  This is a standard Istio label that should be present.\n"
+                "  Check:\n"
+                "    1. Istio gateway metrics are being scraped by platform Prometheus\n"
+                "    2. ServiceMonitor for Istio gateway exists in openshift-ingress"
             )
         
         print(f"[e2e] Metric '{metric_name}' has 'destination_service_name' label ✓")
@@ -1038,10 +1010,10 @@ class TestIstioLatencyMetrics:
 
         if message == "Could not query platform Prometheus":
             pytest.fail(
-                f"FAIL: Cannot query platform Prometheus for Istio metrics.\n"
-                f"  Check:\n"
-                f"    1. Prometheus pods are running: kubectl get pods -n openshift-monitoring\n"
-                f"    2. Current user has cluster-admin privileges"
+                "FAIL: Cannot query platform Prometheus for Istio metrics.\n"
+                "  Check:\n"
+                "    1. Prometheus pods are running: kubectl get pods -n openshift-monitoring\n"
+                "    2. Current user has cluster-admin privileges"
             )
 
         if not has_label:
@@ -1049,10 +1021,10 @@ class TestIstioLatencyMetrics:
                 f"FAIL: Metric '{metric_name}' does not have 'response_code' label.\n"
                 f"  Reference: observability.md Gateway Traffic Metrics\n"
                 f"  Result: {message}\n"
-                f"  This label is required for error rate panels (4xx, 5xx, 401).\n"
-                f"  Check:\n"
-                f"    1. Istio gateway metrics are being scraped by platform Prometheus\n"
-                f"    2. ServiceMonitor for Istio gateway exists in openshift-ingress"
+                "  This label is required for error rate panels (4xx, 5xx, 401).\n"
+                "  Check:\n"
+                "    1. Istio gateway metrics are being scraped by platform Prometheus\n"
+                "    2. ServiceMonitor for Istio gateway exists in openshift-ingress"
             )
 
         print(f"[e2e] Metric '{metric_name}' has 'response_code' label ✓")
@@ -1476,7 +1448,7 @@ class TestMetricTypes:
 
         if mismatches:
             pytest.fail(
-                f"FAIL: Metric type mismatches found:\n"
+                "FAIL: Metric type mismatches found:\n"
                 + "\n".join(mismatches)
                 + "\n  Update expected_metrics.yaml or fix the metric source."
             )
