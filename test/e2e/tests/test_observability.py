@@ -112,6 +112,39 @@ def _query_prometheus(query: str, namespace: str = "openshift-user-workload-moni
         return None
 
 
+def _query_prometheus_metadata(metric_name: str, namespace: str = "openshift-user-workload-monitoring",
+                               pod: str = "prometheus-user-workload-0",
+                               container: str = "prometheus") -> str | None:
+    """
+    Query Prometheus metadata API to get the type of a metric.
+    Returns the type string ('counter', 'gauge', 'histogram', 'summary') or None.
+    """
+    encoded_metric = quote(metric_name, safe="")
+    exec_cmd = [
+        "exec", "-n", namespace,
+        pod, "-c", container, "--",
+        "curl", "-s", f"http://localhost:9090/api/v1/metadata?metric={encoded_metric}"
+    ]
+    rc, stdout, stderr = _run_kubectl(exec_cmd, timeout=30)
+
+    if rc != 0:
+        log.warning(f"[prometheus] Metadata query failed: {stderr}")
+        return None
+
+    try:
+        data = json.loads(stdout)
+    except Exception:
+        return None
+
+    if data.get("status") != "success":
+        return None
+
+    entries = data.get("data", {}).get(metric_name, [])
+    if entries:
+        return entries[0].get("type")
+    return None
+
+
 def _query_platform_prometheus(query: str) -> dict | None:
     """Query the platform Prometheus (openshift-monitoring) for infrastructure metrics.
     
@@ -177,26 +210,44 @@ class TestObservabilityResources:
         exists = _resource_exists("telemetry.telemetry.istio.io", name, namespace)
         assert exists, (
             f"FAIL: Istio Telemetry '{name}' not found in namespace '{namespace}'.\n"
-            f"  This resource is required for adding 'user' label to istio_request_duration metrics.\n"
+            f"  This resource is required for adding 'tier' label to istio_request_duration metrics.\n"
             f"  Deploy with: kustomize build deployment/base/observability | kubectl apply -f -"
         )
         log.info(f"[resource] Istio Telemetry '{name}' exists in '{namespace}'")
         print(f"[resource] Istio Telemetry '{name}' exists in '{namespace}'")
 
-    def test_limitador_servicemonitor_exists(self, expected_metrics_config):
-        """Verify ServiceMonitor for Limitador is deployed."""
+    def test_limitador_metrics_scraping_configured(self, expected_metrics_config):
+        """Verify Limitador metrics scraping is configured (ServiceMonitor or Kuadrant PodMonitor).
+
+        When Kuadrant CR has spec.observability.enable=true, the operator creates its own
+        PodMonitor (kuadrant-limitador-monitor). In that case, install-observability.sh
+        skips deploying the MaaS ServiceMonitor to avoid duplicate metrics.
+        Either mechanism is acceptable.
+        """
         cfg = expected_metrics_config["resources"]["limitador_servicemonitor"]
         name = cfg["name"]
         namespace = cfg["namespace"]
 
-        exists = _resource_exists("servicemonitor", name, namespace)
-        assert exists, (
-            f"FAIL: ServiceMonitor '{name}' not found in namespace '{namespace}'.\n"
-            f"  This resource is required for Prometheus to scrape Limitador metrics.\n"
-            f"  Deploy with: kustomize build deployment/base/observability | kubectl apply -f -"
+        # Check for MaaS-deployed ServiceMonitor
+        has_servicemonitor = _resource_exists("servicemonitor", name, namespace)
+        # Check for Kuadrant-managed PodMonitor
+        has_podmonitor = _resource_exists("podmonitor", "kuadrant-limitador-monitor", namespace)
+
+        assert has_servicemonitor or has_podmonitor, (
+            f"FAIL: No Limitador metrics scraping configured in namespace '{namespace}'.\n"
+            f"  Expected either:\n"
+            f"    - ServiceMonitor '{name}' (deployed by install-observability.sh)\n"
+            f"    - PodMonitor 'kuadrant-limitador-monitor' (deployed by Kuadrant operator)\n"
+            f"  Check:\n"
+            f"    1. kubectl get servicemonitor,podmonitor -n {namespace}\n"
+            f"    2. Deploy with: scripts/install-observability.sh"
         )
-        log.info(f"[resource] ServiceMonitor '{name}' exists in '{namespace}'")
-        print(f"[resource] ServiceMonitor '{name}' exists in '{namespace}'")
+        if has_podmonitor:
+            log.info(f"[resource] Kuadrant PodMonitor 'kuadrant-limitador-monitor' exists in '{namespace}'")
+            print(f"[resource] Kuadrant PodMonitor 'kuadrant-limitador-monitor' exists in '{namespace}' (Kuadrant-managed)")
+        else:
+            log.info(f"[resource] ServiceMonitor '{name}' exists in '{namespace}'")
+            print(f"[resource] ServiceMonitor '{name}' exists in '{namespace}'")
 
 
 class TestLimitadorConfiguration:
@@ -1008,81 +1059,424 @@ class TestIstioLatencyMetrics:
 
 
 # =============================================================================
-# vLLM Metrics Tests
+# vLLM Metrics Tests — ALL dashboard metrics
 # =============================================================================
+
+def _assert_vllm_metric_exists(metric_query: str, display_name: str, dashboard: str):
+    """Helper: assert a vLLM metric exists in user-workload Prometheus."""
+    result = _query_prometheus(metric_query)
+
+    if result is None:
+        pytest.fail(f"FAIL: Could not query Prometheus for '{metric_query}'.")
+
+    if result.get("status") != "success":
+        pytest.fail(f"FAIL: Prometheus query failed for '{metric_query}': {result.get('error', 'unknown')}")
+
+    data = result.get("data", {})
+    results = data.get("result", [])
+
+    if len(results) == 0:
+        pytest.fail(
+            f"FAIL: Metric '{metric_query}' not found in Prometheus.\n"
+            f"  Dashboard panel: {dashboard}\n"
+            f"  Both real vLLM and simulator v0.7.1+ expose this metric.\n"
+            f"  Check:\n"
+            f"    1. Model pods are running: kubectl get pods -n llm\n"
+            f"    2. ServiceMonitor exists: kubectl get servicemonitor -n llm\n"
+            f"    3. Traffic has been sent to generate metrics (lazily registered)"
+        )
+
+    print(f"[e2e] Metric '{display_name}' exists in Prometheus ✓")
+    return results
+
+
+def _assert_vllm_metric_has_label(metric_query: str, label_name: str, display_name: str):
+    """Helper: assert a vLLM metric has a specific label."""
+    result = _query_prometheus(metric_query)
+
+    if result is None or result.get("status") != "success":
+        pytest.fail(f"FAIL: Could not query Prometheus for '{metric_query}'.")
+
+    data = result.get("data", {})
+    results = data.get("result", [])
+
+    if len(results) == 0:
+        pytest.fail(
+            f"FAIL: Metric '{metric_query}' not found in Prometheus.\n"
+            f"  Cannot verify '{label_name}' label without metric data."
+        )
+
+    for r in results:
+        metric = r.get("metric", {})
+        if label_name in metric:
+            print(f"[e2e] Metric '{display_name}' has '{label_name}' label: '{metric[label_name]}' ✓")
+            return
+
+    pytest.fail(
+        f"FAIL: Metric '{metric_query}' does not have '{label_name}' label.\n"
+        f"  This label should be present on vLLM metrics."
+    )
+
 
 class TestVLLMMetrics:
     """
-    Tests for verifying vLLM model metrics have correct labels.
-    Reference: observability.md Model Latency Metrics table.
-    
+    Tests for ALL vLLM metrics used in Grafana dashboards.
+    Reference: observability.md vLLM Metrics table + dashboard JSON.
+
     vLLM metrics are scraped by user-workload Prometheus.
     Both real vLLM models and the simulator (v0.7.1+) expose these metrics.
-    
+
     NOTE: Histogram metrics must be queried with a suffix (_count, _bucket, _sum)
     because Prometheus does not return results for the base histogram name.
     """
 
-    def test_vllm_latency_metric_exists(self):
+    # --- vllm:e2e_request_latency_seconds (histogram) ---
+    # Dashboard: Platform Admin (Model Inference Latency), AI Engineer (Inference Success Rate)
+
+    def test_vllm_e2e_latency_exists(self):
+        """Verify vllm:e2e_request_latency_seconds is being scraped."""
+        _assert_vllm_metric_exists(
+            "vllm:e2e_request_latency_seconds_count",
+            "vllm:e2e_request_latency_seconds",
+            "Platform Admin → Model Inference Latency",
+        )
+
+    def test_vllm_e2e_latency_has_model_name(self):
+        """Verify vllm:e2e_request_latency_seconds has 'model_name' label."""
+        _assert_vllm_metric_has_label(
+            "vllm:e2e_request_latency_seconds_count",
+            "model_name",
+            "vllm:e2e_request_latency_seconds",
+        )
+
+    # --- vllm:request_success_total (counter) ---
+    # Dashboard: Platform Admin (Inference Success Rate), AI Engineer (Inference Success Rate)
+
+    def test_vllm_request_success_total_exists(self):
+        """Verify vllm:request_success_total is being scraped."""
+        _assert_vllm_metric_exists(
+            "vllm:request_success_total",
+            "vllm:request_success_total",
+            "Platform Admin → Inference Success Rate",
+        )
+
+    # --- vllm:num_requests_running (gauge) ---
+    # Dashboard: Platform Admin (Requests Running, Model Queue Depth)
+
+    def test_vllm_num_requests_running_exists(self):
+        """Verify vllm:num_requests_running is being scraped."""
+        _assert_vllm_metric_exists(
+            "vllm:num_requests_running",
+            "vllm:num_requests_running",
+            "Platform Admin → Requests Running",
+        )
+
+    def test_vllm_num_requests_running_has_model_name(self):
+        """Verify vllm:num_requests_running has 'model_name' label."""
+        _assert_vllm_metric_has_label(
+            "vllm:num_requests_running",
+            "model_name",
+            "vllm:num_requests_running",
+        )
+
+    # --- vllm:num_requests_waiting (gauge) ---
+    # Dashboard: Platform Admin (Requests Waiting, Model Queue Depth)
+
+    def test_vllm_num_requests_waiting_exists(self):
+        """Verify vllm:num_requests_waiting is being scraped."""
+        _assert_vllm_metric_exists(
+            "vllm:num_requests_waiting",
+            "vllm:num_requests_waiting",
+            "Platform Admin → Requests Waiting",
+        )
+
+    def test_vllm_num_requests_waiting_has_model_name(self):
+        """Verify vllm:num_requests_waiting has 'model_name' label."""
+        _assert_vllm_metric_has_label(
+            "vllm:num_requests_waiting",
+            "model_name",
+            "vllm:num_requests_waiting",
+        )
+
+    # --- vllm:kv_cache_usage_perc (gauge) ---
+    # Dashboard: Platform Admin (GPU Cache Usage)
+
+    def test_vllm_kv_cache_usage_exists(self):
+        """Verify vllm:kv_cache_usage_perc is being scraped."""
+        _assert_vllm_metric_exists(
+            "vllm:kv_cache_usage_perc",
+            "vllm:kv_cache_usage_perc",
+            "Platform Admin → GPU Cache Usage",
+        )
+
+    # --- vllm:request_prompt_tokens (histogram) ---
+    # Dashboard: Platform Admin (Tokens 1h, Token Throughput, Prompt vs Generation Ratio)
+
+    def test_vllm_prompt_tokens_exists(self):
+        """Verify vllm:request_prompt_tokens is being scraped."""
+        _assert_vllm_metric_exists(
+            "vllm:request_prompt_tokens_sum",
+            "vllm:request_prompt_tokens",
+            "Platform Admin → Token Throughput",
+        )
+
+    # --- vllm:request_generation_tokens (histogram) ---
+    # Dashboard: Platform Admin (Token Throughput, Prompt vs Generation Ratio)
+
+    def test_vllm_generation_tokens_exists(self):
+        """Verify vllm:request_generation_tokens is being scraped."""
+        _assert_vllm_metric_exists(
+            "vllm:request_generation_tokens_sum",
+            "vllm:request_generation_tokens",
+            "Platform Admin → Token Throughput",
+        )
+
+    # --- vllm:time_to_first_token_seconds (histogram) ---
+    # Dashboard: Platform Admin (TTFT panel)
+
+    def test_vllm_ttft_exists(self):
+        """Verify vllm:time_to_first_token_seconds is being scraped."""
+        _assert_vllm_metric_exists(
+            "vllm:time_to_first_token_seconds_count",
+            "vllm:time_to_first_token_seconds",
+            "Platform Admin → Time to First Token (TTFT)",
+        )
+
+    # --- vllm:inter_token_latency_seconds (histogram) ---
+    # Dashboard: Platform Admin (ITL panel)
+
+    def test_vllm_itl_exists(self):
+        """Verify vllm:inter_token_latency_seconds is being scraped."""
+        _assert_vllm_metric_exists(
+            "vllm:inter_token_latency_seconds_count",
+            "vllm:inter_token_latency_seconds",
+            "Platform Admin → Inter-Token Latency (ITL)",
+        )
+
+    # --- vllm:request_queue_time_seconds (histogram) ---
+    # NOTE: vllm:request_queue_time_seconds is in the Platform Admin dashboard
+    # but is NOT exposed by the simulator. Only real vLLM backends produce it.
+    # Skipped from CI validation.
+
+
+# =============================================================================
+# Authorino Auth Server Metrics Tests — dashboard metrics
+# =============================================================================
+
+class TestAuthorinoMetrics:
+    """
+    Tests for Authorino auth server metrics used in the Platform Admin dashboard.
+
+    These metrics are scraped from Authorino's /server-metrics endpoint via the
+    authorino-server-metrics ServiceMonitor deployed by install-observability.sh.
+    """
+
+    def test_authorino_server_metrics_scraping_configured(self):
+        """Verify Authorino /server-metrics scraping is configured."""
+        # Check for MaaS-deployed ServiceMonitor
+        has_maas_sm = _resource_exists(
+            "servicemonitor", "authorino-server-metrics", "kuadrant-system"
+        )
+        # Check if Kuadrant already scrapes /server-metrics
+        has_kuadrant_sm = False
+        rc, output, _ = _run_kubectl([
+            "get", "servicemonitor,podmonitor", "-n", "kuadrant-system",
+            "-o", "jsonpath={range .items[*]}{.metadata.name}{' '}{end}"
+        ])
+        if rc == 0:
+            # Check if any existing monitor scrapes /server-metrics
+            for name in output.strip().split():
+                if "authorino" in name and "server" in name:
+                    has_kuadrant_sm = True
+                    break
+
+        assert has_maas_sm or has_kuadrant_sm, (
+            "FAIL: No Authorino /server-metrics scraping configured.\n"
+            "  The Platform Admin dashboard needs auth evaluation metrics.\n"
+            "  Check:\n"
+            "    1. kubectl get servicemonitor authorino-server-metrics -n kuadrant-system\n"
+            "    2. Deploy with: scripts/install-observability.sh"
+        )
+        print("[resource] Authorino /server-metrics scraping configured ✓")
+
+    def test_auth_evaluation_latency_exists(self):
         """
-        Verify vllm:e2e_request_latency_seconds metric is being scraped.
-        Reference: observability.md Model Latency Metrics table.
-        
-        Queries _count suffix since Prometheus histograms require a suffix.
+        Verify auth_server_authconfig_duration_seconds is being scraped.
+        Dashboard: Platform Admin → Auth Evaluation Latency (P50/P95/P99).
         """
-        metric_name = "vllm:e2e_request_latency_seconds_count"
+        metric_name = "auth_server_authconfig_duration_seconds_count"
         result = _query_prometheus(metric_name)
-        
+
         if result is None:
-            pytest.fail("FAIL: Could not query Prometheus for vLLM metrics.")
-        
+            pytest.fail("FAIL: Could not query Prometheus for Authorino metrics.")
+
         if result.get("status") != "success":
             pytest.fail(f"FAIL: Prometheus query failed: {result.get('error', 'unknown')}")
-        
+
         data = result.get("data", {})
         results = data.get("result", [])
-        
+
         if len(results) == 0:
             pytest.fail(
                 f"FAIL: Metric '{metric_name}' not found in Prometheus.\n"
-                f"  Both real vLLM and simulator v0.7.1+ expose this metric.\n"
+                f"  Dashboard: Platform Admin → Auth Evaluation Latency\n"
+                f"  This metric requires the authorino-server-metrics ServiceMonitor.\n"
                 f"  Check:\n"
-                f"    1. Model pods are running: kubectl get pods -n llm\n"
-                f"    2. ServiceMonitor exists: kubectl get servicemonitor -n llm\n"
-                f"    3. Traffic has been sent to generate metrics (lazily registered)"
+                f"    1. ServiceMonitor exists: kubectl get servicemonitor authorino-server-metrics -n kuadrant-system\n"
+                f"    2. Authorino pods are running: kubectl get pods -n kuadrant-system -l authorino-resource=authorino\n"
+                f"    3. Traffic has been sent to trigger auth evaluations"
             )
-        
+
         print(f"[e2e] Metric '{metric_name}' exists in Prometheus ✓")
 
-    def test_vllm_latency_metric_has_model_name_label(self):
+    def test_auth_response_status_exists(self):
         """
-        Verify vllm:e2e_request_latency_seconds has 'model_name' label.
-        Reference: observability.md Model Latency Metrics table.
+        Verify auth_server_authconfig_response_status is being scraped.
+        Dashboard: Platform Admin → Auth Success / Deny Rate.
         """
-        metric_name = "vllm:e2e_request_latency_seconds_count"
+        metric_name = "auth_server_authconfig_response_status"
         result = _query_prometheus(metric_name)
-        
-        if result is None or result.get("status") != "success":
-            pytest.fail("FAIL: Could not query Prometheus for vLLM metrics.")
-        
+
+        if result is None:
+            pytest.fail("FAIL: Could not query Prometheus for Authorino metrics.")
+
+        if result.get("status") != "success":
+            pytest.fail(f"FAIL: Prometheus query failed: {result.get('error', 'unknown')}")
+
         data = result.get("data", {})
         results = data.get("result", [])
-        
+
         if len(results) == 0:
             pytest.fail(
                 f"FAIL: Metric '{metric_name}' not found in Prometheus.\n"
-                f"  Cannot verify 'model_name' label without metric data."
+                f"  Dashboard: Platform Admin → Auth Success / Deny Rate\n"
+                f"  This metric requires the authorino-server-metrics ServiceMonitor.\n"
+                f"  Check:\n"
+                f"    1. ServiceMonitor exists: kubectl get servicemonitor authorino-server-metrics -n kuadrant-system\n"
+                f"    2. Authorino pods are running: kubectl get pods -n kuadrant-system -l authorino-resource=authorino\n"
+                f"    3. Traffic has been sent to trigger auth evaluations"
             )
-        
-        # Check for model_name label
+
+        print(f"[e2e] Metric '{metric_name}' exists in Prometheus ✓")
+
+    def test_auth_response_status_has_status_label(self):
+        """
+        Verify auth_server_authconfig_response_status has 'status' label.
+        Dashboard: Platform Admin → Auth Success / Deny Rate (grouped by status).
+        """
+        metric_name = "auth_server_authconfig_response_status"
+        result = _query_prometheus(metric_name)
+
+        if result is None or result.get("status") != "success":
+            pytest.fail("FAIL: Could not query Prometheus for Authorino metrics.")
+
+        data = result.get("data", {})
+        results = data.get("result", [])
+
+        if len(results) == 0:
+            pytest.fail(
+                f"FAIL: Metric '{metric_name}' not found. Cannot verify 'status' label."
+            )
+
         for r in results:
             metric = r.get("metric", {})
-            if "model_name" in metric:
-                print(f"[e2e] Metric '{metric_name}' has 'model_name' label: '{metric['model_name']}' ✓")
+            if "status" in metric:
+                print(f"[e2e] Metric '{metric_name}' has 'status' label: '{metric['status']}' ✓")
                 return
-        
+
         pytest.fail(
-            f"FAIL: Metric '{metric_name}' does not have 'model_name' label.\n"
-            f"  Reference: observability.md Model Latency Metrics table\n"
-            f"  This label should be present on vLLM metrics."
+            f"FAIL: Metric '{metric_name}' does not have 'status' label.\n"
+            f"  Dashboard: Platform Admin → Auth Success / Deny Rate\n"
+            f"  The 'status' label (OK, PERMISSION_DENIED, etc.) is required for the dashboard."
         )
+
+
+# =============================================================================
+# Metric Type Validation — data-driven from expected_metrics.yaml
+# =============================================================================
+
+def _collect_all_metrics_with_type(config: dict) -> list[tuple[str, str, str]]:
+    """
+    Walk expected_metrics.yaml and collect all (metric_name, expected_type, prometheus_source)
+    tuples where 'type' is declared.
+
+    prometheus_source is 'user-workload' or 'platform' to indicate which Prometheus to query.
+    """
+    entries = []
+
+    # Limitador metrics → user-workload Prometheus
+    for section in ("token_metrics", "health_metrics"):
+        for m in config.get("limitador", {}).get(section, []):
+            if "type" in m:
+                entries.append((m["name"], m["type"], "user-workload"))
+
+    # Istio gateway metrics → platform Prometheus
+    for m in config.get("latency_metrics", {}).get("istio_gateway", {}).get("metrics", []):
+        if "type" in m:
+            entries.append((m["name"], m["type"], "platform"))
+
+    # vLLM metrics → user-workload Prometheus
+    for m in config.get("latency_metrics", {}).get("vllm", {}).get("metrics", []):
+        if "type" in m:
+            entries.append((m["name"], m["type"], "user-workload"))
+
+    # Authorino metrics → user-workload Prometheus
+    for m in config.get("authorino", {}).get("metrics", []):
+        if "type" in m:
+            entries.append((m["name"], m["type"], "user-workload"))
+
+    return entries
+
+
+class TestMetricTypes:
+    """
+    Data-driven test that validates every metric's type in Prometheus
+    matches the type declared in expected_metrics.yaml.
+
+    Uses the Prometheus /api/v1/metadata endpoint.
+    """
+
+    @pytest.fixture(scope="class")
+    def metrics_with_types(self, expected_metrics_config):
+        """Collect all metrics that declare a type."""
+        entries = _collect_all_metrics_with_type(expected_metrics_config)
+        if not entries:
+            pytest.skip("No metrics with 'type' declared in config")
+        return entries
+
+    def test_all_metric_types_match(self, metrics_with_types):
+        """Verify every metric's type in Prometheus matches expected_metrics.yaml."""
+        mismatches = []
+        skipped = []
+
+        for metric_name, expected_type, source in metrics_with_types:
+            if source == "platform":
+                actual_type = _query_prometheus_metadata(
+                    metric_name,
+                    namespace="openshift-monitoring",
+                    pod="prometheus-k8s-0",
+                    container="prometheus",
+                )
+            else:
+                actual_type = _query_prometheus_metadata(metric_name)
+
+            if actual_type is None:
+                skipped.append(metric_name)
+                continue
+
+            if actual_type != expected_type:
+                mismatches.append(
+                    f"  {metric_name}: expected '{expected_type}', got '{actual_type}'"
+                )
+            else:
+                print(f"[type] {metric_name}: {actual_type} ✓")
+
+        if skipped:
+            print(f"[type] Skipped (no metadata): {', '.join(skipped)}")
+
+        if mismatches:
+            pytest.fail(
+                f"FAIL: Metric type mismatches found:\n"
+                + "\n".join(mismatches)
+                + "\n  Update expected_metrics.yaml or fix the metric source."
+            )
