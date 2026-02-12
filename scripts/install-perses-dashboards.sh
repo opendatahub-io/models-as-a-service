@@ -60,7 +60,7 @@ echo ""
 if ! kubectl get crd persesdashboards.perses.dev &>/dev/null; then
     echo "⚠️  Perses CRDs not found. Install the Cluster Observability Operator first."
     echo "   Run:  ./scripts/installers/install-perses.sh"
-    echo "   See:  https://docs.openshift.com/container-platform/latest/observability/cluster_observability_operator/cluster-observability-operator-overview.html"
+    echo "   See:  https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html/cluster_observability_operator/index"
     exit 0
 fi
 echo "✅ Perses CRDs available"
@@ -103,9 +103,11 @@ echo "   ✅ Dashboards deployed (Platform Admin, AI Engineer)"
 
 echo ""
 echo "🔗 Configuring Prometheus datasource..."
-kubectl apply -f "$OBSERVABILITY_DIR/perses/perses-datasource.yaml" -n openshift-operators 2>/dev/null || \
+if kubectl apply -f "$OBSERVABILITY_DIR/perses/perses-datasource.yaml" -n openshift-operators 2>/dev/null; then
+    echo "   ✅ Datasource configured"
+else
     echo "   ⚠️  Datasource may already be configured"
-echo "   ✅ Datasource configured"
+fi
 
 # ==========================================
 # Summary

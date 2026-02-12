@@ -39,6 +39,13 @@ if [[ "$OCP" == true ]]; then
   if kubectl get csv -n openshift-operators 2>/dev/null | grep -q "cluster-observability-operator.*Succeeded"; then
     echo "✅ Cluster Observability Operator already installed"
     kubectl get csv -n openshift-operators | grep cluster-observability-operator
+    # Still need to wait for Perses CRDs to be established before exiting,
+    # since callers (e.g., install-perses-dashboards.sh) depend on them.
+    echo "   Waiting for Perses CRDs..."
+    for crd in "perses.perses.dev" "persesdashboards.perses.dev" "persesdatasources.perses.dev"; do
+      kubectl wait --for=condition=Established "crd/$crd" --timeout=60s 2>/dev/null || \
+        echo "   ⚠️  CRD $crd not yet established, continuing..."
+    done
     echo "📊 Perses operator installation completed!"
     exit 0
   fi
