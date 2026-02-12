@@ -1,4 +1,7 @@
-# OpenShift Route to expose Perses UI
+# OpenShift Route to expose Perses UI.
+# Standalone kustomize deployments only (kubectl apply -k).
+# Not used by install-perses-dashboards.sh — the UIPlugin integrates Perses
+# into the OpenShift Console directly (no external route needed).
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:

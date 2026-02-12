@@ -1,5 +1,7 @@
 # Perses Dashboard: Platform Admin Dashboard
-# Equivalent to Grafana Platform Admin Dashboard
+# GENERATED FROM Grafana source: deployment/components/observability/grafana/dashboards/dashboard-platform-admin.yaml
+# Every panel and PromQL query matches the Grafana version except:
+#   - Grafana's $__range is replaced with [1h] (Perses does not support $__range)
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
 metadata:
@@ -12,8 +14,7 @@ spec:
     name: "Platform Admin Dashboard"
     description: "Platform-wide metrics for administrators monitoring the MaaS platform"
   duration: 1h
-  
-  # Variables
+
   variables:
     - kind: ListVariable
       spec:
@@ -29,6 +30,24 @@ spec:
             labelName: namespace
             matchers:
               - kube_pod_info{pod=~"maas-api.*"}
+    - kind: TextVariable
+      spec:
+        name: kuadrant_namespace
+        display:
+          name: "Kuadrant Namespace"
+        value: "kuadrant-system"
+    - kind: TextVariable
+      spec:
+        name: gateway_namespace
+        display:
+          name: "Gateway Namespace"
+        value: "openshift-ingress"
+    - kind: TextVariable
+      spec:
+        name: llm_namespace
+        display:
+          name: "LLM Namespace"
+        value: "llm"
     - kind: ListVariable
       spec:
         name: model
@@ -44,14 +63,16 @@ spec:
             matchers:
               - vllm:num_requests_running
 
-  # ALL Panels
   panels:
-    # === Row: Component Health ===
+    # =============================================
+    # Section: Component Health (6 panels)
+    # =============================================
     limitadorHealth:
       kind: Panel
       spec:
         display:
           name: "💚 Limitador"
+          description: "Shows if Limitador (rate limiting service) is running. Uses max() to deduplicate across scrape sources."
         plugin:
           kind: StatChart
           spec:
@@ -64,13 +85,15 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: limitador_up
+                  seriesNameFormat: "Limitador"
+                  query: max(limitador_up)
 
     authorinoHealth:
       kind: Panel
       spec:
         display:
           name: "🔐 Authorino"
+          description: "Count of running Authorino pods (authentication/authorization service). Should be >= 1."
         plugin:
           kind: StatChart
           spec:
@@ -83,13 +106,15 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: count(kube_pod_status_phase{namespace="kuadrant-system", pod=~"authorino.*", phase="Running"}) OR vector(0)
+                  seriesNameFormat: "Pods"
+                  query: count(kube_pod_status_phase{namespace=~"$kuadrant_namespace", pod=~"authorino.*", phase="Running"}) OR vector(0)
 
     maasApiPods:
       kind: Panel
       spec:
         display:
           name: "🌐 MaaS API Pods"
+          description: "Count of running MaaS API pods. These handle token generation and model routing."
         plugin:
           kind: StatChart
           spec:
@@ -102,13 +127,15 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: count(kube_pod_status_phase{namespace=~"$maas_namespace", pod=~"maas-api.*", phase="Running"} == 1) OR vector(0)
+                  seriesNameFormat: "Pods"
+                  query: count(kube_pod_status_phase{namespace=~"$maas_namespace", pod=~"maas-api.*", phase="Running"} == 1) OR on() vector(0)
 
     gatewayPods:
       kind: Panel
       spec:
         display:
           name: "🚪 Gateway Pods"
+          description: "Count of running Istio Gateway pods. These are the entry point for all API traffic."
         plugin:
           kind: StatChart
           spec:
@@ -121,13 +148,15 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: count(kube_pod_status_phase{namespace="openshift-ingress", pod=~"maas-default-gateway.*", phase="Running"} == 1) OR vector(0)
+                  seriesNameFormat: "Pods"
+                  query: count(kube_pod_status_phase{namespace=~"$gateway_namespace", pod=~"maas-default-gateway.*", phase="Running"} == 1) OR on() vector(0)
 
     firingAlerts:
       kind: Panel
       spec:
         display:
           name: "🚨 Firing Alerts"
+          description: "Number of currently firing Prometheus alerts for MaaS components. 0 = healthy."
         plugin:
           kind: StatChart
           spec:
@@ -140,14 +169,15 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: count(ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"llm|kuadrant-system|maas-api|envoy-gateway-system"}) OR vector(0)
+                  seriesNameFormat: "Alerts"
+                  query: count(ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"$llm_namespace|$kuadrant_namespace|$maas_namespace|envoy-gateway-system"}) OR vector(0)
 
     activeAlertsTable:
       kind: Panel
       spec:
         display:
           name: "📋 Active Alerts"
-          description: "Currently firing alerts across MaaS namespaces"
+          description: "Currently firing Prometheus alerts for MaaS-related namespaces. Excludes the Watchdog heartbeat alert."
         plugin:
           kind: TimeSeriesTable
           spec: {}
@@ -158,9 +188,76 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{alertname}} ({{severity}})"
-                  query: ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"llm|kuadrant-system|maas-api|envoy-gateway-system"}
+                  query: ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"$llm_namespace|$kuadrant_namespace|$maas_namespace|envoy-gateway-system"}
 
-    # === Row: Key Metrics ===
+    # =============================================
+    # Section: Auth Evaluation (2 panels)
+    # =============================================
+    authEvaluationLatency:
+      kind: Panel
+      spec:
+        display:
+          name: "🔐 Auth Evaluation Latency (P50/P95/P99)"
+          description: "Authentication/authorization evaluation latency. Shows how long Authorino takes to evaluate each request."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: seconds
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "P50"
+                  query: histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "P95"
+                  query: histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "P99"
+                  query: histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))
+
+    authSuccessDenyRate:
+      kind: Panel
+      spec:
+        display:
+          name: "🔐 Auth Success / Deny Rate"
+          description: "Rate of auth evaluation outcomes from Authorino. Shows successful authentications vs denials over time."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{status}}"
+                  query: sum by (status) (rate(auth_server_authconfig_response_status[5m]))
+
+    # =============================================
+    # Section: Key Metrics (8 panels)
+    # =============================================
     totalTokensConsumed:
       kind: Panel
       spec:
@@ -180,6 +277,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
+                  seriesNameFormat: "Tokens"
                   query: sum(authorized_hits)
 
     totalRequests:
@@ -201,6 +299,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
+                  seriesNameFormat: "Requests"
                   query: sum(authorized_calls)
 
     tokenRate:
@@ -222,6 +321,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
+                  seriesNameFormat: "tokens/s"
                   query: sum(rate(authorized_hits[5m]))
 
     requestRate:
@@ -243,6 +343,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
+                  seriesNameFormat: "req/s"
                   query: sum(rate(authorized_calls[5m]))
 
     inferenceSuccessRate:
@@ -256,16 +357,60 @@ spec:
           spec:
             calculation: last-number
             format:
-              unit: percent
+              unit: percent-decimal
               decimalPlaces: 1
-            max: 100
+            max: 1
         queries:
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: 100 * (((sum(rate(vllm:request_success_total[5m])) / sum(rate(vllm:e2e_request_latency_seconds_count[5m]))) >= 0) OR vector(1))
+                  seriesNameFormat: "Success Rate"
+                  query: ((sum(rate(vllm:request_success_total[5m])) / sum(rate(vllm:e2e_request_latency_seconds_count[5m]))) >= 0) OR vector(1)
+
+    activeUsers:
+      kind: Panel
+      spec:
+        display:
+          name: "👥 Active Users"
+          description: "Unique users with at least one successful request."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Users"
+                  query: count(count by (user) (authorized_calls))
+
+    p50Latency:
+      kind: Panel
+      spec:
+        display:
+          name: "⏱️ P50 Response Latency"
+          description: "Median (50th percentile) response latency measured at the gateway over a 15m window."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: milliseconds
+              decimalPlaces: 0
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "P50"
+                  query: (histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket[15m])) by (le)) >= 0) OR vector(0)
 
     rateLimitRatio:
       kind: Panel
@@ -286,49 +431,12 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
+                  seriesNameFormat: "Rate Limited"
                   query: (sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)
 
-    activeUsers:
-      kind: Panel
-      spec:
-        display:
-          name: "👥 Active Users (5m)"
-          description: "Number of unique users with activity in the last 5 minutes."
-        plugin:
-          kind: StatChart
-          spec:
-            calculation: last-number
-            format:
-              unit: decimal
-        queries:
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: PrometheusTimeSeriesQuery
-                spec:
-                  query: count(count by (user) (rate(authorized_hits[5m]) > 0))
-
-    p50Latency:
-      kind: Panel
-      spec:
-        display:
-          name: "⏱️ P50 Response Latency"
-        plugin:
-          kind: StatChart
-          spec:
-            calculation: last-number
-            format:
-              unit: milliseconds
-              decimalPlaces: 0
-        queries:
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: PrometheusTimeSeriesQuery
-                spec:
-                  query: histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket[5m])) by (le))
-
-    # === Row: Traffic Analysis ===
+    # =============================================
+    # Section: Traffic Analysis (6 panels)
+    # =============================================
     tokenRateByModel:
       kind: Panel
       spec:
@@ -351,13 +459,14 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{model}}"
-                  query: sum by (model) (rate(authorized_hits[5m]))
+                  query: sum by (model) (rate(authorized_hits{model!=""}[5m]))
 
     overallErrorRate:
       kind: Panel
       spec:
         display:
           name: "❌ Overall Error Rate"
+          description: "Error rates by type. 4xx = client errors excluding 429, 5xx = server errors, Rate Limited = 429 quota exceeded."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -373,8 +482,8 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "4xx Errors"
-                  query: sum(rate(istio_requests_total{response_code=~"4.."}[5m])) OR vector(0)
+                  seriesNameFormat: "4xx Errors (excl. 429)"
+                  query: sum(rate(istio_requests_total{response_code=~"4..", response_code!="429"}[5m])) OR vector(0)
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -387,15 +496,15 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "Rate Limited"
+                  seriesNameFormat: "429 Rate Limited"
                   query: sum(rate(limited_calls[5m])) OR vector(0)
 
-    tokenRateByTier:
+    tokenConsumptionByTier:
       kind: Panel
       spec:
         display:
-          name: "📊 Token Rate by Tier"
-          description: "Token consumption rate (tokens/s) broken down by user tier (free, premium, enterprise). Shows tier distribution."
+          name: "📊 Token Consumption by Tier"
+          description: "Token consumption rate (tokens/s) by tier."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -414,11 +523,36 @@ spec:
                   seriesNameFormat: "{{tier}}"
                   query: sum by (tier) (rate(authorized_hits[5m]))
 
+    requestVolumeByTier:
+      kind: Panel
+      spec:
+        display:
+          name: "📈 Request Volume by Tier"
+          description: "Request rate (req/s) by tier."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{tier}}"
+                  query: sum by (tier) (rate(authorized_calls[5m]))
+
     p95LatencyByService:
       kind: Panel
       spec:
         display:
           name: "⏱️ P95 Latency by Service"
+          description: "95th percentile latency per backend service. Excludes unknown (404s to non-existent paths)."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -435,36 +569,14 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{destination_service_name}}"
-                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
-
-    p99LatencyByService:
-      kind: Panel
-      spec:
-        display:
-          name: "⏱️ P99 Latency by Service"
-        plugin:
-          kind: TimeSeriesChart
-          spec:
-            legend:
-              position: bottom
-              mode: table
-            yAxis:
-              format:
-                unit: milliseconds
-        queries:
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: PrometheusTimeSeriesQuery
-                spec:
-                  seriesNameFormat: "{{destination_service_name}}"
-                  query: histogram_quantile(0.99, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
+                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{destination_service_name!="unknown"}[5m])))
 
     rateLimitViolationsByTier:
       kind: Panel
       spec:
         display:
           name: "🚫 Rate Limit Violations by Tier"
+          description: "Rate limit violations (HTTP 429) by tier."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -483,36 +595,15 @@ spec:
                   seriesNameFormat: "{{tier}}"
                   query: sum by (tier) (rate(limited_calls[5m]))
 
-    successRateByTier:
+    # =============================================
+    # Section: Error Breakdown (2 panels)
+    # =============================================
+    rateLimitedRequests:
       kind: Panel
       spec:
         display:
-          name: "✅ Success Rate by Tier"
-        plugin:
-          kind: TimeSeriesChart
-          spec:
-            legend:
-              position: bottom
-              mode: table
-            yAxis:
-              format:
-                unit: percent
-        queries:
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: PrometheusTimeSeriesQuery
-                spec:
-                  seriesNameFormat: "{{tier}}"
-                  query: (sum by (tier) (authorized_calls) / clamp_min(sum by (tier) (authorized_calls) + sum by (tier) (limited_calls), 1e-9)) and (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls)) > 0
-
-    # === Row: Top Users ===
-    topUsersByRequests:
-      kind: Panel
-      spec:
-        display:
-          name: "🏆 Top 10 Users by Requests"
-          description: "Top 10 users ranked by total API requests made."
+          name: "🚫 Rate Limited Requests"
+          description: "Rate of requests that exceeded quota and received HTTP 429."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -528,15 +619,15 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{user}}"
-                  query: topk(10, sum by (user) (authorized_calls))
+                  seriesNameFormat: "Rate Limited"
+                  query: sum(rate(limited_calls[5m]))
 
-    topUsersByTokens:
+    unauthorizedRequests:
       kind: Panel
       spec:
         display:
-          name: "🏆 Top 10 Users by Token Usage"
-          description: "Top 10 users ranked by total tokens consumed. Helps identify your highest-consuming users."
+          name: "🔒 Unauthorized Requests"
+          description: "Rate of unauthorized (401) requests at the gateway."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -552,113 +643,18 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{user}}"
-                  query: topk(10, sum by (user) (authorized_hits))
+                  seriesNameFormat: "Unauthorized (401)"
+                  query: sum(rate(istio_requests_total{response_code="401"}[5m])) OR vector(0)
 
-    # === Row: Token Consumption ===
-    tokenConsumptionByTier:
-      kind: Panel
-      spec:
-        display:
-          name: "🔤 Token Consumption by Tier"
-          description: "Total API tokens consumed per tier, extracted from model response usage.total_tokens."
-        plugin:
-          kind: TimeSeriesChart
-          spec:
-            legend:
-              position: bottom
-              mode: table
-            yAxis:
-              format:
-                unit: decimal
-        queries:
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: PrometheusTimeSeriesQuery
-                spec:
-                  seriesNameFormat: "{{tier}}"
-                  query: sum by (tier) (authorized_hits)
-
-    tokenConsumptionByUser:
-      kind: Panel
-      spec:
-        display:
-          name: "🔤 Token Consumption by User"
-          description: "Total API tokens consumed per user, extracted from model response usage.total_tokens."
-        plugin:
-          kind: TimeSeriesChart
-          spec:
-            legend:
-              position: bottom
-              mode: table
-            yAxis:
-              format:
-                unit: decimal
-        queries:
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: PrometheusTimeSeriesQuery
-                spec:
-                  seriesNameFormat: "{{user}}"
-                  query: sum by (user) (authorized_hits)
-
-    # === Row: Detailed Breakdown ===
-    tokenRateByUser:
-      kind: Panel
-      spec:
-        display:
-          name: "👥 Token Rate by User"
-          description: "Token consumption rate (tokens/s) broken down by individual user. Shows usage patterns over time."
-        plugin:
-          kind: TimeSeriesChart
-          spec:
-            legend:
-              position: bottom
-              mode: table
-            yAxis:
-              format:
-                unit: decimal
-        queries:
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: PrometheusTimeSeriesQuery
-                spec:
-                  seriesNameFormat: "{{user}}"
-                  query: sum by (user) (rate(authorized_hits[5m]))
-
-    tokenVolumeByUserModelTier:
-      kind: Panel
-      spec:
-        display:
-          name: "📋 Token Volume by User, Model & Tier"
-          description: "Token consumption broken down by user, model, and tier."
-        plugin:
-          kind: TimeSeriesChart
-          spec:
-            legend:
-              position: bottom
-              mode: table
-            yAxis:
-              format:
-                unit: decimal
-        queries:
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: PrometheusTimeSeriesQuery
-                spec:
-                  seriesNameFormat: "{{user}} / {{model}} / {{tier}}"
-                  query: sum by (user, model, tier) (authorized_hits)
-
-    # === Row: Model Metrics (vLLM) ===
+    # =============================================
+    # Section: Model Metrics (12 panels)
+    # =============================================
     requestsRunning:
       kind: Panel
       spec:
         display:
           name: "🔄 Requests Running"
+          description: "Number of inference requests currently being processed by the model."
         plugin:
           kind: StatChart
           spec:
@@ -671,6 +667,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
+                  seriesNameFormat: "Running"
                   query: sum(vllm:num_requests_running)
 
     requestsWaiting:
@@ -678,6 +675,7 @@ spec:
       spec:
         display:
           name: "⏳ Requests Waiting"
+          description: "Number of inference requests waiting in queue. Growing queue indicates model is overloaded."
         plugin:
           kind: StatChart
           spec:
@@ -690,34 +688,38 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
+                  seriesNameFormat: "Waiting"
                   query: sum(vllm:num_requests_waiting)
 
     gpuCacheUsage:
       kind: Panel
       spec:
         display:
-          name: "💾 KV Cache Usage"
+          name: "💾 GPU Cache Usage"
+          description: "Percentage of GPU KV-cache in use. High values (>90%) may cause request queuing."
         plugin:
           kind: GaugeChart
           spec:
             calculation: last-number
             format:
-              unit: percent
+              unit: percent-decimal
               decimalPlaces: 1
-            max: 100
+            max: 1
         queries:
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: 100 * avg(vllm:kv_cache_usage_perc)
+                  seriesNameFormat: "Cache Usage"
+                  query: avg(vllm:kv_cache_usage_perc)
 
-    totalVllmRequests:
+    totalModelRequests:
       kind: Panel
       spec:
         display:
-          name: "📊 Total Model Requests"
+          name: "📊 Total Requests"
+          description: "Total inference requests processed by the model in the last hour."
         plugin:
           kind: StatChart
           spec:
@@ -731,6 +733,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
+                  seriesNameFormat: "Requests"
                   query: sum(increase(vllm:e2e_request_latency_seconds_count{model_name=~"$model"}[1h]))
 
     modelQueueDepth:
@@ -738,6 +741,7 @@ spec:
       spec:
         display:
           name: "📊 Model Queue Depth"
+          description: "Running and waiting requests per model over time."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -768,6 +772,7 @@ spec:
       spec:
         display:
           name: "⏱️ Model Inference Latency"
+          description: "End-to-end model inference latency (P50/P95/P99). Includes queue time + processing time."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -805,6 +810,7 @@ spec:
       spec:
         display:
           name: "🔤 Tokens (1h)"
+          description: "Total prompt + generation tokens processed in the last hour across all models."
         plugin:
           kind: StatChart
           spec:
@@ -818,6 +824,7 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
+                  seriesNameFormat: "Tokens"
                   query: sum(increase(vllm:request_prompt_tokens_sum{model_name=~"$model"}[1h])) + sum(increase(vllm:request_generation_tokens_sum{model_name=~"$model"}[1h]))
 
     tokenThroughput:
@@ -825,6 +832,7 @@ spec:
       spec:
         display:
           name: "🔤 Token Throughput"
+          description: "Token processing rate. Prompt = input tokens, Generation = output tokens."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -850,13 +858,153 @@ spec:
                   seriesNameFormat: "Generation tokens/s"
                   query: sum(rate(vllm:request_generation_tokens_sum{model_name=~"$model"}[5m]))
 
-    # === Row: User Tracking ===
-    tokenUsageAndRateLimitsPerUser:
+    promptVsGenerationRatio:
       kind: Panel
       spec:
         display:
-          name: "👤 Token Usage & Rate Limits per User"
-          description: "Token consumption rate and rate-limited requests per user."
+          name: "📊 Prompt vs Generation Token Ratio"
+          description: "Ratio of prompt (input) tokens to total tokens per model. Values close to 1.0 mean large contexts with little generation."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: percent-decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}}"
+                  query: (sum by (model_name) (rate(vllm:request_prompt_tokens_sum{model_name=~"$model"}[5m]))) / clamp_min(sum by (model_name) (rate(vllm:request_prompt_tokens_sum{model_name=~"$model"}[5m])) + sum by (model_name) (rate(vllm:request_generation_tokens_sum{model_name=~"$model"}[5m])), 1e-9) and (sum by (model_name) (rate(vllm:request_prompt_tokens_sum{model_name=~"$model"}[5m])) + sum by (model_name) (rate(vllm:request_generation_tokens_sum{model_name=~"$model"}[5m]))) > 0
+
+    queueWaitTime:
+      kind: Panel
+      spec:
+        display:
+          name: "⏳ Queue Wait Time"
+          description: "Time requests spend waiting in the model queue before processing begins (P50/P95/P99)."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: seconds
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P50"
+                  query: histogram_quantile(0.5, sum(rate(vllm:request_queue_time_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P95"
+                  query: histogram_quantile(0.95, sum(rate(vllm:request_queue_time_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P99"
+                  query: histogram_quantile(0.99, sum(rate(vllm:request_queue_time_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+
+    ttft:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Time to First Token (TTFT)"
+          description: "Time to First Token over time (P50/P95/P99). Critical for streaming user experience."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: seconds
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P50"
+                  query: histogram_quantile(0.5, sum(rate(vllm:time_to_first_token_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P95"
+                  query: histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P99"
+                  query: histogram_quantile(0.99, sum(rate(vllm:time_to_first_token_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+
+    itl:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Inter-Token Latency (ITL)"
+          description: "Inter-Token Latency over time (P50/P95/P99). Affects perceived typing speed during streaming."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: seconds
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P50"
+                  query: histogram_quantile(0.5, sum(rate(vllm:inter_token_latency_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P95"
+                  query: histogram_quantile(0.95, sum(rate(vllm:inter_token_latency_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{model_name}} P99"
+                  query: histogram_quantile(0.99, sum(rate(vllm:inter_token_latency_seconds_bucket{model_name=~"$model"}[5m])) by (le, model_name))
+
+    # =============================================
+    # Section: Top Users (2 panels)
+    # =============================================
+    topUsersByTokens:
+      kind: Panel
+      spec:
+        display:
+          name: "🏆 Top 10 Users by Token Usage"
+          description: "Top 10 users ranked by total tokens consumed."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -872,23 +1020,66 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{user}} tokens/s"
-                  query: sum by (user) (rate(authorized_hits[5m]))
+                  seriesNameFormat: "{{user}}"
+                  query: topk(10, sum by (user) (authorized_hits{user!=""}))
+
+    topUsersByDeclined:
+      kind: Panel
+      spec:
+        display:
+          name: "🏆 Top 10 Users by Declined Requests"
+          description: "Top 10 users ranked by rate-limited requests (HTTP 429)."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{user}} 🚫 rate-limited"
-                  query: sum by (user) (rate(limited_calls[5m]))
+                  seriesNameFormat: "{{user}}"
+                  query: topk(10, sum by (user) (limited_calls{user!=""}))
 
-    # === Row: Resource Allocation ===
-    resourceAllocationTable:
+    # =============================================
+    # Section: Detailed Breakdown (2 panels)
+    # =============================================
+    tokenRateByUser:
       kind: Panel
       spec:
         display:
-          name: "📦 Resource Allocation per Model"
-          description: "CPU and Memory requests/limits for LLM model pods"
+          name: "👥 Token Rate by User"
+          description: "Token consumption rate (tokens/s) broken down by individual user."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}}"
+                  query: sum by (user) (rate(authorized_hits[5m]))
+
+    requestVolumeByUserTier:
+      kind: Panel
+      spec:
+        display:
+          name: "📋 Request Volume by User & Tier"
+          description: "Request count by user and tier. Note: OpenShift Console shows raw labels; native Perses applies the formatted series name."
         plugin:
           kind: TimeSeriesTable
           spec: {}
@@ -898,23 +1089,101 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{pod}} - {{resource}} requests"
-                  query: kube_pod_container_resource_requests{namespace="llm", container="main"}
+                  seriesNameFormat: "{{user}} / {{tier}}"
+                  query: sum by (user, tier) (authorized_calls{user!=""})
+
+    # =============================================
+    # Section: Resource Allocation (1 panel)
+    # =============================================
+    resourceAllocationTable:
+      kind: Panel
+      spec:
+        display:
+          name: "📦 Resource Allocation per Model"
+          description: "Resource requests/limits for LLM model pods. Note: OpenShift Console shows raw labels; native Perses applies the formatted series name."
+        plugin:
+          kind: TimeSeriesTable
+          spec: {}
+        queries:
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{pod}} - {{resource}} limits"
-                  query: kube_pod_container_resource_limits{namespace="llm", container="main"}
+                  seriesNameFormat: "{{pod}} - CPU requests"
+                  query: max by (pod) (kube_pod_container_resource_requests{namespace=~"$llm_namespace", resource="cpu"})
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{pod}} - CPU limits"
+                  query: max by (pod) (kube_pod_container_resource_limits{namespace=~"$llm_namespace", resource="cpu"})
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{pod}} - Memory requests"
+                  query: max by (pod) (kube_pod_container_resource_requests{namespace=~"$llm_namespace", resource="memory"})
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{pod}} - Memory limits"
+                  query: max by (pod) (kube_pod_container_resource_limits{namespace=~"$llm_namespace", resource="memory"})
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{pod}} - GPUs"
+                  query: max by (pod) (kube_pod_container_resource_requests{namespace=~"$llm_namespace", resource=~"nvidia.com/gpu|amd.com/gpu"})
 
-    # === Row: Per-User Metrics ===
-    p95LatencyPerTier:
+    # =============================================
+    # Section: User Tracking (1 panel)
+    # =============================================
+    tokenUsageAndRateLimitsPerUser:
       kind: Panel
       spec:
         display:
-          name: "⏱️ P95 Latency per Tier"
-          description: "P95 gateway latency per access tier. The tier label is injected by Istio Telemetry from the X-MaaS-Tier header."
+          name: "👤 Token Usage & Rate Limits per User"
+          description: "Per-user metrics. Shows token consumption rate vs rate-limited requests per user over time."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}} (tokens/s)"
+                  query: sum by (user) (rate(authorized_hits[5m]))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{user}} (429 Rate Limited)"
+                  query: sum by (user) (rate(limited_calls[5m]))
+
+    # =============================================
+    # Section: Per-Tier & Per-Model Breakdown (3 panels)
+    # =============================================
+    latencyPerTier:
+      kind: Panel
+      spec:
+        display:
+          name: "⏱️ Latency per Tier (P50 / P95 / P99)"
+          description: "P50/P95/P99 latency per access tier. The tier label is added via Istio Telemetry reading the X-MaaS-Tier header."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -930,28 +1199,73 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{tier}}"
-                  query: histogram_quantile(0.95, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=""}[5m])))
+                  seriesNameFormat: "{{tier}} P50"
+                  query: histogram_quantile(0.5, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!="",tier!="unknown"}[5m])))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{tier}} P95"
+                  query: histogram_quantile(0.95, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!="",tier!="unknown"}[5m])))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{tier}} P99"
+                  query: histogram_quantile(0.99, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!="",tier!="unknown"}[5m])))
 
-    statusNotes:
+    p95LatencyPerModel:
       kind: Panel
       spec:
         display:
-          name: "📝 Status Notes"
-          description: "✅ Latency per User: ENABLED\n⚠️ Token Breakdown per User: BLOCKED (requires vLLM changes)"
+          name: "⏱️ P95 Latency per Model"
+          description: "P95 latency per model (backend service). Each KServe model gets a dedicated service."
         plugin:
-          kind: StatChart
+          kind: TimeSeriesChart
           spec:
-            calculation: last-number
-            format:
-              unit: decimal
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: milliseconds
         queries:
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  query: vector(0)
+                  seriesNameFormat: "{{destination_service_name}}"
+                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{destination_service_name!="",destination_service_name!="unknown"}[5m])))
+
+    tokenVolumeByTier:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Token Volume by Tier"
+          description: "Token consumption per tier over time. Shows absolute token volume per tier."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            visual:
+              display: bar
+              stack: all
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "{{tier}}"
+                  query: sum by (tier) (increase(authorized_hits{tier!=""}[5m]))
 
   # Layout definition
   layouts:
@@ -989,7 +1303,7 @@ spec:
           - x: 0
             "y": 4
             width: 6
-            height: 4
+            height: 6
             content:
               "$ref": "#/spec/panels/firingAlerts"
           - x: 6
@@ -1002,58 +1316,78 @@ spec:
     - kind: Grid
       spec:
         display:
+          title: "🔐 Auth Evaluation"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/authEvaluationLatency"
+          - x: 12
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/authSuccessDenyRate"
+
+    - kind: Grid
+      spec:
+        display:
           title: "📊 Key Metrics"
           collapse:
             open: true
         items:
           - x: 0
             "y": 0
-            width: 4
-            height: 4
+            width: 6
+            height: 5
             content:
               "$ref": "#/spec/panels/totalTokensConsumed"
-          - x: 4
+          - x: 6
             "y": 0
-            width: 4
-            height: 4
+            width: 6
+            height: 5
             content:
               "$ref": "#/spec/panels/totalRequests"
-          - x: 8
-            "y": 0
-            width: 4
-            height: 4
-            content:
-              "$ref": "#/spec/panels/tokenRate"
           - x: 12
             "y": 0
-            width: 4
-            height: 4
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/tokenRate"
+          - x: 18
+            "y": 0
+            width: 6
+            height: 5
             content:
               "$ref": "#/spec/panels/requestRate"
-          - x: 16
-            "y": 0
-            width: 4
-            height: 4
+          - x: 0
+            "y": 5
+            width: 6
+            height: 5
             content:
               "$ref": "#/spec/panels/inferenceSuccessRate"
-          - x: 20
-            "y": 0
-            width: 4
-            height: 4
+          - x: 6
+            "y": 5
+            width: 6
+            height: 5
             content:
               "$ref": "#/spec/panels/activeUsers"
-          - x: 0
-            "y": 4
-            width: 4
-            height: 4
-            content:
-              "$ref": "#/spec/panels/rateLimitRatio"
-          - x: 4
-            "y": 4
-            width: 8
-            height: 4
+          - x: 12
+            "y": 5
+            width: 6
+            height: 5
             content:
               "$ref": "#/spec/panels/p50Latency"
+          - x: 18
+            "y": 5
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/rateLimitRatio"
 
     - kind: Grid
       spec:
@@ -1079,31 +1413,125 @@ spec:
             width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/tokenRateByTier"
+              "$ref": "#/spec/panels/tokenConsumptionByTier"
           - x: 12
             "y": 8
             width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/p95LatencyByService"
+              "$ref": "#/spec/panels/requestVolumeByTier"
           - x: 0
             "y": 16
             width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/p99LatencyByService"
+              "$ref": "#/spec/panels/p95LatencyByService"
           - x: 12
             "y": 16
             width: 12
             height: 8
             content:
               "$ref": "#/spec/panels/rateLimitViolationsByTier"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "❌ Error Breakdown"
+          collapse:
+            open: true
+        items:
           - x: 0
-            "y": 24
-            width: 24
+            "y": 0
+            width: 12
             height: 8
             content:
-              "$ref": "#/spec/panels/successRateByTier"
+              "$ref": "#/spec/panels/rateLimitedRequests"
+          - x: 12
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/unauthorizedRequests"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "🤖 Model Metrics"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/requestsRunning"
+          - x: 6
+            "y": 0
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/requestsWaiting"
+          - x: 12
+            "y": 0
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/gpuCacheUsage"
+          - x: 18
+            "y": 0
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/totalModelRequests"
+          - x: 0
+            "y": 5
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/modelQueueDepth"
+          - x: 12
+            "y": 5
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/modelInferenceLatency"
+          - x: 0
+            "y": 13
+            width: 12
+            height: 5
+            content:
+              "$ref": "#/spec/panels/tokensTotal"
+          - x: 12
+            "y": 13
+            width: 12
+            height: 5
+            content:
+              "$ref": "#/spec/panels/tokenThroughput"
+          - x: 0
+            "y": 18
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/promptVsGenerationRatio"
+          - x: 12
+            "y": 18
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/queueWaitTime"
+          - x: 0
+            "y": 26
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/ttft"
+          - x: 12
+            "y": 26
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/itl"
 
     - kind: Grid
       spec:
@@ -1114,36 +1542,16 @@ spec:
         items:
           - x: 0
             "y": 0
-            width: 12
-            height: 8
-            content:
-              "$ref": "#/spec/panels/topUsersByRequests"
-          - x: 12
-            "y": 0
-            width: 12
-            height: 8
+            width: 24
+            height: 7
             content:
               "$ref": "#/spec/panels/topUsersByTokens"
-
-    - kind: Grid
-      spec:
-        display:
-          title: "🔤 Token Consumption"
-          collapse:
-            open: true
-        items:
           - x: 0
-            "y": 0
-            width: 12
-            height: 8
+            "y": 7
+            width: 24
+            height: 7
             content:
-              "$ref": "#/spec/panels/tokenConsumptionByTier"
-          - x: 12
-            "y": 0
-            width: 12
-            height: 8
-            content:
-              "$ref": "#/spec/panels/tokenConsumptionByUser"
+              "$ref": "#/spec/panels/topUsersByDeclined"
 
     - kind: Grid
       spec:
@@ -1163,77 +1571,7 @@ spec:
             width: 24
             height: 8
             content:
-              "$ref": "#/spec/panels/tokenVolumeByUserModelTier"
-
-    - kind: Grid
-      spec:
-        display:
-          title: "🤖 Model Metrics (vLLM)"
-          collapse:
-            open: true
-        items:
-          - x: 0
-            "y": 0
-            width: 6
-            height: 4
-            content:
-              "$ref": "#/spec/panels/requestsRunning"
-          - x: 6
-            "y": 0
-            width: 6
-            height: 4
-            content:
-              "$ref": "#/spec/panels/requestsWaiting"
-          - x: 12
-            "y": 0
-            width: 6
-            height: 4
-            content:
-              "$ref": "#/spec/panels/gpuCacheUsage"
-          - x: 18
-            "y": 0
-            width: 6
-            height: 4
-            content:
-              "$ref": "#/spec/panels/totalVllmRequests"
-          - x: 0
-            "y": 4
-            width: 12
-            height: 8
-            content:
-              "$ref": "#/spec/panels/modelQueueDepth"
-          - x: 12
-            "y": 4
-            width: 12
-            height: 8
-            content:
-              "$ref": "#/spec/panels/modelInferenceLatency"
-          - x: 0
-            "y": 12
-            width: 6
-            height: 4
-            content:
-              "$ref": "#/spec/panels/tokensTotal"
-          - x: 6
-            "y": 12
-            width: 18
-            height: 4
-            content:
-              "$ref": "#/spec/panels/tokenThroughput"
-
-    - kind: Grid
-      spec:
-        display:
-          title: "👤 User Tracking"
-          collapse:
-            open: true
-        items:
-          - x: 0
-            "y": 0
-            width: 24
-            height: 8
-            content:
-              "$ref": "#/spec/panels/tokenUsageAndRateLimitsPerUser"
+              "$ref": "#/spec/panels/requestVolumeByUserTier"
 
     - kind: Grid
       spec:
@@ -1252,19 +1590,39 @@ spec:
     - kind: Grid
       spec:
         display:
-          title: "👤 Per-User Metrics"
+          title: "👤 User Tracking"
           collapse:
             open: true
         items:
           - x: 0
             "y": 0
-            width: 16
+            width: 24
             height: 8
             content:
-              "$ref": "#/spec/panels/p95LatencyPerTier"
+              "$ref": "#/spec/panels/tokenUsageAndRateLimitsPerUser"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "📊 Per-Tier & Per-Model Breakdown"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 8
+            height: 8
+            content:
+              "$ref": "#/spec/panels/latencyPerTier"
+          - x: 8
+            "y": 0
+            width: 8
+            height: 8
+            content:
+              "$ref": "#/spec/panels/p95LatencyPerModel"
           - x: 16
             "y": 0
             width: 8
             height: 8
             content:
-              "$ref": "#/spec/panels/statusNotes"
+              "$ref": "#/spec/panels/tokenVolumeByTier"

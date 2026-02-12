@@ -43,8 +43,8 @@ The observability stack is defined in `deployment/base/observability/`. It inclu
 
 | Resource | Purpose |
 |----------|---------|
-| **TelemetryPolicy** (`telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
-| **Istio Telemetry** (`istio-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
+| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
+| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
 
 **Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Tier` is injected):
 
@@ -59,7 +59,7 @@ When using the full deployment script, this is applied automatically:
     - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and tier lookup must be deployed first. The AuthPolicy injects `X-MaaS-Tier`, which Istio Telemetry reads to label latency by tier. Without it, the `tier` label on gateway latency will be empty.
     - **Namespace**: Use `--namespace` if your MaaS API is deployed to a namespace other than `maas-api` (e.g. `--namespace opendatahub`)
 
-**Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/components/observability/monitors/` if your deployment includes that component.
+**Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/base/observability/` if your deployment includes that component.
 
 ## Metrics Collection
 
@@ -367,7 +367,7 @@ Installs the Cluster Observability Operator (if not present), enables the Perses
 
 **Manual Grafana import (dashboard JSON only):**
 
-    kustomize build deployment/components/observability/dashboards | \
+    kustomize build deployment/components/observability/grafana/dashboards | \
       sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
       kubectl apply -f -
 
@@ -418,7 +418,7 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
 2. The Istio Telemetry resource extracts this header and adds it as a `tier` label to the `REQUEST_DURATION` metric
 3. Prometheus scrapes these metrics from the Istio gateway
 
-**Configuration** (`deployment/base/observability/istio-telemetry.yaml`):
+**Configuration** (`deployment/base/observability/istio-gateway-telemetry.yaml`):
 
     apiVersion: telemetry.istio.io/v1
     kind: Telemetry
