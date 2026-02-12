@@ -148,7 +148,6 @@ Installs individual dependencies (Kuadrant, ODH, etc.).
 **Options:**
 - `--kuadrant`: Install Kuadrant operator and dependencies
 - `--istio`: Install Istio
-- `--grafana`: Install Grafana
 - `--prometheus`: Install Prometheus
 
 ---
