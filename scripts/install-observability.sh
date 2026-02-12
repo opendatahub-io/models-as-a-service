@@ -178,7 +178,7 @@ if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
        || kubectl get podmonitor kuadrant-limitador-monitor -n kuadrant-system &>/dev/null; then
         echo "   ℹ️  Kuadrant already scrapes Limitador /metrics - skipping MaaS ServiceMonitor (no duplicates)"
     else
-        kubectl apply -f "$BASE_OBSERVABILITY_DIR/servicemonitor.yaml"
+        kubectl apply -f "$BASE_OBSERVABILITY_DIR/limitador-servicemonitor.yaml"
         echo "   ✅ Limitador ServiceMonitor deployed (Kuadrant PodMonitor not found)"
     fi
 
@@ -200,8 +200,8 @@ fi
 
 # Deploy Istio Gateway metrics (if gateway exists)
 if kubectl get deploy -n openshift-ingress maas-default-gateway-openshift-default &>/dev/null; then
-    kubectl apply -f "$OBSERVABILITY_DIR/monitors/istio-gateway-service.yaml"
-    kubectl apply -f "$OBSERVABILITY_DIR/monitors/istio-gateway-servicemonitor.yaml"
+    kubectl apply -f "$BASE_OBSERVABILITY_DIR/istio-gateway-service.yaml"
+    kubectl apply -f "$BASE_OBSERVABILITY_DIR/istio-gateway-servicemonitor.yaml"
     echo "   ✅ Istio Gateway metrics configured"
 else
     echo "   ⚠️  Istio Gateway not found - skipping Istio metrics"

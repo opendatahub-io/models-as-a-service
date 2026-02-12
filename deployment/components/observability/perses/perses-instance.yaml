@@ -1,6 +1,8 @@
-# Perses Instance for MaaS Observability
-# Deploys a Perses server for dashboard visualization
-# Explicitly use Red Hat image since operator defaults to Docker Hub
+# Perses Instance for MaaS Observability.
+# Standalone kustomize deployments only (kubectl apply -k).
+# Not used by install-perses-dashboards.sh — the UIPlugin creates its own Perses instance
+# in openshift-operators namespace.
+# Explicitly use Red Hat image since operator defaults to Docker Hub.
 apiVersion: perses.dev/v1alpha1
 kind: Perses
 metadata:

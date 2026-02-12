@@ -6,13 +6,13 @@
 #    - Use: ./scripts/install-perses-dashboards.sh
 #    - UIPlugin creates Perses in openshift-operators namespace
 #    - Only dashboards and datasource are deployed from here
-#    - No need for perses-instance.yaml, perses-rbac.yaml, or route.yaml
+#    - No need for perses-instance.yaml, perses-rbac.yaml, or perses-route.yaml
 #
 # 2. Standalone Mode (for custom deployments):
 #    - Use: kubectl apply -k deployment/components/observability/perses/
 #    - Deploys full stack to maas-api namespace
 #    - Requires all files including instance, RBAC, route
-#    - UIPlugin (uiplugin.yaml) applied separately (cluster-scoped)
+#    - UIPlugin (perses-uiplugin.yaml) applied separately (cluster-scoped)
 #
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -31,12 +31,12 @@ resources:
   - perses-rbac.yaml
   - perses-instance.yaml
   - perses-datasource.yaml
-  - route.yaml
+  - perses-route.yaml
   # Both modes: Dashboards (for UIPlugin, apply to openshift-operators instead)
   - dashboards/dashboard-ai-engineer.yaml
   - dashboards/dashboard-platform-admin.yaml
-  # UIPlugin (uiplugin.yaml) is cluster-scoped - apply separately:
-  #   kubectl apply -f uiplugin.yaml
+  # UIPlugin (perses-uiplugin.yaml) is cluster-scoped - apply separately:
+  #   kubectl apply -f perses-uiplugin.yaml
 
 labels:
   - pairs:

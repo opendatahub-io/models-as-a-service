@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # MaaS Perses Dashboard Installation (helper)
-# Installs the Cluster Observability Operator (if needed), enables the Perses UIPlugin,
-# and deploys MaaS dashboard definitions (PersesDashboard CRs).
+# Enables the Perses UIPlugin and deploys MaaS dashboard definitions (PersesDashboard CRs).
+# Does not install the Cluster Observability Operator; assumes it is already present.
+# Never fails for missing operator: warnings only (same pattern as install-grafana-dashboards.sh).
 #
 # This script is idempotent - safe to run multiple times
 #
@@ -21,13 +22,13 @@ done
 show_help() {
     echo "Usage: $0"
     echo ""
-    echo "Installs the Cluster Observability Operator (if needed), enables the Perses UIPlugin,"
-    echo "and deploys MaaS PersesDashboard definitions into openshift-operators."
+    echo "Enables the Perses UIPlugin and deploys MaaS PersesDashboard definitions into openshift-operators."
+    echo "Requires the Cluster Observability Operator to be installed first (provides Perses CRDs)."
     echo ""
     echo "Perses dashboards are accessible via OpenShift Console → Observe → Dashboards → Perses tab."
     echo ""
     echo "Examples:"
-    echo "  $0    # Install Perses + deploy dashboards"
+    echo "  $0    # Deploy Perses dashboards"
     echo ""
     exit 0
 }
@@ -49,45 +50,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/components/observability"
 
-# Import shared helper functions (wait_for_crd, etc.)
-source "$SCRIPT_DIR/deployment-helpers.sh"
 
 # ==========================================
-# Step 1: Install Cluster Observability Operator
+# Preflight: Cluster Observability Operator & Perses CRDs
 # ==========================================
 echo "📊 MaaS Perses Dashboard Installation"
 echo ""
 
-if kubectl get csv -n openshift-operators 2>/dev/null | grep -q "cluster-observability-operator.*Succeeded"; then
-    echo "✅ Cluster Observability Operator already installed"
-else
-    echo "🔧 Installing Cluster Observability Operator..."
-    "$SCRIPT_DIR/installers/install-perses.sh"
+if ! kubectl get crd persesdashboards.perses.dev &>/dev/null; then
+    echo "⚠️  Perses CRDs not found. Install the Cluster Observability Operator first."
+    echo "   Run:  ./scripts/installers/install-perses.sh"
+    echo "   See:  https://docs.openshift.com/container-platform/latest/observability/cluster_observability_operator/cluster-observability-operator-overview.html"
+    exit 0
 fi
+echo "✅ Perses CRDs available"
 
 # ==========================================
-# Step 2: Wait for Perses CRDs
-# ==========================================
-echo ""
-echo "⏳ Waiting for Perses CRDs..."
-for crd in perses.perses.dev persesdashboards.perses.dev persesdatasources.perses.dev; do
-    wait_for_crd "$crd" 120 || {
-        echo "❌ CRD $crd not available. Please check Cluster Observability Operator installation."
-        exit 1
-    }
-done
-echo "   ✅ All Perses CRDs established"
-
-# ==========================================
-# Step 3: Enable UIPlugin (shows Perses in OpenShift Console)
+# Step 1: Enable UIPlugin (shows Perses in OpenShift Console)
 # ==========================================
 echo ""
 echo "🔌 Enabling Perses UIPlugin..."
-kubectl apply -f "$OBSERVABILITY_DIR/perses/uiplugin.yaml"
+kubectl apply -f "$OBSERVABILITY_DIR/perses/perses-uiplugin.yaml"
 echo "   ✅ UIPlugin enabled"
 
 # ==========================================
-# Step 4: Wait for Perses pod (created by UIPlugin)
+# Step 2: Wait for Perses pod (created by UIPlugin)
 # ==========================================
 echo ""
 echo "⏳ Waiting for Perses instance..."
@@ -106,7 +93,7 @@ for i in $(seq 1 30); do
 done
 
 # ==========================================
-# Step 5: Deploy dashboards and datasource
+# Step 3: Deploy dashboards and datasource
 # ==========================================
 echo ""
 echo "📊 Deploying Perses dashboards..."

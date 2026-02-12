@@ -1,23 +1,12 @@
 # ServiceMonitor for Authorino /server-metrics endpoint.
 #
-# Deployment path: OpenShift user-workload monitoring (install-observability.sh).
-# Deployed by: scripts/install-observability.sh → kubectl apply
+# Deployed by: scripts/install-observability.sh (conditional — skipped if Kuadrant already scrapes /server-metrics)
 # Scraped by:  OpenShift user-workload Prometheus (openshift-user-workload-monitoring)
 #
 # This scrapes auth evaluation metrics (auth_server_authconfig_total,
 # auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, etc.)
 # that are NOT collected by the Kuadrant-provided authorino-operator-monitor
 # (which only scrapes /metrics for controller-runtime stats).
-#
-# NOT a duplicate of deployment/components/observability/prometheus/kuadrant-servicemonitors.yaml
-# (authorino-runtime). That file is for the standalone Prometheus path
-# (deployment/components/observability/prometheus/) and is never deployed by
-# install-observability.sh. The two ServiceMonitors serve different deployment
-# scenarios and are never active on the same cluster simultaneously.
-#
-# Note: If a Kuadrant update begins scraping /server-metrics natively,
-# install-observability.sh will autodetect this and skip deploying this
-# ServiceMonitor (it checks for existing monitors that scrape /server-metrics).
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
