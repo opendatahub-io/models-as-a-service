@@ -12,7 +12,7 @@ set -e
 set -o pipefail
 
 # Preflight checks
-for cmd in kubectl kustomize jq yq; do
+for cmd in kubectl kustomize; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "❌ Required command '$cmd' not found. Please install it first."
         exit 1
@@ -115,14 +115,13 @@ echo "1️⃣ Enabling user-workload-monitoring..."
 
 if kubectl get configmap cluster-monitoring-config -n openshift-monitoring &>/dev/null; then
     CURRENT_CONFIG=$(kubectl get configmap cluster-monitoring-config -n openshift-monitoring -o jsonpath='{.data.config\.yaml}' 2>/dev/null || echo "")
-    CURRENT_VALUE=$(echo "$CURRENT_CONFIG" | yq '.enableUserWorkload // false' 2>/dev/null || echo "false")
-    if [ "$CURRENT_VALUE" = "true" ]; then
+    if echo "$CURRENT_CONFIG" | grep -q "enableUserWorkload: true"; then
         echo "   ✅ user-workload-monitoring already enabled"
     else
         echo "   Patching cluster-monitoring-config to enable user-workload-monitoring..."
-        NEW_CONFIG=$(echo "$CURRENT_CONFIG" | yq '.enableUserWorkload = true')
-        kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
-            --type merge -p "{\"data\":{\"config.yaml\":$(echo "$NEW_CONFIG" | jq -Rs .)}}"
+        kubectl create configmap cluster-monitoring-config -n openshift-monitoring \
+            --from-literal="config.yaml=$(printf '%s\nenableUserWorkload: true' "$CURRENT_CONFIG")" \
+            --dry-run=client -o yaml | kubectl apply -f -
         echo "   ✅ user-workload-monitoring enabled (existing config preserved)"
     fi
 else
