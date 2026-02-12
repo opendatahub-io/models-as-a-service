@@ -337,6 +337,9 @@ run_observability_tests() {
         python -m pip install --upgrade pip --quiet
         python -m pip install -r "${PROJECT_ROOT}/test/e2e/requirements.txt" --quiet
         
+        # Set PYTHONPATH so "from tests.test_helper import …" resolves
+        export PYTHONPATH="${PROJECT_ROOT}/test/e2e:${PYTHONPATH:-}"
+        
         # Run observability tests
         echo "[observability] Running observability tests..."
         local REPORTS_DIR="${PROJECT_ROOT}/test/e2e/reports"
