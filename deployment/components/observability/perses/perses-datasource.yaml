@@ -1,0 +1,36 @@
+# Perses Datasource for OpenShift Prometheus (Thanos Querier)
+# Based on official OpenShift sample from perses-operator
+#
+# DEPLOYMENT:
+# - UIPlugin mode: Apply to openshift-operators namespace
+#   kubectl apply -f perses-datasource.yaml -n openshift-operators
+# - Standalone mode: Applied via kustomize to maas-api namespace
+#
+# NOTE: Unlike Grafana, Perses datasource does NOT require explicit bearer
+# token auth. The Cluster Observability Operator handles authentication
+# through the pod's ServiceAccount and RBAC configuration.
+---
+apiVersion: perses.dev/v1alpha1
+kind: PersesDatasource
+metadata:
+  name: prometheus
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  config:
+    display:
+      name: "Prometheus (Thanos Querier)"
+    default: true
+    plugin:
+      kind: "PrometheusDatasource"
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+  # TLS configuration for OpenShift service CA
+  client:
+    tls:
+      enable: true
+      insecureSkipVerify: true  # For internal service communication
