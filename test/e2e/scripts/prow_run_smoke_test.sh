@@ -21,14 +21,27 @@
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
+# CI/CD PIPELINE USAGE:
+#   # Test with pipeline-built images
+#   OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
+#   MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
+#   ./test/e2e/scripts/prow_run_smoke_test.sh
+#
 # ENVIRONMENT VARIABLES:
+#   OPERATOR_TYPE   - Operator to deploy: "odh" or "rhoai" (default: odh)
+#                     odh   → uses Kuadrant (upstream), Authorino in kuadrant-system
+#                     rhoai → uses RHCL (downstream), Authorino in rh-connectivity-link
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
-#   SKIP_AUTH_CHECK - Skip Authorino auth readiness check (default: true, temporary workaround)
-#   MAAS_API_IMAGE - Custom image for MaaS API (e.g., quay.io/opendatahub/maas-api:pr-232)
+#   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
+#                    Example: quay.io/opendatahub/maas-api:pr-232
+#   OPERATOR_CATALOG - Custom operator catalog image (default: latest from main)
+#                      Example: quay.io/opendatahub/opendatahub-operator-catalog:pr-456
+#   OPERATOR_IMAGE - Custom operator image (default: uses catalog default)
+#                    Example: quay.io/opendatahub/opendatahub-operator:pr-456
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
-#                    Affects both deploy-openshift.sh and smoke.sh
+#                    Affects both deploy.sh (via --disable-tls-backend) and smoke.sh
 # =============================================================================
 
 set -euo pipefail
@@ -62,6 +75,39 @@ SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
+
+# Operator configuration
+# OPERATOR_TYPE determines which operator and policy engine to use:
+#   odh   → Kuadrant (upstream) → kuadrant-system
+#   rhoai → RHCL (downstream)   → rh-connectivity-link
+OPERATOR_TYPE=${OPERATOR_TYPE:-odh}
+
+# Image configuration (for CI/CD pipelines)
+# OPERATOR_CATALOG: For ODH, defaults to snapshot catalog (required for v2 API / MaaS support)
+#                   For RHOAI, no default (uses redhat-operators from OCP marketplace)
+if [[ -z "${OPERATOR_CATALOG:-}" ]]; then
+    if [[ "$OPERATOR_TYPE" == "odh" ]]; then
+        # ODH requires v3+ for DataScienceCluster v2 API (MaaS support)
+        # community-operators only has v2.x which doesn't have v2 API
+        OPERATOR_CATALOG="quay.io/opendatahub/opendatahub-operator-catalog:latest"
+    fi
+    # RHOAI: intentionally no default - uses redhat-operators from OCP marketplace
+fi
+export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}  # Optional: uses operator default if not set
+export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}  # Optional: uses catalog default if not set
+
+# Compute namespaces based on operator type (matches deploy-rhoai-stable.sh behavior)
+# MaaS API is always deployed to the fixed application namespace, NOT the CI namespace
+case "${OPERATOR_TYPE}" in
+    rhoai)
+        AUTHORINO_NAMESPACE="rh-connectivity-link"
+        MAAS_NAMESPACE="redhat-ods-applications"
+        ;;
+    *)
+        AUTHORINO_NAMESPACE="kuadrant-system"
+        MAAS_NAMESPACE="opendatahub"
+        ;;
+esac
 
 print_header() {
     echo ""
@@ -97,12 +143,39 @@ check_prerequisites() {
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform on OpenShift..."
-    if ! "$PROJECT_ROOT/scripts/deploy-rhoai-stable.sh" --operator-type odh --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:latest --channel fast; then
+    echo "Using operator type: ${OPERATOR_TYPE}"
+    echo "Using operator catalog: ${OPERATOR_CATALOG:-"(default)"}"
+    if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
+        echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
+    fi
+    if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
+        echo "Using custom operator image: ${OPERATOR_IMAGE}"
+    fi
+
+    # Build deploy.sh command with optional parameters
+    local deploy_cmd=(
+        "$PROJECT_ROOT/scripts/deploy.sh"
+        --operator-type "${OPERATOR_TYPE}"
+        --channel fast
+    )
+
+    # Add optional operator catalog if specified (otherwise uses default catalog)
+    if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
+        deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
+    fi
+
+    # Add optional operator image if specified
+    if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
+        deploy_cmd+=(--operator-image "${OPERATOR_IMAGE}")
+    fi
+
+    if ! "${deploy_cmd[@]}"; then
         echo "❌ ERROR: MaaS platform deployment failed"
         exit 1
     fi
     # Wait for DataScienceCluster's KServe and ModelsAsService to be ready
-    if ! wait_datasciencecluster_ready "default-dsc" 600; then
+    # Using 300s timeout to fit within Prow's 15m job limit
+    if ! wait_datasciencecluster_ready "default-dsc" 300; then
         echo "❌ ERROR: DataScienceCluster components did not become ready"
         exit 1
     fi
@@ -112,12 +185,13 @@ deploy_maas_platform() {
     # once the operator creates the gateway→Authorino TLS EnvoyFilter at Gateway/AuthPolicy creation
     # time, not at first LLMInferenceService creation. Currently there's a chicken-egg problem where
     # auth checks fail before any model is deployed because the TLS config doesn't exist yet.
-    if [[ "${SKIP_AUTH_CHECK:-false}" == "true" ]]; then
+    if [[ "${SKIP_AUTH_CHECK:-true}" == "true" ]]; then
         echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"
         echo "   This is a temporary workaround for the gateway→Authorino TLS chicken-egg problem"
     else
-        echo "Waiting for Authorino and auth service to be ready..."
-        if ! wait_authorino_ready 600; then
+        # Using 300s timeout to fit within Prow's 15m job limit
+        echo "Waiting for Authorino and auth service to be ready (namespace: ${AUTHORINO_NAMESPACE})..."
+        if ! wait_authorino_ready "$AUTHORINO_NAMESPACE" 300; then
             echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
         fi
     fi
@@ -157,11 +231,13 @@ deploy_models() {
 
 validate_deployment() {
     echo "Deployment Validation"
+    echo "Using namespace: $MAAS_NAMESPACE"
+    
     if [ "$SKIP_VALIDATION" = false ]; then
-        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
-            echo "⚠️  First validation attempt failed, waiting 60 seconds and retrying..."
-            sleep 60
-            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE"; then
+            echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
+            sleep 30
+            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE"; then
                 echo "❌ ERROR: Deployment validation failed after retry"
                 exit 1
             fi
@@ -185,7 +261,7 @@ setup_vars_for_tests() {
     # Export INSECURE_HTTP for smoke.sh (it handles MAAS_API_BASE_URL detection)
     # HTTPS is the default for MaaS.
     # HTTP is used only when INSECURE_HTTP=true (opt-out mode).
-    # This aligns with deploy-openshift.sh which also respects INSECURE_HTTP
+    # This aligns with deploy.sh which also respects TLS configuration
     export INSECURE_HTTP
     if [ "$INSECURE_HTTP" = "true" ]; then
         echo "⚠️  INSECURE_HTTP=true - will use HTTP for tests"

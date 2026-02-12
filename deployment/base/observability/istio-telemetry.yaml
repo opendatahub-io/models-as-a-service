@@ -2,7 +2,7 @@
 apiVersion: telemetry.istio.io/v1
 kind: Telemetry
 metadata:
-  name: latency-per-user
+  name: latency-per-tier
   namespace: openshift-ingress
 spec:
   selector:
@@ -16,6 +16,6 @@ spec:
         metric: REQUEST_DURATION
         mode: CLIENT_AND_SERVER
       tagOverrides:
-        user:
+        tier:
           operation: UPSERT
-          value: request.headers["x-maas-username"]
+          value: request.headers["x-maas-tier"]

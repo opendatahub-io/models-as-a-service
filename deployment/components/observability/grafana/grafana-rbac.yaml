@@ -1,0 +1,20 @@
+# RBAC for Grafana to access Prometheus/Thanos metrics
+# NOTE: ServiceAccount 'grafana-sa' is created by the Grafana operator, not here.
+# Creating it manually causes "already exists" errors when operator tries to create it.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grafana-prometheus-reader
+  labels:
+    app: grafana
+    component: observability
+subjects:
+- kind: ServiceAccount
+  name: grafana-sa
+  namespace: maas-api  # Replaced by sed in install-observability.sh with $NAMESPACE
+roleRef:
+  kind: ClusterRole
+  name: cluster-monitoring-view
+  apiGroup: rbac.authorization.k8s.io
+

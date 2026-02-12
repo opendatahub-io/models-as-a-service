@@ -38,17 +38,26 @@ For step-by-step commands, see [TLS Configuration: Authorino TLS Configuration](
 
 ### Automated OpenShift Deployment (Recommended)
 
-For OpenShift clusters, use the automated deployment script:
+For OpenShift clusters, use the unified automated deployment script:
 
 ```bash
 export MAAS_REF="main"  # Use the latest release tag, or "main" for development
-./scripts/deploy-rhoai-stable.sh
+
+# Deploy using RHOAI operator (default)
+./scripts/deploy.sh
+
+# Or deploy using ODH operator
+./scripts/deploy.sh --operator-type odh
+
+# Or deploy using kustomize
+./scripts/deploy.sh --deployment-mode kustomize
 ```
 
 !!! note "Using Release Tags"
     The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
     The release workflow automatically updates all `MAAS_REF="main"` references in documentation and scripts
     to use the new release tag when a release is created. Use `"main"` only for development/testing.
+
 
 ### Verify Deployment
 

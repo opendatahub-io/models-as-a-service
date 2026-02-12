@@ -6,8 +6,11 @@ metadata:
   annotations:
     config.kubernetes.io/local-config: "true"
 
-namespace: llm-observability
+namespace: maas-api
 
 resources:
   - grafana-instance.yaml
+  - grafana-rbac.yaml
+  # grafana-datasource.yaml is NOT included here - it's deployed by
+  # install-observability.sh with proper authentication token injection
   - route.yaml
