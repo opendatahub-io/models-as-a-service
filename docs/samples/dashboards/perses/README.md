@@ -111,4 +111,4 @@ layouts:
 - [Perses Documentation](https://perses.dev/)
 - [Perses Operator](https://github.com/perses/perses-operator)
 - [OpenShift Cluster Observability Operator](https://docs.openshift.com/container-platform/latest/observability/cluster_observability_operator/cluster-observability-operator-overview.html)
-- [MaaS Observability Guide](../../content/advanced-administration/observability.md)
+- [MaaS Observability Guide](../../../content/advanced-administration/observability.md)
