@@ -119,8 +119,9 @@ if kubectl get configmap cluster-monitoring-config -n openshift-monitoring &>/de
         echo "   ✅ user-workload-monitoring already enabled"
     else
         echo "   Patching cluster-monitoring-config to enable user-workload-monitoring..."
+        CLEAN_CONFIG=$(echo "$CURRENT_CONFIG" | grep -v "enableUserWorkload:" || true)
         kubectl create configmap cluster-monitoring-config -n openshift-monitoring \
-            --from-literal="config.yaml=$(printf '%s\nenableUserWorkload: true' "$CURRENT_CONFIG")" \
+            --from-literal="config.yaml=$(printf '%s\nenableUserWorkload: true' "$CLEAN_CONFIG")" \
             --dry-run=client -o yaml | kubectl apply -f -
         echo "   ✅ user-workload-monitoring enabled (existing config preserved)"
     fi
