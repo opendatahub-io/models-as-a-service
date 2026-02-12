@@ -46,7 +46,6 @@ if [[ "$OCP" == true ]]; then
       kubectl wait --for=condition=Established "crd/$crd" --timeout=60s 2>/dev/null || \
         echo "   ⚠️  CRD $crd not yet established, continuing..."
     done
-    echo "📊 Perses operator installation completed!"
     exit 0
   fi
   
@@ -138,5 +137,3 @@ else
   
   echo "✅ Perses installed via Helm"
 fi
-
-echo "📊 Perses operator installation completed!"
