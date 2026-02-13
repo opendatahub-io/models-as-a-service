@@ -1,19 +1,21 @@
-package token
+package token_test
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 func TestSanitizeServiceAccountName(t *testing.T) {
 	t.Parallel()
 
-	manager := &Manager{}
+	manager := &token.Manager{}
 	username := "Alice@example.com"
 
-	name, err := manager.sanitizeServiceAccountName(username)
+	name, err := manager.SanitizeServiceAccountName(username)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 		return
@@ -42,8 +44,8 @@ func TestSanitizeServiceAccountName(t *testing.T) {
 func TestSanitizeServiceAccountName_InvalidUsername(t *testing.T) {
 	t.Parallel()
 
-	manager := &Manager{}
-	if _, err := manager.sanitizeServiceAccountName("!!!"); err == nil {
+	manager := &token.Manager{}
+	if _, err := manager.SanitizeServiceAccountName("!!!"); err == nil {
 		t.Error("expected error for invalid username, got nil")
 	}
 }
@@ -51,10 +53,10 @@ func TestSanitizeServiceAccountName_InvalidUsername(t *testing.T) {
 func TestSanitizeServiceAccountName_Truncation(t *testing.T) {
 	t.Parallel()
 
-	manager := &Manager{}
+	manager := &token.Manager{}
 	username := strings.Repeat("a", 200) + "@example.com"
 
-	name, err := manager.sanitizeServiceAccountName(username)
+	name, err := manager.SanitizeServiceAccountName(username)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 		return
