@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/openai/openai-go/v2/packages/pagination"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
@@ -176,12 +177,6 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	tierMapper := tier.NewMapper(log, cluster.ConfigMapLister, cfg.Name, cfg.Namespace)
 	v1Routes.POST("/tiers/lookup", tier.NewHandler(tierMapper).TierLookup)
 
-	modelManager, err := models.NewManager(
-		log,
-		cluster.LLMInferenceServiceLister,
-		cluster.HTTPRouteLister,
-		models.GatewayRef{Name: cfg.GatewayName, Namespace: cfg.GatewayNamespace},
-	)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}
@@ -196,12 +191,15 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	)
 	tokenHandler := token.NewHandler(log, cfg.Name, tokenManager)
 
-	modelsHandler := handlers.NewModelsHandler(log, modelManager, tokenManager)
-
 	apiKeyService := api_keys.NewService(tokenManager, store)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService)
 
-	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, pagination.Page[models.Model]{
+			Object: "list",
+			Data:   []models.Model{},
+		})
+	})
 
 	tokenRoutes := v1Routes.Group("/tokens", tokenHandler.ExtractUserInfo())
 	tokenRoutes.POST("", tokenHandler.IssueToken)
