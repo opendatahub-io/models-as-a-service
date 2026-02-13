@@ -211,6 +211,14 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)
 	apiKeyRoutes.GET("", apiKeyHandler.ListAPIKeys)
 	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)
+	// Permanent API keys (sk-oai-* format) - POC
+	apiKeyRoutes.POST("/permanent", apiKeyHandler.CreatePermanentAPIKey)
+	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)
+
+	// Internal routes for Authorino HTTP callback (no auth required - called by Authorino)
+	// Per TECHNICAL_ARCHITECTURE.md §4.4
+	internalRoutes := router.Group("/internal/v1")
+	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
 
 	return nil
 }

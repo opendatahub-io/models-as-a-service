@@ -12,6 +12,7 @@ spec:
   rules:
     metadata:
       # Enriching identity metadata with a proper subscription tier based on user groups
+      # Note: For API keys (sk-oai-*), tier lookup uses the validated user identity
       matchedTier:
         http:
           # TODO: network policy to limit access to this endpoint
@@ -26,7 +27,38 @@ spec:
             selector: auth.identity.user.username
           ttl: 300
     authentication:
+      # NEW: Permanent API Key Authentication (sk-oai-* tokens)
+      # Per TECHNICAL_ARCHITECTURE.md §4.4: HTTP callback to MaaS API validation endpoint
+      api-keys:
+        when:
+          # Match requests with Bearer token starting with sk-oai-
+          - selector: request.headers.authorization
+            operator: matches
+            value: "^Bearer sk-oai-.*"
+        http:
+          url: http://maas-api.maas-api.svc.cluster.local:8080/internal/v1/api-keys/validate
+          method: POST
+          contentType: application/json
+          body:
+            # Extract the key from "Bearer sk-oai-..." header
+            expression: |
+              {"key": request.headers.authorization.replace("Bearer ", "")}
+        cache:
+          # Cache validation results per key (per arch doc §13.3: 60s TTL)
+          key:
+            selector: request.headers.authorization
+          ttl: 60
+        defaults:
+          # Map validated API key response to user identity
+          userid:
+            expression: auth.identity.userId
+      # EXISTING: Service Account Token Authentication (K8s JWT tokens)
       service-accounts:
+        when:
+          # Match requests with Bearer token starting with eyJ (JWT)
+          - selector: request.headers.authorization
+            operator: matches
+            value: "^Bearer eyJ.*"
         kubernetesTokenReview:
           audiences:
             - maas-default-gateway-sa
@@ -70,6 +102,10 @@ spec:
           X-MaaS-Username:
             plain:
               selector: auth.identity.userid
+          # NEW: Include key ID for API key authentication (for audit logging)
+          X-MaaS-Key-Id:
+            plain:
+              selector: auth.identity.keyId
         filters:
           identity:
             json:
