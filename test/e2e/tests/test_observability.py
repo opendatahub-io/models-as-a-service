@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Observability Tests for MaaS Platform
 =====================================
