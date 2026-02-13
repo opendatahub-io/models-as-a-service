@@ -415,11 +415,11 @@ print_header "Deploying Maas on OpenShift"
 check_prerequisites
 deploy_maas_platform
 
-print_header "Installing Observability"
-install_observability
-
 print_header "Deploying Models"  
 deploy_models
+
+print_header "Installing Observability"
+install_observability
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
