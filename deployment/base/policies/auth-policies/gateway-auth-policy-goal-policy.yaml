@@ -1,0 +1,57 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: policy-name
+  namespace: llm
+spec:
+  rules:
+    authentication:
+      service-accounts:
+        cache:
+          key:
+            selector: 'context.request.http.headers.authorization.@case:lower'
+          ttl: 600
+        defaults:
+          userid:
+            selector: auth.identity.user.username
+        kubernetesTokenReview:
+          audiences:
+            - maas-default-gateway-sa
+            - 'https://kubernetes.default.svc'
+        metrics: false
+        priority: 0
+    authorization:
+      deny-not-in-allowed-groups:
+        metrics: false
+        patternMatching:
+          patterns:
+            - operator: eq
+              selector: auth.identity.user.username
+              value: ''
+        priority: 0
+        when:
+          - all:
+              - operator: excl
+                selector: auth.identity.user.groups
+                value: free-user
+              - operator: excl
+                selector: auth.identity.user.groups
+                value: premium-user
+    response:
+      success:
+        filters:
+          identity:
+            json:
+                groups:
+                  expression: |
+                    auth.identity.user.groups.filter(g, g == "free-user" || g == "premium-user")
+                userid:
+                  expression: auth.identity.user.username
+                  selector: auth.identity.userid
+            metrics: true
+            priority: 0
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: facebook-opt-125m-simulated-kserve-route
+

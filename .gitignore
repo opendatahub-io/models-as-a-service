@@ -40,6 +40,7 @@ htmlcov/
 apps/frontend/.env.local
 apps/backend/.env
 CLAUDE.md
+.cursor/
 
 # Docs build and site directories
 docs/build/
