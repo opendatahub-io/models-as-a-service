@@ -4,13 +4,16 @@ Thanks for your interest in contributing. This guide explains how to work with t
 
 ## Table of contents
 
-- [Getting started](#getting-started)
-- [Development setup](#development-setup)
-- [Pull request process](#pull-request-process)
-- [Repository layout](#repository-layout)
-- [CI and checks](#ci-and-checks)
-- [Documentation](#documentation)
-- [Getting help](#getting-help)
+- [Contributing to Models as a Service (MaaS)](#contributing-to-models-as-a-service-maas)
+  - [Table of contents](#table-of-contents)
+  - [Getting started](#getting-started)
+  - [Development setup](#development-setup)
+  - [Pull request process](#pull-request-process)
+  - [Repository layout](#repository-layout)
+  - [CI and checks](#ci-and-checks)
+  - [Testing](#testing)
+  - [Documentation](#documentation)
+  - [Getting help](#getting-help)
 
 ## Getting started
 
@@ -60,10 +63,17 @@ Thanks for your interest in contributing. This guide explains how to work with t
 - **Kustomize:** Manifests under `deployment/` are validated with `scripts/ci/validate-manifests.sh` (kustomize build).
 - **MaaS API (on `maas-api/**` changes):** Lint (golangci-lint), tests (`make test`), and image build.
 
+**Workflows requiring owner approval:** Some CI workflows (e.g. those that run on infrastructure or deploy) require approval from an [OWNERS](OWNERS) approver before they can run. If your PR’s workflows are blocked, ping an owner in the PR to request approval. Before asking, validate that the workflow would succeed by running the same steps locally where possible (for example, the Prow-style E2E script below).
+
 **Run locally before pushing:**
 
 - Kustomize: `./scripts/ci/validate-manifests.sh` (from repo root; requires kustomize 5.7.x).
 - MaaS API: from `maas-api/`, run `make lint` and `make test`.
+- Full E2E (Prow-style): `./test/e2e/scripts/prow_run_smoke_test.sh` (from repo root; requires OpenShift cluster and cluster-admin).
+
+## Testing
+
+**New functionality should include tests.** Add or extend tests to cover your changes—for example, unit tests in `maas-api/` or `test/`, or E2E coverage where appropriate. This section will be expanded with more detailed testing guidelines.
 
 ## Documentation
 
