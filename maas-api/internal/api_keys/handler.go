@@ -166,3 +166,102 @@ func (h *Handler) RevokeAllTokens(c *gin.Context) {
 	h.logger.Debug("Successfully revoked tokens")
 	c.Status(http.StatusNoContent)
 }
+
+// CreatePermanentKeyRequest is the request body for creating a permanent API key
+type CreatePermanentKeyRequest struct {
+	Name        string `json:"name" binding:"required"`
+	Description string `json:"description,omitempty"`
+}
+
+// CreatePermanentAPIKey handles POST /v1/api-keys/permanent
+// Creates a new API key (sk-oai-* format) per Feature Refinement
+// Per "Keys Shown Only Once": key is returned ONCE at creation and never again
+func (h *Handler) CreatePermanentAPIKey(c *gin.Context) {
+	var req CreatePermanentKeyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userCtx, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "User context not found"})
+		return
+	}
+
+	user, ok := userCtx.(*token.UserContext)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user context type"})
+		return
+	}
+
+	result, err := h.service.CreatePermanentAPIKey(c.Request.Context(), user, req.Name, req.Description)
+	if err != nil {
+		h.logger.Error("Failed to create permanent API key", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create API key"})
+		return
+	}
+
+	h.logger.Info("Created permanent API key",
+		"keyId", result.ID,
+		"keyPrefix", result.KeyPrefix,
+	)
+
+	// Return the key - THIS IS THE ONLY TIME THE PLAINTEXT IS SHOWN
+	c.JSON(http.StatusCreated, result)
+}
+
+// ValidateAPIKeyRequest is the request body for validating an API key
+type ValidateAPIKeyRequest struct {
+	Key string `json:"key" binding:"required"`
+}
+
+// ValidateAPIKeyHandler handles POST /internal/v1/api-keys/validate
+// This endpoint is called by Authorino via HTTP external auth callback
+// Per Feature Refinement "Gateway Integration (Inference Flow)"
+func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
+	var req ValidateAPIKeyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	result, err := h.service.ValidateAPIKey(c.Request.Context(), req.Key)
+	if err != nil {
+		h.logger.Error("API key validation failed", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "validation failed"})
+		return
+	}
+
+	if !result.Valid {
+		// Return 401 with reason for invalid keys
+		c.JSON(http.StatusUnauthorized, result)
+		return
+	}
+
+	// Valid key - return user identity for Authorino to use
+	c.JSON(http.StatusOK, result)
+}
+
+// RevokeAPIKey handles DELETE /v1/api-keys/:id
+// Revokes a specific permanent API key (soft delete)
+func (h *Handler) RevokeAPIKey(c *gin.Context) {
+	keyID := c.Param("id")
+	if keyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "API key ID required"})
+		return
+	}
+
+	if err := h.service.RevokeAPIKey(c.Request.Context(), keyID); err != nil {
+		if errors.Is(err, ErrKeyNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
+			return
+		}
+		h.logger.Error("Failed to revoke API key", "error", err, "keyId", keyID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke API key"})
+		return
+	}
+
+	h.logger.Info("Revoked API key", "keyId", keyID)
+	c.Status(http.StatusNoContent)
+}
