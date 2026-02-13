@@ -28,12 +28,15 @@
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
+#   SKIP_DEPLOY     - Skip platform deployment (default: false)
 #   OPERATOR_TYPE   - Operator to deploy: "odh" or "rhoai" (default: odh)
 #                     odh   → uses Kuadrant (upstream), Authorino in kuadrant-system
 #                     rhoai → uses RHCL (downstream), Authorino in rh-connectivity-link
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
+#   SKIP_AUTH_CHECK - Skip Authorino auth readiness check (default: true, temporary workaround)
+#   SKIP_OBSERVABILITY - Skip observability tests (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   OPERATOR_CATALOG - Custom operator catalog image (default: latest from main)
@@ -74,7 +77,11 @@ SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
+SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
+
+# Track test failures - script continues but exits with error at end
+TESTS_FAILED=false
 
 # Operator configuration
 # OPERATOR_TYPE determines which operator and policy engine to use:
@@ -199,6 +206,19 @@ deploy_maas_platform() {
     echo "✅ MaaS platform deployment completed"
 }
 
+install_observability() {
+    if [[ "${SKIP_OBSERVABILITY}" == "true" ]]; then
+        echo "⏭️  Skipping observability installation (SKIP_OBSERVABILITY=true)"
+        return 0
+    fi
+    echo "Installing observability components..."
+    if ! "$PROJECT_ROOT/scripts/install-observability.sh"; then
+        echo "❌ ERROR: Failed to deploy observability components"
+        exit 1
+    fi
+    echo "✅ Observability installation completed"
+}
+
 deploy_models() {
     echo "Deploying simulator Model"
     # Create llm namespace if it does not exist
@@ -301,6 +321,61 @@ run_smoke_tests() {
     fi
 }
 
+run_observability_tests() {
+    echo "-- Observability Testing --"
+    
+    if [ "$SKIP_OBSERVABILITY" = false ]; then
+        # Setup Python venv (reuse smoke.sh's venv setup logic)
+        local VENV_DIR="${PROJECT_ROOT}/test/e2e/.venv"
+        
+        if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
+            echo "[observability] Creating virtual environment at ${VENV_DIR}"
+            rm -rf "${VENV_DIR}"  # Clean up any corrupt/incomplete venv
+            python3 -m venv "${VENV_DIR}" --upgrade-deps
+        fi
+        
+        # Activate virtual environment
+        source "${VENV_DIR}/bin/activate"
+        
+        # Install dependencies
+        python -m pip install --upgrade pip --quiet
+        python -m pip install -r "${PROJECT_ROOT}/test/e2e/requirements.txt" --quiet
+        
+        # Set PYTHONPATH so "from tests.test_helper import …" resolves
+        export PYTHONPATH="${PROJECT_ROOT}/test/e2e:${PYTHONPATH:-}"
+        
+        # Run observability tests
+        echo "[observability] Running observability tests..."
+        local REPORTS_DIR="${PROJECT_ROOT}/test/e2e/reports"
+        mkdir -p "${REPORTS_DIR}"
+        
+        local USER
+        USER="$(oc whoami 2>/dev/null || echo 'unknown')"
+        # Sanitize: replace colons and other filesystem-unsafe chars with dashes
+        USER="$(printf '%s' "$USER" | tr ':/@\\' '----' | sed 's/--*/-/g; s/^-//; s/-$//')"
+        USER="${USER:-unknown}"
+        local HTML="${REPORTS_DIR}/observability-${USER}.html"
+        local XML="${REPORTS_DIR}/observability-${USER}.xml"
+        
+        if pytest "${PROJECT_ROOT}/test/e2e/tests/test_observability.py" \
+            -v \
+            --tb=short \
+            "--junitxml=${XML}" \
+            --html="${HTML}" --self-contained-html \
+            2>&1; then
+            echo "✅ Observability tests completed successfully"
+        else
+            echo "❌ ERROR: Observability tests failed"
+            echo "  Reports: ${HTML}"
+            TESTS_FAILED=true
+        fi
+        
+        deactivate 2>/dev/null || true
+    else
+        echo "⏭️  Skipping observability tests"
+    fi
+}
+
 run_token_verification() {
     echo "-- Token Metadata Verification --"
     
@@ -347,6 +422,9 @@ deploy_maas_platform
 print_header "Deploying Models"  
 deploy_models
 
+print_header "Installing Observability"
+install_observability
+
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
@@ -371,6 +449,10 @@ run_token_verification
 sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
 
+# Run observability tests (only once as admin, since they verify infrastructure)
+print_header "Running Observability Tests"
+run_observability_tests
+
 # Test edit user  
 print_header "Running Maas e2e Tests as edit user"
 EDIT_TOKEN=$(oc create token tester-edit-user -n default)
@@ -382,5 +464,10 @@ print_header "Running Maas e2e Tests as view user"
 VIEW_TOKEN=$(oc create token tester-view-user -n default)
 oc login --token "$VIEW_TOKEN" --server "$K8S_CLUSTER_URL"
 run_smoke_tests
+
+if [[ "${TESTS_FAILED}" == "true" ]]; then
+    echo "❌ Some tests failed — see reports above for details"
+    exit 1
+fi
 
 echo "🎉 Deployment completed successfully!"

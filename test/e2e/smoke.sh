@@ -10,9 +10,10 @@ VENV_DIR="${DIR}/.venv"
 setup_python_venv() {
     echo "[smoke] Setting up Python virtual environment..."
     
-    # Create virtual environment if it doesn't exist
-    if [[ ! -d "${VENV_DIR}" ]]; then
+    # Create virtual environment if it doesn't exist or is invalid
+    if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
         echo "[smoke] Creating virtual environment at ${VENV_DIR}"
+        rm -rf "${VENV_DIR}"  # Clean up any corrupt/incomplete venv
         python3 -m venv "${VENV_DIR}" --upgrade-deps
     fi
     

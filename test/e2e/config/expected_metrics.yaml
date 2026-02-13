@@ -1,0 +1,148 @@
+# Expected Metrics Configuration for MaaS Observability Tests
+# ==========================================================
+#
+# This file defines the expected metrics and Kubernetes resources that should
+# be available after deploying the MaaS observability stack.
+#
+# Tests will FAIL with informative messages if:
+#   - A metric is missing (not found in the endpoint)
+#   - A metric is missing expected labels
+#   - A metric has the wrong type (counter/gauge/histogram)
+#   - A Kubernetes resource (TelemetryPolicy, Telemetry) is not deployed
+#
+# Update this file when:
+#   - Adding new metrics to the observability stack
+#   - Changing metric names or labels
+#   - Adding new observability components
+#   - Adding or modifying Grafana dashboard panels
+
+# Kubernetes resources that must exist for observability
+resources:
+  telemetry_policy:
+    name: "user-group"
+    namespace: "openshift-ingress"
+    kind: "TelemetryPolicy"
+    api_group: "extensions.kuadrant.io/v1alpha1"
+    expected_condition:
+      type: "Enforced"
+      status: "True"
+
+  istio_telemetry:
+    name: "latency-per-tier"
+    namespace: "openshift-ingress"
+    kind: "Telemetry"
+    api_group: "telemetry.istio.io/v1"
+
+  limitador_servicemonitor:
+    name: "limitador-metrics"
+    namespace: "kuadrant-system"
+    kind: "ServiceMonitor"
+    api_group: "monitoring.coreos.com/v1"
+
+# Limitador metrics (enriched with user/tier/model labels via TelemetryPolicy)
+limitador:
+  access:
+    service: "limitador-limitador"
+    namespace: "kuadrant-system"
+    port: 8080
+    path: "/metrics"
+
+  token_metrics:
+    - name: "authorized_hits"
+      type: "counter"
+      labels:
+        required:
+          - "user"
+          - "tier"
+          - "model"
+
+    - name: "authorized_calls"
+      type: "counter"
+      labels:
+        required:
+          - "user"
+          - "tier"
+
+    - name: "limited_calls"
+      type: "counter"
+      labels:
+        required:
+          - "user"
+          - "tier"
+
+  health_metrics:
+    - name: "limitador_up"
+      type: "gauge"
+
+# Gateway / Istio metrics
+latency_metrics:
+  istio_gateway:
+    metrics:
+      - name: "istio_requests_total"
+        type: "counter"
+        labels:
+          required:
+            - "response_code"
+            - "destination_service_name"
+
+      - name: "istio_request_duration_milliseconds"
+        type: "histogram"
+        labels:
+          required:
+            - "destination_service_name"
+            - "tier"
+
+  # vLLM metrics used in Grafana dashboards (simulator v0.7.1+ exposes all)
+  vllm:
+    metrics:
+      - name: "vllm:e2e_request_latency_seconds"
+        type: "histogram"
+        labels:
+          required:
+            - "model_name"
+
+      - name: "vllm:request_success_total"
+        type: "counter"
+
+      - name: "vllm:num_requests_running"
+        type: "gauge"
+        labels:
+          required:
+            - "model_name"
+
+      - name: "vllm:num_requests_waiting"
+        type: "gauge"
+        labels:
+          required:
+            - "model_name"
+
+      - name: "vllm:kv_cache_usage_perc"
+        type: "gauge"
+
+      - name: "vllm:request_prompt_tokens"
+        type: "histogram"
+
+      - name: "vllm:request_generation_tokens"
+        type: "histogram"
+
+      - name: "vllm:time_to_first_token_seconds"
+        type: "histogram"
+
+      - name: "vllm:inter_token_latency_seconds"
+        type: "histogram"
+
+      # NOTE: vllm:request_queue_time_seconds is used in the Platform Admin dashboard
+      # but is NOT exposed by the simulator (llm-d-inference-sim). It will only appear
+      # with real vLLM backends. Skipped from CI validation for this reason.
+
+# Authorino auth server metrics (requires authorino-server-metrics ServiceMonitor)
+authorino:
+  metrics:
+    - name: "auth_server_authconfig_duration_seconds"
+      type: "histogram"
+
+    - name: "auth_server_authconfig_response_status"
+      type: "counter"
+      labels:
+        required:
+          - "status"
