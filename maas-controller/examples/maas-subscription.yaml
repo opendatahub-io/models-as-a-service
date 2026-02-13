@@ -1,0 +1,21 @@
+# MaaSSubscription with token rate limits for the simulator model.
+# Owner groups/users determine who is subject to the limit; limits apply per model.
+#
+# NOTE: The group names here must match groups from the Kubernetes TokenReview API
+# (i.e. your identity provider groups), same as in MaaSAuthPolicy.
+# See maas-auth-policy.yaml for details.
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: simulator-subscription
+  namespace: opendatahub
+spec:
+  owner:
+    groups:
+      - name: free-user  # Replace with a real group from your identity provider
+    users: []
+  modelRefs:
+    - name: facebook-opt-125m-simulated
+      tokenRateLimits:
+        - limit: 100
+          window: 1m

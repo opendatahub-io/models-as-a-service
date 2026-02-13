@@ -1,0 +1,24 @@
+# MaaSAuthPolicy granting access to the simulator model for users in the listed groups.
+# The controller will create one Kuadrant AuthPolicy per model targeting that model's HTTPRoute.
+#
+# IMPORTANT: The group names here must match groups returned by the Kubernetes
+# TokenReview API for your user's token. These come from your identity provider
+# (OIDC, LDAP, htpasswd), NOT from OpenShift Group objects (oc adm groups).
+# To check your groups: oc create token default -n default | jwt decode -
+# Or see the TokenReview API response for your token.
+#
+# Example: On a default OpenShift cluster, "dedicated-admins" or
+# "system:authenticated" are common groups. Replace "free-user" below with a
+# group that matches your identity provider configuration.
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: simulator-access
+  namespace: opendatahub
+spec:
+  modelRefs:
+    - facebook-opt-125m-simulated
+  subjects:
+    groups:
+      - name: free-user  # Replace with a real group from your identity provider
+    users: []

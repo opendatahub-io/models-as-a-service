@@ -1,0 +1,9 @@
+# Example MaaS CRs (MaaSModel, MaaSAuthPolicy, MaaSSubscription).
+# Deploy after the maas-controller is running and the simulator LLMInferenceService exists.
+# See README.md and ../scripts/install-examples.sh.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - maas-model.yaml
+  - maas-auth-policy.yaml
+  - maas-subscription.yaml

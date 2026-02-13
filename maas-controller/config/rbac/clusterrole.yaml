@@ -1,0 +1,26 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-controller-role
+rules:
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maasauthpolicies", "maasmodels", "maassubscriptions"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maasauthpolicies/finalizers", "maasmodels/finalizers", "maassubscriptions/finalizers"]
+  verbs: ["update"]
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maasauthpolicies/status", "maasmodels/status", "maassubscriptions/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gateways"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["httproutes"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["kuadrant.io"]
+  resources: ["authpolicies", "tokenratelimitpolicies"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["serving.kserve.io"]
+  resources: ["llminferenceservices"]
+  verbs: ["get", "list", "watch"]

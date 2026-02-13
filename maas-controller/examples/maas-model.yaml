@@ -1,0 +1,13 @@
+# MaaSModel that registers the simulator LLMInferenceService.
+# The LLMIS name must match the deployed resource (e.g. from docs/samples/models/simulator:
+# namePrefix facebook-opt-125m- + name simulated -> facebook-opt-125m-simulated in namespace llm).
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModel
+metadata:
+  name: facebook-opt-125m-simulated
+  namespace: opendatahub
+spec:
+  modelRef:
+    kind: llmisvc
+    name: facebook-opt-125m-simulated
+    namespace: llm

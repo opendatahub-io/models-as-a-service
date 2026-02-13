@@ -1,0 +1,36 @@
+# Default deny-all TokenRateLimitPolicy at the gateway level.
+# Scoped to model inference paths (/llm/) only — does NOT affect non-model routes
+# like /maas-api/ or /v1/models (the MaaS API management endpoints).
+#
+# Routes WITHOUT a per-route TokenRateLimitPolicy (i.e. models without a MaaSSubscription)
+# will get 0 tokens -> 429 Too Many Requests.
+# Routes WITH a per-route TokenRateLimitPolicy (created by the MaaSSubscription controller)
+# override these defaults and get their subscription's token limits.
+#
+# IMPORTANT: Per-route TRLPs completely replace these defaults (atomic strategy).
+# The MaaSSubscription controller embeds a deny-unsubscribed catch-all rule in each
+# per-route TRLP to ensure users outside the subscription group still get 429.
+apiVersion: kuadrant.io/v1alpha1
+kind: TokenRateLimitPolicy
+metadata:
+  name: gateway-default-deny
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/managed-by: maas-controller
+    app.kubernetes.io/part-of: maas-controller
+    app.kubernetes.io/component: default-policy
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+  defaults:
+    limits:
+      deny-all-by-default:
+        rates:
+          - limit: 0
+            window: 1m
+        when:
+          - predicate: 'request.path.startsWith("/llm/")'
+        counters:
+          - expression: auth.identity.userid
