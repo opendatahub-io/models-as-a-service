@@ -3,7 +3,7 @@ package token
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha1" //nolint:gosec // SHA1 used for non-cryptographic hashing of usernames, not for security
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -135,7 +135,7 @@ func (m *Manager) RevokeTokens(ctx context.Context, user *UserContext) error {
 		return fmt.Errorf("failed to determine namespace for tier %s: %w", userTier.Name, errNS)
 	}
 
-	saName, errName := m.sanitizeServiceAccountName(user.Username)
+	saName, errName := m.SanitizeServiceAccountName(user.Username)
 	if errName != nil {
 		return fmt.Errorf("failed to sanitize service account name for user %s: %w", user.Username, errName)
 	}
@@ -205,7 +205,7 @@ func (m *Manager) ensureTierNamespace(ctx context.Context, tier string) (string,
 // ensureServiceAccount creates a service account if it doesn't exist.
 // It takes a raw username, sanitizes it for Kubernetes naming, and returns the sanitized name.
 func (m *Manager) ensureServiceAccount(ctx context.Context, namespace, username, userTier string) (string, error) {
-	saName, errName := m.sanitizeServiceAccountName(username)
+	saName, errName := m.SanitizeServiceAccountName(username)
 	if errName != nil {
 		return "", fmt.Errorf("failed to sanitize service account name for user %s: %w", username, errName)
 	}
@@ -275,10 +275,11 @@ func (m *Manager) deleteServiceAccount(ctx context.Context, namespace, saName st
 	return nil
 }
 
-// sanitizeServiceAccountName ensures the service account name follows Kubernetes naming conventions.
+// SanitizeServiceAccountName ensures the service account name follows Kubernetes naming conventions.
 // While ideally usernames should be pre-validated, Kubernetes TokenReview can return usernames
 // in various formats (OIDC emails, LDAP DNs, etc.) that need sanitization for use as SA names.
-func (m *Manager) sanitizeServiceAccountName(username string) (string, error) {
+// Exported for testing.
+func (m *Manager) SanitizeServiceAccountName(username string) (string, error) {
 	// Kubernetes ServiceAccount names must be valid DNS-1123 labels:
 	// [a-z0-9-], 1-63 chars, start/end alphanumeric.
 	name := strings.ToLower(username)
@@ -295,9 +296,9 @@ func (m *Manager) sanitizeServiceAccountName(username string) (string, error) {
 		return "", fmt.Errorf("invalid username %q", username)
 	}
 
-	// Append a stable short hash to reduce collisions
-	sum := sha1.Sum([]byte(username)) //nolint:gosec // SHA1 used for non-cryptographic hashing, not for security
-	suffix := hex.EncodeToString(sum[:])[:8]
+	// Append a stable hash suffix to reduce collision risk across users
+	sum := sha256.Sum256([]byte(username))
+	suffix := hex.EncodeToString(sum[:])[:12] // 48-bit truncation
 
 	// Ensure total length <= 63 including hyphen and suffix
 	const maxLen = 63
