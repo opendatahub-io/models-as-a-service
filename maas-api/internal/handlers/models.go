@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
 	"github.com/openai/openai-go/v2/packages/pagination"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
@@ -17,14 +17,11 @@ import (
 type ModelsHandler struct {
 	modelMgr     *models.Manager
 	tokenManager *token.Manager
-	logger       *logger.Logger
+	logger       logr.Logger
 }
 
 // NewModelsHandler creates a new models handler.
-func NewModelsHandler(log *logger.Logger, modelMgr *models.Manager, tokenMgr *token.Manager) *ModelsHandler {
-	if log == nil {
-		log = logger.Production()
-	}
+func NewModelsHandler(log logr.Logger, modelMgr *models.Manager, tokenMgr *token.Manager) *ModelsHandler {
 	return &ModelsHandler{
 		modelMgr:     modelMgr,
 		tokenManager: tokenMgr,
@@ -37,7 +34,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	// Extract authorization token from header
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" {
-		h.logger.Error("Authorization header missing")
+		h.logger.Error(nil, "Authorization header missing")
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": gin.H{
 				"message": "Authorization token required",
@@ -51,7 +48,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	bearerToken = strings.TrimSpace(bearerToken)
 
 	if bearerToken == "" {
-		h.logger.Error("Empty token after processing authorization header")
+		h.logger.Error(nil, "Empty token after processing authorization header")
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": gin.H{
 				"message": "Valid authorization token required",
@@ -66,7 +63,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	if !h.tokenManager.HasValidAudience(bearerToken) {
 		userCtx, exists := c.Get("user")
 		if !exists {
-			h.logger.Error("User context not found for token exchange")
+			h.logger.Error(nil, "User context not found for token exchange")
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": gin.H{
 					"message": "Internal server error",
@@ -77,7 +74,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 
 		user, ok := userCtx.(*token.UserContext)
 		if !ok {
-			h.logger.Error("Invalid user context type")
+			h.logger.Error(nil, "Invalid user context type")
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": gin.H{
 					"message": "Internal server error",
@@ -88,9 +85,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 
 		exchangedToken, err := h.tokenManager.GenerateToken(c.Request.Context(), user, 10*time.Minute)
 		if err != nil {
-			h.logger.Error("Token exchange failed",
-				"error", err,
-			)
+			h.logger.Error(err, "Token exchange failed")
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": gin.H{
 					"message": "Failed to authorize request",
@@ -99,7 +94,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			return
 		}
 
-		h.logger.Debug("Exchanged token for SA token with correct audience")
+		h.logger.V(1).Info("Exchanged token for SA token with correct audience")
 		saToken = exchangedToken.Token
 	}
 
@@ -107,10 +102,9 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	if err != nil {
 		claims, claimsErr := token.ExtractClaims(bearerToken)
 		if claimsErr != nil {
-			h.logger.Warn("Failed to extract claims from token", "error", claimsErr)
+			h.logger.V(1).Info("Failed to extract claims from token", "error", claimsErr)
 		}
-		h.logger.Error("Failed to get available LLM models",
-			"error", err,
+		h.logger.Error(err, "Failed to get available LLM models",
 			"jti", claims["jti"],
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{
