@@ -477,10 +477,18 @@ create_tls_secret() {
   temp_dir=$(mktemp -d)
   
   # Set up trap to ensure cleanup on any exit (including signals)
-  # Save any existing EXIT trap and restore it after
-  local old_trap
-  old_trap=$(trap -p EXIT)
-  trap "rm -rf '$temp_dir'; $old_trap" EXIT
+  # Extract the command from any existing EXIT trap and chain it
+  local old_trap_cmd=""
+  local old_trap_output
+  old_trap_output=$(trap -p EXIT)
+
+  # Extract just the command portion from 'trap -- 'COMMAND' EXIT' format
+  if [[ -n "$old_trap_output" ]]; then
+    old_trap_cmd=$(echo "$old_trap_output" | sed "s/^trap -- '\(.*\)' .*$/\1/")
+  fi
+
+  # Set new trap that executes BOTH cleanups (temp dir, then original command)
+  trap "rm -rf '$temp_dir'; $old_trap_cmd" EXIT
 
   # Generate self-signed certificate with matching key
   if ! openssl req -x509 -newkey rsa:2048 \
@@ -513,7 +521,9 @@ create_tls_secret() {
   # Clean up temp dir and restore original trap
   rm -rf "$temp_dir"
   trap - EXIT
-  eval "$old_trap"
+  if [[ -n "$old_trap_cmd" ]]; then
+    eval "$old_trap_cmd"
+  fi
 
   return $rc
 }
