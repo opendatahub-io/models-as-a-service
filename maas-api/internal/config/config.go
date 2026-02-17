@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"flag"
-	"fmt"
 
 	"k8s.io/utils/env"
 
@@ -11,36 +10,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
-// StorageMode represents the storage backend type.
-type StorageMode string
-
 const (
-	StorageModeInMemory StorageMode = "in-memory"
-	StorageModeDisk     StorageMode = "disk"
-	StorageModeExternal StorageMode = "external"
-)
-
-// String implements flag.Value interface.
-func (s *StorageMode) String() string {
-	return string(*s)
-}
-
-func (s *StorageMode) Set(value string) error {
-	switch StorageMode(value) {
-	case StorageModeInMemory, StorageModeDisk, StorageModeExternal:
-		*s = StorageMode(value)
-		return nil
-	case "":
-		*s = StorageModeInMemory
-		return nil
-	default:
-		return fmt.Errorf("invalid storage mode %q: valid modes are %q, %q, or %q",
-			value, StorageModeInMemory, StorageModeDisk, StorageModeExternal)
-	}
-}
-
-const (
-	DefaultDataPath     = "/data/maas-api.db"
 	DefaultSecureAddr   = ":8443"
 	DefaultInsecureAddr = ":8080"
 )
@@ -59,18 +29,9 @@ type Config struct {
 
 	DebugMode bool
 
-	// StorageMode specifies the storage backend type:
-	//   - "in-memory" (default): Ephemeral storage, data lost on restart
-	//   - "disk": Persistent local storage using a file (single replica only)
-	//   - "external": External database (PostgreSQL), supports multiple replicas
-	StorageMode StorageMode
-
-	// DBConnectionURL is the database connection URL for external mode.
+	// DBConnectionURL is the PostgreSQL connection URL.
+	// Format: postgresql://user:password@host:port/database
 	DBConnectionURL string
-
-	// DataPath is the path to the database file for disk mode.
-	// Default: /data/maas-api.db
-	DataPath string
 
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
@@ -91,16 +52,9 @@ func Load() *Config {
 		Secure:           secure,
 		TLS:              loadTLSConfig(),
 		DebugMode:        debugMode,
-		StorageMode:      StorageModeInMemory,
 		DBConnectionURL:  env.GetString("DB_CONNECTION_URL", ""),
-		DataPath:         env.GetString("DATA_PATH", DefaultDataPath),
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
-	}
-
-	// Validate STORAGE_MODE env var through Set() to ensure consistent validation
-	if err := c.StorageMode.Set(env.GetString("STORAGE_MODE", "")); err != nil {
-		c.StorageMode = StorageModeInMemory
 	}
 
 	c.bindFlags(flag.CommandLine)
@@ -123,9 +77,7 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.deprecatedHTTPPort, "port", c.deprecatedHTTPPort, "DEPRECATED: use --address with --secure=false")
 
 	fs.BoolVar(&c.DebugMode, "debug", c.DebugMode, "Enable debug mode")
-	fs.Var(&c.StorageMode, "storage", "Storage mode: in-memory (default), disk, or external")
-	fs.StringVar(&c.DBConnectionURL, "db-connection-url", c.DBConnectionURL, "Database connection URL (required for --storage=external)")
-	fs.StringVar(&c.DataPath, "data-path", c.DataPath, "Path to database file (for --storage=disk)")
+	fs.StringVar(&c.DBConnectionURL, "db-connection-url", c.DBConnectionURL, "PostgreSQL connection URL (required)")
 }
 
 // Validate validates the configuration after flags have been parsed.

@@ -119,6 +119,8 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
+	// TODO(production): Add authorization check - verify user owns key or is admin
+	// Currently any authenticated user can view any key by ID
 	tokenID := c.Param("id")
 	if tokenID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Token ID required"})
@@ -246,6 +248,8 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 // RevokeAPIKey handles DELETE /v1/api-keys/:id
 // Revokes a specific permanent API key (soft delete)
 func (h *Handler) RevokeAPIKey(c *gin.Context) {
+	// TODO(production): Add authorization check - verify user owns key or is admin
+	// Currently any authenticated user can revoke any key by ID
 	keyID := c.Param("id")
 	if keyID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API key ID required"})

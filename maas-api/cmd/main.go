@@ -123,40 +123,18 @@ func serve() error {
 	return nil
 }
 
-// initStore creates the store based on the configured storage mode.
-//
-// Storage modes:
-//   - in-memory (default): Ephemeral storage, data lost on restart
-//   - disk: Persistent local storage using a file (single replica only)
-//   - external: External database (PostgreSQL), supports multiple replicas
+// initStore creates the PostgreSQL store for API key management.
+// Requires DB_CONNECTION_URL environment variable or --db-connection-url flag.
 //
 //nolint:ireturn // Returns MetadataStore interface by design for pluggable storage backends.
 func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
-	switch cfg.StorageMode {
-	case config.StorageModeInMemory, "":
-		log.Info("Using in-memory storage (data will be lost on restart). " +
-			"For persistent storage, use --storage=disk or --storage=external")
-		return api_keys.NewSQLiteStore(ctx, log, ":memory:")
-
-	case config.StorageModeDisk:
-		dataPath := strings.TrimSpace(cfg.DataPath)
-		if dataPath == "" {
-			dataPath = config.DefaultDataPath
-		}
-		log.Info("Using persistent disk storage", "path", dataPath)
-		return api_keys.NewSQLiteStore(ctx, log, dataPath)
-
-	case config.StorageModeExternal:
-		dbURL := strings.TrimSpace(cfg.DBConnectionURL)
-		if dbURL == "" {
-			return nil, errors.New("--db-connection-url is required when using --storage=external")
-		}
-		log.Info("Connecting to external database...")
-		return api_keys.NewExternalStore(ctx, log, dbURL)
-
-	default:
-		return nil, fmt.Errorf("unknown storage mode: %q (valid modes: in-memory, disk, external)", cfg.StorageMode)
+	dbURL := strings.TrimSpace(cfg.DBConnectionURL)
+	if dbURL == "" {
+		return nil, errors.New("database connection URL is required. Set DB_CONNECTION_URL or use --db-connection-url")
 	}
+
+	log.Info("Connecting to PostgreSQL database...")
+	return api_keys.NewPostgresStoreFromURL(ctx, log, dbURL)
 }
 
 func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, store api_keys.MetadataStore) error {
@@ -198,7 +176,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, tokenManager)
 
-	apiKeyService := api_keys.NewService(tokenManager, store)
+	apiKeyService := api_keys.NewServiceWithLogger(tokenManager, store, log)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)

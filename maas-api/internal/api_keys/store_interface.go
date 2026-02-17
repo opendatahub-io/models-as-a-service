@@ -9,6 +9,8 @@ var (
 	ErrTokenNotFound = errors.New("token not found")
 	ErrKeyNotFound   = errors.New("api key not found")
 	ErrInvalidKey    = errors.New("api key is invalid or revoked")
+	ErrEmptyJTI      = errors.New("key ID is required and cannot be empty")
+	ErrEmptyName     = errors.New("key name is required and cannot be empty")
 )
 
 const (
@@ -36,6 +38,10 @@ type MetadataStore interface {
 
 	// Revoke marks a specific API key as revoked (soft delete)
 	Revoke(ctx context.Context, keyID string) error
+
+	// UpdateLastUsed updates the last_used_at timestamp for an API key
+	// Called after successful validation to track key usage
+	UpdateLastUsed(ctx context.Context, keyID string) error
 
 	Close() error
 }

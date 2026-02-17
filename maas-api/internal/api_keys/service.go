@@ -8,18 +8,33 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 type Service struct {
 	tokenManager *token.Manager
 	store        MetadataStore
+	logger       *logger.Logger
 }
 
 func NewService(tokenManager *token.Manager, store MetadataStore) *Service {
 	return &Service{
 		tokenManager: tokenManager,
 		store:        store,
+		logger:       logger.Production(),
+	}
+}
+
+// NewServiceWithLogger creates a new service with a custom logger (for testing)
+func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, log *logger.Logger) *Service {
+	if log == nil {
+		log = logger.Production()
+	}
+	return &Service{
+		tokenManager: tokenManager,
+		store:        store,
+		logger:       log,
 	}
 }
 
@@ -143,6 +158,25 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		}
 		return nil, fmt.Errorf("validation lookup failed: %w", err)
 	}
+
+	// Update last_used_at asynchronously (don't block validation response)
+	go func() {
+		// Recover from panics to prevent crashing the entire process
+		defer func() {
+			if r := recover(); r != nil {
+				s.logger.Error("Panic in UpdateLastUsed goroutine", "panic", r, "key_id", metadata.ID)
+			}
+		}()
+
+		// Use background context with timeout since original may be cancelled
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		if err := s.store.UpdateLastUsed(ctx, metadata.ID); err != nil {
+			// Log warning but don't fail validation - this is best-effort tracking
+			s.logger.Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
+		}
+	}()
 
 	// Success - return user identity for Authorino
 	return &ValidationResult{
