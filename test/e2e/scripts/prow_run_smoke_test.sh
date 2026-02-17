@@ -73,7 +73,10 @@ SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS
 SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
-# Track test failures - script continues but exits with error at end
+# Track non-blocking test failures - script continues but exits with error at end.
+# Currently: only run_observability_tests sets TESTS_FAILED=true (non-blocking).
+# All other test functions (smoke tests, token verification, validation) exit 1 immediately.
+# If adding more non-blocking test suites, each must set TESTS_FAILED=true on failure.
 TESTS_FAILED=false
 
 # Operator configuration
