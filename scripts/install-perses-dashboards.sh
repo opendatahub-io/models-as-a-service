@@ -60,7 +60,7 @@ echo ""
 if ! kubectl get crd persesdashboards.perses.dev &>/dev/null; then
     echo "⚠️  Perses CRDs not found. Install the Cluster Observability Operator first."
     echo "   Run:  ./scripts/installers/install-perses.sh"
-    echo "   See:  https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html/cluster_observability_operator/index"
+    echo "   See:  https://docs.redhat.com/en/documentation/red_hat_openshift_cluster_observability_operator/1-latest/html/about_red_hat_openshift_cluster_observability_operator/index"
     exit 0
 fi
 echo "✅ Perses CRDs available"

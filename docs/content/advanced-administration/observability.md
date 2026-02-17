@@ -363,7 +363,7 @@ Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashbo
 
     ./scripts/install-perses-dashboards.sh
 
-Installs the Cluster Observability Operator (if not present), enables the Perses UIPlugin in the OpenShift Console, and deploys PersesDashboard CRs to `openshift-operators`. After installation, dashboards are accessible at **Observe → Dashboards → Perses tab** in the OpenShift Console.
+Checks for Perses CRDs and, if they are missing, exits with a warning directing you to run `install-perses.sh` first (operator installation is a separate step handled by `scripts/installers/install-perses.sh`). When CRDs are present, `install-perses-dashboards.sh` enables the Perses UIPlugin in the OpenShift Console and deploys PersesDashboard CRs to `openshift-operators`. After installation, dashboards are accessible at **Observe → Dashboards → Perses tab** in the OpenShift Console.
 
 **Manual Grafana import (dashboard JSON only):**
 
