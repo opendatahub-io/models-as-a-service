@@ -61,6 +61,10 @@ if [[ "$OCP" == true ]]; then
   fi
   
   echo "🔧 Installing Cluster Observability Operator subscription..."
+  # installPlanApproval is set to Automatic, so OLM auto-approves install plans.
+  # The manual approval detection/patching loop below is a safety net for edge
+  # cases (e.g., operator upgrades that switch to manual, or OLM race conditions)
+  # and will not trigger under normal circumstances.
   kubectl apply -f - <<EOF
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
