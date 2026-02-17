@@ -72,7 +72,7 @@ spec:
       spec:
         display:
           name: "💚 Limitador"
-          description: "Shows if Limitador (rate limiting service) is running. Uses max() to deduplicate across scrape sources."
+          description: "Count of running Limitador pods (rate limiting service). Should be >= 1."
         plugin:
           kind: StatChart
           spec:
@@ -85,8 +85,8 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "Limitador"
-                  query: max(limitador_up)
+                  seriesNameFormat: "Pods"
+                  query: count(kube_pod_status_phase{namespace=~"$kuadrant_namespace", pod=~"limitador.*", phase="Running"}) OR vector(0)
 
     authorinoHealth:
       kind: Panel
