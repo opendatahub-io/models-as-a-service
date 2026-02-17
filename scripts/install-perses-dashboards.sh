@@ -12,12 +12,10 @@
 set -e
 set -o pipefail
 
-for cmd in kubectl; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo "❌ Required command '$cmd' not found. Please install it first."
-        exit 1
-    fi
-done
+if ! command -v kubectl &>/dev/null; then
+    echo "❌ Required command 'kubectl' not found. Please install it first."
+    exit 1
+fi
 
 show_help() {
     echo "Usage: $0"
