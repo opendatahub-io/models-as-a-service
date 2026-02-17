@@ -39,6 +39,8 @@ Model Endpoint (200 OK)
 
 Relationships are many-to-many: multiple MaaSAuthPolicies/MaaSSubscriptions can reference the same model — the controller aggregates them into a single Kuadrant policy per model. Multiple subscriptions for one model use mutually exclusive predicates with priority based on token limit (highest wins).
 
+**Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModel** CRs (in the API’s namespace). Each MaaSModel’s `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModel objects is the source of truth for “which models are available” in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
+
 ### Controller watches
 
 The controller watches these resources and re-reconciles automatically:

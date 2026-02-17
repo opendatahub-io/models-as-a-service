@@ -57,6 +57,8 @@ flowchart TB
 
 **Summary:** You declare intent with MaaS CRs; the controller turns that into Gateway/Kuadrant resources that attach to the same HTTPRoute and backend (e.g. KServe LLMInferenceService).
 
+The **MaaS API** GET /v1/models endpoint uses MaaSModel CRs as its primary source: it lists them in the API namespace, then **validates access** by probing each model’s `/v1/models` endpoint with the client’s **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModel objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is. (Once minting is in place, this may be revisited.)
+
 ---
 
 ## 3. Request Flow (End-to-End)
@@ -220,7 +222,7 @@ flowchart LR
 
 ## 9. Authentication (Current Behavior)
 
-Until MaaS API token minting is in place, inference calls use the **OpenShift token**:
+For **GET /v1/models**, the API forwards the client’s **Authorization** header as-is to each model endpoint (no token exchange). For inference, until MaaS API token minting is in place, use the **OpenShift token**:
 
 ```bash
 export TOKEN=$(oc whoami -t)
