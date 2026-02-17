@@ -78,7 +78,7 @@ echo ""
 echo "⏳ Waiting for Perses instance..."
 for i in $(seq 1 30); do
     PERSES_PODS=$(kubectl get pods -n openshift-operators -l app.kubernetes.io/name=perses --no-headers 2>/dev/null | grep -c Running || echo "0")
-    if [ "$PERSES_PODS" -ge 1 ] 2>/dev/null; then
+    if [ "$PERSES_PODS" -ge 1 ]; then
         echo "   ✅ Perses pod is running in openshift-operators"
         break
     fi

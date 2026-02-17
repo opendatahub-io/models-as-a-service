@@ -33,4 +33,4 @@ spec:
   client:
     tls:
       enable: true
-      insecureSkipVerify: true  # For internal service communication
+      insecureSkipVerify: true  # Acceptable: internal cluster communication only

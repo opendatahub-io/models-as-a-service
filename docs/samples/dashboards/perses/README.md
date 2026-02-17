@@ -2,7 +2,7 @@
 
 Dashboard definitions live in a single location (source of truth):
 
-```
+```text
 deployment/components/observability/perses/dashboards/
 ├── dashboard-ai-engineer.yaml
 └── dashboard-platform-admin.yaml
