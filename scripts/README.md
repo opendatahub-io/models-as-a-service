@@ -28,8 +28,20 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - Installs rate limiter (RHCL or upstream Kuadrant)
 - Installs primary operator (RHOAI or ODH) or deploys via kustomize
 - Applies custom resources (DSC, DSCI)
-- Configures TLS backend (enabled by default)
+- Configures TLS backend (enabled by default, use `--disable-tls-backend` to skip)
 - Supports custom operator catalogs and MaaS API images for PR testing
+
+**Options:**
+- `--operator-type <odh|rhoai>` - Which operator to install (default: odh)
+- `--deployment-mode <operator|kustomize>` - Deployment method (default: operator)
+- `--namespace <namespace>` - Target namespace for deployment
+- `--enable-tls-backend` - Enable TLS backend (default)
+- `--disable-tls-backend` - Disable TLS backend
+- `--verbose` - Enable debug logging
+- `--dry-run` - Show what would be done without applying changes
+- `--operator-catalog <image>` - Custom operator catalog image for PR testing
+- `--operator-image <image>` - Custom operator image for PR testing
+- `--channel <channel>` - Operator channel override (default: fast-3 for ODH, fast-3.x for RHOAI)
 
 **Requirements:**
 - OpenShift cluster (4.16+)
@@ -42,6 +54,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `MAAS_API_IMAGE` - Custom MaaS API container image (works in both operator and kustomize modes)
 - `OPERATOR_CATALOG` - Custom operator catalog for PR testing
 - `OPERATOR_IMAGE` - Custom operator image for PR testing
+- `OPERATOR_TYPE` - Operator type (odh/rhoai)
 - `LOG_LEVEL` - Logging verbosity (DEBUG, INFO, WARN, ERROR)
 
 **Advanced Usage:**

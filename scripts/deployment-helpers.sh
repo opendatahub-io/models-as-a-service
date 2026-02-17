@@ -107,14 +107,8 @@ get_cluster_audience() {
 # Constants and Configuration
 # ============================================================================
 
-# Timeout values (seconds)
-readonly DEFAULT_TIMEOUT=300
-readonly CSV_TIMEOUT=180
-readonly NAMESPACE_TIMEOUT=60
-readonly POD_READY_TIMEOUT=120
-readonly CRD_TIMEOUT=90
-readonly WEBHOOK_TIMEOUT=120
-readonly CUSTOM_RESOURCE_TIMEOUT=600
+# Timeout values (seconds) - used by deploy.sh and related scripts
+readonly CUSTOM_RESOURCE_TIMEOUT=600  # Used for DataScienceCluster wait
 
 # Logging levels
 readonly LOG_LEVEL_DEBUG=0
@@ -122,8 +116,23 @@ readonly LOG_LEVEL_INFO=1
 readonly LOG_LEVEL_WARN=2
 readonly LOG_LEVEL_ERROR=3
 
-# Current log level (can be overridden by LOG_LEVEL env var)
-CURRENT_LOG_LEVEL=${LOG_LEVEL_INFO}
+# Current log level - honor LOG_LEVEL env var if set
+# This allows standalone usage of helpers with LOG_LEVEL=DEBUG ./script.sh
+case "${LOG_LEVEL:-}" in
+  DEBUG)
+    CURRENT_LOG_LEVEL=$LOG_LEVEL_DEBUG
+    ;;
+  WARN)
+    CURRENT_LOG_LEVEL=$LOG_LEVEL_WARN
+    ;;
+  ERROR)
+    CURRENT_LOG_LEVEL=$LOG_LEVEL_ERROR
+    ;;
+  *)
+    # Default to INFO (includes unset LOG_LEVEL and LOG_LEVEL=INFO)
+    CURRENT_LOG_LEVEL=$LOG_LEVEL_INFO
+    ;;
+esac
 
 # ============================================================================
 # Version Management
@@ -462,13 +471,10 @@ create_tls_secret() {
   fi
 
   echo "  * Creating TLS secret $name in $namespace (CN=$cn)..."
-  
+
   # Create temp directory for key/cert files
   local temp_dir
   temp_dir=$(mktemp -d)
-  
-  # Helper to clean up temp directory
-  _cleanup_temp() { rm -rf "$temp_dir"; }
 
   # Generate self-signed certificate with matching key
   if ! openssl req -x509 -newkey rsa:2048 \
@@ -477,14 +483,14 @@ create_tls_secret() {
       -days 365 -nodes \
       -subj "/CN=${cn}" 2>/dev/null; then
     echo "  ERROR: Failed to generate TLS certificate"
-    _cleanup_temp
+    rm -rf "$temp_dir"
     return 1
   fi
 
   # Verify files were created
   if [[ ! -f "${temp_dir}/tls.crt" || ! -f "${temp_dir}/tls.key" ]]; then
     echo "  ERROR: TLS certificate files not generated"
-    _cleanup_temp
+    rm -rf "$temp_dir"
     return 1
   fi
 
@@ -494,11 +500,11 @@ create_tls_secret() {
       --key="${temp_dir}/tls.key" \
       -n "$namespace"; then
     echo "  * TLS secret $name created successfully"
-    _cleanup_temp
+    rm -rf "$temp_dir"
     return 0
   else
     echo "  ERROR: Failed to create TLS secret $name"
-    _cleanup_temp
+    rm -rf "$temp_dir"
     return 1
   fi
 }

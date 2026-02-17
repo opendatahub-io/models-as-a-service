@@ -46,27 +46,20 @@
 
 set -euo pipefail
 
-find_project_root() {
+# Find project root before sourcing helpers (helpers need to be sourced from correct path)
+_find_project_root_bootstrap() {
   local start_dir="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
-  local marker="${2:-.git}"
   local dir="$start_dir"
-
-  while [[ "$dir" != "/" && ! -e "$dir/$marker" ]]; do
+  while [[ "$dir" != "/" && ! -e "$dir/.git" ]]; do
     dir="$(dirname "$dir")"
   done
-
-  if [[ -e "$dir/$marker" ]]; then
-    printf '%s\n' "$dir"
-  else
-    echo "Error: couldn't find '$marker' in any parent of '$start_dir'" >&2
-    return 1
-  fi
+  [[ -e "$dir/.git" ]] && printf '%s\n' "$dir" || return 1
 }
 
 # Configuration
-PROJECT_ROOT="$(find_project_root)"
+PROJECT_ROOT="$(_find_project_root_bootstrap)"
 
-# Source helper functions
+# Source helper functions (includes find_project_root and other utilities)
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # Options (can be set as environment variables)
@@ -153,10 +146,13 @@ deploy_maas_platform() {
     fi
 
     # Build deploy.sh command with optional parameters
+    # NOTE: Do NOT hardcode --channel here! deploy.sh sets per-operator defaults:
+    #   - ODH: fast-3 (for v3+ with MaaS support)
+    #   - RHOAI: fast-3.x (for v3.x with MaaS support)
+    # Hardcoding --channel fast breaks RHOAI (installs 2.x without modelsAsService)
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --operator-type "${OPERATOR_TYPE}"
-        --channel fast
     )
 
     # Add optional operator catalog if specified (otherwise uses default catalog)
