@@ -54,8 +54,8 @@ spec:
           "id": 10,
           "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "max(limitador_up)", "instant": true, "refId": "A"}],
-          "description": "Shows if Limitador (rate limiting service) is running. Green = healthy, Red = down. Uses max() to deduplicate across scrape sources (PodMonitor + headless service auto-discovery).",
+          "targets": [{"expr": "count(kube_pod_status_phase{namespace=~\"$kuadrant_namespace\", pod=~\"limitador.*\", phase=\"Running\"}) OR vector(0)", "instant": true, "refId": "A"}],
+          "description": "Count of running Limitador pods (rate limiting service). Should be >= 1.",
           "title": "💚 Limitador",
           "type": "stat"
         },
