@@ -2,13 +2,15 @@
 # deploy-poc-postgres.sh
 # Quick PostgreSQL setup for API Key Management POC
 # NOT for production use
+#
+# Schema migrations are handled automatically by maas-api on startup.
 
 set -e
 
 NAMESPACE="${NAMESPACE:-maas-system}"
 POSTGRES_USER="${POSTGRES_USER:-maas}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-pocpassword}"
-POSTGRES_DB="${POSTGRES_DB:-maas_db}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-maaspassword}"
+POSTGRES_DB="${POSTGRES_DB:-maas}"
 
 echo "=== Deploying POC PostgreSQL to namespace: $NAMESPACE ==="
 
@@ -46,14 +48,22 @@ spec:
       labels:
         app: postgres
     spec:
+      securityContext:
+        fsGroup: 26
       containers:
       - name: postgres
         image: postgres:15-alpine
+        securityContext:
+          runAsUser: 26
+          runAsNonRoot: true
         envFrom:
         - secretRef:
             name: postgres-creds
         ports:
         - containerPort: 5432
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
         resources:
           requests:
             memory: "256Mi"
@@ -66,6 +76,9 @@ spec:
             command: ["pg_isready", "-U", "${POSTGRES_USER}"]
           initialDelaySeconds: 5
           periodSeconds: 5
+      volumes:
+      - name: data
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -104,14 +117,18 @@ echo "  Service:   postgres:5432"
 echo "  Database:  $POSTGRES_DB"
 echo "  User:      $POSTGRES_USER"
 echo ""
-echo "For maas-api, use secret 'maas-db-config' with key 'DB_CONNECTION_URL'"
+echo "Note: Schema migrations are applied automatically by maas-api on startup."
 echo ""
-echo "Example maas-api deployment snippet:"
+echo "For maas-api deployment, use secret 'maas-db-config':"
 echo "  env:"
 echo "  - name: DB_CONNECTION_URL"
 echo "    valueFrom:"
 echo "      secretKeyRef:"
 echo "        name: maas-db-config"
 echo "        key: DB_CONNECTION_URL"
+echo ""
+echo "To test locally with port-forward:"
+echo "  kubectl port-forward -n $NAMESPACE svc/postgres 5432:5432"
+echo "  export DB_CONNECTION_URL=\"postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB?sslmode=disable\""
 echo ""
 echo "To cleanup: kubectl delete -n $NAMESPACE deploy/postgres svc/postgres secret/postgres-creds secret/maas-db-config"

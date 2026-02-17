@@ -61,7 +61,7 @@ deps: ## Download Go dependencies
 	go mod download
 
 .PHONY: build
-build: deps lint test binary ## Build the maas-api binary
+build: deps sqlc-generate lint test binary ## Build the maas-api binary
 
 .PHONY: binary
 binary: $(BUILD_DIR)
@@ -116,6 +116,11 @@ version: ## Show version information
 	@echo "Git Commit: $(GIT_COMMIT)"
 	@echo "Git Branch: $(GIT_BRANCH)"
 	@echo "Build Time: $(BUILD_TIME)"
+
+## Code Generation (sqlc)
+.PHONY: sqlc-generate
+sqlc-generate: ## Generate Go code from SQL queries
+	cd db/sqlc && sqlc generate
 
 # Default target
 .DEFAULT_GOAL := help

@@ -35,6 +35,7 @@ type ApiKeyMetadata struct {
 	CreationDate   string `json:"creationDate"`
 	ExpirationDate string `json:"expirationDate,omitempty"` // Empty for permanent keys
 	Status         string `json:"status"`                   // "active", "expired", "revoked"
+	LastUsedAt     string `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
 }
 
 // ValidationResult holds the result of API key validation (for Authorino HTTP callback)

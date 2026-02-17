@@ -12,13 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func createTestStore(t *testing.T) *api_keys.SQLStore {
+func createTestStore(t *testing.T) api_keys.MetadataStore {
 	t.Helper()
-	ctx := context.Background()
-	testLogger := logger.Development()
-	store, err := api_keys.NewSQLiteStore(ctx, testLogger, ":memory:")
-	require.NoError(t, err, "failed to create test store")
-	return store
+	return api_keys.NewMockStore()
 }
 
 func TestStore(t *testing.T) {
@@ -78,7 +74,7 @@ func TestStore(t *testing.T) {
 		assert.Equal(t, "token3", tokens[0].Name)
 	})
 
-	t.Run("MarkTokensAsExpiredForUser", func(t *testing.T) {
+	t.Run("MarkTokensAsRevokedForUser", func(t *testing.T) {
 		err := store.InvalidateAll(ctx, "user1")
 		require.NoError(t, err)
 
@@ -86,7 +82,7 @@ func TestStore(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, tokens, 2)
 		for _, tok := range tokens {
-			assert.Equal(t, api_keys.TokenStatusExpired, tok.Status)
+			assert.Equal(t, api_keys.TokenStatusRevoked, tok.Status)
 		}
 
 		// User2 should still exist
@@ -159,49 +155,74 @@ func TestStoreValidation(t *testing.T) {
 	t.Run("TokenNotFound", func(t *testing.T) {
 		_, err := store.Get(ctx, "nonexistent-jti")
 		require.Error(t, err)
-		assert.Equal(t, api_keys.ErrTokenNotFound, err)
+		assert.Equal(t, api_keys.ErrKeyNotFound, err)
 	})
 }
 
-func TestSQLiteStore(t *testing.T) {
-	ctx := context.Background()
-	testLogger := logger.Development()
-
-	t.Run("InMemory", func(t *testing.T) {
-		store, err := api_keys.NewSQLiteStore(ctx, testLogger, ":memory:")
-		require.NoError(t, err)
-		defer store.Close()
-
-		tokens, err := store.List(ctx, "user")
-		require.NoError(t, err)
-		assert.Empty(t, tokens)
-	})
-
-	t.Run("EmptyPath", func(t *testing.T) {
-		// Empty path should default to in-memory
-		store, err := api_keys.NewSQLiteStore(ctx, testLogger, "")
-		require.NoError(t, err)
-		defer store.Close()
-
-		tokens, err := store.List(ctx, "user")
-		require.NoError(t, err)
-		assert.Empty(t, tokens)
-	})
-}
-
-func TestExternalStore(t *testing.T) {
+func TestPostgresStoreFromURL(t *testing.T) {
 	ctx := context.Background()
 	testLogger := logger.Development()
 
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := api_keys.NewExternalStore(ctx, testLogger, "mysql://localhost:3306/db")
+		_, err := api_keys.NewPostgresStoreFromURL(ctx, testLogger, "mysql://localhost:3306/db")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported external database URL")
+		assert.Contains(t, err.Error(), "invalid database URL")
 	})
 
 	t.Run("EmptyURL", func(t *testing.T) {
-		_, err := api_keys.NewExternalStore(ctx, testLogger, "")
+		_, err := api_keys.NewPostgresStoreFromURL(ctx, testLogger, "")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported external database URL")
+		assert.Contains(t, err.Error(), "invalid database URL")
+	})
+}
+
+func TestPermanentKeyOperations(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	t.Run("AddPermanentKey", func(t *testing.T) {
+		err := store.AddPermanentKey(ctx, "user1", "key-id-1", "hash123", "sk-oai-abc", "my-key", "test key")
+		require.NoError(t, err)
+
+		keys, err := store.List(ctx, "user1")
+		require.NoError(t, err)
+		assert.Len(t, keys, 1)
+		assert.Equal(t, "my-key", keys[0].Name)
+		assert.Equal(t, "sk-oai-abc", keys[0].KeyPrefix)
+	})
+
+	t.Run("GetByHash", func(t *testing.T) {
+		key, err := store.GetByHash(ctx, "hash123")
+		require.NoError(t, err)
+		assert.Equal(t, "my-key", key.Name)
+		assert.Equal(t, "user1", key.Username)
+	})
+
+	t.Run("GetByHashNotFound", func(t *testing.T) {
+		_, err := store.GetByHash(ctx, "nonexistent-hash")
+		require.ErrorIs(t, err, api_keys.ErrKeyNotFound)
+	})
+
+	t.Run("RevokeKey", func(t *testing.T) {
+		err := store.Revoke(ctx, "key-id-1")
+		require.NoError(t, err)
+
+		// Getting by hash should now fail
+		_, err = store.GetByHash(ctx, "hash123")
+		require.ErrorIs(t, err, api_keys.ErrInvalidKey)
+	})
+
+	t.Run("UpdateLastUsed", func(t *testing.T) {
+		// Add another key for this test
+		err := store.AddPermanentKey(ctx, "user2", "key-id-2", "hash456", "sk-oai-def", "key2", "")
+		require.NoError(t, err)
+
+		err = store.UpdateLastUsed(ctx, "key-id-2")
+		require.NoError(t, err)
+
+		key, err := store.GetByHash(ctx, "hash456")
+		require.NoError(t, err)
+		assert.NotEmpty(t, key.LastUsedAt)
 	})
 }

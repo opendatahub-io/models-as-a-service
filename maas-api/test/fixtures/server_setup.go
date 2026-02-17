@@ -1,7 +1,6 @@
 package fixtures
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -148,10 +147,7 @@ func SetupTestRouter(manager *token.Manager) (*gin.Engine, func() error) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
-	store, err := api_keys.NewSQLiteStore(context.Background(), testLogger, ":memory:")
-	if err != nil {
-		panic(fmt.Sprintf("failed to create test store: %v", err))
-	}
+	store := api_keys.NewMockStore()
 
 	tokenHandler := token.NewHandler(testLogger, "test", manager)
 	apiKeyService := api_keys.NewService(manager, store)
