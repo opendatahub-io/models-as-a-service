@@ -7,6 +7,21 @@ set -euo pipefail
 
 OCP=true
 
+wait_for_perses_crds() {
+  echo "   Waiting for Perses CRDs..."
+  local failures=0
+  for crd in "perses.perses.dev" "persesdashboards.perses.dev" "persesdatasources.perses.dev"; do
+    if ! kubectl wait --for=condition=Established "crd/$crd" --timeout=60s 2>/dev/null; then
+      echo "   ⚠️  CRD $crd not yet established"
+      failures=$((failures + 1))
+    fi
+  done
+  if [ "$failures" -gt 0 ]; then
+    echo "❌ $failures Perses CRD(s) failed to become established"
+    return 1
+  fi
+}
+
 usage() {
   cat <<EOF
 Usage: $0 [--kubernetes]
@@ -41,18 +56,7 @@ if [[ "$OCP" == true ]]; then
     kubectl get csv -n openshift-operators | grep cluster-observability-operator
     # Still need to wait for Perses CRDs to be established before exiting,
     # since callers (e.g., install-perses-dashboards.sh) depend on them.
-    echo "   Waiting for Perses CRDs..."
-    CRD_FAILURES=0
-    for crd in "perses.perses.dev" "persesdashboards.perses.dev" "persesdatasources.perses.dev"; do
-      if ! kubectl wait --for=condition=Established "crd/$crd" --timeout=60s 2>/dev/null; then
-        echo "   ⚠️  CRD $crd not yet established"
-        CRD_FAILURES=$((CRD_FAILURES + 1))
-      fi
-    done
-    if [ "$CRD_FAILURES" -gt 0 ]; then
-      echo "❌ $CRD_FAILURES Perses CRD(s) failed to become established"
-      exit 1
-    fi
+    wait_for_perses_crds || exit 1
     exit 0
   fi
   
@@ -113,19 +117,7 @@ EOF
   fi
 
   # Wait for CRDs to be established
-  echo "   Waiting for Perses CRDs..."
-  CRD_FAILURES=0
-  for crd in "perses.perses.dev" "persesdashboards.perses.dev" "persesdatasources.perses.dev"; do
-    if ! kubectl wait --for=condition=Established "crd/$crd" --timeout=60s 2>/dev/null; then
-      echo "   ⚠️  CRD $crd not yet established"
-      CRD_FAILURES=$((CRD_FAILURES + 1))
-    fi
-  done
-
-  if [ "$CRD_FAILURES" -gt 0 ]; then
-    echo "❌ Cluster Observability Operator installed but $CRD_FAILURES Perses CRD(s) failed to become established"
-    exit 1
-  fi
+  wait_for_perses_crds || exit 1
   echo "✅ Cluster Observability Operator is installed and running"
 
 else
