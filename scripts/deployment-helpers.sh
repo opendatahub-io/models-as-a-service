@@ -471,24 +471,10 @@ create_tls_secret() {
   fi
 
   echo "  * Creating TLS secret $name in $namespace (CN=$cn)..."
-  
+
   # Create temp directory for key/cert files
   local temp_dir
   temp_dir=$(mktemp -d)
-  
-  # Set up trap to ensure cleanup on any exit (including signals)
-  # Extract the command from any existing EXIT trap and chain it
-  local old_trap_cmd=""
-  local old_trap_output
-  old_trap_output=$(trap -p EXIT)
-
-  # Extract just the command portion from 'trap -- 'COMMAND' EXIT' format
-  if [[ -n "$old_trap_output" ]]; then
-    old_trap_cmd=$(echo "$old_trap_output" | sed "s/^trap -- '\(.*\)' .*$/\1/")
-  fi
-
-  # Set new trap that executes BOTH cleanups (temp dir, then original command)
-  trap "rm -rf '$temp_dir'; $old_trap_cmd" EXIT
 
   # Generate self-signed certificate with matching key
   if ! openssl req -x509 -newkey rsa:2048 \
@@ -497,35 +483,30 @@ create_tls_secret() {
       -days 365 -nodes \
       -subj "/CN=${cn}" 2>/dev/null; then
     echo "  ERROR: Failed to generate TLS certificate"
+    rm -rf "$temp_dir"
     return 1
   fi
 
   # Verify files were created
   if [[ ! -f "${temp_dir}/tls.crt" || ! -f "${temp_dir}/tls.key" ]]; then
     echo "  ERROR: TLS certificate files not generated"
+    rm -rf "$temp_dir"
     return 1
   fi
 
   # Create the secret
-  local rc=0
   if kubectl create secret tls "$name" \
       --cert="${temp_dir}/tls.crt" \
       --key="${temp_dir}/tls.key" \
       -n "$namespace"; then
     echo "  * TLS secret $name created successfully"
+    rm -rf "$temp_dir"
+    return 0
   else
     echo "  ERROR: Failed to create TLS secret $name"
-    rc=1
+    rm -rf "$temp_dir"
+    return 1
   fi
-
-  # Clean up temp dir and restore original trap
-  rm -rf "$temp_dir"
-  trap - EXIT
-  if [[ -n "$old_trap_cmd" ]]; then
-    eval "$old_trap_cmd"
-  fi
-
-  return $rc
 }
 
 # create_gateway_route name namespace hostname service tls_secret
