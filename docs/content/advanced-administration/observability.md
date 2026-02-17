@@ -341,9 +341,12 @@ Personal usage view for individual developers:
 - Ensure the Grafana instance has label `app=grafana` so MaaS dashboard definitions attach.
 - Configure a **Prometheus or Thanos datasource** in Grafana; the MaaS dashboards use the default Prometheus datasource.
 
-**For Perses dashboards:**
+**For Perses dashboards (two-step install):**
 
-- **OpenShift 4.18+** with the Cluster Observability Operator available in the operator catalog. The install script handles operator installation, UIPlugin enablement, and dashboard deployment automatically.
+- **OpenShift 4.18+** with the Cluster Observability Operator available in the operator catalog.
+- **Step 1** — Run `scripts/installers/install-perses.sh` to install the Cluster Observability Operator and wait for Perses CRDs to become available.
+- **Step 2** — Run `scripts/install-perses-dashboards.sh` to enable the Perses UIPlugin in the OpenShift Console and deploy MaaS dashboard definitions.
+- Both scripts must be run in sequence; `install-perses-dashboards.sh` will exit with a warning if CRDs from step 1 are not yet present.
 - Perses dashboards are accessed via the OpenShift Console (Observe → Dashboards → Perses tab).
 
 ### Deploying Dashboards
