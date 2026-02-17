@@ -29,6 +29,11 @@ rules:
   resources: ["maasmodels"]
   verbs: ["get", "list", "watch"]
 
+# HTTPRoutes (for future use, e.g. listing or resolving model routes)
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["httproutes"]
+  verbs: ["get", "list", "watch"]
+
 # Metrics and monitoring
 - apiGroups: [""]
   resources: ["pods", "services", "endpoints"]
