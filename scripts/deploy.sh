@@ -30,11 +30,11 @@
 #   LOG_LEVEL         Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #
 # EXAMPLES:
-#   # Deploy RHOAI (default, uses rhcl policy engine)
+#   # Deploy ODH (default, uses kuadrant policy engine)
 #   ./scripts/deploy.sh
 #
-#   # Deploy ODH (uses kuadrant policy engine)
-#   ./scripts/deploy.sh --operator-type odh
+#   # Deploy RHOAI (uses rhcl policy engine)
+#   ./scripts/deploy.sh --operator-type rhoai
 #
 #   # Test custom MaaS API image
 #   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh
@@ -111,6 +111,9 @@ OPTIONS:
   --enable-subscriptions
       Install the MaaS subscription controller (per-model auth + rate limiting)
       Runs alongside existing tier-based flow. Does not replace it.
+  --disable-tls-backend
+      Disable TLS backend for Authorino and MaaS API
+      Uses HTTP tier lookup URL instead
 
   --namespace <namespace>
       Target namespace for deployment
@@ -136,7 +139,7 @@ ADVANCED OPTIONS (PR Testing):
 
   --channel <channel>
       Operator channel override
-      Default: fast (RHOAI and ODH)
+      Default: fast-3 (ODH), fast-3.x (RHOAI)
 
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE        Custom MaaS API container image
@@ -146,11 +149,11 @@ ENVIRONMENT VARIABLES:
   LOG_LEVEL             Logging verbosity (DEBUG, INFO, WARN, ERROR)
 
 EXAMPLES:
-  # Deploy RHOAI (default, uses rhcl policy engine)
+  # Deploy ODH (default, uses kuadrant policy engine)
   ./scripts/deploy.sh
 
-  # Deploy ODH (uses kuadrant policy engine)
-  ./scripts/deploy.sh --operator-type odh
+  # Deploy RHOAI (uses rhcl policy engine)
+  ./scripts/deploy.sh --operator-type rhoai
 
   # Deploy via Kustomize
   ./scripts/deploy.sh --deployment-mode kustomize
@@ -378,7 +381,10 @@ main() {
       kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s 2>/dev/null || true
 
       log_info "  Disabling old gateway-auth-policy (replaced by per-route policies)..."
-      NAMESPACE="$NAMESPACE" "$controller_dir/hack/disable-gateway-auth-policy.sh"
+      NAMESPACE="$NAMESPACE" "$controller_dir/hack/
+      
+      -
+      -gateway-auth-policy.sh"
 
       log_info "  Subscription controller installed."
       log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
@@ -443,6 +449,13 @@ deploy_via_kustomize() {
   trap cleanup_maas_api_image EXIT INT TERM
   set_maas_api_image
 
+  # Create namespace if it doesn't exist (kustomize mode uses maas-api namespace)
+  # This must be done before applying manifests that target this namespace
+  if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
+    log_info "Creating namespace: $NAMESPACE"
+    kubectl create namespace "$NAMESPACE"
+  fi
+
   # Apply kustomize manifests
   log_info "Applying kustomize manifests..."
 
@@ -478,8 +491,20 @@ install_optional_operators() {
   kubectl apply -f "${data_dir}/lws-subscription.yaml" &
   local lws_pid=$!
 
-  # Wait for both apply commands to complete
-  wait $cert_manager_pid $lws_pid
+  # Wait for both apply commands to complete and capture individual exit codes
+  local cert_manager_apply_rc=0
+  local lws_apply_rc=0
+  wait $cert_manager_pid || cert_manager_apply_rc=$?
+  wait $lws_pid || lws_apply_rc=$?
+
+  if [[ $cert_manager_apply_rc -ne 0 ]]; then
+    log_error "Failed to apply cert-manager subscription (exit code: $cert_manager_apply_rc)"
+    return 1
+  fi
+  if [[ $lws_apply_rc -ne 0 ]]; then
+    log_error "Failed to apply LWS subscription (exit code: $lws_apply_rc)"
+    return 1
+  fi
 
   # Wait for both subscriptions to be installed (can run in parallel too)
   log_info "Waiting for operators to be installed..."
@@ -488,8 +513,20 @@ install_optional_operators() {
   waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
   local lws_wait_pid=$!
 
-  # Wait for both to complete
-  wait $cert_wait_pid $lws_wait_pid
+  # Wait for both to complete and capture individual exit codes
+  local cert_wait_rc=0
+  local lws_wait_rc=0
+  wait $cert_wait_pid || cert_wait_rc=$?
+  wait $lws_wait_pid || lws_wait_rc=$?
+
+  if [[ $cert_wait_rc -ne 0 ]]; then
+    log_error "cert-manager operator installation failed"
+    return 1
+  fi
+  if [[ $lws_wait_rc -ne 0 ]]; then
+    log_error "LWS operator installation failed"
+    return 1
+  fi
 
   # Create LeaderWorkerSetOperator CR to activate the LWS controller-manager.
   # The operator subscription alone only installs the operator pod; the CR is
@@ -666,6 +703,7 @@ spec: {}
 EOF
 
       # Install Kuadrant operator from the custom catalog
+      # IMPORTANT: source_namespace must match where CatalogSource was created (kuadrant_ns)
       install_olm_operator \
         "kuadrant-operator" \
         "$kuadrant_ns" \
@@ -673,7 +711,7 @@ EOF
         "stable" \
         "" \
         "AllNamespaces" \
-        "$kuadrant_ns"
+        "$kuadrant_ns"  # source_namespace - must match CatalogSource namespace
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
       patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
@@ -690,15 +728,6 @@ EOF
 
 install_primary_operator() {
   log_info "Installing primary operator: $OPERATOR_TYPE"
-
-  # Handle custom catalog if specified
-  if [[ -n "$OPERATOR_CATALOG" ]]; then
-    log_info "Using custom operator catalog: $OPERATOR_CATALOG"
-    create_custom_catalogsource \
-      "${OPERATOR_TYPE}-custom-catalog" \
-      "openshift-marketplace" \
-      "$OPERATOR_CATALOG"
-  fi
 
   local catalog_source
   local channel
@@ -1008,7 +1037,7 @@ apply_kuadrant_cr() {
   # This ensures Service Mesh is installed and Gateway API provider is operational
   log_info "Waiting for Gateway to be Programmed (Service Mesh initialization)..."
   if ! kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=120s 2>/dev/null; then
-    log_warn "Gateway not yet Programmed after 300s - Kuadrant may take longer to become ready"
+    log_warn "Gateway not yet Programmed after 120s - Kuadrant may take longer to become ready"
   fi
 
   log_info "Applying Kuadrant custom resource in $namespace..."
@@ -1095,14 +1124,25 @@ patch_operator_csv() {
 
   log_info "Patching operator CSV with custom image: $operator_image"
 
-  # Wait a bit for CSV to be created
-  sleep 10
+  # Poll for CSV to be created instead of hardcoded sleep
+  local csv_name=""
+  local timeout=60
+  local elapsed=0
+  local interval=5
 
-  local csv_name
-  csv_name=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | head -n1 | awk '{print $1}')
+  log_info "Waiting for CSV to be created (timeout: ${timeout}s)..."
+  while [[ $elapsed -lt $timeout ]]; do
+    csv_name=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | head -n1 | awk '{print $1}')
+    if [[ -n "$csv_name" ]]; then
+      log_debug "Found CSV: $csv_name after ${elapsed}s"
+      break
+    fi
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
 
   if [[ -z "$csv_name" ]]; then
-    log_warn "Could not find CSV for $operator_prefix, skipping image patch"
+    log_warn "Could not find CSV for $operator_prefix after ${timeout}s, skipping image patch"
     return 0
   fi
 
