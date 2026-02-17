@@ -167,38 +167,6 @@ spec:
         },
         {
           "collapsed": false,
-          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22},
-          "id": 110,
-          "panels": [],
-          "title": "🔐 Auth Evaluation",
-          "type": "row"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "Authentication/authorization evaluation latency (P50/P95/P99). Shows how long Authorino takes to evaluate each request. High latency here adds directly to overall request latency. Requires the authorino-server-metrics ServiceMonitor.",
-          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.1}, {"color": "red", "value": 0.5}]}, "unit": "s", "noValue": "No Data\nDeploy authorino-server-metrics ServiceMonitor"}, "overrides": []},
-          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 23},
-          "id": 52,
-          "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-          "pluginVersion": "11.3.0",
-          "targets": [{"expr": "histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P99", "refId": "C"}],
-          "title": "🔐 Auth Evaluation Latency (P50/P95/P99)",
-          "type": "timeseries"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "Rate of auth evaluation outcomes from Authorino. Shows successful authentications vs denials over time. A rising denial rate may indicate misconfigured policies or an attack. Requires the authorino-server-metrics ServiceMonitor.",
-          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "ops", "noValue": "No Data\nDeploy authorino-server-metrics ServiceMonitor"}, "overrides": [{"matcher": {"id": "byRegexp", "options": ".*OK.*"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}, {"matcher": {"id": "byRegexp", "options": ".*(PERMISSION_DENIED|UNAUTHENTICATED).*"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]}]},
-          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 23},
-          "id": 53,
-          "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-          "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (status) (rate(auth_server_authconfig_response_status[5m]))", "legendFormat": "{{status}}", "refId": "A"}],
-          "title": "🔐 Auth Success / Deny Rate",
-          "type": "timeseries"
-        },
-        {
-          "collapsed": false,
           "gridPos": {"h": 1, "w": 24, "x": 0, "y": 11},
           "id": 101,
           "panels": [],
@@ -300,6 +268,38 @@ spec:
           "description": "Percentage of gateway requests rejected by rate limiting (HTTP 429). High values indicate users are exceeding their tier quotas — consider adjusting rate limits or upgrading user tiers. This is a capacity planning signal, not a system health issue.",
           "title": "🚦 Rate Limit Ratio",
           "type": "stat"
+        },
+        {
+          "collapsed": false,
+          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 22},
+          "id": 110,
+          "panels": [],
+          "title": "🔐 Auth Evaluation",
+          "type": "row"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "description": "Authentication/authorization evaluation latency (P50/P95/P99). Shows how long Authorino takes to evaluate each request. High latency here adds directly to overall request latency. Requires the authorino-server-metrics ServiceMonitor.",
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.1}, {"color": "red", "value": 0.5}]}, "unit": "s", "noValue": "No Data\nDeploy authorino-server-metrics ServiceMonitor"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 23},
+          "id": 52,
+          "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "11.3.0",
+          "targets": [{"expr": "histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P99", "refId": "C"}],
+          "title": "🔐 Auth Evaluation Latency (P50/P95/P99)",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "description": "Rate of auth evaluation outcomes from Authorino. Shows successful authentications vs denials over time. A rising denial rate may indicate misconfigured policies or an attack. Requires the authorino-server-metrics ServiceMonitor.",
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "ops", "noValue": "No Data\nDeploy authorino-server-metrics ServiceMonitor"}, "overrides": [{"matcher": {"id": "byRegexp", "options": ".*OK.*"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}, {"matcher": {"id": "byRegexp", "options": ".*(PERMISSION_DENIED|UNAUTHENTICATED).*"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]}]},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 23},
+          "id": 53,
+          "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "11.3.0",
+          "targets": [{"expr": "sum by (status) (rate(auth_server_authconfig_response_status[5m]))", "legendFormat": "{{status}}", "refId": "A"}],
+          "title": "🔐 Auth Success / Deny Rate",
+          "type": "timeseries"
         },
         {
           "collapsed": false,

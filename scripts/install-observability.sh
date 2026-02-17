@@ -92,10 +92,26 @@ kuadrant_already_scrapes() {
     local endpoint="$1"
     local namespace="${2:-kuadrant-system}"
 
-    # Get all monitors, exclude MaaS-owned ones, check for the endpoint path
-    kubectl get servicemonitor,podmonitor -n "$namespace" \
-        -l 'app.kubernetes.io/part-of!=maas-observability' \
-        -o json 2>/dev/null | grep -q "\"${endpoint}\""
+    # Get all monitors, exclude MaaS-owned ones, check for the endpoint path.
+    # Uses jq to precisely inspect .spec.endpoints[].path and
+    # .spec.podMetricsEndpoints[].path rather than raw grep, which could
+    # false-positive on monitor names or annotations containing the path string.
+    if command -v jq &>/dev/null; then
+        kubectl get servicemonitor,podmonitor -n "$namespace" \
+            -l 'app.kubernetes.io/part-of!=maas-observability' \
+            -o json 2>/dev/null | \
+            jq -e --arg ep "$endpoint" '
+                .items[]? |
+                (.spec.endpoints // [] | .[].path // empty),
+                (.spec.podMetricsEndpoints // [] | .[].path // empty)
+                | select(. == $ep)
+            ' &>/dev/null
+    else
+        # Fallback: raw grep when jq is not available
+        kubectl get servicemonitor,podmonitor -n "$namespace" \
+            -l 'app.kubernetes.io/part-of!=maas-observability' \
+            -o json 2>/dev/null | grep -q "\"${endpoint}\""
+    fi
 }
 
 # ==========================================

@@ -492,8 +492,16 @@ The Grafana datasource uses a ServiceAccount token to authenticate with Promethe
 
 **To rotate the token:**
 
-    # Delete the existing datasource and create a new one (or rotate the token per your Grafana setup).
-    # To re-deploy only MaaS dashboard definitions: ./scripts/install-grafana-dashboards.sh
+    ```bash
+    # 1. Generate a new ServiceAccount token (30-day default)
+    oc create token grafana-sa -n <grafana-namespace> --duration=720h
+
+    # 2. Update the Grafana datasource with the new token
+    #    (delete and recreate, or update via Grafana UI/API per your setup)
+
+    # 3. Re-deploy MaaS dashboard definitions (optional, if dashboards need updating)
+    ./scripts/install-grafana-dashboards.sh
+    ```
 
 !!! tip "Production Recommendation"
     For production deployments, consider automating token rotation using a CronJob or external secrets operator to avoid dashboard outages.

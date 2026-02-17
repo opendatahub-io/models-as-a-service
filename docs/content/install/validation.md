@@ -163,6 +163,17 @@ kubectl exec -n llm "$MODEL_POD" -- curl -sk https://localhost:8000/metrics | \
   grep -E '^vllm:' | sed 's/{.*//' | sort -u
 ```
 
+!!! note "curl availability"
+    The `kubectl exec ... curl` command assumes `curl` is available in the model container.
+    The simulator image includes `curl`, but production model images (e.g., stock vLLM) may not.
+    As an alternative, use `kubectl port-forward` with a local `curl`:
+
+    ```bash
+    kubectl port-forward -n llm "$MODEL_POD" 8000:8000 &
+    curl -sk https://localhost:8000/metrics | grep -E '^vllm:' | sed 's/{.*//' | sort -u
+    kill %1
+    ```
+
 !!! tip "Expected vLLM metrics after traffic"
     After sending at least one inference request, you should see metrics including:
     `vllm:e2e_request_latency_seconds`, `vllm:time_to_first_token_seconds`,

@@ -324,21 +324,8 @@ run_observability_tests() {
     echo "-- Observability Testing --"
     
     if [ "$SKIP_OBSERVABILITY" = false ]; then
-        # Setup Python venv (reuse smoke.sh's venv setup logic)
-        local VENV_DIR="${PROJECT_ROOT}/test/e2e/.venv"
-        
-        if [[ ! -f "${VENV_DIR}/bin/activate" ]]; then
-            echo "[observability] Creating virtual environment at ${VENV_DIR}"
-            rm -rf "${VENV_DIR}"  # Clean up any corrupt/incomplete venv
-            python3 -m venv "${VENV_DIR}" --upgrade-deps
-        fi
-        
-        # Activate virtual environment
-        source "${VENV_DIR}/bin/activate"
-        
-        # Install dependencies
-        python -m pip install --upgrade pip --quiet
-        python -m pip install -r "${PROJECT_ROOT}/test/e2e/requirements.txt" --quiet
+        # Setup Python venv using shared helper from deployment-helpers.sh
+        setup_python_venv "$PROJECT_ROOT" "observability"
         
         # Set PYTHONPATH so "from tests.test_helper import …" resolves
         export PYTHONPATH="${PROJECT_ROOT}/test/e2e:${PYTHONPATH:-}"

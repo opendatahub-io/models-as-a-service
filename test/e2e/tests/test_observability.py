@@ -39,7 +39,7 @@ def expected_metrics_config():
     if not CONFIG_PATH.exists():
         pytest.fail(f"FAIL: Metrics configuration file not found: {CONFIG_PATH}")
 
-    with open(CONFIG_PATH) as f:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     log.info(f"[config] Loaded metrics configuration from {CONFIG_PATH}")
@@ -48,7 +48,7 @@ def expected_metrics_config():
 
 def _run_kubectl(args: list[str], timeout: int = 30) -> tuple[int, str, str]:
     """Run kubectl command and return (returncode, stdout, stderr)."""
-    cmd = ["kubectl"] + args
+    cmd = ["kubectl", *args]
     try:
         result = subprocess.run(
             cmd,
@@ -61,6 +61,16 @@ def _run_kubectl(args: list[str], timeout: int = 30) -> tuple[int, str, str]:
         return -1, "", "Command timed out"
     except Exception as e:
         return -1, "", str(e)
+
+
+def _metric_exists_in_text(metrics_text: str, metric_name: str) -> bool:
+    """Check if a metric exists in Prometheus exposition format text.
+
+    Matches metric_name at the start of a line followed by '{' (labels) or ' ' (value).
+    Shared helper used by both TestLimitadorMetrics and TestMetricsAfterRequest.
+    """
+    pattern = rf"^{re.escape(metric_name)}[\{{\s]"
+    return bool(re.search(pattern, metrics_text, re.MULTILINE))
 
 
 def _fetch_limitador_metrics(namespace: str, port: int, path: str) -> str:
@@ -364,9 +374,7 @@ class TestLimitadorMetrics:
 
     def _metric_exists(self, metrics_text: str, metric_name: str) -> bool:
         """Check if a metric exists in the Prometheus metrics text."""
-        # Match metric name at start of line, followed by { or space or newline
-        pattern = rf"^{re.escape(metric_name)}[\{{\s]"
-        return bool(re.search(pattern, metrics_text, re.MULTILINE))
+        return _metric_exists_in_text(metrics_text, metric_name)
 
     def _metric_has_label(self, metrics_text: str, metric_name: str, label_name: str) -> bool:
         """Check if a metric has a specific label."""
@@ -509,9 +517,12 @@ def authpolicy_enforced():
 
 
 @pytest.fixture(scope="module")
-def make_test_request(headers, model_v1, model_name, authpolicy_enforced):
+def make_test_request(headers, model_v1, model_name, authpolicy_enforced):  # noqa: ARG001 (authpolicy_enforced is for ordering only)
     """Make a test request to generate metrics.
-    
+
+    The authpolicy_enforced parameter is not used directly — it ensures the
+    AuthPolicy enforcement check runs before we attempt to make requests.
+
     Returns:
         int: HTTP status code (200, 429, etc.) or -1 if request failed due to network error
     """
@@ -559,10 +570,7 @@ class TestMetricsAfterRequest:
 
     def _metric_exists(self, metrics_text: str, metric_name: str) -> bool:
         """Check if a metric exists in Prometheus format text."""
-        for line in metrics_text.split("\n"):
-            if line.startswith(metric_name + "{") or line.startswith(metric_name + " "):
-                return True
-        return False
+        return _metric_exists_in_text(metrics_text, metric_name)
 
     def _check_metric_label(self, metrics_text: str, metric_name: str, label_name: str) -> tuple[bool, str]:
         """Check if a metric has a specific label. Returns (has_label, sample_lines)."""
@@ -1102,6 +1110,11 @@ class TestVLLMMetrics:
 
     NOTE: Histogram metrics must be queried with a suffix (_count, _bucket, _sum)
     because Prometheus does not return results for the base histogram name.
+
+    DEPENDENCY: These tests rely on the module-scoped ``make_test_request`` fixture
+    (triggered by TestMetricsAfterRequest / TestPrometheusScrapingMetrics) to ensure
+    at least one inference request has been made so vLLM metrics are registered.
+    If running this class in isolation, ensure traffic has been sent first.
     """
 
     # --- vllm:e2e_request_latency_seconds (histogram) ---
@@ -1243,6 +1256,10 @@ class TestAuthorinoMetrics:
 
     These metrics are scraped from Authorino's /server-metrics endpoint via the
     authorino-server-metrics ServiceMonitor deployed by install-observability.sh.
+
+    DEPENDENCY: These tests rely on the module-scoped ``make_test_request`` fixture
+    (triggered by earlier test classes) to ensure auth evaluations have occurred.
+    If running this class in isolation, ensure traffic has been sent first.
     """
 
     def test_authorino_server_metrics_scraping_configured(self):
@@ -1251,18 +1268,27 @@ class TestAuthorinoMetrics:
         has_maas_sm = _resource_exists(
             "servicemonitor", "authorino-server-metrics", "kuadrant-system"
         )
-        # Check if Kuadrant already scrapes /server-metrics
+        # Check if Kuadrant already scrapes /server-metrics by inspecting
+        # the actual endpoint paths in monitor specs (not just names).
         has_kuadrant_sm = False
         rc, output, _ = _run_kubectl([
             "get", "servicemonitor,podmonitor", "-n", "kuadrant-system",
-            "-o", "jsonpath={range .items[*]}{.metadata.name}{' '}{end}"
+            "-o", "json"
         ])
         if rc == 0:
-            # Check if any existing monitor scrapes /server-metrics
-            for name in output.strip().split():
-                if "authorino" in name and "server" in name:
-                    has_kuadrant_sm = True
-                    break
+            try:
+                monitors = json.loads(output)
+                for item in monitors.get("items", []):
+                    endpoints = item.get("spec", {}).get("endpoints", [])
+                    endpoints += item.get("spec", {}).get("podMetricsEndpoints", [])
+                    for ep in endpoints:
+                        if ep.get("path") == "/server-metrics":
+                            has_kuadrant_sm = True
+                            break
+                    if has_kuadrant_sm:
+                        break
+            except (json.JSONDecodeError, KeyError):
+                pass
 
         assert has_maas_sm or has_kuadrant_sm, (
             "FAIL: No Authorino /server-metrics scraping configured.\n"
@@ -1447,6 +1473,16 @@ class TestMetricTypes:
 
         if skipped:
             print(f"[type] Skipped (no metadata): {', '.join(skipped)}")
+
+        # Guard: if most metrics were skipped, Prometheus metadata may not be available yet
+        total = len(metrics_with_types)
+        skip_ratio = len(skipped) / total if total else 0
+        if skip_ratio > 0.5 and total > 2:
+            pytest.fail(
+                f"FAIL: {len(skipped)}/{total} metrics had no Prometheus metadata "
+                f"({skip_ratio:.0%} skipped). Prometheus may not have scraped targets yet.\n"
+                f"  Skipped: {', '.join(skipped)}"
+            )
 
         if mismatches:
             pytest.fail(

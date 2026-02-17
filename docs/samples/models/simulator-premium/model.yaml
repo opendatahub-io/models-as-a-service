@@ -35,6 +35,13 @@ spec:
         - /var/run/kserve/tls/tls.crt
         - --ssl-keyfile
         - /var/run/kserve/tls/tls.key
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
         env:
           - name: POD_NAME
             valueFrom:
