@@ -158,8 +158,13 @@ kubectl get secret maas-api-serving-cert -n redhat-ods-applications \
 ### Test HTTPS Endpoint
 
 ```bash
+# For RHOAI:
 kubectl run curl --rm -it --image=curlimages/curl -- \
   curl -vk https://maas-api.redhat-ods-applications.svc:8443/health
+
+# For ODH:
+kubectl run curl --rm -it --image=curlimages/curl -- \
+  curl -vk https://maas-api.opendatahub.svc:8443/health
 ```
 
 For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).

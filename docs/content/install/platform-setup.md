@@ -531,9 +531,9 @@ Verify that Authorino can communicate with the MaaS API:
     # Get Authorino pod
     AUTHORINO_POD=$(kubectl get pods -n rh-connectivity-link -l authorino-resource=authorino -o jsonpath='{.items[0].metadata.name}')
 
-    # Test connectivity
-    kubectl exec -n rh-connectivity-link $AUTHORINO_POD -- curl -s \
-      http://maas-api.redhat-ods-applications.svc.cluster.local:8080/health
+    # Test connectivity (TLS is enabled by default, uses port 8443)
+    kubectl exec -n rh-connectivity-link $AUTHORINO_POD -- curl -s -k \
+      https://maas-api.redhat-ods-applications.svc.cluster.local:8443/health
     ```
 
 === "Open Data Hub"
@@ -542,9 +542,9 @@ Verify that Authorino can communicate with the MaaS API:
     # Get Authorino pod
     AUTHORINO_POD=$(kubectl get pods -n kuadrant-system -l authorino-resource=authorino -o jsonpath='{.items[0].metadata.name}')
 
-    # Test connectivity
-    kubectl exec -n kuadrant-system $AUTHORINO_POD -- curl -s \
-      http://maas-api.opendatahub.svc.cluster.local:8080/health
+    # Test connectivity (TLS is enabled by default, uses port 8443)
+    kubectl exec -n kuadrant-system $AUTHORINO_POD -- curl -s -k \
+      https://maas-api.opendatahub.svc.cluster.local:8443/health
     ```
 
 Expected output:
