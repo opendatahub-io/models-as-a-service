@@ -691,7 +691,7 @@ EOF
 #──────────────────────────────────────────────────────────────
 
 check_conflicting_operators() {
-  log_info "Checking for conflicting operators..."
+  log_info "Checking if there are any conflicting operators..."
   local conflicting_operator
   if [[ "$OPERATOR_TYPE" == "odh" ]]; then
     conflicting_operator="rhods-operator"
@@ -704,16 +704,16 @@ check_conflicting_operators() {
 
   if [[ -n "$conflict" ]]; then
     local ns=$(echo "$conflict" | awk '{print $1}')
-    log_error "Conflicting operator found: $conflicting_operator in namespace $ns"
-    log_error "ODH and RHOAI operators cannot coexist (they manage the same CRDs)."
-    log_error "Remove the conflicting operator before proceeding:"
+    log_error "Conflicting operator found: $conflicting_operator in namespace $ns. ODH and RHOAI operators cannot coexist (they manage the same CRDs)."
+    log_error "Remove the conflicting operator before proceeding (suggested steps):"
     log_error "  1. Delete custom resources: oc delete datasciencecluster --all && oc delete dscinitializations --all"
     log_error "  2. Delete subscription: oc delete subscription.operators.coreos.com $conflicting_operator -n $ns"
     log_error "  3. Delete CSV: oc delete csv -n $ns -l operators.coreos.com/$conflicting_operator"
+    log_error "  4. Try uninstalling $conflicting_operator before attempting to run deploy.sh again."
+    log_error "Quit the execution of the script. You may try re-running again."
     return 1
   fi
-
-  log_info "No conflicting operators found"
+  log_info "No conflicting operators found. Proceeding to installing primary operator."
 }
 
 #──────────────────────────────────────────────────────────────
