@@ -937,7 +937,6 @@ check_dsc_components() {
   if [[ "$needs_patch" == "true" ]]; then
     log_info "Patching DataScienceCluster '$dsc_name' with required configuration..."
     kubectl patch datasciencecluster "$dsc_name" --type=merge -p "$patch"
-    log_info "DataScienceCluster patched successfully"
   else
     log_info "DataScienceCluster configuration is correct, no changes needed"
   fi
