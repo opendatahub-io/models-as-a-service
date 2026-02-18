@@ -14,7 +14,10 @@
 #                                   odh → kuadrant (community v1.3.1)
 #                                   rhoai → rhcl (Red Hat Connectivity Link)
 #   --enable-tls-backend          Enable TLS for Authorino/MaaS API (default: on)
-#   --namespace <namespace>       Target namespace
+#   --namespace <namespace>       Target namespace for deployment
+#                                 In operator mode: Ignored - uses fixed namespace based on operator type
+#                                   (redhat-ods-applications for RHOAI, opendatahub for ODH)
+#                                 In kustomize mode: Uses provided namespace (default: maas-api)
 #   --verbose                     Enable debug logging
 #   --dry-run                     Show what would be done
 #   --help                        Show full help with all options
@@ -113,7 +116,9 @@ OPTIONS:
 
   --namespace <namespace>
       Target namespace for deployment
-      Default: redhat-ods-applications (RHOAI) or opendatahub (ODH)
+      In operator mode: Ignored - uses fixed namespace based on operator type
+        (redhat-ods-applications for RHOAI, opendatahub for ODH)
+      In kustomize mode: Uses provided namespace (default: maas-api)
 
   --verbose
       Enable verbose/debug logging
