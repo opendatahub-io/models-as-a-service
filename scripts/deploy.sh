@@ -909,12 +909,8 @@ apply_dsc() {
     [[ "$raw_dep_service_config" != "Headless" ]] && log_warn "  kserve.rawDeploymentServiceConfig: '${raw_dep_service_config:-unset}' (expected 'Headless')"
     [[ "$maas_state" != "Managed" ]] && log_warn "  kserve.modelsAsService.managementState: '${maas_state:-unset}' (expected 'Managed')"
     
-    log_warn "Deleting the current DataScienceCluster..."
-    kubectl delete datasciencecluster "$existing_dsc" --timeout=180s 2>/dev/null || {
-      log_warn "Delete timed out, removing finalizers..."
-      kubectl patch datasciencecluster "$existing_dsc" -p '{"metadata":{"finalizers":[]}}' --type=merge
-      kubectl delete datasciencecluster "$existing_dsc" --timeout=30s 2>/dev/null || true
-    }
+    log_error "Fix the required fields in DSC deployment and try again..."
+    return 1
   fi
 
   # Apply DSC with modelsAsService - this is REQUIRED for MaaS deployment
@@ -923,7 +919,7 @@ apply_dsc() {
   #
   # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
   #       Only ODH currently supports this feature
-  log_info "Creating MaaS-only DataScienceCluster..."
+  log_info "Creating DataScienceCluster..."
   kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
 }
 
