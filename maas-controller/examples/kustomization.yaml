@@ -1,7 +1,7 @@
 # Example MaaS CRs: regular and premium simulators with policies and subscriptions.
 # - Regular: system:authenticated (policy + subscription)
 # - Premium: premium-user (policy + subscription)
-# - Premium no-sub: premium-viewer (policy only, no subscription → 429 from default deny)
+# - Premium no-sub: premium-viewer (policy only, no subscription → 429)
 # Deploy after the maas-controller is running and both simulator LLMInferenceServices exist.
 # See README.md and ../scripts/install-examples.sh.
 apiVersion: kustomize.config.k8s.io/v1beta1

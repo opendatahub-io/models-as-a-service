@@ -381,10 +381,7 @@ main() {
       kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s 2>/dev/null || true
 
       log_info "  Disabling old gateway-auth-policy (replaced by per-route policies)..."
-      NAMESPACE="$NAMESPACE" "$controller_dir/hack/
-      
-      -
-      -gateway-auth-policy.sh"
+      NAMESPACE="$NAMESPACE" "$controller_dir/hack/disable-gateway-auth-policy.sh"
 
       log_info "  Subscription controller installed."
       log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."

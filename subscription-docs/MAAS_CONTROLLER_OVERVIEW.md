@@ -69,7 +69,7 @@ sequenceDiagram
     participant TRLP as TokenRateLimitPolicy
     participant Backend as LLMInferenceService
 
-    User->>Gateway: GET /v1/models/<model>/infer (Bearer token)
+    User->>Gateway: POST /llm/<model>/v1/chat/completions (Bearer token)
     Gateway->>AuthPolicy: Validate token (TokenReview)
     AuthPolicy->>AuthPolicy: Check groups/users, build identity
     Note over AuthPolicy: Writes identity (userid, groups_str)
@@ -88,18 +88,19 @@ sequenceDiagram
 
 ## 4. The “String Trick” (AuthPolicy → TokenRateLimitPolicy)
 
-Kuadrant’s TokenRateLimitPolicy CEL predicates do not always support array fields the same way as the AuthPolicy response. To pass **allowed groups** from AuthPolicy to TokenRateLimitPolicy in a reliable way, the controller uses a **comma-separated string**:
+Kuadrant’s TokenRateLimitPolicy CEL predicates do not always support array fields the same way as the AuthPolicy response. To pass **user groups** from AuthPolicy to TokenRateLimitPolicy in a reliable way, the controller uses a **comma-separated string**:
 
 1. **AuthPolicy (controller-generated)**  
-   - In the success response identity, the controller adds a property **`groups_str`** with a CEL expression that takes the filtered groups and **joins them with a comma**, e.g.  
-     `auth.identity.user.groups.filter(g, g == "free-user").join(",")`  
-   - So the identity object has both `groups` (array) and **`groups_str`** (string, e.g. `"free-user"` or `"free-user,premium-user"`).
+   - In the success response identity, the controller adds a property **`groups_str`** with a CEL expression that takes **all** user groups (unfiltered) and **joins them with a comma**:  
+     `auth.identity.user.groups.join(",")`  
+   - So the identity object has both `groups` (array) and **`groups_str`** (string, e.g. `"system:authenticated,free-user,premium-user"`).  
+   - Groups are passed unfiltered so that TRLP predicates can match against subscription groups, which may differ from auth policy groups.
 
 2. **TokenRateLimitPolicy (controller-generated)**  
    - For each subscription owner group, the controller generates a CEL predicate that **splits** `groups_str` and checks membership, e.g.  
      `auth.identity.groups_str.split(",").exists(g, g == "free-user")`.
 
-So: **AuthPolicy** turns the allowed-groups array into a **comma-separated string**; **TokenRateLimitPolicy** turns that string back into a logical list and uses it for rate-limit matching. That’s the “string trick.”
+So: **AuthPolicy** turns the user-groups array into a **comma-separated string**; **TokenRateLimitPolicy** turns that string back into a logical list and uses it for rate-limit matching. That’s the “string trick.”
 
 ---
 
@@ -224,7 +225,7 @@ Until MaaS API token minting is in place, inference calls use the **OpenShift to
 
 ```bash
 export TOKEN=$(oc whoami -t)
-curl -H "Authorization: Bearer $TOKEN" "https://<gateway-host>/v1/models/<model-name>/infer" -d '...'
+curl -H "Authorization: Bearer $TOKEN" "https://<gateway-host>/llm/<model-name>/v1/chat/completions" -d '...'
 ```
 
 The Kuadrant AuthPolicy validates this token via **Kubernetes TokenReview** and derives user/groups for authorization and for the identity passed to TokenRateLimitPolicy (including `groups_str`).
@@ -238,7 +239,7 @@ The Kuadrant AuthPolicy validates this token via **Kubernetes TokenReview** and 
 | **What** | MaaS Controller = control plane that reconciles MaaSModel, MaaSAuthPolicy, and MaaSSubscription into Gateway API and Kuadrant resources. |
 | **Where** | Single controller in `maas-controller`; CRs and generated resources can live in opendatahub or other namespaces. |
 | **How** | Three reconcilers watch MaaS CRs (and related resources); each creates/updates HTTPRoutes, AuthPolicies, or TokenRateLimitPolicies. |
-| **Identity bridge** | AuthPolicy exposes allowed groups as a comma-separated `groups_str`; TokenRateLimitPolicy uses `groups_str.split(",").exists(...)` for subscription matching (the “string trick”). |
+| **Identity bridge** | AuthPolicy exposes all user groups as a comma-separated `groups_str`; TokenRateLimitPolicy uses `groups_str.split(",").exists(...)` for subscription matching (the “string trick”). |
 | **Deploy** | Disable shared gateway-auth-policy, then run install-maas-controller.sh; optionally install examples. |
 
-This overview should be enough to explain what was created and how it works in talks or written docs. For slide-by-slide presentation ideas, see **SLIDE_IDEAS.md** in this directory.
+This overview should be enough to explain what was created and how it works in talks or written docs.

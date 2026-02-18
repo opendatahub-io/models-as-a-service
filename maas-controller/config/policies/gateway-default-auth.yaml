@@ -1,0 +1,55 @@
+# Default deny-all AuthPolicy at the gateway level.
+# Scoped to model inference paths (/llm/) only — does NOT affect non-model routes
+# like /maas-api/ or /v1/models (the MaaS API management endpoints).
+#
+# Routes WITHOUT a per-route AuthPolicy (i.e. models without a MaaSAuthPolicy)
+# will get 401 (no/invalid token) or 403 (valid token, not authorized).
+# Routes WITH a per-route AuthPolicy (created by the MaaSAuthPolicy controller)
+# override these defaults with their model-specific group/user rules.
+#
+# IMPORTANT: Per-route AuthPolicies completely replace these defaults (atomic strategy).
+# This policy ensures unconfigured models are denied at the auth layer (401/403)
+# rather than the rate-limit layer (429), giving users correct HTTP semantics.
+# The gateway-default-deny TRLP remains as a secondary safety net.
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: gateway-default-auth
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/managed-by: maas-controller
+    app.kubernetes.io/part-of: maas-controller
+    app.kubernetes.io/component: default-policy
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+  defaults:
+    when:
+      - predicate: 'request.path.startsWith("/llm/")'
+    rules:
+      authentication:
+        service-accounts:
+          cache:
+            key:
+              selector: "context.request.http.headers.authorization.@case:lower"
+            ttl: 600
+          defaults:
+            userid:
+              selector: "auth.identity.user.username"
+          kubernetesTokenReview:
+            audiences:
+              - maas-default-gateway-sa
+              - https://kubernetes.default.svc
+          metrics: false
+          priority: 0
+      authorization:
+        deny-unconfigured-models:
+          metrics: false
+          priority: 0
+          patternMatching:
+            patterns:
+              - operator: eq
+                selector: "context.request.http.method"
+                value: "__deny_unconfigured_models__"

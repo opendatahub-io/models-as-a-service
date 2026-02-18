@@ -1,6 +1,7 @@
 # MaaSAuthPolicy for the premium simulator: access only, NO subscription.
 # Users in premium-viewer can pass auth but have no token quota (no MaaSSubscription).
-# They will hit the gateway default-deny TokenRateLimitPolicy (0 tokens) and get 429.
+# They will get 429 from the per-route TRLP's deny-unsubscribed rule (if another
+# subscription exists for the same model) or from the gateway default-deny (if none do).
 # Use this to see "policy without subscription" behavior.
 # Replace "premium-viewer" with a group from your identity provider (TokenReview).
 apiVersion: maas.opendatahub.io/v1alpha1

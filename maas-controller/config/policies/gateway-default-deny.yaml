@@ -1,9 +1,11 @@
-# Default deny-all TokenRateLimitPolicy at the gateway level.
+# Secondary safety-net TokenRateLimitPolicy at the gateway level.
 # Scoped to model inference paths (/llm/) only — does NOT affect non-model routes
 # like /maas-api/ or /v1/models (the MaaS API management endpoints).
 #
-# Routes WITHOUT a per-route TokenRateLimitPolicy (i.e. models without a MaaSSubscription)
-# will get 0 tokens -> 429 Too Many Requests.
+# The PRIMARY default deny is gateway-default-auth.yaml (AuthPolicy), which
+# returns 401/403 for unconfigured models. This TRLP is a defense-in-depth layer:
+# if a request somehow passes auth but has no per-route TRLP, it gets 0 tokens -> 429.
+#
 # Routes WITH a per-route TokenRateLimitPolicy (created by the MaaSSubscription controller)
 # override these defaults and get their subscription's token limits.
 #

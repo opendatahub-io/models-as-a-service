@@ -14,7 +14,8 @@ User Request
     ▼
 Gateway (maas-default-gateway)
     │
-    ├── Default deny (0 tokens) for unsubscribed models
+    ├── Default deny AuthPolicy ──── 401/403 for unconfigured models
+    ├── Default deny TRLP ──────── 429 safety net (defense-in-depth)
     │
     ▼
 HTTPRoute (per model)
@@ -28,6 +29,8 @@ HTTPRoute (per model)
     ▼
 Model Endpoint (200 OK)
 ```
+
+Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway level by `gateway-default-auth` (AuthPolicy, returns 401/403). The `gateway-default-deny` (TRLP, returns 429) remains as a secondary safety net. Per-route policies created by the controller override both gateway defaults.
 
 ### CRDs and what they generate
 
@@ -54,7 +57,7 @@ The controller watches these resources and re-reconciles automatically:
 
 **MaaSModel deleted:** The controller uses a finalizer to cascade-delete all generated AuthPolicies and TokenRateLimitPolicies for that model. The parent MaaSAuthPolicy and MaaSSubscription CRs remain intact. The underlying LLMInferenceService is not affected.
 
-**MaaSSubscription deleted:** The aggregated TRLP for the model is deleted, then rebuilt from the remaining subscriptions. If no subscriptions remain, the model falls back to the gateway-default-deny (429 for everyone).
+**MaaSSubscription deleted:** The aggregated TRLP for the model is deleted, then rebuilt from the remaining subscriptions. If no subscriptions remain, the model falls back to the gateway defaults (401/403 from auth if no MaaSAuthPolicy, or 429 from TRLP safety net if auth passes).
 
 **MaaSAuthPolicy deleted:** Same pattern — the aggregated AuthPolicy is rebuilt from remaining auth policies.
 
