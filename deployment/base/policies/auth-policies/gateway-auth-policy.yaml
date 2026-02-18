@@ -28,7 +28,7 @@ spec:
           ttl: 300
     authentication:
       # NEW: Permanent API Key Authentication (sk-oai-* tokens)
-      # Per TECHNICAL_ARCHITECTURE.md §4.4: HTTP callback to MaaS API validation endpoint
+      # HTTP callback to MaaS API validation endpoint
       api-keys:
         when:
           # Match requests with Bearer token starting with sk-oai-
@@ -44,7 +44,7 @@ spec:
             expression: |
               {"key": request.headers.authorization.replace("Bearer ", "")}
         cache:
-          # Cache validation results per key (per arch doc §13.3: 60s TTL)
+          # Cache validation results per key (60s TTL)
           key:
             selector: request.headers.authorization
           ttl: 60

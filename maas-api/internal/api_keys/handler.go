@@ -178,6 +178,10 @@ type CreatePermanentKeyRequest struct {
 // CreatePermanentAPIKey handles POST /v1/api-keys/permanent
 // Creates a new API key (sk-oai-* format) per Feature Refinement
 // Per "Keys Shown Only Once": key is returned ONCE at creation and never again
+//
+// TODO(post-POC): After removing SA-backed endpoint, consolidate to POST /v1/api-keys
+// and deprecate /permanent suffix. Will support both permanent and expiring keys via
+// optional expiresAt field in request body.
 func (h *Handler) CreatePermanentAPIKey(c *gin.Context) {
 	var req CreatePermanentKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
