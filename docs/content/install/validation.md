@@ -102,14 +102,15 @@ Check that all components are running:
 # For RHOAI:
 kubectl get pods -n redhat-ods-applications && \
 kubectl get pods -n rh-connectivity-link && \
-kubectl get pods -n kserve && \
 kubectl get pods -n llm
 
 # For ODH:
 kubectl get pods -n opendatahub && \
 kubectl get pods -n kuadrant-system && \
-kubectl get pods -n kserve && \
 kubectl get pods -n llm
+
+# Note: KServe controller runs in the operator namespace (redhat-ods-applications for RHOAI, opendatahub for ODH)
+# not in a separate 'kserve' namespace
 ```
 
 Check Gateway status:
