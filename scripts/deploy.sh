@@ -878,21 +878,69 @@ EOF
 
 apply_dsc() {
   log_info "Applying DataScienceCluster with ModelsAsService..."
-
-  # Check if a DataScienceCluster already exists, skip creation if so
-  if kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
-    log_info "DataScienceCluster already exists in the cluster. Skipping creation."
+  
+  local data_dir="${SCRIPT_DIR}/data"
+  if ! kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
+    log_info "No DataScienceCluster found, creating one..."
+    # Apply DSC with modelsAsService - this is REQUIRED for MaaS deployment
+    # Without modelsAsService, only KServe deploys (no maas-api, no HTTPRoutes, no AuthPolicy)
+    # If the operator doesn't support modelsAsService, kubectl will fail with a clear error
+    #
+    # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
+    #       Only ODH currently supports this feature
+    kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
     return 0
   fi
+  
+  log_info "DataScienceCluster already exists, verifying configuration..."
+  check_dsc_components
+  
+}
 
-  # Apply DSC with modelsAsService - this is REQUIRED for MaaS deployment
-  # Without modelsAsService, only KServe deploys (no maas-api, no HTTPRoutes, no AuthPolicy)
-  # If the operator doesn't support modelsAsService, kubectl will fail with a clear error
-  #
-  # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
-  #       Only ODH currently supports this feature
-  local data_dir="${SCRIPT_DIR}/data"
-  kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
+check_dsc_components() {
+  local dsc_name
+  dsc_name=$(kubectl get datasciencecluster -A --no-headers 2>/dev/null | awk '{print$2}' | head -1)
+
+  local needs_patch=false
+  local patch='{"spec":{"components":{"kserve":{'
+
+  # Check kserve.managementState
+  local kserve_state
+  kserve_state=$(kubectl get datasciencecluster "$dsc_name" -o jsonpath='{.spec.components.kserve.managementState}' 2>/dev/null || echo "")
+  if [[ "$kserve_state" != "Managed" ]]; then
+    log_warn "  kserve.managementState is '${kserve_state:-unset}', expected 'Managed'"
+    needs_patch=true
+    patch+='"managementState":"Managed",'
+  fi
+
+  # Check kserve.rawDeploymentServiceConfig
+  local raw_config
+  raw_config=$(kubectl get datasciencecluster "$dsc_name" -o jsonpath='{.spec.components.kserve.rawDeploymentServiceConfig}' 2>/dev/null || echo "")
+  if [[ "$raw_config" != "Headed" ]]; then
+    log_warn "  kserve.rawDeploymentServiceConfig is '${raw_config:-unset}', expected 'Headed'"
+    needs_patch=true
+    patch+='"rawDeploymentServiceConfig":"Headed",'
+  fi
+
+  # Check kserve.modelsAsService.managementState
+  local maas_state
+  maas_state=$(kubectl get datasciencecluster "$dsc_name" -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
+  if [[ "$maas_state" != "Managed" ]]; then
+    log_warn "  kserve.modelsAsService.managementState is '${maas_state:-unset}', expected 'Managed'"
+    needs_patch=true
+    patch+='"modelsAsService":{"managementState":"Managed"},'
+  fi
+
+  # Remove trailing comma and close the JSON
+  patch="${patch%,}}}}}"
+
+  if [[ "$needs_patch" == "true" ]]; then
+    log_info "Patching DataScienceCluster '$dsc_name' with required configuration..."
+    kubectl patch datasciencecluster "$dsc_name" --type=merge -p "$patch"
+    log_info "DataScienceCluster patched successfully"
+  else
+    log_info "DataScienceCluster configuration is correct, no changes needed"
+  fi
 }
 
 #──────────────────────────────────────────────────────────────
