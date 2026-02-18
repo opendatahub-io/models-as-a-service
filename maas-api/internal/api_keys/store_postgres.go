@@ -6,6 +6,7 @@ package api_keys
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -61,7 +62,7 @@ func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey
 }
 
 // AddPermanentKey stores an API key with hash-only storage (no plaintext)
-func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description string) error {
+func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -71,17 +72,20 @@ func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, ke
 	if keyHash == "" {
 		return errors.New("key hash is required")
 	}
+	if tierName == "" {
+		return errors.New("tier name is required")
+	}
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)
+		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, tier_name, original_user_groups, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9)
 	`
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, keyPrefix, time.Now().UTC())
+	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, keyPrefix, tierName, originalUserGroups, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
 
-	s.logger.Debug("Stored API key", "id", keyID, "prefix", keyPrefix, "user", username)
+	s.logger.Debug("Stored API key", "id", keyID, "prefix", keyPrefix, "user", username, "tier", tierName)
 	return nil
 }
 
@@ -169,7 +173,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata,
 // GetByHash looks up an API key by its SHA-256 hash (critical path for validation)
 func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetadata, error) {
 	query := `
-		SELECT id, username, name, description, key_prefix, status, last_used_at
+		SELECT id, username, name, description, key_prefix, tier_name, original_user_groups, status, last_used_at
 		FROM api_keys
 		WHERE key_hash = $1
 	`
@@ -177,9 +181,9 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 
 	var k ApiKeyMetadata
 	var lastUsedAt sql.NullTime
-	var description sql.NullString
+	var description, tierName, originalUserGroups sql.NullString
 
-	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, &k.KeyPrefix, &k.Status, &lastUsedAt); err != nil {
+	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, &k.KeyPrefix, &tierName, &originalUserGroups, &k.Status, &lastUsedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}
@@ -188,6 +192,16 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 
 	if description.Valid {
 		k.Description = description.String
+	}
+	if tierName.Valid {
+		k.TierName = tierName.String
+	}
+	if originalUserGroups.Valid && originalUserGroups.String != "" {
+		// Parse JSON array of groups
+		var groups []string
+		if err := json.Unmarshal([]byte(originalUserGroups.String), &groups); err == nil {
+			k.OriginalUserGroups = groups
+		}
 	}
 	if lastUsedAt.Valid {
 		k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)

@@ -2,6 +2,7 @@ package api_keys
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -9,31 +10,35 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 type Service struct {
 	tokenManager *token.Manager
 	store        MetadataStore
+	tierMapper   *tier.Mapper
 	logger       *logger.Logger
 }
 
-func NewService(tokenManager *token.Manager, store MetadataStore) *Service {
+func NewService(tokenManager *token.Manager, store MetadataStore, tierMapper *tier.Mapper) *Service {
 	return &Service{
 		tokenManager: tokenManager,
 		store:        store,
+		tierMapper:   tierMapper,
 		logger:       logger.Production(),
 	}
 }
 
 // NewServiceWithLogger creates a new service with a custom logger (for testing)
-func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, log *logger.Logger) *Service {
+func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, tierMapper *tier.Mapper, log *logger.Logger) *Service {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Service{
 		tokenManager: tokenManager,
 		store:        store,
+		tierMapper:   tierMapper,
 		logger:       log,
 	}
 }
@@ -75,6 +80,7 @@ type CreatePermanentKeyResponse struct {
 // - Generates cryptographically secure key with sk-oai-* prefix
 // - Stores ONLY the SHA-256 hash (plaintext never stored)
 // - Returns plaintext ONCE at creation ("show-once" pattern)
+// - Determines tier from user groups and stores for authorization
 func (s *Service) CreatePermanentAPIKey(ctx context.Context, user *token.UserContext, name, description string) (*CreatePermanentKeyResponse, error) {
 	// Generate the API key
 	plaintext, hash, prefix, err := GenerateAPIKey()
@@ -82,13 +88,24 @@ func (s *Service) CreatePermanentAPIKey(ctx context.Context, user *token.UserCon
 		return nil, fmt.Errorf("failed to generate API key: %w", err)
 	}
 
+	// Determine tier from user groups (same logic as token generation)
+	userTier, err := s.tierMapper.GetTierForGroups(user.Groups...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine user tier: %w", err)
+	}
+
 	// Generate unique ID for this key
 	keyID := uuid.New().String()
 
+	// Marshal original user groups for audit trail (optional)
+	originalGroups, _ := json.Marshal(user.Groups)
+
 	// Store in database (hash only, plaintext NEVER stored)
-	if err := s.store.AddPermanentKey(ctx, user.Username, keyID, hash, prefix, name, description); err != nil {
+	if err := s.store.AddPermanentKey(ctx, user.Username, keyID, hash, prefix, name, description, userTier.Name, string(originalGroups)); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
+
+	s.logger.Info("Created permanent API key", "user", user.Username, "tier", userTier.Name, "id", keyID)
 
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
 	return &CreatePermanentKeyResponse{
@@ -178,12 +195,21 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		}
 	}()
 
-	// Success - return user identity for Authorino
+	// Generate synthetic ServiceAccount group from tier name
+	// This matches the pattern used by actual ServiceAccount tokens
+	var groups []string
+	if metadata.TierName != "" {
+		syntheticGroup := fmt.Sprintf("system:serviceaccounts:maas-default-gateway-tier-%s", metadata.TierName)
+		groups = []string{syntheticGroup}
+	}
+
+	// Success - return user identity and groups for Authorino
 	return &ValidationResult{
 		Valid:    true,
 		UserID:   metadata.Username,
 		Username: metadata.Username,
 		KeyID:    metadata.ID,
+		Groups:   groups, // Synthetic groups for tier lookup and authorization
 	}, nil
 }
 
