@@ -91,6 +91,11 @@ LeaderWorkerSet API (LWS).
     kubectl apply --server-side -f https://github.com/kubernetes-sigs/lws/releases/download/${LATEST_LWS_VERSION}/manifests.yaml
     ```
 
+    !!! note "Operator-based Installation Alternative"
+        If you used the automated `./scripts/deploy.sh` script, LWS is installed via the Red Hat operator
+        in the `openshift-lws-operator` namespace (same as RHOAI), not in `lws-system`.
+        Use `kubectl get deployments -n openshift-lws-operator` to verify in that case.
+
 ### Verification
 
 Check that LWS deployments are ready:
@@ -107,11 +112,23 @@ Check that LWS deployments are ready:
 
 === "Open Data Hub"
 
+    For kubectl installation method (as shown above):
+
     ```shell
     kubectl get deployments --namespace lws-system
 
     NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
     lws-controller-manager   2/2     2            2           35s
+    ```
+
+    For operator installation (if using `./scripts/deploy.sh` script):
+
+    ```shell
+    kubectl get deployments --namespace openshift-lws-operator
+
+    NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
+    lws-controller-manager   2/2     2            2           61s
+    openshift-lws-operator   1/1     1            1           4m26s
     ```
 
 ## Install Gateway API Controller
