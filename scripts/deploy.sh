@@ -919,7 +919,6 @@ apply_dsc() {
   #
   # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
   #       Only ODH currently supports this feature
-  log_info "Creating DataScienceCluster..."
   kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
 }
 
