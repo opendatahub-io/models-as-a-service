@@ -27,22 +27,25 @@ type PermanentAPIKey struct {
 // ApiKeyMetadata represents metadata for a single API key (without the token itself).
 // Used for listing and retrieving API key metadata from the database.
 type ApiKeyMetadata struct {
-	ID             string `json:"id"`
-	KeyPrefix      string `json:"keyPrefix,omitempty"` // For permanent keys: sk-oai-abc123...
-	Name           string `json:"name"`
-	Description    string `json:"description,omitempty"`
-	Username       string `json:"username,omitempty"`
-	CreationDate   string `json:"creationDate"`
-	ExpirationDate string `json:"expirationDate,omitempty"` // Empty for permanent keys
-	Status         string `json:"status"`                   // "active", "expired", "revoked"
-	LastUsedAt     string `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
+	ID                 string   `json:"id"`
+	KeyPrefix          string   `json:"keyPrefix,omitempty"` // For permanent keys: sk-oai-abc123...
+	Name               string   `json:"name"`
+	Description        string   `json:"description,omitempty"`
+	Username           string   `json:"username,omitempty"`
+	TierName           string   `json:"tierName,omitempty"`           // Tier determined at creation time
+	OriginalUserGroups []string `json:"originalUserGroups,omitempty"` // User's groups at creation (audit only)
+	CreationDate       string   `json:"creationDate"`
+	ExpirationDate     string   `json:"expirationDate,omitempty"` // Empty for permanent keys
+	Status             string   `json:"status"`                   // "active", "expired", "revoked"
+	LastUsedAt         string   `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
 }
 
 // ValidationResult holds the result of API key validation (for Authorino HTTP callback)
 type ValidationResult struct {
-	Valid    bool   `json:"valid"`
-	UserID   string `json:"userId,omitempty"`
-	Username string `json:"username,omitempty"`
-	KeyID    string `json:"keyId,omitempty"`
-	Reason   string `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
+	Valid    bool     `json:"valid"`
+	UserID   string   `json:"userId,omitempty"`
+	Username string   `json:"username,omitempty"`
+	KeyID    string   `json:"keyId,omitempty"`
+	Groups   []string `json:"groups,omitempty"` // Synthetic groups for tier-based authorization
+	Reason   string   `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
 }

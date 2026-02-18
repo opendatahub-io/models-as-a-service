@@ -48,22 +48,30 @@ spec:
       labels:
         app: postgres
     spec:
-      securityContext:
-        fsGroup: 26
       containers:
       - name: postgres
-        image: postgres:15-alpine
-        securityContext:
-          runAsUser: 26
-          runAsNonRoot: true
-        envFrom:
-        - secretRef:
-            name: postgres-creds
+        image: registry.redhat.io/rhel9/postgresql-15:latest
+        env:
+        - name: POSTGRESQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-creds
+              key: POSTGRES_USER
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-creds
+              key: POSTGRES_PASSWORD
+        - name: POSTGRESQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: postgres-creds
+              key: POSTGRES_DB
         ports:
         - containerPort: 5432
         volumeMounts:
         - name: data
-          mountPath: /var/lib/postgresql/data
+          mountPath: /var/lib/pgsql/data
         resources:
           requests:
             memory: "256Mi"
@@ -73,7 +81,7 @@ spec:
             cpu: "500m"
         readinessProbe:
           exec:
-            command: ["pg_isready", "-U", "${POSTGRES_USER}"]
+            command: ["/usr/libexec/check-container"]
           initialDelaySeconds: 5
           periodSeconds: 5
       volumes:

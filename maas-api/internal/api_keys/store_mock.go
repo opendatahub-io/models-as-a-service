@@ -64,7 +64,7 @@ func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey) er
 	return nil
 }
 
-func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description string) error {
+func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -81,6 +81,7 @@ func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHas
 			Name:         name,
 			Description:  description,
 			KeyPrefix:    keyPrefix,
+			TierName:     tierName,
 			Status:       TokenStatusActive,
 			CreationDate: time.Now().UTC().Format(time.RFC3339),
 		},

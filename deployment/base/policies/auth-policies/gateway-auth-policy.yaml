@@ -11,51 +11,63 @@ spec:
     name: maas-default-gateway
   rules:
     metadata:
-      # Enriching identity metadata with a proper subscription tier based on user groups
-      # Note: For API keys (sk-oai-*), tier lookup uses the validated user identity
+      # Tier lookup for all authenticated users
       matchedTier:
         http:
-          # TODO: network policy to limit access to this endpoint
-          url: http://maas-api.maas-api.svc.cluster.local:8080/v1/tiers/lookup
+          url: https://maas-api.opendatahub.svc.cluster.local:8443/v1/tiers/lookup
           contentType: application/json
           method: POST
           body:
-            expression: |-
-              { "groups": auth.identity.user.groups }
+            expression: '{ "groups": auth.identity.user.groups }'
         cache:
           key:
             selector: auth.identity.user.username
           ttl: 300
-    authentication:
-      # NEW: Permanent API Key Authentication (sk-oai-* tokens)
-      # HTTP callback to MaaS API validation endpoint
-      api-keys:
+
+      # NEW: API Key Validation (for sk-oai-* tokens)
+      # Calls validation endpoint and stores result in metadata
+      apiKeyValidation:
         when:
-          # Match requests with Bearer token starting with sk-oai-
+          # Only call validation for API key requests
           - selector: request.headers.authorization
             operator: matches
             value: "^Bearer sk-oai-.*"
         http:
-          url: http://maas-api.maas-api.svc.cluster.local:8080/internal/v1/api-keys/validate
-          method: POST
+          url: https://maas-api.opendatahub.svc.cluster.local:8443/internal/v1/api-keys/validate
           contentType: application/json
+          method: POST
           body:
-            # Extract the key from "Bearer sk-oai-..." header
-            expression: |
-              {"key": request.headers.authorization.replace("Bearer ", "")}
+            # Extract key from "Bearer sk-oai-..." header
+            expression: '{"key": request.headers.authorization.@replace:{"old":"Bearer ","new":""}}'
         cache:
-          # Cache validation results per key (60s TTL)
           key:
             selector: request.headers.authorization
           ttl: 60
+
+    authentication:
+      # API Key "Authentication" - accepts request, real validation happens in metadata
+      api-keys:
+        when:
+          - selector: request.headers.authorization
+            operator: matches
+            value: "^Bearer sk-oai-.*"
+        plain:
+          # Extract the key to make it available in auth.identity
+          selector: request.headers.authorization
         defaults:
-          # Map validated API key response to user identity
+          # Will be overridden by metadata validation response
           userid:
-            expression: auth.identity.userId
-      # EXISTING: Service Account Token Authentication (K8s JWT tokens)
+            expression: auth.metadata.apiKeyValidation.userId
+          user:
+            expression: |
+              {
+                "username": auth.metadata.apiKeyValidation.username,
+                "groups": auth.metadata.apiKeyValidation.groups
+              }
+
+      # Service Account Token Authentication (K8s JWT tokens)
       service-accounts:
         when:
-          # Match requests with Bearer token starting with eyJ (JWT)
           - selector: request.headers.authorization
             operator: matches
             value: "^Bearer eyJ.*"
@@ -63,8 +75,6 @@ spec:
           audiences:
             - maas-default-gateway-sa
         defaults:
-          # token normalization - https://docs.kuadrant.io/1.2.x/authorino/docs/user-guides/token-normalization/
-          # full username: system:serviceaccount:<ns>:<name>
           userid:
             expression: |
               auth.identity.user.username.split(":")[3]
@@ -72,7 +82,23 @@ spec:
           key:
             selector: context.request.http.headers.authorization.@case:lower
           ttl: 600
+
     authorization:
+      # NEW: Validate API key is valid before allowing access
+      api-key-valid:
+        when:
+          # Only apply this check for API key requests
+          - selector: request.headers.authorization
+            operator: matches
+            value: "^Bearer sk-oai-.*"
+        patternMatching:
+          patterns:
+            # Deny if validation failed or key is invalid
+            - selector: auth.metadata.apiKeyValidation.valid
+              operator: eq
+              value: "true"
+
+      # Tier-based access control
       tier-access:
         cache:
           key:
@@ -89,23 +115,21 @@ spec:
             resource:
               value: llminferenceservices
             namespace:
-              expression: |
-                request.path.split("/")[1]
+              expression: request.path.split("/")[1]
             name:
-              expression: |
-                request.path.split("/")[2]
+              expression: request.path.split("/")[2]
             verb:
               value: post
+
     response:
       success:
         headers:
           X-MaaS-Username:
             plain:
               selector: auth.identity.userid
-          # NEW: Include key ID for API key authentication (for audit logging)
           X-MaaS-Key-Id:
             plain:
-              selector: auth.identity.keyId
+              selector: auth.metadata.apiKeyValidation.keyId
         filters:
           identity:
             json:
@@ -113,4 +137,4 @@ spec:
                 userid:
                   expression: auth.identity.userid
                 tier:
-                  expression: auth.metadata.matchedTier["tier"]
+                  expression: auth.metadata.matchedTier.tier

@@ -23,7 +23,9 @@ type MetadataStore interface {
 	Add(ctx context.Context, username string, apiKey *APIKey) error
 
 	// AddPermanentKey stores a permanent API key with hash-only storage (no plaintext)
-	AddPermanentKey(ctx context.Context, username string, keyID, keyHash, keyPrefix, name, description string) error
+	// tierName is required for generating synthetic groups during validation
+	// originalUserGroups is optional JSON array for audit trail
+	AddPermanentKey(ctx context.Context, username string, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string) error
 
 	List(ctx context.Context, username string) ([]ApiKeyMetadata, error)
 
