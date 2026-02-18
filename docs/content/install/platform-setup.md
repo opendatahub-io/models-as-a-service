@@ -460,22 +460,6 @@ below provides an example Gateway you can use:
 # Get your cluster's domain
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 
-# Detect TLS certificate secret (or set manually)
-CERT_NAME=$(kubectl get ingresscontroller default -n openshift-ingress-operator \
-  -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)
-
-# If not found, check common certificate names
-if [[ -z "$CERT_NAME" ]]; then
-  for cert in default-gateway-cert data-science-gatewayconfig-tls data-science-gateway-service-tls; do
-    if kubectl get secret -n openshift-ingress "$cert" &>/dev/null; then
-      CERT_NAME="$cert"
-      break
-    fi
-  done
-fi
-
-echo "Using TLS certificate: ${CERT_NAME}"
-
 kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -501,12 +485,19 @@ spec:
          from: All
      tls:
        certificateRefs:
-       - group: ''
-         kind: Secret
-         name: ${CERT_NAME}
+       - kind: Secret
+         name: router-certs-default
        mode: Terminate
 EOF
 ```
+
+!!! tip "TLS Certificate"
+    The example above uses `router-certs-default`, which is the default OpenShift router certificate available on most clusters. If you need to use a different certificate, common alternatives include:
+
+    - `data-science-gateway-service-tls` (if Data Science operator is installed)
+    - `default-gateway-cert`
+
+    To verify available certificates: `kubectl get secrets -n openshift-ingress --field-selector type=kubernetes.io/tls`
 
 Wait for the Gateway to be programmed:
 
