@@ -141,6 +141,7 @@ ADVANCED OPTIONS (PR Testing):
   --channel <channel>
       Operator channel override
       Default: fast-3 (ODH), fast-3.x (RHOAI)
+              fast (both) when using custom catalog
 
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE        Custom MaaS API container image
