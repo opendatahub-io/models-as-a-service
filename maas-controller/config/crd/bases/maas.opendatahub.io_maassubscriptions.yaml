@@ -49,22 +49,6 @@ spec:
           spec:
             description: MaaSSubscriptionSpec defines the desired state of MaaSSubscription
             properties:
-              billingMetadata:
-                description: BillingMetadata contains billing information
-                properties:
-                  costCenter:
-                    description: CostCenter is the cost center for billing attribution
-                    type: string
-                  labels:
-                    additionalProperties:
-                      type: string
-                    description: Labels are additional labels for tracking
-                    type: object
-                  organizationId:
-                    description: OrganizationID is the organization identifier for
-                      billing
-                    type: string
-                type: object
               modelRefs:
                 description: ModelRefs defines which models are included with per-model
                   token rate limits
@@ -143,6 +127,23 @@ spec:
                   Higher numbers have higher priority. Defaults to 0.
                 format: int32
                 type: integer
+              tokenMetadata:
+                description: TokenMetadata contains metadata for token attribution
+                  and metering
+                properties:
+                  costCenter:
+                    description: CostCenter is the cost center for usage attribution
+                    type: string
+                  labels:
+                    additionalProperties:
+                      type: string
+                    description: Labels are additional labels for tracking and metrics
+                    type: object
+                  organizationId:
+                    description: OrganizationID is the organization identifier for
+                      metering and billing
+                    type: string
+                type: object
             required:
             - modelRefs
             - owner
