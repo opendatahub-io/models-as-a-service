@@ -106,10 +106,12 @@ kubectl get pods -n kuadrant-system
 # For RHOAI (RHCL):
 kubectl get pods -n rh-connectivity-link
 
-# Check ODH/RHOAI and KServe
-kubectl get pods -n kserve
-kubectl get pods -n opendatahub -l app.kubernetes.io/part-of=opendatahub-operator
-kubectl get pods -n redhat-ods-applications -l app.kubernetes.io/part-of=rhods-operator
+# Check KServe controller (runs in operator namespace, not separate kserve namespace)
+# For ODH:
+kubectl get pods -n opendatahub -l control-plane=kserve-controller-manager
+
+# For RHOAI:
+kubectl get pods -n redhat-ods-applications -l control-plane=kserve-controller-manager
 ```
 
 !!! tip "TLS Configuration"
