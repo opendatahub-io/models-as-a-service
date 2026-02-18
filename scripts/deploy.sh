@@ -890,15 +890,15 @@ apply_dsc() {
     kserve_state=$(kubectl get datasciencecluster "$existing_dsc" \
       -o jsonpath='{.spec.components.kserve.managementState}' 2>/dev/null || echo "")
     
-    local raw_config 
-    raw_config=$(kubectl get datasciencecluster "$existing_dsc" \
+    local raw_dep_service_config 
+    raw_dep_service_config=$(kubectl get datasciencecluster "$existing_dsc" \
       -o jsonpath='{.spec.components.kserve.rawDeploymentServiceConfig}' 2>/dev/null || echo "")
     
     local maas_state
     maas_state=$(kubectl get datasciencecluster "$existing_dsc" \
       -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
 
-    if [[ "$kserve_state" == "Managed" && "$raw_config" == "Headed" && "$maas_state" == "Managed" ]]; then
+    if [[ "$kserve_state" == "Managed" && "$raw_dep_service_config" == "Headless" && "$maas_state" == "Managed" ]]; then
       log_info "Existing DataScienceCluster '$existing_dsc' meets MaaS requirements, skipping creation"
       return 0
     fi
@@ -906,7 +906,7 @@ apply_dsc() {
     # Existing DSC doesn't meet requirements — replace it
     log_warn "Existing DataScienceCluster '$existing_dsc' does not meet MaaS requirements:"
     [[ "$kserve_state" != "Managed" ]] && log_warn "  kserve.managementState: '${kserve_state:-unset}' (expected 'Managed')"
-    [[ "$raw_config" != "Headed" ]] && log_warn "  kserve.rawDeploymentServiceConfig: '${raw_config:-unset}' (expected 'Headed')"
+    [[ "$raw_dep_service_config" != "Headless" ]] && log_warn "  kserve.rawDeploymentServiceConfig: '${raw_dep_service_config:-unset}' (expected 'Headless')"
     [[ "$maas_state" != "Managed" ]] && log_warn "  kserve.modelsAsService.managementState: '${maas_state:-unset}' (expected 'Managed')"
     
     log_warn "Deleting the current DataScienceCluster..."
