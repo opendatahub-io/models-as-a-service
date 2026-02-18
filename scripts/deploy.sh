@@ -899,7 +899,7 @@ apply_dsc() {
 
 check_dsc_components() {
   local dsc_name
-  dsc_name=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}'2>/dev/null)
+  dsc_name=$(kubectl get datasciencecluster -A --no-headers 2>/dev/null | awk '{print$2}' | head -1)
 
   local needs_patch=false
   local patch='{"spec":{"components":{"kserve":{'
