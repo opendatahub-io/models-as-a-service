@@ -25,11 +25,11 @@ Our goal is to create a comprehensive platform for **Models as a Service** with 
 Use the unified deployment script for all deployment scenarios:
 
 ```bash
-# Deploy RHOAI (default)
+# Deploy ODH (default)
 ./scripts/deploy.sh
 
-# Deploy ODH
-./scripts/deploy.sh --operator-type odh
+# Deploy RHOAI
+./scripts/deploy.sh --operator-type rhoai
 
 # Deploy via Kustomize
 ./scripts/deploy.sh --deployment-mode kustomize
@@ -50,13 +50,10 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
 | `--deployment-mode` | `operator`, `kustomize` | `operator` | Deployment method |
-| `--operator-type` | `rhoai`, `odh` | `rhoai` | Which operator to install |
-| `--policy-engine` | `rhcl`, `kuadrant` | auto | Gateway policy engine (rhcl for operators, kuadrant for kustomize) |
+| `--operator-type` | `rhoai`, `odh` | `odh` | Which operator to install (auto-selects policy engine: odh→kuadrant, rhoai→rhcl) |
 | `--enable-tls-backend` | flag | enabled | TLS for Authorino ↔ MaaS API |
-| `--skip-certmanager` | flag | auto-detect | Skip cert-manager installation |
-| `--skip-lws` | flag | auto-detect | Skip LeaderWorkerSet installation |
-| `--namespace` | string | auto | Target namespace |
-| `--timeout` | seconds | `300` | Operation timeout |
+| `--disable-tls-backend` | flag | - | Disable TLS backend (use HTTP tier lookup) |
+| `--namespace` | string | auto | Target namespace (operator mode: fixed based on operator type; kustomize mode: defaults to `maas-api`) |
 | `--verbose` | flag | false | Enable debug logging |
 | `--dry-run` | flag | false | Show plan without executing |
 | `--help` | flag | - | Display full help |
@@ -77,7 +74,6 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 | `OPERATOR_CATALOG` | Custom operator catalog | `quay.io/opendatahub/catalog:pr-456` |
 | `OPERATOR_IMAGE` | Custom operator image | `quay.io/opendatahub/operator:pr-456` |
 | `OPERATOR_TYPE` | Operator type (rhoai/odh) | `odh` |
-| `POLICY_ENGINE` | Policy engine (rhcl/kuadrant) | `kuadrant` |
 | `LOG_LEVEL` | Logging verbosity | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 
 **Note:** TLS backend is enabled by default. Use `--disable-tls-backend` to disable.
@@ -87,11 +83,11 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 #### Standard Deployments
 
 ```bash
-# Deploy RHOAI
-./scripts/deploy.sh --operator-type rhoai
+# Deploy ODH (default - uses kuadrant policy engine)
+./scripts/deploy.sh
 
-# Deploy ODH
-./scripts/deploy.sh --operator-type odh
+# Deploy RHOAI (uses rhcl policy engine)
+./scripts/deploy.sh --operator-type rhoai
 ```
 
 #### Testing PRs
@@ -108,14 +104,14 @@ MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \
   --operator-image quay.io/opendatahub/opendatahub-operator:pr-456
 ```
 
-#### Minimal Deployments
+#### Additional Options
 
 ```bash
-# Skip optional operators (if already installed)
-./scripts/deploy.sh --skip-certmanager --skip-lws
-
 # Deploy without TLS backend (HTTP tier lookup)
 ./scripts/deploy.sh --disable-tls-backend
+
+# Dry run (show what would be done without applying changes)
+./scripts/deploy.sh --dry-run
 ```
 
 
