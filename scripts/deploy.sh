@@ -370,6 +370,9 @@ deploy_via_operator() {
   # Install rate limiter component
   install_policy_engine
 
+  # Check for conflicting operators
+    check_conflicting_operators
+  
   # Install primary operator
   install_primary_operator
 
@@ -681,6 +684,36 @@ EOF
       apply_kuadrant_cr "$kuadrant_ns"
       ;;
   esac
+}
+
+#──────────────────────────────────────────────────────────────
+# PRIMARY OPERATOR INSTALLATION
+#──────────────────────────────────────────────────────────────
+
+check_conflicting_operators() {
+  log_info "Checking for conflicting operators..."
+  local conflicting_operator
+  if [[ "$OPERATOR_TYPE" == "odh" ]]; then
+    conflicting_operator="rhods-operator"
+  else
+    conflicting_operator="opendatahub-operator"
+  fi
+  # Check all namespaces for a conflicting subscription
+  local conflict
+  conflict=$(oc get subscription.operators.coreos.com --all-namespaces --no-headers 2>/dev/null | grep "$conflicting_operator" || true)
+
+  if [[ -n "$conflict" ]]; then
+    local ns=$(echo "$conflict" | awk '{print $1}')
+    log_error "Conflicting operator found: $conflicting_operator in namespace $ns"
+    log_error "ODH and RHOAI operators cannot coexist (they manage the same CRDs)."
+    log_error "Remove the conflicting operator before proceeding:"
+    log_error "  1. Delete custom resources: oc delete datasciencecluster --all && oc delete dscinitializations --all"
+    log_error "  2. Delete subscription: oc delete subscription.operators.coreos.com $conflicting_operator -n $ns"
+    log_error "  3. Delete CSV: oc delete csv -n $ns -l operators.coreos.com/$conflicting_operator"
+    return 1
+  fi
+
+  log_info "No conflicting operators found"
 }
 
 #──────────────────────────────────────────────────────────────
