@@ -416,7 +416,7 @@ deploy_via_kustomize() {
   trap cleanup_maas_api_image EXIT INT TERM
   set_maas_api_image
 
-  # Create namespace if it doesn't exist (kustomize mode uses maas-api namespace)
+  # Create namespace if it doesn't exist (kustomize mode uses provided namespace or maas-api by default)
   # This must be done before applying manifests that target this namespace
   if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
     log_info "Creating namespace: $NAMESPACE"
