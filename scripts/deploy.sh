@@ -39,8 +39,14 @@
 #   # Deploy RHOAI (uses rhcl policy engine)
 #   ./scripts/deploy.sh --operator-type rhoai
 #
-#   # Test custom MaaS API image
-#   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh
+#  # Test MaaS API with custom image
+#  MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh --operator-type odh
+#
+#  # Test ODH operator with custom operator catalog and image
+#  ./scripts/deploy.sh \\
+#    --operator-type odh \\
+#    --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:pr-456 \\
+#    --operator-image quay.io/opendatahub/opendatahub-operator:pr-456
 #
 # For detailed documentation, see:
 # https://opendatahub-io.github.io/models-as-a-service/latest/install/maas-setup/
@@ -160,10 +166,10 @@ EXAMPLES:
   # Deploy via Kustomize
   ./scripts/deploy.sh --deployment-mode kustomize
 
-  # Test MaaS API PR #123
+  # Test MaaS API with custom image
   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh --operator-type odh
 
-  # Test ODH operator PR #456 with manifests
+  # Test ODH operator with custom operator catalog and image
   ./scripts/deploy.sh \\
     --operator-type odh \\
     --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:pr-456 \\
