@@ -22,7 +22,7 @@ The observability stack consists of:
 - **vLLM / llm-d / Simulator**: Expose inference metrics (TTFT, ITL, queue depth, token throughput, KV-cache usage); llm-d also exposes EPP routing metrics
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
 - **ServiceMonitors**: Deployed to configure Prometheus metric scraping
-- **Visualization**: Grafana dashboards (see [Grafana documentation](https://grafana.com/docs/grafana/latest/))
+- **Visualization**: Grafana dashboards or Perses dashboards (OpenShift Console integration)
 
 ### Component Metrics Status
 
@@ -43,8 +43,8 @@ The observability stack is defined in `deployment/base/observability/`. It inclu
 
 | Resource | Purpose |
 |----------|---------|
-| **TelemetryPolicy** (`telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
-| **Istio Telemetry** (`istio-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
+| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
+| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
 
 **Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Tier` is injected):
 
@@ -59,7 +59,7 @@ When using the full deployment script, this is applied automatically:
     - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and tier lookup must be deployed first. The AuthPolicy injects `X-MaaS-Tier`, which Istio Telemetry reads to label latency by tier. Without it, the `tier` label on gateway latency will be empty.
     - **Namespace**: Use `--namespace` if your MaaS API is deployed to a namespace other than `maas-api` (e.g. `--namespace opendatahub`)
 
-**Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/components/observability/monitors/` if your deployment includes that component.
+**Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/base/observability/` if your deployment includes that component.
 
 ## Metrics Collection
 
@@ -259,14 +259,26 @@ For local development and testing, you can also use our [Limitador Persistence](
 
 ## Visualization
 
-For dashboard visualization options, see:
+MaaS provides two visualization options — choose one (or both):
+
+| Platform | Integration | Install Script |
+|----------|------------|----------------|
+| **Grafana** | Standalone Grafana Operator; GrafanaDashboard CRs | `./scripts/install-grafana-dashboards.sh` |
+| **Perses** | OpenShift Console native (via Cluster Observability Operator UIPlugin) | `./scripts/install-perses-dashboards.sh` |
+
+Both options deploy the same two dashboards (Platform Admin and AI Engineer) with equivalent metrics coverage. Choose based on your environment:
+
+- **Grafana**: Feature-rich, standalone UI. Best when a Grafana instance already exists or when you need advanced alerting, annotations, or external sharing.
+- **Perses**: CNCF native, integrated into the OpenShift Console. Best for OpenShift-native workflows where a separate Grafana instance is not desired.
+
+For general references:
 
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
 - **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25/html/managing_and_monitoring_models/index)
 
 ### Included Dashboards
 
-MaaS includes two Grafana dashboards for different personas:
+MaaS includes two dashboards for different personas (available in both Grafana and Perses):
 
 #### Platform Admin Dashboard
 
@@ -323,30 +335,48 @@ Personal usage view for individual developers:
 
 ### Prerequisites
 
+**For Grafana dashboards:**
+
 - **Grafana** must be installed (for example via your observability team's process, a centralized instance, or the [Grafana Operator](https://grafana.github.io/grafana-operator/docs/installation/)). The dashboard helper does **not** install Grafana; it only deploys MaaS dashboard definitions and **never fails** (warnings only if none or multiple instances are found).
 - Ensure the Grafana instance has label `app=grafana` so MaaS dashboard definitions attach.
 - Configure a **Prometheus or Thanos datasource** in Grafana; the MaaS dashboards use the default Prometheus datasource.
 
+**For Perses dashboards (two-step install):**
+
+- **OpenShift 4.18+** with the Cluster Observability Operator available in the operator catalog.
+- **Step 1** — Run `scripts/installers/install-perses.sh` to install the Cluster Observability Operator and wait for Perses CRDs to become available.
+- **Step 2** — Run `scripts/install-perses-dashboards.sh` to enable the Perses UIPlugin in the OpenShift Console and deploy MaaS dashboard definitions.
+- Both scripts must be run in sequence; `install-perses-dashboards.sh` will exit with a warning if CRDs from step 1 are not yet present.
+- Perses dashboards are accessed via the OpenShift Console (Observe → Dashboards → Perses tab).
+
 ### Deploying Dashboards
 
-Monitoring is installed by `install-observability.sh`. Dashboards are installed by a **separate helper** that discovers Grafana cluster-wide:
+Monitoring is installed by `install-observability.sh`. Dashboards are installed by **separate helpers** — one for each visualization platform:
+
+**Grafana:**
 
     ./scripts/install-grafana-dashboards.sh
 
-**Behavior:** Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning (and, for multiple, lists them) and exits without error. Use flags to target a specific instance:
+Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning and exits without error. Use flags to target a specific instance:
 
     ./scripts/install-grafana-dashboards.sh --grafana-namespace maas-api
     ./scripts/install-grafana-dashboards.sh --grafana-label app=grafana
 
-To deploy only the dashboard manifests manually (same namespace as your Grafana):
+**Perses:**
 
-    kustomize build deployment/components/observability/dashboards | \
+    ./scripts/install-perses-dashboards.sh
+
+Checks for Perses CRDs and, if they are missing, exits with a warning directing you to run `install-perses.sh` first (operator installation is a separate step handled by `scripts/installers/install-perses.sh`). When CRDs are present, `install-perses-dashboards.sh` enables the Perses UIPlugin in the OpenShift Console and deploys PersesDashboard CRs to `openshift-operators`. After installation, dashboards are accessible at **Observe → Dashboards → Perses tab** in the OpenShift Console.
+
+**Manual Grafana import (dashboard JSON only):**
+
+    kustomize build deployment/components/observability/grafana/dashboards | \
       sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
       kubectl apply -f -
 
 ### Sample Dashboard JSON
 
-For manual import, a sample dashboard JSON file is available:
+For manual Grafana import, a sample dashboard JSON file is available:
 
 - [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
@@ -391,7 +421,7 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
 2. The Istio Telemetry resource extracts this header and adds it as a `tier` label to the `REQUEST_DURATION` metric
 3. Prometheus scrapes these metrics from the Istio gateway
 
-**Configuration** (`deployment/base/observability/istio-telemetry.yaml`):
+**Configuration** (`deployment/base/observability/istio-gateway-telemetry.yaml`):
 
     apiVersion: telemetry.istio.io/v1
     kind: Telemetry
