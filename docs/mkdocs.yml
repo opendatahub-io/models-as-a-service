@@ -94,7 +94,6 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
-  - pymdownx.superfences
   - pymdownx.tasklist:
       clickable_checkbox: true
   - pymdownx.tilde
@@ -106,9 +105,6 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
-  - pymdownx.tabbed:
-      alternate_style: true
   - tables
   - attr_list
   - md_in_html

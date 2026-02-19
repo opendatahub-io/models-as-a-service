@@ -59,5 +59,5 @@ maas-controller/scripts/install-examples.sh
 
 ## Customization
 
-- **Groups**: Replace `premium-user` and `premium-viewer` in the premium policy/subscription files with groups from your identity provider (see TokenReview; e.g. `maas-controller/hack/tokenreview-groups.sh`). `system:authenticated` works as-is for the regular example.
+- **Groups**: Replace `premium-user` and `premium-viewer` in the premium policy/subscription files with groups from your identity provider. `system:authenticated` works as-is for the regular example.
 - **Model refs**: If your LLMIS names or namespaces differ, update `spec.modelRef` in the model YAMLs and the corresponding `modelRefs` in policies and subscriptions.

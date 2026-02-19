@@ -102,6 +102,8 @@ func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Update gateway default policies with path prefixes derived from all model HTTPRoutes.
 	if err := r.reconcileGatewayDefaults(ctx, log); err != nil {
 		log.Error(err, "failed to reconcile gateway default policies")
+		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to reconcile gateway defaults: %v", err))
+		return ctrl.Result{}, err
 	}
 
 	// Update status based on referenced model
