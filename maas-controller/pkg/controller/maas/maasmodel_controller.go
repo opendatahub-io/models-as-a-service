@@ -522,25 +522,21 @@ func (r *MaaSModelReconciler) reconcileGatewayDefaults(ctx context.Context, log 
 		return fmt.Errorf("failed to list MaaSModels: %w", err)
 	}
 
-	pathPrefixSet := map[string]bool{}
+	nsSet := map[string]bool{}
 	for _, m := range models.Items {
 		if !m.GetDeletionTimestamp().IsZero() {
 			continue
 		}
-		if m.Spec.ModelRef.Kind == "ExternalModel" {
-			pathPrefixSet[m.Name] = true
-		} else {
-			ns := m.Spec.ModelRef.Namespace
-			if ns == "" {
-				ns = m.Namespace
-			}
-			pathPrefixSet[ns] = true
+		ns := m.Spec.ModelRef.Namespace
+		if ns == "" {
+			ns = m.Namespace
 		}
+		nsSet[ns] = true
 	}
 
 	var pathPredicates []string
-	for prefix := range pathPrefixSet {
-		pathPredicates = append(pathPredicates, fmt.Sprintf(`request.path.startsWith("/%s/")`, prefix))
+	for ns := range nsSet {
+		pathPredicates = append(pathPredicates, fmt.Sprintf(`request.path.startsWith("/%s/")`, ns))
 	}
 
 	var whenPredicate string

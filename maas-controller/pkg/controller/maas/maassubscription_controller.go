@@ -295,7 +295,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 		} else if err != nil {
 			return fmt.Errorf("failed to get existing TRLP: %w", err)
 		} else {
-			if existing.GetAnnotations()["opendatahub.io/managed"] == "false" {
+			if existing.GetAnnotations()["maas.opendatahub.io/managed"] == "false" {
 				log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
 			} else {
 				mergedAnnotations := existing.GetAnnotations()

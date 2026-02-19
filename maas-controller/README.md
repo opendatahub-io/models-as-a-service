@@ -218,13 +218,13 @@ See [examples/README.md](examples/README.md) for more details.
 By default, the controller overwrites manual edits to generated AuthPolicies and TokenRateLimitPolicies. To prevent this for a specific policy, annotate it:
 
 ```bash
-kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed=false
+kubectl annotate authpolicy <name> -n <namespace> maas.opendatahub.io/managed=false
 ```
 
 Remove the annotation to re-enable controller management:
 
 ```bash
-kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed-
+kubectl annotate authpolicy <name> -n <namespace> maas.opendatahub.io/managed-
 ```
 
 ## Build and push image
