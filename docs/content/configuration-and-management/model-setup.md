@@ -1,6 +1,15 @@
 # Model Setup Guide
 
-This guide explains how to configure `LLMInferenceService` resources to be picked up by the MaaS platform for authentication, rate limiting, and token-based consumption tracking.
+This guide explains how to configure models so they appear in the MaaS platform and are subject to authentication, rate limiting, and token-based consumption tracking.
+
+## How the model list is built
+
+The **GET /v1/models** endpoint (and thus "which models are available") can be built in two ways:
+
+1. **MaaSModel (recommended when using the MaaS controller)**  
+   When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed, you register models by creating **MaaSModel** CRs that reference an LLMInferenceService. The controller reconciles each MaaSModel and sets `status.endpoint` and `status.phase`. The MaaS API lists these MaaSModel CRs and returns them as the model list. Access and quotas are controlled by **MaaSAuthPolicy** and **MaaSSubscription**. See [Model listing flow](model-listing-flow.md) for details.
+
+Model listing is from MaaSModel CRs (cached via informer). The sections below focus on **LLMInferenceService** configuration (gateway reference, tier annotation) for use as the backend referenced by MaaSModel.
 
 ## Gateway Architecture
 

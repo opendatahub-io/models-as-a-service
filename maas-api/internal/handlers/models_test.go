@@ -7,10 +7,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v2/packages/pagination"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"knative.dev/pkg/apis"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
@@ -20,6 +25,46 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
+
+const (
+	maasModelGVRGroup    = "maas.opendatahub.io"
+	maasModelGVRVersion  = "v1alpha1"
+	maasModelGVRResource = "maasmodels"
+)
+
+// maasModelUnstructured returns an unstructured MaaSModel for testing (name, namespace, endpoint URL, ready).
+func maasModelUnstructured(name, namespace, endpoint string, ready bool) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   maasModelGVRGroup,
+		Version: maasModelGVRVersion,
+		Kind:    "MaaSModel",
+	})
+	u.SetName(name)
+	u.SetNamespace(namespace)
+	u.SetCreationTimestamp(metav1.NewTime(time.Unix(1700000000, 0)))
+	_ = unstructured.SetNestedField(u.Object, endpoint, "status", "endpoint")
+	if ready {
+		_ = unstructured.SetNestedField(u.Object, "Ready", "status", "phase")
+	}
+	_ = unstructured.SetNestedField(u.Object, "llmisvc", "spec", "modelRef", "kind")
+	return u
+}
+
+// fakeMaaSModelLister implements models.MaaSModelLister for tests (namespace -> items).
+type fakeMaaSModelLister map[string][]*unstructured.Unstructured
+
+func (f fakeMaaSModelLister) List(namespace string) ([]*unstructured.Unstructured, error) {
+	items := f[namespace]
+	if items == nil {
+		return nil, nil
+	}
+	out := make([]*unstructured.Unstructured, len(items))
+	for i, u := range items {
+		out[i] = u.DeepCopy()
+	}
+	return out, nil
+}
 
 // makeModelsResponse creates a JSON response for /v1/models endpoint.
 func makeModelsResponse(modelIDs ...string) []byte {
@@ -139,12 +184,10 @@ func TestListingModels(t *testing.T) {
 				constant.AnnotationDescription:  "A large language model for general AI tasks",
 				constant.AnnotationDisplayName:  "Test Model Alpha",
 			},
+			// MaaSModel listing does not populate Details from annotations.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
-				require.NotNil(t, model.Details, "Expected modelDetails to be present")
-				assert.Equal(t, "General purpose LLM", model.Details.GenAIUseCase)
-				assert.Equal(t, "A large language model for general AI tasks", model.Details.Description)
-				assert.Equal(t, "Test Model Alpha", model.Details.DisplayName)
+				_ = model
 			},
 		},
 		{
@@ -157,12 +200,10 @@ func TestListingModels(t *testing.T) {
 			Annotations: map[string]string{
 				constant.AnnotationDisplayName: "Test Model Beta",
 			},
+			// MaaSModel listing does not populate Details.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
-				require.NotNil(t, model.Details, "Expected modelDetails to be present")
-				assert.Empty(t, model.Details.GenAIUseCase)
-				assert.Empty(t, model.Details.Description)
-				assert.Equal(t, "Test Model Beta", model.Details.DisplayName)
+				_ = model
 			},
 		},
 		{
@@ -181,31 +222,27 @@ func TestListingModels(t *testing.T) {
 			},
 		},
 	}
-	llmInferenceServices := fixtures.CreateLLMInferenceServices(llmTestScenarios...)
+	// Build MaaSModel unstructured list from scenarios (same URLs as mock servers for access validation).
+	maasModelItems := make([]*unstructured.Unstructured, 0, len(llmTestScenarios))
+	for _, s := range llmTestScenarios {
+		endpoint := s.URL.String()
+		maasModelItems = append(maasModelItems, maasModelUnstructured(s.Name, fixtures.TestNamespace, endpoint, s.Ready))
+	}
+	maasModelLister := fakeMaaSModelLister{fixtures.TestNamespace: maasModelItems}
 
 	config := fixtures.TestServerConfig{
-		Objects: llmInferenceServices,
+		Objects: []runtime.Object{},
 	}
-	router, clients := fixtures.SetupTestServer(t, config)
+	router, _ := fixtures.SetupTestServer(t, config)
 
-	gatewayRef := models.GatewayRef{
-		Name:      testGatewayName,
-		Namespace: testGatewayNamespace,
-	}
-
-	modelMgr, errMgr := models.NewManager(
-		testLogger,
-		clients.LLMInferenceServiceLister,
-		clients.HTTPRouteLister,
-		gatewayRef,
-	)
+	modelMgr, errMgr := models.NewManager(testLogger)
 	require.NoError(t, errMgr)
 
 	// Create token manager for test - uses fixtures helper which sets up tier config
 	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
 	defer cleanup()
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, maasModelLister, fixtures.TestNamespace)
 
 	// Create token handler to extract user info middleware
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
@@ -231,7 +268,7 @@ func TestListingModels(t *testing.T) {
 
 	assert.Equal(t, "list", response.Object, "Expected object type to be 'list'")
 	// With authorization, we expect 8 models (excluding the one without URL)
-	require.Len(t, response.Data, len(llmInferenceServices)-1, "Mismatched number of models returned")
+	require.Len(t, response.Data, len(llmTestScenarios)-1, "Mismatched number of models returned")
 
 	modelsByName := make(map[string]models.Model)
 	for _, model := range response.Data {

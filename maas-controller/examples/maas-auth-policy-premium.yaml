@@ -1,0 +1,15 @@
+# MaaSAuthPolicy for the premium simulator: users in premium-user get access.
+# Paired with maas-subscription-premium.yaml for token rate limits.
+# Replace "premium-user" with a group from your identity provider (TokenReview).
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: premium-simulator-access
+  namespace: opendatahub
+spec:
+  modelRefs:
+    - premium-simulated-simulated-premium
+  subjects:
+    groups:
+      - name: premium-user
+    users: []

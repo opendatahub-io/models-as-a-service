@@ -1,0 +1,17 @@
+# MaaSSubscription for the regular simulator: token rate limit for system:authenticated.
+# Paired with maas-auth-policy-regular.yaml.
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: simulator-subscription
+  namespace: opendatahub
+spec:
+  owner:
+    groups:
+      - name: system:authenticated
+    users: []
+  modelRefs:
+    - name: facebook-opt-125m-simulated
+      tokenRateLimits:
+        - limit: 100
+          window: 1m

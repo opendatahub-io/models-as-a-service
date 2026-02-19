@@ -9,7 +9,7 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 - **Tier-Based Access Control**: Users are assigned to tiers (free, premium, enterprise) based on Kubernetes group membership
 - **Short-Lived Token Issuance**: Self-service ephemeral tokens with configurable expiration
 - **Rate & Token Limiting**: Per-tier request and token consumption limits
-- **Model Discovery**: Automatic listing of available KServe LLMInferenceServices
+- **Model listing**: GET /v1/models lists models from **MaaSModel** CRs (when the MaaS controller is installed) or falls back to discovering KServe LLMInferenceServices. See [Model listing flow](../docs/content/configuration-and-management/model-listing-flow.md).
 - **Usage Metrics**: Real-time telemetry with user, tier, and model tracking
 - **Kubernetes-Native**: Leverages Service Accounts, RBAC, and TokenReview for authentication
 
@@ -29,7 +29,7 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 | Endpoint             | Method | Purpose                                | Request Body      | Response                    |
 |----------------------|--------|----------------------------------------|-------------------|-----------------------------|
 | `/health`            | GET    | Service health check                   | None              | Health status               |
-| `/v1/models`         | GET    | List available LLMInferenceServices    | None              | OpenAI-compatible list      |
+| `/v1/models`         | GET    | List available models (from MaaSModel CRs or LLMInferenceServices) | None              | OpenAI-compatible list      |
 | `/v1/tokens`         | POST   | Issue ephemeral short-lived token      | `{"expiration"}` | Token with expiration       |
 | `/v1/tokens`         | DELETE | Revoke all ephemeral tokens for user   | None              | Success confirmation        |
 | `/v1/api-keys`       | POST   | Create named API key (long-lived)      | `{"expiration", "name"}` | Token with metadata |
@@ -48,14 +48,14 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 - **Features**:
   - Ephemeral token generation via Kubernetes Service Account TokenRequest API
   - Tier-based namespace and Service Account management
-  - KServe model discovery across all namespaces
+  - Model list from MaaSModel CRs only
   - Health checks and CORS support (debug mode)
 
 **Key Components**:
 - **Token Manager**: Creates/revokes Service Account tokens
 - **Token Reviewer**: Validates tokens via Kubernetes TokenReview API
 - **Tier Mapper**: Maps user groups to tiers using ConfigMap
-- **Model Manager**: Discovers LLMInferenceServices
+- **Model listing**: Lists **MaaSModel** CRs (when the MaaS controller is installed) to build GET /v1/models; falls back to discovering LLMInferenceServices and probing each model endpoint if MaaSModel listing is not available.
 
 ### 2. Kuadrant Policy Engine
 
@@ -384,38 +384,35 @@ sequenceDiagram
 - 404: No tier found for any group
 - 500: Failed to load tier configuration
 
-### Model Discovery
+### Model listing (GET /v1/models)
 
-**Endpoint**: `GET /v1/models` - List LLMInferenceServices
+**Endpoint**: `GET /v1/models` — Returns an OpenAI-compatible list of available models.
 
-**Response Format** (OpenAI-compatible):
+**Primary flow (MaaSModel)**  
+When the MaaS controller is installed and the API can list **MaaSModel** CRs (maas.opendatahub.io) in its namespace:
+
+1. The API lists all MaaSModel resources in the configured namespace.
+2. For each MaaSModel it maps: **id** = `metadata.name`, **url** = `status.endpoint`, **ready** = (`status.phase == "Ready"`), plus **created** / **owned_by** from metadata.
+3. No per-model HTTP calls are made; the controller has already reconciled status from the underlying LLMInferenceService and HTTPRoute.
+
+If the MaaSModel lister is not configured or listing fails, the API returns an empty list or an error. See [Model listing flow](../docs/content/configuration-and-management/model-listing-flow.md) for details.
+
+**Response format** (OpenAI-compatible):
 ```json
 {
   "object": "list",
   "data": [
     {
-      "id": "facebook-opt-125m",
+      "id": "facebook-opt-125m-simulated",
       "object": "model",
       "created": 1703001234,
-      "owned_by": "models-namespace",
-      "url": "http://facebook-opt-125m.models.svc.cluster.local",
+      "owned_by": "opendatahub",
+      "url": "https://maas.example.com/llm/facebook-opt-125m-simulated",
       "ready": true
     }
   ]
 }
 ```
-
-**Discovery Process**:
-1. Query Kubernetes for all LLMInferenceServices across all namespaces
-2. For each resource:
-   - Extract model ID from `spec.model.name` or `metadata.name`
-   - Determine URL from `status.url` or `status.addresses[0].url`
-   - Check readiness:
-     - Not marked for deletion
-     - `status.observedGeneration` matches `metadata.generation`
-     - All conditions have `status: "True"`
-3. Convert to OpenAI model format
-4. Return array of models
 
 ### Service Account Name Sanitization
 

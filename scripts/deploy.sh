@@ -75,6 +75,7 @@ OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
 NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
+ENABLE_SUBSCRIPTIONS="${ENABLE_SUBSCRIPTIONS:-false}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
@@ -107,6 +108,9 @@ OPTIONS:
       Enable TLS backend for Authorino and MaaS API (default: enabled)
       Configures HTTPS tier lookup URL
 
+  --enable-subscriptions
+      Install the MaaS subscription controller (per-model auth + rate limiting)
+      Runs alongside existing tier-based flow. Does not replace it.
   --disable-tls-backend
       Disable TLS backend for Authorino and MaaS API
       Uses HTTP tier lookup URL instead
@@ -202,6 +206,10 @@ parse_arguments() {
         ;;
       --disable-tls-backend)
         ENABLE_TLS_BACKEND="false"
+        shift
+        ;;
+      --enable-subscriptions)
+        ENABLE_SUBSCRIPTIONS="true"
         shift
         ;;
       --namespace)
@@ -336,6 +344,9 @@ main() {
   log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
+  if [[ "$ENABLE_SUBSCRIPTIONS" == "true" ]]; then
+    log_info "  Subscriptions: ENABLED (per-model auth + rate limiting)"
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log_info "DRY RUN MODE - no changes will be applied"
@@ -351,6 +362,34 @@ main() {
       deploy_via_kustomize
       ;;
   esac
+
+  # Install subscription controller if enabled (additive, doesn't replace tier-based flow)
+  if [[ "$ENABLE_SUBSCRIPTIONS" == "true" ]]; then
+    log_info ""
+    log_info "Installing MaaS Subscription Controller..."
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local controller_dir="$script_dir/../maas-controller"
+
+    if [[ ! -d "$controller_dir" ]]; then
+      log_warn "maas-controller directory not found at $controller_dir — skipping subscription controller"
+    else
+      log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
+      "$controller_dir/scripts/install-maas-controller.sh" "$NAMESPACE"
+
+      log_info "  Waiting for maas-controller to be ready..."
+      if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
+        log_error "maas-controller deployment not ready — skipping gateway-auth-policy disable to avoid inconsistent state"
+        return 1
+      fi
+
+      log_info "  Disabling old gateway-auth-policy (replaced by per-route policies)..."
+      "$controller_dir/hack/disable-gateway-auth-policy.sh"
+
+      log_info "  Subscription controller installed."
+      log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
+    fi
+  fi
 
   log_info "==================================================="
   log_info "  Deployment completed successfully!"

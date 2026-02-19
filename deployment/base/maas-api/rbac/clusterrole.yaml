@@ -24,12 +24,12 @@ rules:
   resources: ["tokenreviews"]
   verbs: ["create"]
 
-# KServe resources for model management
-- apiGroups: ["serving.kserve.io"]
-  resources: ["inferenceservices", "llminferenceservices"]
+# MaaSModel CRs for the models endpoint (cached via informer)
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maasmodels"]
   verbs: ["get", "list", "watch"]
 
-# Gateway API resources for route filtering
+# HTTPRoutes (for future use, e.g. listing or resolving model routes)
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["httproutes"]
   verbs: ["get", "list", "watch"]

@@ -1,0 +1,57 @@
+# Deployed to opendatahub namespace (must exist; created by Open Data Hub operator).
+# Override namespace via: kustomize build config/default | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maas-controller
+  namespace: opendatahub
+  labels:
+    control-plane: maas-controller
+    app: maas-controller
+spec:
+  selector:
+    matchLabels:
+      control-plane: maas-controller
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        control-plane: maas-controller
+        app: maas-controller
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - command:
+        - /manager
+        args:
+          - --leader-elect
+          - --health-probe-bind-address=:8081
+        image: quay.io/maas/maas-controller:latest
+        name: manager
+        imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+      serviceAccountName: maas-controller
+      terminationGracePeriodSeconds: 10

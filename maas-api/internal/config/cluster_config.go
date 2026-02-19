@@ -4,18 +4,18 @@ import (
 	"fmt"
 	"time"
 
-	kserveclient "github.com/kserve/kserve/pkg/client/clientset/versioned"
-	kserveinformers "github.com/kserve/kserve/pkg/client/informers/externalversions"
-	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
-	gatewayclient "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
-	gatewayinformers "sigs.k8s.io/gateway-api/pkg/client/informers/externalversions"
-	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 )
 
 type ClusterConfig struct {
@@ -25,12 +25,35 @@ type ClusterConfig struct {
 	NamespaceLister      corev1listers.NamespaceLister
 	ServiceAccountLister corev1listers.ServiceAccountLister
 
-	LLMInferenceServiceLister kservelistersv1alpha1.LLMInferenceServiceLister
-
-	HTTPRouteLister gatewaylisters.HTTPRouteLister
+	// MaaSModelLister lists MaaSModel CRs from the informer cache for GET /v1/models.
+	MaaSModelLister models.MaaSModelLister
 
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})
+}
+
+// maasModelLister implements models.MaaSModelLister from a cache.GenericLister (informer-backed).
+type maasModelLister struct {
+	lister cache.GenericLister
+}
+
+func (m *maasModelLister) List(namespace string) ([]*unstructured.Unstructured, error) {
+	objs, err := m.lister.List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*unstructured.Unstructured, 0, len(objs))
+	for _, o := range objs {
+		u, ok := o.(*unstructured.Unstructured)
+		if !ok {
+			continue
+		}
+		if namespace != "" && u.GetNamespace() != namespace {
+			continue
+		}
+		out = append(out, u)
+	}
+	return out, nil
 }
 
 func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterConfig, error) {
@@ -44,26 +67,23 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 		return nil, fmt.Errorf("failed to create Kubernetes clientset: %w", err)
 	}
 
-	kserveClientset, err := kserveclient.NewForConfig(restConfig)
+	dynamicClient, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create KServe clientset: %w", err)
-	}
-
-	gatewayClientset, err := gatewayclient.NewForConfig(restConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Gateway API clientset: %w", err)
+		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
 	coreFactory := informers.NewSharedInformerFactory(clientset, resyncPeriod)
 	coreFactoryNs := informers.NewSharedInformerFactoryWithOptions(clientset, resyncPeriod, informers.WithNamespace(namespace))
-	kserveFactory := kserveinformers.NewSharedInformerFactory(kserveClientset, resyncPeriod)
-	gatewayFactory := gatewayinformers.NewSharedInformerFactory(gatewayClientset, resyncPeriod)
 
 	cmInformer := coreFactoryNs.Core().V1().ConfigMaps()
 	nsInformer := coreFactory.Core().V1().Namespaces()
 	saInformer := coreFactory.Core().V1().ServiceAccounts()
-	llmIsvcInformer := kserveFactory.Serving().V1alpha1().LLMInferenceServices()
-	httpRouteInformer := gatewayFactory.Gateway().V1().HTTPRoutes()
+
+	// MaaSModel informer (cached); watches all namespaces so we can list any namespace from cache.
+	maasDynamicFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, resyncPeriod)
+	maasGVR := models.GVR()
+	maasInformer := maasDynamicFactory.ForResource(maasGVR)
+	maasModelListerVal := &maasModelLister{lister: maasInformer.Lister()}
 
 	return &ClusterConfig{
 		ClientSet: clientset,
@@ -72,22 +92,18 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 		NamespaceLister:      nsInformer.Lister(),
 		ServiceAccountLister: saInformer.Lister(),
 
-		LLMInferenceServiceLister: llmIsvcInformer.Lister(),
-
-		HTTPRouteLister: httpRouteInformer.Lister(),
+		MaaSModelLister: maasModelListerVal,
 
 		informersSynced: []cache.InformerSynced{
 			cmInformer.Informer().HasSynced,
 			nsInformer.Informer().HasSynced,
 			saInformer.Informer().HasSynced,
-			llmIsvcInformer.Informer().HasSynced,
-			httpRouteInformer.Informer().HasSynced,
+			maasInformer.Informer().HasSynced,
 		},
 		startFuncs: []func(<-chan struct{}){
 			coreFactory.Start,
 			coreFactoryNs.Start,
-			kserveFactory.Start,
-			gatewayFactory.Start,
+			maasDynamicFactory.Start,
 		},
 	}, nil
 }

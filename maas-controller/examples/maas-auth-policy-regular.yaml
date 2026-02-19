@@ -1,0 +1,14 @@
+# MaaSAuthPolicy for the regular simulator: any authenticated user (system:authenticated).
+# Paired with maas-subscription-regular.yaml for token rate limits.
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: simulator-access
+  namespace: opendatahub
+spec:
+  modelRefs:
+    - facebook-opt-125m-simulated
+  subjects:
+    groups:
+      - name: system:authenticated
+    users: []
