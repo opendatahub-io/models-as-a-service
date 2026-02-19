@@ -32,7 +32,7 @@ Before deploying MaaS, Authorino's listener TLS must be enabled. This is a platf
 For step-by-step commands, see [TLS Configuration: Authorino TLS Configuration](configuration-and-management/tls-configuration.md#authorino-tls-configuration).
 
 !!! tip "Automated configuration"
-    The `deploy-rhoai-stable.sh` script automatically configures all remaining TLS settings after deployment, including Gateway TLS bootstrap and Authorino → maas-api outbound TLS.
+    The `deploy.sh` script automatically configures all remaining TLS settings after deployment, including Gateway TLS bootstrap and Authorino → maas-api outbound TLS.
 
 ## Quick Start
 
@@ -43,11 +43,11 @@ For OpenShift clusters, use the unified automated deployment script:
 ```bash
 export MAAS_REF="main"  # Use the latest release tag, or "main" for development
 
-# Deploy using RHOAI operator (default)
+# Deploy using ODH operator (default)
 ./scripts/deploy.sh
 
-# Or deploy using ODH operator
-./scripts/deploy.sh --operator-type odh
+# Or deploy using RHOAI operator
+./scripts/deploy.sh --operator-type rhoai
 
 # Or deploy using kustomize
 ./scripts/deploy.sh --deployment-mode kustomize
@@ -58,25 +58,28 @@ export MAAS_REF="main"  # Use the latest release tag, or "main" for development
     The release workflow automatically updates all `MAAS_REF="main"` references in documentation and scripts
     to use the new release tag when a release is created. Use `"main"` only for development/testing.
 
-
 ### Verify Deployment
 
 The deployment script creates the following core resources:
 
 - **Gateway**: `maas-default-gateway` in `openshift-ingress` namespace
-- **HTTPRoutes**: `maas-api-route` in the `redhat-ods-applications` namespace (deployed by operator)
+- **HTTPRoutes**: `maas-api-route` in the operator's applications namespace (deployed by operator)
+  - ODH: `opendatahub` namespace
+  - RHOAI: `redhat-ods-applications` namespace
 - **Policies**:
   - `maas-api-auth-policy` (deployed by operator) - Protects MaaS API
   - `gateway-auth-policy` (deployed by script) - Protects Gateway/model inference
   - `TokenRateLimitPolicy`, `RateLimitPolicy` (deployed by script) - Usage limits
-- **MaaS API**: Deployment and service in `redhat-ods-applications` namespace (deployed by operator)
-- **Operators**: Cert-manager, LWS, Red Hat Connectivity Link and Red Hat OpenShift AI.
+- **MaaS API**: Deployment and service in the operator's applications namespace (deployed by operator)
+- **Operators**: Cert-manager, LWS, and either:
+  - ODH: Kuadrant (community policy engine)
+  - RHOAI: Red Hat Connectivity Link (RHCL) and Red Hat OpenShift AI
 
 Check deployment status:
 
 ```bash
 # Check all namespaces
-kubectl get ns | grep -E "kuadrant-system|kserve|opendatahub|redhat-ods-applications|llm"
+kubectl get ns | grep -E "kuadrant-system|rh-connectivity-link|kserve|opendatahub|redhat-ods-applications|llm"
 
 # Check Gateway status
 kubectl get gateway -n openshift-ingress maas-default-gateway
@@ -86,16 +89,28 @@ kubectl get authpolicy -A
 kubectl get tokenratelimitpolicy -A
 kubectl get ratelimitpolicy -A
 
-# Check MaaS API (deployed by operator in redhat-ods-applications)
+# Check MaaS API (namespace depends on operator type)
+# For ODH (default):
+kubectl get pods -n opendatahub -l app.kubernetes.io/name=maas-api
+kubectl get svc -n opendatahub maas-api
+
+# For RHOAI:
 kubectl get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
 kubectl get svc -n redhat-ods-applications maas-api
 
-# Check Kuadrant operators
+# Check policy engine operators
+# For ODH (Kuadrant):
 kubectl get pods -n kuadrant-system
 
-# Check RHOAI/KServe
-kubectl get pods -n kserve
-kubectl get pods -n redhat-ods-applications
+# For RHOAI (RHCL):
+kubectl get pods -n rh-connectivity-link
+
+# Check KServe controller (runs in operator namespace, not separate kserve namespace)
+# For ODH:
+kubectl get pods -n opendatahub -l control-plane=kserve-controller-manager
+
+# For RHOAI:
+kubectl get pods -n redhat-ods-applications -l control-plane=kserve-controller-manager
 ```
 
 !!! tip "TLS Configuration"
@@ -109,6 +124,13 @@ For detailed validation and troubleshooting, see the [Validation Guide](install/
     At least one model must be deployed to validate the installation using the [Validation Guide](install/validation.md).
 
 ### Deploy Sample Models
+
+These sample models deploys to the `llm` namespace, and should be created if it doesn't already exist.
+
+```bash
+# Create namespace where models will be deployed to
+kubectl create namespace llm
+```
 
 #### Simulator Model (CPU)
 
