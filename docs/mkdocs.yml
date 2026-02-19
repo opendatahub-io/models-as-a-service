@@ -65,6 +65,8 @@ nav:
       - Token Management: configuration-and-management/token-management.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
     - Model Setup: configuration-and-management/model-setup.md
+    - Model Listing Flow: configuration-and-management/model-listing-flow.md
+    - MaaSModel Kinds (future): configuration-and-management/maas-model-kinds.md
     - Known Issues:
       - Group Membership: configuration-and-management/group-membership-known-issues.md
       - Tier Modification: configuration-and-management/tier-modification-known-issues.md

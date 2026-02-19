@@ -19,7 +19,6 @@ package maas
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 
@@ -52,7 +51,6 @@ type MaaSModelReconciler struct {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
 
 const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
@@ -83,7 +81,15 @@ func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	}
 
-	// Reconcile HTTPRoute (only for ExternalModel, validate for llmisvc)
+	// Only reconcile HTTPRoute for known kinds. Unknown kind -> set status to Failed and exit.
+	kind := model.Spec.ModelRef.Kind
+	if kind != "llmisvc" && kind != "ExternalModel" {
+		log.Error(nil, "unknown modelRef kind", "kind", kind)
+		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("unknown kind: %s", kind))
+		return ctrl.Result{}, nil
+	}
+
+	// Reconcile HTTPRoute: for ExternalModel create/update route; for llmisvc validate route exists (populates MaaSModel status from HTTPRoute/Gateway only).
 	if err := r.reconcileHTTPRoute(ctx, log, model); err != nil {
 		log.Error(err, "failed to reconcile HTTPRoute")
 		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to reconcile HTTPRoute: %v", err))
@@ -110,27 +116,27 @@ func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 func (r *MaaSModelReconciler) reconcileHTTPRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
-	// For llmisvc kind, only validate that the HTTPRoute exists (don't create/override)
+	// Only ExternalModel gets an HTTPRoute created by this controller.
+	if model.Spec.ModelRef.Kind == "ExternalModel" {
+		return r.createOrUpdateHTTPRoute(ctx, log, model)
+	}
+	// llmisvc: validate HTTPRoute exists (created by LLMInferenceService controller) and populate MaaSModel status from it.
 	if model.Spec.ModelRef.Kind == "llmisvc" {
 		return r.validateLLMISvcHTTPRoute(ctx, log, model)
 	}
-
-	// For ExternalModel, create/update the HTTPRoute
-	return r.createOrUpdateHTTPRoute(ctx, log, model)
+	return fmt.Errorf("unknown kind: %s", model.Spec.ModelRef.Kind)
 }
 
+// validateLLMISvcHTTPRoute ensures an HTTPRoute exists for the referenced LLMInferenceService (by labels),
+// populates MaaSModel status from the HTTPRoute and gateway ref.
 func (r *MaaSModelReconciler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
-	// Determine namespace for HTTPRoute (same as LLMInferenceService)
 	routeNS := model.Namespace
 	if model.Spec.ModelRef.Namespace != "" {
 		routeNS = model.Spec.ModelRef.Namespace
 	}
 
-	// Find HTTPRoute using labels instead of naming convention
 	// HTTPRoutes for LLMInferenceService have these labels:
-	// - app.kubernetes.io/name: <llmisvc-name>
-	// - app.kubernetes.io/component: llminferenceservice-router
-	// - app.kubernetes.io/part-of: llminferenceservice
+	// app.kubernetes.io/name: <llmisvc-name>, component: llminferenceservice-router, part-of: llminferenceservice
 	routeList := &gatewayapiv1.HTTPRouteList{}
 	labelSelector := client.MatchingLabels{
 		"app.kubernetes.io/name":      model.Spec.ModelRef.Name,
@@ -144,7 +150,7 @@ func (r *MaaSModelReconciler) validateLLMISvcHTTPRoute(ctx context.Context, log 
 
 	if len(routeList.Items) == 0 {
 		log.Error(nil, "HTTPRoute not found for LLMInferenceService", "llmisvcName", model.Spec.ModelRef.Name, "namespace", routeNS)
-		return fmt.Errorf("HTTPRoute not found for LLMInferenceService %s in namespace %s - it should be created by the LLMInferenceService controller", model.Spec.ModelRef.Name, routeNS)
+		return fmt.Errorf("HTTPRoute not found for LLMInferenceService %s in namespace %s", model.Spec.ModelRef.Name, routeNS)
 	}
 
 	// Use the first matching HTTPRoute
@@ -256,7 +262,7 @@ func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log l
 						{
 							Path: &gatewayapiv1.HTTPPathMatch{
 								Type:  ptr(gatewayapiv1.PathMatchPathPrefix),
-								Value: ptr(fmt.Sprintf("/v1/models/%s", model.Name)),
+								Value: ptr(fmt.Sprintf("/%s", model.Name)),
 							},
 						},
 					},
@@ -299,19 +305,14 @@ func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log l
 }
 
 func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
-	// For internal models (llmisvc), check the status of the referenced LLMInferenceService
+	// For llmisvc: read endpoint and readiness directly from LLMInferenceService status.
 	if model.Spec.ModelRef.Kind == "llmisvc" {
 		llmisvcNS := model.Namespace
 		if model.Spec.ModelRef.Namespace != "" {
 			llmisvcNS = model.Spec.ModelRef.Namespace
 		}
-
 		llmisvc := &kservev1alpha1.LLMInferenceService{}
-		key := client.ObjectKey{
-			Name:      model.Spec.ModelRef.Name,
-			Namespace: llmisvcNS,
-		}
-
+		key := client.ObjectKey{Name: model.Spec.ModelRef.Name, Namespace: llmisvcNS}
 		if err := r.Get(ctx, key, llmisvc); err != nil {
 			if apierrors.IsNotFound(err) {
 				model.Status.Phase = "Failed"
@@ -320,117 +321,81 @@ func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Lo
 			}
 			return err
 		}
-
-		// Validate HTTPRoute exists (already checked in reconcileHTTPRoute, but double-check here)
-		routeList := &gatewayapiv1.HTTPRouteList{}
-		labelSelector := client.MatchingLabels{
-			"app.kubernetes.io/name":      model.Spec.ModelRef.Name,
-			"app.kubernetes.io/component": "llminferenceservice-router",
-			"app.kubernetes.io/part-of":   "llminferenceservice",
-		}
-
-		if err := r.List(ctx, routeList, client.InNamespace(llmisvcNS), labelSelector); err != nil {
-			return err
-		}
-
-		if len(routeList.Items) == 0 {
-			model.Status.Phase = "Failed"
-			model.Status.Endpoint = ""
-			return nil
-		}
-
-		// Check if LLMInferenceService is ready
-		// Check status conditions to determine readiness
 		ready := false
-		for _, condition := range llmisvc.Status.Conditions {
-			if condition.Type == "Ready" && condition.Status == "True" {
+		for _, c := range llmisvc.Status.Conditions {
+			if c.Type == "Ready" && c.Status == "True" {
 				ready = true
 				break
 			}
 		}
-
-		if ready {
-			// Get the endpoint from LLMInferenceService status.addresses
-			// Prefer gateway-external address, fall back to first address or constructed endpoint
-			endpoint := r.getEndpointFromLLMISvc(llmisvc, model)
-			if endpoint == "" {
-				// Fallback to constructing from gateway if LLMISvc doesn't have address
-				var err error
-				endpoint, err = r.getModelEndpoint(ctx, log, model)
-				if err != nil {
-					log.Error(err, "failed to get model endpoint")
-					model.Status.Endpoint = ""
-				} else {
-					model.Status.Endpoint = endpoint
-				}
-			} else {
-				model.Status.Endpoint = endpoint
-			}
-			model.Status.Phase = "Ready"
-		} else {
+		if !ready {
 			model.Status.Phase = "Pending"
 			model.Status.Endpoint = ""
+			return nil
 		}
+		endpoint := r.getEndpointFromLLMISvc(llmisvc)
+		if endpoint == "" {
+			var err error
+			endpoint, err = r.getModelEndpoint(ctx, log, model)
+			if err != nil {
+				log.Error(err, "failed to get model endpoint fallback")
+				model.Status.Phase = "Failed"
+				model.Status.Endpoint = ""
+				return nil
+			}
+		}
+		model.Status.Endpoint = endpoint
+		model.Status.Phase = "Ready"
+		return nil
 	}
 
-	// For external models, we would perform health checks
 	if model.Spec.ModelRef.Kind == "ExternalModel" {
-		// External model health check logic would go here
+		endpoint, err := r.getModelEndpoint(ctx, log, model)
+		if err != nil {
+			log.Error(err, "failed to get model endpoint for ExternalModel")
+			model.Status.Phase = "Failed"
+			model.Status.Endpoint = ""
+			return nil
+		}
+		model.Status.Endpoint = endpoint
 		model.Status.Phase = "Ready"
 	}
 
 	return nil
 }
 
-// baseURLFromString extracts scheme://host from a URL string.
-func baseURLFromString(raw string) string {
-	if u, err := url.Parse(raw); err == nil && u.Host != "" {
-		return u.Scheme + "://" + u.Host
-	}
-	return raw
-}
-
-// getEndpointFromLLMISvc extracts the endpoint URL from LLMInferenceService status.
-// Prefers gateway-external address with https, falls back to http, then first address or status.URL.
-func (r *MaaSModelReconciler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInferenceService, model *maasv1alpha1.MaaSModel) string {
+// getEndpointFromLLMISvc returns the endpoint URL from LLMInferenceService status as-reported.
+// Prefers gateway-external with https, then any gateway-external, then first address, then status.URL.
+func (r *MaaSModelReconciler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInferenceService) string {
 	var gatewayExternalURLs []string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.Name != nil && *addr.Name == "gateway-external" && addr.URL != nil {
-			gatewayExternalURLs = append(gatewayExternalURLs, baseURLFromString(addr.URL.String()))
+			gatewayExternalURLs = append(gatewayExternalURLs, addr.URL.String())
 		}
 	}
-
-	var selectedBaseURL string
-	for _, baseURL := range gatewayExternalURLs {
-		if strings.HasPrefix(baseURL, "https://") {
-			selectedBaseURL = baseURL
-			break
+	for _, u := range gatewayExternalURLs {
+		if strings.HasPrefix(u, "https://") {
+			return u
 		}
 	}
-	if selectedBaseURL == "" && len(gatewayExternalURLs) > 0 {
-		selectedBaseURL = gatewayExternalURLs[0]
+	if len(gatewayExternalURLs) > 0 {
+		return gatewayExternalURLs[0]
 	}
-	if selectedBaseURL != "" {
-		return fmt.Sprintf("%s/v1/models/%s", selectedBaseURL, model.Name)
-	}
-
 	if len(llmisvc.Status.Addresses) > 0 && llmisvc.Status.Addresses[0].URL != nil {
-		return fmt.Sprintf("%s/v1/models/%s", baseURLFromString(llmisvc.Status.Addresses[0].URL.String()), model.Name)
+		return llmisvc.Status.Addresses[0].URL.String()
 	}
-
 	if llmisvc.Status.URL != nil {
-		return fmt.Sprintf("%s/v1/models/%s", baseURLFromString(llmisvc.Status.URL.String()), model.Name)
+		return llmisvc.Status.URL.String()
 	}
-
 	return ""
 }
 
-// getModelEndpoint constructs the endpoint URL for the model using the gateway external address
+// getModelEndpoint constructs the endpoint URL from MaaSModel status (HTTPRoute hostnames) or Gateway.
 func (r *MaaSModelReconciler) getModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (string, error) {
 	// First, try to use HTTPRoute hostname from status (if already set)
 	if len(model.Status.HTTPRouteHostnames) > 0 {
 		hostname := model.Status.HTTPRouteHostnames[0]
-		return fmt.Sprintf("https://%s/v1/models/%s", hostname, model.Name), nil
+		return fmt.Sprintf("https://%s/%s", hostname, model.Name), nil
 	}
 
 	// If HTTPRoute hostname not available, get it from the gateway
@@ -453,7 +418,7 @@ func (r *MaaSModelReconciler) getModelEndpoint(ctx context.Context, log logr.Log
 		for _, listener := range gateway.Spec.Listeners {
 			if listener.Hostname != nil {
 				hostname := string(*listener.Hostname)
-				return fmt.Sprintf("https://%s/v1/models/%s", hostname, model.Name), nil
+				return fmt.Sprintf("https://%s/%s", hostname, model.Name), nil
 			}
 		}
 	}
@@ -463,11 +428,11 @@ func (r *MaaSModelReconciler) getModelEndpoint(ctx context.Context, log logr.Log
 		// Prefer hostname type addresses
 		for _, addr := range gateway.Status.Addresses {
 			if addr.Type != nil && *addr.Type == gatewayapiv1.HostnameAddressType {
-				return fmt.Sprintf("https://%s/v1/models/%s", addr.Value, model.Name), nil
+				return fmt.Sprintf("https://%s/%s", addr.Value, model.Name), nil
 			}
 		}
 		// If no hostname type, use the first address
-		return fmt.Sprintf("https://%s/v1/models/%s", gateway.Status.Addresses[0].Value, model.Name), nil
+		return fmt.Sprintf("https://%s/%s", gateway.Status.Addresses[0].Value, model.Name), nil
 	}
 
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)
@@ -555,7 +520,6 @@ func (r *MaaSModelReconciler) reconcileGatewayDefaults(ctx context.Context, log 
 		return fmt.Errorf("failed to list MaaSModels: %w", err)
 	}
 
-	// Collect unique LLMIS namespaces (the path prefix is /<namespace>/)
 	nsSet := map[string]bool{}
 	for _, m := range models.Items {
 		if !m.GetDeletionTimestamp().IsZero() {
@@ -568,7 +532,6 @@ func (r *MaaSModelReconciler) reconcileGatewayDefaults(ctx context.Context, log 
 		nsSet[ns] = true
 	}
 
-	// Build the when predicate from all namespaces
 	var pathPredicates []string
 	for ns := range nsSet {
 		pathPredicates = append(pathPredicates, fmt.Sprintf(`request.path.startsWith("/%s/")`, ns))
@@ -582,7 +545,6 @@ func (r *MaaSModelReconciler) reconcileGatewayDefaults(ctx context.Context, log 
 
 	const gatewayNS = "openshift-ingress"
 
-	// Update gateway-default-auth (AuthPolicy)
 	authPolicy := &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	key := client.ObjectKey{Name: "gateway-default-auth", Namespace: gatewayNS}
@@ -590,7 +552,6 @@ func (r *MaaSModelReconciler) reconcileGatewayDefaults(ctx context.Context, log 
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to get gateway-default-auth: %w", err)
 		}
-		// Policy doesn't exist yet (bootstrap not applied); skip
 	} else {
 		defaults, _, _ := unstructured.NestedMap(authPolicy.Object, "spec", "defaults")
 		if defaults == nil {
@@ -612,7 +573,6 @@ func (r *MaaSModelReconciler) reconcileGatewayDefaults(ctx context.Context, log 
 		log.Info("Updated gateway-default-auth path predicate", "predicate", whenPredicate)
 	}
 
-	// Update gateway-default-deny (TRLP)
 	trlp := &unstructured.Unstructured{}
 	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 	key = client.ObjectKey{Name: "gateway-default-deny", Namespace: gatewayNS}

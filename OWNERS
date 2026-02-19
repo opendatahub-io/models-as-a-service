@@ -10,6 +10,7 @@ approvers:
   - usize
   - yossiovadia
   - ishitasequeira
+  - yu-teo
 reviewers:
   - bartoszmajsak
   - israel-hdez
@@ -22,3 +23,4 @@ reviewers:
   - usize
   - yossiovadia
   - ishitasequeira
+  - yu-teo
