@@ -8,6 +8,6 @@ metadata:
   namespace: opendatahub
 spec:
   modelRef:
-    kind: llmisvc
+    kind: LLMInferenceService
     name: facebook-opt-125m-simulated
     namespace: llm

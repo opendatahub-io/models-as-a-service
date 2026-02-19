@@ -61,7 +61,7 @@ spec:
                   kind:
                     description: Kind determines which fields are available
                     enum:
-                    - llmisvc
+                    - LLMInferenceService
                     - ExternalModel
                     type: string
                   name:

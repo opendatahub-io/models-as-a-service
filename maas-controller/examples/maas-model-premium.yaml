@@ -7,6 +7,6 @@ metadata:
   namespace: opendatahub
 spec:
   modelRef:
-    kind: llmisvc
+    kind: LLMInferenceService
     name: premium-simulated-simulated-premium
     namespace: llm

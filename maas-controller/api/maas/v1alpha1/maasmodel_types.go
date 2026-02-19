@@ -29,7 +29,7 @@ type MaaSModelSpec struct {
 // ModelReference references a model endpoint
 type ModelReference struct {
 	// Kind determines which fields are available
-	// +kubebuilder:validation:Enum=llmisvc;ExternalModel
+	// +kubebuilder:validation:Enum=LLMInferenceService;ExternalModel
 	Kind string `json:"kind"`
 
 	// Name is the name of the model resource

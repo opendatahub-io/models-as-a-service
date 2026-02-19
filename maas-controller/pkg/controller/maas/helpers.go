@@ -52,7 +52,7 @@ func findHTTPRouteForModel(ctx context.Context, c client.Reader, defaultNS, mode
 	}
 
 	switch maasModel.Spec.ModelRef.Kind {
-	case "llmisvc":
+	case "LLMInferenceService":
 		llmisvcNS := maasModel.Namespace
 		if maasModel.Spec.ModelRef.Namespace != "" {
 			llmisvcNS = maasModel.Spec.ModelRef.Namespace

@@ -235,7 +235,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		} else if err != nil {
 			return nil, fmt.Errorf("failed to get existing AuthPolicy: %w", err)
 		} else {
-			if existing.GetAnnotations()["maas.opendatahub.io/managed"] == "false" {
+			if existing.GetAnnotations()["opendatahub.io/managed"] == "false" {
 				log.Info("AuthPolicy opted out, skipping", "name", authPolicyName)
 			} else {
 				mergedAnnotations := existing.GetAnnotations()

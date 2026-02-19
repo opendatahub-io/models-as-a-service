@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -42,7 +43,9 @@ import (
 // MaaSModelReconciler reconciles a MaaSModel object
 type MaaSModelReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme           *runtime.Scheme
+	GatewayName      string
+	GatewayNamespace string
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodels,verbs=get;list;watch;create;update;patch;delete
@@ -83,7 +86,7 @@ func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Only reconcile HTTPRoute for known kinds. Unknown kind -> set status to Failed and exit.
 	kind := model.Spec.ModelRef.Kind
-	if kind != "llmisvc" && kind != "ExternalModel" {
+	if kind != "LLMInferenceService" && kind != "ExternalModel" {
 		log.Error(nil, "unknown modelRef kind", "kind", kind)
 		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("unknown kind: %s", kind))
 		return ctrl.Result{}, nil
@@ -122,7 +125,7 @@ func (r *MaaSModelReconciler) reconcileHTTPRoute(ctx context.Context, log logr.L
 		return r.createOrUpdateHTTPRoute(ctx, log, model)
 	}
 	// llmisvc: validate HTTPRoute exists (created by LLMInferenceService controller) and populate MaaSModel status from it.
-	if model.Spec.ModelRef.Kind == "llmisvc" {
+	if model.Spec.ModelRef.Kind == "LLMInferenceService" {
 		return r.validateLLMISvcHTTPRoute(ctx, log, model)
 	}
 	return fmt.Errorf("unknown kind: %s", model.Spec.ModelRef.Kind)
@@ -158,9 +161,8 @@ func (r *MaaSModelReconciler) validateLLMISvcHTTPRoute(ctx context.Context, log 
 	route := &routeList.Items[0]
 	routeName := route.Name
 
-	// Validate that the HTTPRoute references maas-default-gateway
-	const expectedGatewayName = "maas-default-gateway"
-	const expectedGatewayNamespace = "openshift-ingress"
+	expectedGatewayName := r.GatewayName
+	expectedGatewayNamespace := r.GatewayNamespace
 
 	gatewayFound := false
 	var gatewayName string
@@ -173,7 +175,7 @@ func (r *MaaSModelReconciler) validateLLMISvcHTTPRoute(ctx context.Context, log 
 			refNS = string(*parentRef.Namespace)
 		}
 
-		// Check if this parent reference points to maas-default-gateway
+		// Check if this parent reference points to the expected gateway
 		if refName == expectedGatewayName && refNS == expectedGatewayNamespace {
 			gatewayFound = true
 			gatewayName = refName
@@ -203,12 +205,12 @@ func (r *MaaSModelReconciler) validateLLMISvcHTTPRoute(ctx context.Context, log 
 
 	// Validate gateway reference
 	if !gatewayFound {
-		log.Error(nil, "HTTPRoute does not reference maas-default-gateway",
+		log.Error(nil, "HTTPRoute does not reference the expected gateway",
 			"routeName", routeName,
 			"routeNamespace", routeNS,
 			"expectedGateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName),
 			"foundGateway", fmt.Sprintf("%s/%s", gatewayNamespace, gatewayName))
-		return fmt.Errorf("HTTPRoute %s/%s does not reference maas-default-gateway (expected: %s/%s, found: %s/%s). The LLMInferenceService must be configured to use maas-default-gateway",
+		return fmt.Errorf("HTTPRoute %s/%s does not reference gateway %s/%s (found: %s/%s)",
 			routeNS, routeName, expectedGatewayNamespace, expectedGatewayName, gatewayNamespace, gatewayName)
 	}
 
@@ -249,9 +251,9 @@ func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log l
 			CommonRouteSpec: gatewayapiv1.CommonRouteSpec{
 			ParentRefs: []gatewayapiv1.ParentReference{
 				{
-					Name: gatewayapiv1.ObjectName("maas-default-gateway"),
+					Name: gatewayapiv1.ObjectName(r.GatewayName),
 					Namespace: func() *gatewayapiv1.Namespace {
-						ns := gatewayapiv1.Namespace("openshift-ingress")
+						ns := gatewayapiv1.Namespace(r.GatewayNamespace)
 						return &ns
 					}(),
 				},
@@ -262,8 +264,8 @@ func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log l
 					Matches: []gatewayapiv1.HTTPRouteMatch{
 						{
 							Path: &gatewayapiv1.HTTPPathMatch{
-								Type:  ptr(gatewayapiv1.PathMatchPathPrefix),
-								Value: ptr(fmt.Sprintf("/%s", model.Name)),
+								Type:  ptr.To(gatewayapiv1.PathMatchPathPrefix),
+								Value: ptr.To(fmt.Sprintf("/%s", model.Name)),
 							},
 						},
 					},
@@ -271,14 +273,14 @@ func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log l
 						{
 							BackendRef: gatewayapiv1.BackendRef{
 								BackendObjectReference: gatewayapiv1.BackendObjectReference{
-									Group: ptr(gatewayapiv1.Group("")),
-									Kind:  ptr(gatewayapiv1.Kind("Service")),
+									Group: ptr.To(gatewayapiv1.Group("")),
+									Kind:  ptr.To(gatewayapiv1.Kind("Service")),
 									Name:  gatewayapiv1.ObjectName(model.Spec.ModelRef.Name),
 									Namespace: func() *gatewayapiv1.Namespace {
 										ns := gatewayapiv1.Namespace(backendNS)
 										return &ns
 									}(),
-									Port: ptr(gatewayapiv1.PortNumber(8080)),
+									Port: ptr.To(gatewayapiv1.PortNumber(8080)),
 								},
 							},
 						},
@@ -310,7 +312,7 @@ func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log l
 // Ready status) or false when it is not (caller should persist the non-Ready
 // phase that was already set on model.Status).
 func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (bool, error) {
-	if model.Spec.ModelRef.Kind == "llmisvc" {
+	if model.Spec.ModelRef.Kind == "LLMInferenceService" {
 		llmisvcNS := model.Namespace
 		if model.Spec.ModelRef.Namespace != "" {
 			llmisvcNS = model.Spec.ModelRef.Namespace
@@ -397,8 +399,8 @@ func (r *MaaSModelReconciler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLM
 
 // getModelEndpoint constructs the endpoint URL from MaaSModel status (HTTPRoute hostnames) or Gateway.
 func (r *MaaSModelReconciler) getModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (string, error) {
-	gatewayName := "maas-default-gateway"
-	gatewayNS := "openshift-ingress"
+	gatewayName := r.GatewayName
+	gatewayNS := r.GatewayNamespace
 
 	gateway := &gatewayapiv1.Gateway{}
 	key := client.ObjectKey{Name: gatewayName, Namespace: gatewayNS}
@@ -451,7 +453,7 @@ func (r *MaaSModelReconciler) handleDeletion(ctx context.Context, log logr.Logge
 		}
 
 		// Only clean up HTTPRoute for ExternalModel (llmisvc HTTPRoutes are managed by LLMInferenceService controller)
-		if model.Spec.ModelRef.Kind != "llmisvc" {
+		if model.Spec.ModelRef.Kind != "LLMInferenceService" {
 			routeName := fmt.Sprintf("maas-model-%s", model.Name)
 			route := &gatewayapiv1.HTTPRoute{
 				ObjectMeta: metav1.ObjectMeta{
@@ -547,7 +549,7 @@ func (r *MaaSModelReconciler) reconcileGatewayDefaults(ctx context.Context, log 
 		whenPredicate = strings.Join(pathPredicates, " || ")
 	}
 
-	const gatewayNS = "openshift-ingress"
+	gatewayNS := r.GatewayNamespace
 
 	authPolicy := &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
@@ -643,11 +645,6 @@ func (r *MaaSModelReconciler) updateStatus(ctx context.Context, model *maasv1alp
 		log := logr.FromContextOrDiscard(ctx)
 		log.Error(err, "failed to update MaaSModel status", "name", model.Name)
 	}
-}
-
-// Helper function to get pointer to value
-func ptr[T any](v T) *T {
-	return &v
 }
 
 // SetupWithManager sets up the controller with the Manager.
