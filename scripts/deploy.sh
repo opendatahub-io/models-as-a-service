@@ -248,6 +248,38 @@ parse_arguments() {
 }
 
 #──────────────────────────────────────────────────────────────
+# PREREQUISITE CHECKS
+#──────────────────────────────────────────────────────────────
+
+check_required_tools() {
+  local missing=()
+
+  command -v oc &>/dev/null || missing+=("oc (OpenShift CLI)")
+  command -v kubectl &>/dev/null || missing+=("kubectl")
+  command -v jq &>/dev/null || missing+=("jq")
+  if command -v kustomize &>/dev/null; then
+    local kustomize_version 
+    local required="5.7.0"
+    kustomize_version=$(kustomize version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [[ -z "$kustomize_version" ]] || \
+       [[ "$(printf '%s\n%s' "$required" "$kustomize_version" | sort -V | head -1)" != "$required" ]]; then
+      missing+=("kustomize (v5.7.0+ required, found ${kustomize_version:-unknown})")
+    fi
+  else
+    missing+=("kustomize (v5.7.0+)")
+  fi
+  command -v gsed &>/dev/null || missing+=("gsed (GNU sed)")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    log_error "Missing or incompatible required tools:"
+    for tool in "${missing[@]}"; do
+      log_error "  - $tool"
+    done
+    return 1
+  fi
+}
+
+#──────────────────────────────────────────────────────────────
 # CONFIGURATION VALIDATION
 #──────────────────────────────────────────────────────────────
 
@@ -326,6 +358,7 @@ main() {
   log_info "==================================================="
 
   parse_arguments "$@"
+  check_required_tools
   validate_configuration
 
   log_info "Deployment configuration:"
