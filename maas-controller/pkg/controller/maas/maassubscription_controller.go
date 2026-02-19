@@ -112,18 +112,17 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			return fmt.Errorf("failed to list subscriptions for model %s: %w", modelRef.Name, err)
 		}
 
-		pathCheck := `!request.path.endsWith("/v1/models")`
 		limitsMap := map[string]interface{}{}
-		var allOwnerChecks []string
+		var allGroupNames, allUserNames []string
 		var subNames []string
 
-		// Collect per-subscription info: owner checks and max limit (for priority sorting).
 		type subInfo struct {
-			sub         maasv1alpha1.MaaSSubscription
-			mRef        maasv1alpha1.ModelSubscriptionRef
-			ownerChecks []string
-			rates       []interface{}
-			maxLimit    int64
+			sub        maasv1alpha1.MaaSSubscription
+			mRef       maasv1alpha1.ModelSubscriptionRef
+			groupNames []string
+			userNames  []string
+			rates      []interface{}
+			maxLimit   int64
 		}
 		var subs []subInfo
 		for _, sub := range allSubs {
@@ -131,18 +130,19 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				if mRef.Name != modelRef.Name {
 					continue
 				}
-				var ownerChecks []string
+				var groupNames []string
 				for _, group := range sub.Spec.Owner.Groups {
 					if err := validateCELValue(group.Name, "group name"); err != nil {
 						return fmt.Errorf("invalid owner in MaaSSubscription %s: %w", sub.Name, err)
 					}
-					ownerChecks = append(ownerChecks, fmt.Sprintf(`auth.identity.groups_str.split(",").exists(g, g == "%s")`, group.Name))
+					groupNames = append(groupNames, group.Name)
 				}
+				var userNames []string
 				for _, user := range sub.Spec.Owner.Users {
 					if err := validateCELValue(user, "username"); err != nil {
 						return fmt.Errorf("invalid owner in MaaSSubscription %s: %w", sub.Name, err)
 					}
-					ownerChecks = append(ownerChecks, fmt.Sprintf(`auth.identity.user.username == "%s"`, user))
+					userNames = append(userNames, user)
 				}
 				var rates []interface{}
 				var maxLimit int64
@@ -157,87 +157,97 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 					rates = append(rates, map[string]interface{}{"limit": int64(100), "window": "1m"})
 					maxLimit = 100
 				}
-				subs = append(subs, subInfo{sub: sub, mRef: mRef, ownerChecks: ownerChecks, rates: rates, maxLimit: maxLimit})
+				subs = append(subs, subInfo{sub: sub, mRef: mRef, groupNames: groupNames, userNames: userNames, rates: rates, maxLimit: maxLimit})
 				break
 			}
 		}
 
 		// Sort subscriptions by maxLimit descending (highest tier first).
-		// This determines priority: higher-limit subscriptions take precedence.
 		sort.Slice(subs, func(i, j int) bool { return subs[i].maxLimit > subs[j].maxLimit })
 
-		// Build limits with mutually exclusive predicates + x-maas-subscription header support.
-		// Each subscription has TWO matching branches (OR'd):
-		//   1. Explicit selection: header == "sub-name" AND user is in the subscription's group
-		//   2. Auto selection: no header AND user is in group AND NOT in any higher-tier group
-		// This lets users explicitly pick a lower-tier subscription via header while still
-		// requiring group membership (validated — can't pick a subscription you don't belong to).
+		// Helper: build a compact CEL predicate that checks if the user belongs to
+		// any of the given groups or matches any of the given usernames. Uses a single
+		// exists() call for groups (e.g. exists(g, g == "a" || g == "b")) instead of
+		// N separate exists() calls, keeping predicates short at scale.
+		buildMembershipCheck := func(groups, users []string) string {
+			var parts []string
+			if len(groups) > 0 {
+				var comparisons []string
+				for _, g := range groups {
+					comparisons = append(comparisons, fmt.Sprintf(`g == "%s"`, g))
+				}
+				parts = append(parts, fmt.Sprintf(`auth.identity.groups_str.split(",").exists(g, %s)`, strings.Join(comparisons, " || ")))
+			}
+			for _, u := range users {
+				parts = append(parts, fmt.Sprintf(`auth.identity.user.username == "%s"`, u))
+			}
+			return strings.Join(parts, " || ")
+		}
+
 		headerCheck := `request.headers["x-maas-subscription"]`
 		headerExists := `request.headers.exists(h, h == "x-maas-subscription")`
 
 		for i, si := range subs {
 			subNames = append(subNames, si.sub.Name)
-			allOwnerChecks = append(allOwnerChecks, si.ownerChecks...)
+			allGroupNames = append(allGroupNames, si.groupNames...)
+			allUserNames = append(allUserNames, si.userNames...)
 
-			var predicate string
-			if len(si.ownerChecks) > 0 {
-				groupMatch := "(" + strings.Join(si.ownerChecks, " || ") + ")"
-
-				// Branch 1: explicit header selection (validated against group membership)
-				explicitBranch := fmt.Sprintf(`(%s == "%s" && %s)`, headerCheck, si.sub.Name, groupMatch)
-
-				// Branch 2: auto selection (no header, priority-based exclusions)
-				var exclusions []string
-				for j := 0; j < i; j++ {
-					exclusions = append(exclusions, subs[j].ownerChecks...)
-				}
-				autoPart := groupMatch
-				if len(exclusions) > 0 {
-					autoPart += " && !(" + strings.Join(exclusions, " || ") + ")"
-				}
-				autoBranch := fmt.Sprintf("(!%s && %s)", headerExists, autoPart)
-
-				predicate = pathCheck + " && (" + explicitBranch + " || " + autoBranch + ")"
-			} else {
-				// No owner groups: header-only selection (no group validation possible)
-				subscriptionIDCheck := fmt.Sprintf(`%s == "%s"`, headerCheck, si.sub.Name)
-				predicate = pathCheck + " && " + subscriptionIDCheck
+			membershipCheck := buildMembershipCheck(si.groupNames, si.userNames)
+			if membershipCheck == "" {
+				log.Info("skipping subscription with no owner groups/users — rate limit would be unreachable",
+					"subscription", si.sub.Name, "model", si.mRef.Name)
+				continue
 			}
 
-			limitKey := fmt.Sprintf("%s-%s-tokens", si.sub.Name, si.mRef.Name)
-			limitsMap[limitKey] = map[string]interface{}{
+			// Collect higher-tier groups/users for exclusions
+			var excludeGroups, excludeUsers []string
+			for j := 0; j < i; j++ {
+				excludeGroups = append(excludeGroups, subs[j].groupNames...)
+				excludeUsers = append(excludeUsers, subs[j].userNames...)
+			}
+
+			// Build branch selection: explicit header OR auto-select with exclusions.
+			// These remain OR'd in one predicate because they share the same counter.
+			explicitBranch := fmt.Sprintf(`%s == "%s"`, headerCheck, si.sub.Name)
+			autoBranch := "!" + headerExists
+			if exclusionCheck := buildMembershipCheck(excludeGroups, excludeUsers); exclusionCheck != "" {
+				autoBranch += " && !(" + exclusionCheck + ")"
+			}
+
+			limitsMap[fmt.Sprintf("%s-%s-tokens", si.sub.Name, si.mRef.Name)] = map[string]interface{}{
 				"rates": si.rates,
-				"when":  []interface{}{map[string]interface{}{"predicate": predicate}},
+				"when": []interface{}{
+					map[string]interface{}{"predicate": membershipCheck},
+					map[string]interface{}{"predicate": explicitBranch + " || (" + autoBranch + ")"},
+				},
 				"counters": []interface{}{
 					map[string]interface{}{"expression": "auth.identity.userid"},
 				},
 			}
 		}
 
-		// Add unified deny-unsubscribed catch-all from ALL subscriptions' owner checks.
-		// Deny when: user is not in any subscription group AND no valid header selection matched.
-		if len(allOwnerChecks) > 0 {
-			denyPredicate := pathCheck + " && !(" + strings.Join(allOwnerChecks, " || ") + ")"
+		// Deny-unsubscribed: user is not in ANY subscription group/user list.
+		if denyCheck := buildMembershipCheck(allGroupNames, allUserNames); denyCheck != "" {
 			limitsMap[fmt.Sprintf("deny-unsubscribed-%s", modelRef.Name)] = map[string]interface{}{
 				"rates":    []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
-				"when":     []interface{}{map[string]interface{}{"predicate": denyPredicate}},
+				"when":     []interface{}{map[string]interface{}{"predicate": "!(" + denyCheck + ")"}},
 				"counters": []interface{}{map[string]interface{}{"expression": "auth.identity.userid"}},
 			}
 		}
 
-		// Add deny for invalid header values.
-		// When x-maas-subscription header is present but doesn't match any known subscription,
-		// the explicit branches don't match and auto branches are disabled. Without this rule,
-		// a bogus header would bypass all rate limits.
+		// Deny invalid header: header present but doesn't match any known subscription.
 		if len(subNames) > 0 {
-			var validHeaderChecks []string
-			for _, name := range subNames {
-				validHeaderChecks = append(validHeaderChecks, fmt.Sprintf(`%s == "%s"`, headerCheck, name))
+			denyHeaderWhen := []interface{}{
+				map[string]interface{}{"predicate": headerExists},
 			}
-			invalidHeaderPredicate := pathCheck + " && " + headerExists + " && !(" + strings.Join(validHeaderChecks, " || ") + ")"
+			for _, name := range subNames {
+				denyHeaderWhen = append(denyHeaderWhen,
+					map[string]interface{}{"predicate": fmt.Sprintf(`%s != "%s"`, headerCheck, name)},
+				)
+			}
 			limitsMap[fmt.Sprintf("deny-invalid-header-%s", modelRef.Name)] = map[string]interface{}{
 				"rates":    []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
-				"when":     []interface{}{map[string]interface{}{"predicate": invalidHeaderPredicate}},
+				"when":     denyHeaderWhen,
 				"counters": []interface{}{map[string]interface{}{"expression": "auth.identity.userid"}},
 			}
 		}
