@@ -19,6 +19,8 @@ package maas
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -50,6 +52,7 @@ type MaaSModelReconciler struct {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
 
 const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
@@ -87,7 +90,10 @@ func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	// Auth for model routes is managed by MaaSAuthPolicy only (one AuthPolicy per route).
+	// Update gateway default policies with path prefixes derived from all model HTTPRoutes.
+	if err := r.reconcileGatewayDefaults(ctx, log); err != nil {
+		log.Error(err, "failed to reconcile gateway default policies")
+	}
 
 	// Update status based on referenced model
 	modelStatusFailed := false
@@ -376,30 +382,24 @@ func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Lo
 	return nil
 }
 
-// getEndpointFromLLMISvc extracts the endpoint URL from LLMInferenceService status
-// Prefers gateway-external address with https, falls back to http, then first address or status.URL
+// baseURLFromString extracts scheme://host from a URL string.
+func baseURLFromString(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Scheme + "://" + u.Host
+	}
+	return raw
+}
+
+// getEndpointFromLLMISvc extracts the endpoint URL from LLMInferenceService status.
+// Prefers gateway-external address with https, falls back to http, then first address or status.URL.
 func (r *MaaSModelReconciler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInferenceService, model *maasv1alpha1.MaaSModel) string {
-	// First, collect all gateway-external addresses and prefer https
 	var gatewayExternalURLs []string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.Name != nil && *addr.Name == "gateway-external" && addr.URL != nil {
-			urlStr := addr.URL.String()
-			// Extract the base URL (scheme + host)
-			baseURL := urlStr
-			if idx := strings.Index(urlStr, "/llm/"); idx != -1 {
-				baseURL = urlStr[:idx]
-			} else if idx := strings.Index(urlStr, "://"); idx != -1 {
-				// Extract scheme and host
-				parts := strings.SplitN(urlStr[idx+3:], "/", 2)
-				if len(parts) > 0 {
-					baseURL = urlStr[:idx+3+len(parts[0])]
-				}
-			}
-			gatewayExternalURLs = append(gatewayExternalURLs, baseURL)
+			gatewayExternalURLs = append(gatewayExternalURLs, baseURLFromString(addr.URL.String()))
 		}
 	}
 
-	// Prefer https over http
 	var selectedBaseURL string
 	for _, baseURL := range gatewayExternalURLs {
 		if strings.HasPrefix(baseURL, "https://") {
@@ -407,44 +407,19 @@ func (r *MaaSModelReconciler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLM
 			break
 		}
 	}
-	// If no https found, use the first one (http)
 	if selectedBaseURL == "" && len(gatewayExternalURLs) > 0 {
 		selectedBaseURL = gatewayExternalURLs[0]
 	}
-
 	if selectedBaseURL != "" {
 		return fmt.Sprintf("%s/v1/models/%s", selectedBaseURL, model.Name)
 	}
 
-	// Fall back to first address if gateway-external not found
 	if len(llmisvc.Status.Addresses) > 0 && llmisvc.Status.Addresses[0].URL != nil {
-		urlStr := llmisvc.Status.Addresses[0].URL.String()
-		// Extract base URL
-		baseURL := urlStr
-		if idx := strings.Index(urlStr, "/llm/"); idx != -1 {
-			baseURL = urlStr[:idx]
-		} else if idx := strings.Index(urlStr, "://"); idx != -1 {
-			parts := strings.SplitN(urlStr[idx+3:], "/", 2)
-			if len(parts) > 0 {
-				baseURL = urlStr[:idx+3+len(parts[0])]
-			}
-		}
-		return fmt.Sprintf("%s/v1/models/%s", baseURL, model.Name)
+		return fmt.Sprintf("%s/v1/models/%s", baseURLFromString(llmisvc.Status.Addresses[0].URL.String()), model.Name)
 	}
 
-	// Last fallback: use status.URL if available
 	if llmisvc.Status.URL != nil {
-		urlStr := llmisvc.Status.URL.String()
-		baseURL := urlStr
-		if idx := strings.Index(urlStr, "/llm/"); idx != -1 {
-			baseURL = urlStr[:idx]
-		} else if idx := strings.Index(urlStr, "://"); idx != -1 {
-			parts := strings.SplitN(urlStr[idx+3:], "/", 2)
-			if len(parts) > 0 {
-				baseURL = urlStr[:idx+3+len(parts[0])]
-			}
-		}
-		return fmt.Sprintf("%s/v1/models/%s", baseURL, model.Name)
+		return fmt.Sprintf("%s/v1/models/%s", baseURLFromString(llmisvc.Status.URL.String()), model.Name)
 	}
 
 	return ""
@@ -525,7 +500,11 @@ func (r *MaaSModelReconciler) handleDeletion(ctx context.Context, log logr.Logge
 			}
 		}
 
-		// Remove finalizer so the MaaSModel can be deleted
+		// Update gateway defaults (path prefixes may have changed after this model's removal)
+		if err := r.reconcileGatewayDefaults(ctx, log); err != nil {
+			log.Error(err, "failed to update gateway defaults after model deletion")
+		}
+
 		controllerutil.RemoveFinalizer(model, maasModelFinalizer)
 		if err := r.Update(ctx, model); err != nil {
 			return ctrl.Result{}, err
@@ -561,6 +540,105 @@ func (r *MaaSModelReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete %s %s/%s: %w", kind, p.GetNamespace(), p.GetName(), err)
 		}
+	}
+
+	return nil
+}
+
+// reconcileGatewayDefaults updates the gateway-default-auth (AuthPolicy) and
+// gateway-default-deny (TRLP) with a `when` predicate derived from the actual
+// HTTPRoute path prefixes of all MaaSModels. This avoids hardcoding a namespace
+// like "/llm/" -- the predicate adapts to whichever namespaces models live in.
+func (r *MaaSModelReconciler) reconcileGatewayDefaults(ctx context.Context, log logr.Logger) error {
+	var models maasv1alpha1.MaaSModelList
+	if err := r.List(ctx, &models); err != nil {
+		return fmt.Errorf("failed to list MaaSModels: %w", err)
+	}
+
+	// Collect unique LLMIS namespaces (the path prefix is /<namespace>/)
+	nsSet := map[string]bool{}
+	for _, m := range models.Items {
+		if !m.GetDeletionTimestamp().IsZero() {
+			continue
+		}
+		ns := m.Spec.ModelRef.Namespace
+		if ns == "" {
+			ns = m.Namespace
+		}
+		nsSet[ns] = true
+	}
+
+	// Build the when predicate from all namespaces
+	var pathPredicates []string
+	for ns := range nsSet {
+		pathPredicates = append(pathPredicates, fmt.Sprintf(`request.path.startsWith("/%s/")`, ns))
+	}
+
+	var whenPredicate string
+	if len(pathPredicates) > 0 {
+		sort.Strings(pathPredicates)
+		whenPredicate = strings.Join(pathPredicates, " || ")
+	}
+
+	const gatewayNS = "openshift-ingress"
+
+	// Update gateway-default-auth (AuthPolicy)
+	authPolicy := &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	key := client.ObjectKey{Name: "gateway-default-auth", Namespace: gatewayNS}
+	if err := r.Get(ctx, key, authPolicy); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to get gateway-default-auth: %w", err)
+		}
+		// Policy doesn't exist yet (bootstrap not applied); skip
+	} else {
+		defaults, _, _ := unstructured.NestedMap(authPolicy.Object, "spec", "defaults")
+		if defaults == nil {
+			defaults = map[string]interface{}{}
+		}
+		if whenPredicate != "" {
+			defaults["when"] = []interface{}{
+				map[string]interface{}{"predicate": whenPredicate},
+			}
+		} else {
+			delete(defaults, "when")
+		}
+		if err := unstructured.SetNestedMap(authPolicy.Object, defaults, "spec", "defaults"); err != nil {
+			return fmt.Errorf("failed to set defaults on gateway-default-auth: %w", err)
+		}
+		if err := r.Update(ctx, authPolicy); err != nil {
+			return fmt.Errorf("failed to update gateway-default-auth: %w", err)
+		}
+		log.Info("Updated gateway-default-auth path predicate", "predicate", whenPredicate)
+	}
+
+	// Update gateway-default-deny (TRLP)
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	key = client.ObjectKey{Name: "gateway-default-deny", Namespace: gatewayNS}
+	if err := r.Get(ctx, key, trlp); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to get gateway-default-deny: %w", err)
+		}
+	} else {
+		denyLimit, _, _ := unstructured.NestedMap(trlp.Object, "spec", "defaults", "limits", "deny-all-by-default")
+		if denyLimit == nil {
+			denyLimit = map[string]interface{}{}
+		}
+		if whenPredicate != "" {
+			denyLimit["when"] = []interface{}{
+				map[string]interface{}{"predicate": whenPredicate},
+			}
+		} else {
+			delete(denyLimit, "when")
+		}
+		if err := unstructured.SetNestedMap(trlp.Object, denyLimit, "spec", "defaults", "limits", "deny-all-by-default"); err != nil {
+			return fmt.Errorf("failed to set when on gateway-default-deny: %w", err)
+		}
+		if err := r.Update(ctx, trlp); err != nil {
+			return fmt.Errorf("failed to update gateway-default-deny: %w", err)
+		}
+		log.Info("Updated gateway-default-deny path predicate", "predicate", whenPredicate)
 	}
 
 	return nil

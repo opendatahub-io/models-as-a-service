@@ -1,6 +1,10 @@
 # Secondary safety-net TokenRateLimitPolicy at the gateway level.
-# Scoped to model inference paths (/llm/) only — does NOT affect non-model routes
+# Scoped to model inference paths only — does NOT affect non-model routes
 # like /maas-api/ or /v1/models (the MaaS API management endpoints).
+#
+# The path scoping (when predicate) is managed dynamically by the MaaSModel
+# controller, which derives path prefixes from the actual HTTPRoute namespaces
+# (e.g. /llm/, /production/). Do NOT hardcode a path prefix here.
 #
 # The PRIMARY default deny is gateway-default-auth.yaml (AuthPolicy), which
 # returns 401/403 for unconfigured models. This TRLP is a defense-in-depth layer:
@@ -32,7 +36,5 @@ spec:
         rates:
           - limit: 0
             window: 1m
-        when:
-          - predicate: 'request.path.startsWith("/llm/")'
         counters:
           - expression: auth.identity.userid

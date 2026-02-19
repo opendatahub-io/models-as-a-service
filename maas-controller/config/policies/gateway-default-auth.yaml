@@ -1,6 +1,10 @@
 # Default deny-all AuthPolicy at the gateway level.
-# Scoped to model inference paths (/llm/) only — does NOT affect non-model routes
+# Scoped to model inference paths only — does NOT affect non-model routes
 # like /maas-api/ or /v1/models (the MaaS API management endpoints).
+#
+# The path scoping (when predicate) is managed dynamically by the MaaSModel
+# controller, which derives path prefixes from the actual HTTPRoute namespaces
+# (e.g. /llm/, /production/). Do NOT hardcode a path prefix here.
 #
 # Routes WITHOUT a per-route AuthPolicy (i.e. models without a MaaSAuthPolicy)
 # will get 401 (no/invalid token) or 403 (valid token, not authorized).
@@ -26,8 +30,6 @@ spec:
     kind: Gateway
     name: maas-default-gateway
   defaults:
-    when:
-      - predicate: 'request.path.startsWith("/llm/")'
     rules:
       authentication:
         service-accounts:
