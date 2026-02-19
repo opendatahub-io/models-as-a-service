@@ -21,6 +21,10 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - jsonPath: .status.authPolicies[*].name
+      name: AuthPolicies
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -98,6 +102,36 @@ spec:
           status:
             description: MaaSAuthPolicyStatus defines the observed state of MaaSAuthPolicy
             properties:
+              authPolicies:
+                description: AuthPolicies lists the underlying Kuadrant AuthPolicies
+                  and their Accepted/Enforced state.
+                items:
+                  description: AuthPolicyRefStatus reports the status of one underlying
+                    Kuadrant AuthPolicy created by this MaaSAuthPolicy.
+                  properties:
+                    accepted:
+                      description: Accepted reports whether the AuthPolicy has been
+                        accepted (e.g. status.conditions type=Accepted).
+                      type: string
+                    enforced:
+                      description: Enforced reports whether the AuthPolicy is enforced
+                        (e.g. status.conditions type=Enforced).
+                      type: string
+                    model:
+                      description: Model is the model name this AuthPolicy targets.
+                      type: string
+                    name:
+                      description: Name is the name of the AuthPolicy resource.
+                      type: string
+                    namespace:
+                      description: Namespace is the namespace of the AuthPolicy resource.
+                      type: string
+                  required:
+                  - model
+                  - name
+                  - namespace
+                  type: object
+                type: array
               conditions:
                 description: Conditions represent the latest available observations
                   of the policy's state
@@ -163,17 +197,6 @@ spec:
                 - Active
                 - Failed
                 type: string
-              authPolicies:
-                description: AuthPolicies lists the underlying Kuadrant AuthPolicies and their Accepted/Enforced state
-                items:
-                  properties:
-                    name: { type: string }
-                    namespace: { type: string }
-                    model: { type: string }
-                    accepted: { type: string }
-                    enforced: { type: string }
-                  type: object
-                type: array
             type: object
         type: object
     served: true

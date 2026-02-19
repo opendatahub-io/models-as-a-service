@@ -1,13 +1,15 @@
 # MaaS Controller Makefile
 # Build and deploy the MaaS control plane (MaaSModel, MaaSAuthPolicy, MaaSSubscription)
 
-.PHONY: build run test tidy install uninstall image-build image-push docker-build help
+.PHONY: build run test tidy install uninstall image-build image-push docker-build generate manifests help
 
 help:
 	@echo "MaaS Controller make targets:"
 	@echo "  make build        - build manager binary to bin/manager"
 	@echo "  make run          - build and run manager locally"
 	@echo "  make test         - run tests"
+	@echo "  make generate     - generate deepcopy code for API types"
+	@echo "  make manifests    - generate CRD manifests"
 	@echo "  make install      - apply config/default (CRDs, RBAC, deployment)"
 	@echo "  make uninstall    - delete config/default resources"
 	@echo "  make image-build  - build container image (podman/buildah/docker); default IMAGE=quay.io/maas/maas-controller (temporary)"
@@ -37,6 +39,14 @@ test: tidy
 
 tidy:
 	go mod tidy
+
+# Generate deepcopy code for API types
+generate:
+	controller-gen object paths="./api/..."
+
+# Generate CRD manifests
+manifests:
+	controller-gen crd paths="./api/..." output:crd:dir=./config/crd/bases
 
 # Install CRDs, RBAC, and manager deployment (default: opendatahub namespace)
 install:
