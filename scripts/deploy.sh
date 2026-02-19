@@ -944,7 +944,7 @@ apply_dsc() {
     maas_state=$(kubectl get datasciencecluster "$existing_dsc" \
       -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
 
-    if [[ "$kserve_state" == "Managed" && "$raw_dep_service_config" == "Headless" && "$maas_state" == "Managed" && "$kserve_deploy_state" == "RawDeployment" && "$nim_state" == "Managed" && "$knative_state" == "Removed"]]; then
+    if [[ "$kserve_state" == "Managed" && "$raw_dep_service_config" == "Headless" && "$maas_state" == "Managed" && "$kserve_deploy_state" == "RawDeployment" && "$nim_state" == "Managed" && "$knative_state" == "Removed" ]]; then
       log_info "Existing DataScienceCluster '$existing_dsc' meets MaaS requirements, skipping creation"
       return 0
     fi
