@@ -1,22 +1,21 @@
+# =============================================================================
 # Expected Metrics Configuration for MaaS Observability Tests
-# ==========================================================
+# =============================================================================
 #
-# This file defines the expected metrics and Kubernetes resources that should
-# be available after deploying the MaaS observability stack.
+# Structure:
+#   resources     - Kubernetes resources that must exist (TelemetryPolicy, etc.)
+#   limitador     - Rate limiter metrics (access + token_metrics + health_metrics)
+#   latency_metrics.istio_gateway - Gateway/Envoy metrics (access + metrics)
+#   latency_metrics.vllm          - Model inference metrics (access + metrics)
+#   authorino     - Auth server metrics (access + metrics)
 #
-# Tests will FAIL with informative messages if:
-#   - A metric is missing (not found in the endpoint)
-#   - A metric is missing expected labels
-#   - A metric has the wrong type (counter/gauge/histogram)
-#   - A Kubernetes resource (TelemetryPolicy, Telemetry) is not deployed
-#
-# Update this file when:
-#   - Adding new metrics to the observability stack
-#   - Changing metric names or labels
-#   - Adding new observability components
-#   - Adding or modifying Grafana dashboard panels
+# Tests fail if: metric missing, label missing, wrong type, or resource not deployed.
+# Update when: adding metrics, changing names/labels, or modifying dashboards.
+# =============================================================================
 
-# Kubernetes resources that must exist for observability
+# -----------------------------------------------------------------------------
+# Kubernetes resources (must exist for observability)
+# -----------------------------------------------------------------------------
 resources:
   telemetry_policy:
     name: "user-group"
@@ -39,11 +38,14 @@ resources:
     kind: "ServiceMonitor"
     api_group: "monitoring.coreos.com/v1"
 
-# Limitador metrics (enriched with user/tier/model labels via TelemetryPolicy)
+# -----------------------------------------------------------------------------
+# Limitador (rate limiter) - labels from TelemetryPolicy
+# -----------------------------------------------------------------------------
 limitador:
   access:
     service: "limitador-limitador"
     namespace: "kuadrant-system"
+    pod_label_selector: "app=limitador"
     port: 8080
     path: "/metrics"
 
@@ -51,55 +53,60 @@ limitador:
     - name: "authorized_hits"
       type: "counter"
       labels:
-        required:
-          - "user"
-          - "tier"
-          - "model"
+        required: ["user", "tier", "model"]
 
     - name: "authorized_calls"
       type: "counter"
       labels:
-        required:
-          - "user"
-          - "tier"
+        required: ["user", "tier"]
 
     - name: "limited_calls"
       type: "counter"
       labels:
-        required:
-          - "user"
-          - "tier"
+        required: ["user", "tier"]
 
   health_metrics:
     - name: "limitador_up"
       type: "gauge"
 
-# Gateway / Istio metrics
+# -----------------------------------------------------------------------------
+# Istio Gateway (Envoy) - exposes /stats/prometheus (not /metrics), port 15090
+# -----------------------------------------------------------------------------
 latency_metrics:
   istio_gateway:
+    access:
+      namespace: "openshift-ingress"
+      pod_label_selector: "gateway.networking.k8s.io/gateway-name=maas-default-gateway"
+      port: 15090
+      path: "/stats/prometheus"
+
     metrics:
       - name: "istio_requests_total"
         type: "counter"
         labels:
-          required:
-            - "response_code"
-            - "destination_service_name"
+          required: ["response_code", "destination_service_name"]
 
       - name: "istio_request_duration_milliseconds"
         type: "histogram"
         labels:
-          required:
-            - "destination_service_name"
-            - "tier"
+          required: ["destination_service_name", "tier"]
 
-  # vLLM metrics used in Grafana dashboards (simulator v0.7.1+ exposes all)
+  # ---------------------------------------------------------------------------
+  # vLLM / model inference (simulator v0.7.1+ exposes all; used in dashboards)
+  # ---------------------------------------------------------------------------
   vllm:
+    access:
+      namespace: "llm"
+      pod_label_selector: "app.kubernetes.io/part-of=llminferenceservice"
+      port: 8000
+      path: "/metrics"
+      scheme: "https"
+
     metrics:
       - name: "vllm:e2e_request_latency_seconds"
         type: "histogram"
         labels:
-          required:
-            - "model_name"
+          required: ["model_name"]
 
       - name: "vllm:request_success_total"
         type: "counter"
@@ -107,14 +114,12 @@ latency_metrics:
       - name: "vllm:num_requests_running"
         type: "gauge"
         labels:
-          required:
-            - "model_name"
+          required: ["model_name"]
 
       - name: "vllm:num_requests_waiting"
         type: "gauge"
         labels:
-          required:
-            - "model_name"
+          required: ["model_name"]
 
       - name: "vllm:kv_cache_usage_perc"
         type: "gauge"
@@ -130,13 +135,18 @@ latency_metrics:
 
       - name: "vllm:inter_token_latency_seconds"
         type: "histogram"
+    # NOTE: vllm:request_queue_time_seconds is in dashboards but not exposed by simulator; skipped.
 
-      # NOTE: vllm:request_queue_time_seconds is used in the Platform Admin dashboard
-      # but is NOT exposed by the simulator (llm-d-inference-sim). It will only appear
-      # with real vLLM backends. Skipped from CI validation for this reason.
-
-# Authorino auth server metrics (requires authorino-server-metrics ServiceMonitor)
+# -----------------------------------------------------------------------------
+# Authorino (auth server) - /server-metrics (authorino-server-metrics ServiceMonitor)
+# -----------------------------------------------------------------------------
 authorino:
+  access:
+    namespace: "kuadrant-system"
+    pod_label_selector: "authorino-resource=authorino"
+    port: 8080
+    path: "/server-metrics"
+
   metrics:
     - name: "auth_server_authconfig_duration_seconds"
       type: "histogram"
@@ -144,5 +154,4 @@ authorino:
     - name: "auth_server_authconfig_response_status"
       type: "counter"
       labels:
-        required:
-          - "status"
+        required: ["status"]

@@ -17,6 +17,8 @@
 #      - View user (view role)
 #   5. Run token metadata verification (as admin user)
 #   6. Run smoke tests for each user
+#   7. Run observability tests as admin and edit users
+#      (view users skip observability -- requires Prometheus/port-forward access)
 # 
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
@@ -66,6 +68,7 @@ PROJECT_ROOT="$(_find_project_root_bootstrap)"
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # Options (can be set as environment variables)
+SKIP_DEPLOY=${SKIP_DEPLOY:-false}
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
@@ -74,9 +77,8 @@ SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
 # Track non-blocking test failures - script continues but exits with error at end.
-# Currently: only run_observability_tests sets TESTS_FAILED=true (non-blocking).
+# run_observability_tests sets TESTS_FAILED=true (non-blocking) so all user runs complete.
 # All other test functions (smoke tests, token verification, validation) exit 1 immediately.
-# If adding more non-blocking test suites, each must set TESTS_FAILED=true on failure.
 TESTS_FAILED=false
 
 # Operator configuration
@@ -320,6 +322,13 @@ run_smoke_tests() {
     fi
 }
 
+# Observability tests are non-blocking: on failure we set TESTS_FAILED and continue
+# (so admin and edit smoke + observability runs all complete). The script still
+# exits non-zero at the end when TESTS_FAILED is set, mirroring smoke-test exit behavior.
+#
+# Observability runs for admin (full infrastructure validation) and edit (verifies
+# edit-level access works). View users only run smoke tests -- observability requires
+# Prometheus/port-forward access that view users don't have by design (OpenShift RBAC).
 run_observability_tests() {
     echo "-- Observability Testing --"
     
@@ -330,14 +339,12 @@ run_observability_tests() {
         # Set PYTHONPATH so "from tests.test_helper import …" resolves
         export PYTHONPATH="${PROJECT_ROOT}/test/e2e:${PYTHONPATH:-}"
         
-        # Run observability tests
         echo "[observability] Running observability tests..."
         local REPORTS_DIR="${PROJECT_ROOT}/test/e2e/reports"
         mkdir -p "${REPORTS_DIR}"
         
         local USER
         USER="$(oc whoami 2>/dev/null || echo 'unknown')"
-        # Sanitize: replace colons and other filesystem-unsafe chars with dashes
         USER="$(printf '%s' "$USER" | tr ':/@\\' '----' | sed 's/--*/-/g; s/^-//; s/-$//')"
         USER="${USER:-unknown}"
         local HTML="${REPORTS_DIR}/observability-${USER}.html"
@@ -400,16 +407,37 @@ setup_test_user() {
     echo "✅ User setup completed: $username"
 }
 
+restore_oc_login() {
+    if [[ -n "${INITIAL_OC_TOKEN:-}" && -n "${INITIAL_OC_SERVER:-}" ]]; then
+        oc login --token "$INITIAL_OC_TOKEN" --server "$INITIAL_OC_SERVER" >/dev/null 2>&1 || true
+        echo "Restored oc login to initial user ($(oc whoami 2>/dev/null || echo 'unknown'))."
+    fi
+}
+
 # Main execution
-print_header "Deploying Maas on OpenShift"
+# Save initial user and set EXIT trap before any check that might exit, so we always restore on exit
+if ! oc whoami &>/dev/null; then
+    echo "❌ ERROR: Not logged into OpenShift. Please run 'oc login' first"
+    exit 1
+fi
+INITIAL_OC_TOKEN=$(oc whoami -t 2>/dev/null || true)
+INITIAL_OC_SERVER=$(oc whoami --show-server 2>/dev/null || true)
+trap restore_oc_login EXIT
+
 check_prerequisites
-deploy_maas_platform
 
-print_header "Deploying Models"  
-deploy_models
+if [[ "${SKIP_DEPLOY}" == "true" ]]; then
+    echo "⏭️  Skipping deployment (SKIP_DEPLOY=true) — using existing platform"
+else
+    print_header "Deploying Maas on OpenShift"
+    deploy_maas_platform
 
-print_header "Installing Observability"
-install_observability
+    print_header "Deploying Models"
+    deploy_models
+
+    print_header "Installing Observability"
+    install_observability
+fi
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
@@ -419,6 +447,39 @@ print_header "Setting up test users"
 setup_test_user "tester-admin-user" "cluster-admin"
 setup_test_user "tester-edit-user" "edit"
 setup_test_user "tester-view-user" "view"
+
+# Grant edit user access to platform Prometheus (openshift-monitoring) for observability tests.
+# Edit needs get/list pods and create portforward to query Istio metrics via port-forward + REST.
+echo "Granting edit user access to platform Prometheus (openshift-monitoring)..."
+kubectl apply -f - <<'EORBAC'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-query
+  namespace: openshift-monitoring
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tester-edit-user-prometheus
+  namespace: openshift-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-query
+subjects:
+  - kind: ServiceAccount
+    name: tester-edit-user
+    namespace: default
+EORBAC
+echo "✅ Edit user granted access to platform Prometheus"
 
 # Now run tests for each user
 print_header "Running tests for all users"
@@ -435,17 +496,20 @@ run_token_verification
 sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
 
-# Run observability tests (only once as admin, since they verify infrastructure)
-print_header "Running Observability Tests"
+# Run observability tests as admin (verify infrastructure + admin traffic in metrics)
+print_header "Running Observability Tests as admin"
 run_observability_tests
 
-# Test edit user  
+# Test edit user
 print_header "Running Maas e2e Tests as edit user"
 EDIT_TOKEN=$(oc create token tester-edit-user -n default)
 oc login --token "$EDIT_TOKEN" --server "$K8S_CLUSTER_URL"
 run_smoke_tests
+print_header "Running Observability Tests as edit user"
+run_observability_tests
 
-# Test view user
+# Test view user (smoke only -- observability requires Prometheus/port-forward
+# access that view users don't have by OpenShift RBAC design)
 print_header "Running Maas e2e Tests as view user"
 VIEW_TOKEN=$(oc create token tester-view-user -n default)
 oc login --token "$VIEW_TOKEN" --server "$K8S_CLUSTER_URL"
@@ -453,7 +517,9 @@ run_smoke_tests
 
 if [[ "${TESTS_FAILED}" == "true" ]]; then
     echo "❌ Some tests failed — see reports above for details"
+    restore_oc_login
     exit 1
 fi
 
+restore_oc_login
 echo "🎉 Deployment completed successfully!"

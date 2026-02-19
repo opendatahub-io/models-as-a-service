@@ -61,6 +61,24 @@ When using the full deployment script, this is applied automatically:
 
 **Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/components/observability/monitors/` if your deployment includes that component.
 
+### CI observability tests
+
+The e2e pipeline runs observability tests (see [E2E Testing](../../../test/e2e/README.md)) as part of the same CI flow. **Observability tests run as admin and edit.** Admin runs the full suite including infrastructure validation. Edit runs the same suite, verifying that edit-level users can access metrics via port-forward (edit is granted access to platform Prometheus via a Role/RoleBinding in `openshift-monitoring` so it can query Istio metrics). View users only run smoke tests -- observability requires Prometheus/port-forward access that view users don't have by OpenShift RBAC design. The test flow is validated by running the e2e script (`prow_run_smoke_test.sh`) manually or in CI; there is no separate unit test for the script itself.
+
+**How metrics are validated:**
+
+- **Direct endpoint checks (port-forward only):** Tests use **port-forward** from the test process to each component (no exec into pods), so failures isolate “endpoint down” vs “Prometheus scraping”:
+  - **Limitador:** port-forward → `http://127.0.0.1:18590/metrics`; assert metric names and labels (`user`, `tier`, `model`).
+  - **Istio gateway:** port-forward → `http://127.0.0.1:18590/stats/prometheus` (Envoy; not `/metrics`); assert `istio_*` metrics.
+  - **vLLM/model:** port-forward → `https://127.0.0.1:18590/metrics` (or http per config); assert at least one of `vllm:e2e_request_latency_seconds`, `vllm:request_success_total`, `vllm:num_requests_running`.
+  - **Authorino:** port-forward → `http://127.0.0.1:18590/server-metrics`; assert `auth_server_authconfig_duration_seconds` or `auth_server_authconfig_response_status`.
+- **Prometheus queries (port-forward + REST, all components):** Prometheus is queried via port-forward to the Prometheus pod and HTTP `GET /api/v1/query` (no `kubectl exec`). We check all components, metrics, and labels:
+  - **Limitador** (user-workload): `limitador_up`, `authorized_hits`, `authorized_calls`, `limited_calls` and labels `user`, `tier`, `model` (on `authorized_hits`).
+  - **Istio gateway** (platform): `istio_request_duration_milliseconds_bucket`, `istio_requests_total` and labels `tier`, `destination_service_name`, `response_code`.
+  - **vLLM** (user-workload): e.g. `vllm:e2e_request_latency_seconds_*`, `vllm:request_success_total`, `vllm:num_requests_running`, `vllm:num_requests_waiting`, `vllm:kv_cache_usage_perc`, token histograms, TTFT, ITL, and `model_name` label.
+  - **Authorino** (user-workload): `auth_server_authconfig_duration_seconds_*`, `auth_server_authconfig_response_status` and `status` label.
+  - **Metric types** (counter/gauge/histogram) are asserted from `expected_metrics.yaml` via Prometheus `/api/v1/metadata`.
+
 ## Metrics Collection
 
 ### Limitador Metrics

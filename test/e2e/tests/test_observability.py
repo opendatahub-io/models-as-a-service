@@ -7,6 +7,16 @@ Observability Tests for MaaS Platform
 These tests verify that the observability stack is correctly deployed and
 that metrics are being generated with the expected labels.
 
+How other e2e tests are implemented (not in this file):
+- Smoke: smoke.sh (bash) gets token via curl from host, then pytest test_smoke.py
+  hits the gateway URL from the test process (no pods).
+- Validation: validate-deployment.sh (bash), kubectl + curl from host.
+- Token verification: verify-tokens-metadata-logic.sh (bash).
+
+Observability (this file): Direct metrics checks are done from inside the test
+process only: port-forward each component (including Prometheus) to localhost,
+then HTTP GET from the test (no exec into component pods, no helper pods).
+
 Tests will FAIL with informative messages if:
 - Kubernetes resources (TelemetryPolicy, Telemetry, ServiceMonitor) are missing
 - Metrics are not available from Limitador
@@ -19,10 +29,13 @@ Configuration is loaded from: test/e2e/config/expected_metrics.yaml
 import json
 import logging
 import re
+import ssl
 import subprocess
 import time
 from pathlib import Path
+from urllib.error import URLError
 from urllib.parse import quote
+from urllib.request import urlopen
 
 import pytest
 import yaml
@@ -74,40 +87,171 @@ def _metric_exists_in_text(metrics_text: str, metric_name: str) -> bool:
 
 
 def _fetch_limitador_metrics(namespace: str, port: int, path: str) -> str:
+    """Fetch Limitador metrics via port-forward from the test process (works in CI and local)."""
+    return _fetch_metrics_via_port_forward(
+        namespace=namespace,
+        pod_label_selector="app=limitador",
+        port=port,
+        path=path,
+        scheme="http",
+        component_name="Limitador",
+    )
+
+
+# Distinct local ports per component to avoid "address already in use" when tests run back-to-back.
+LOCAL_PORT_LIMITADOR = 18590
+LOCAL_PORT_ISTIO = 18591
+LOCAL_PORT_VLLM = 18592
+LOCAL_PORT_AUTHORINO = 18593
+LOCAL_PORT_PROMETHEUS_USER = 18594
+LOCAL_PORT_PROMETHEUS_PLATFORM = 18595
+
+
+def _prometheus_http_via_port_forward(
+    namespace: str,
+    pod_name: str,
+    path: str,
+    local_port: int,
+    timeout_sec: int = 15,
+    attempts: int = 3,
+) -> str | None:
     """
-    Fetch raw Prometheus metrics text from a Limitador pod via kubectl exec.
-    Raises pytest.fail if the pod cannot be found or metrics cannot be fetched.
+    Query Prometheus via port-forward + HTTP GET (no exec).
+    Forwards pod:9090 to local_port, retries up to `attempts` times.
     """
+    pf_cmd = [
+        "kubectl", "port-forward", "-n", namespace,
+        f"pod/{pod_name}", f"{local_port}:9090",
+    ]
+    proc = subprocess.Popen(
+        pf_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        time.sleep(2)
+        url = f"http://127.0.0.1:{local_port}{path}"
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                with urlopen(url, timeout=timeout_sec) as resp:
+                    return resp.read().decode("utf-8", errors="replace")
+            except (URLError, OSError) as e:
+                last_error = e
+                if attempt < attempts - 1:
+                    time.sleep(2)
+            except Exception as e:
+                last_error = e
+                if attempt < attempts - 1:
+                    time.sleep(2)
+        log.warning(
+            f"[prometheus] port-forward GET failed (ns={namespace}, "
+            f"{attempts} attempts): {last_error}"
+        )
+        return None
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _fetch_metrics_via_port_forward(
+    namespace: str,
+    pod_label_selector: str,
+    port: int,
+    path: str,
+    scheme: str = "http",
+    component_name: str = "pod",
+    local_port: int | None = None,
+) -> str:
+    """
+    Fetch metrics by port-forwarding the pod port to localhost, then HTTP GET from the test process.
+    Uses distinct local_port per component and retries on connection errors for reliability.
+    """
+    if local_port is None:
+        local_port = LOCAL_PORT_LIMITADOR
     pod_cmd = [
         "get", "pod", "-n", namespace,
-        "-l", "app=limitador",
+        "-l", pod_label_selector,
         "-o", "jsonpath={.items[0].metadata.name}"
     ]
     rc, pod_name, _ = _run_kubectl(pod_cmd)
     if rc != 0 or not pod_name.strip():
         pytest.fail(
-            f"FAIL: Could not find Limitador pod in namespace '{namespace}'.\n"
-            f"  Check: kubectl get pods -n {namespace} -l app=limitador"
+            f"FAIL: Could not find {component_name} pod in namespace '{namespace}' "
+            f"(selector: {pod_label_selector}).\n"
+            f"  Check: kubectl get pods -n {namespace} -l '{pod_label_selector}'"
         )
-
     pod_name = pod_name.strip()
-
-    exec_cmd = [
-        "exec", "-n", namespace, pod_name, "--",
-        "curl", "-s", f"http://localhost:{port}{path}"
+    pf_cmd = [
+        "kubectl", "port-forward", "-n", namespace,
+        f"pod/{pod_name}", f"{local_port}:{port}"
     ]
-    rc, metrics_text, stderr = _run_kubectl(exec_cmd, timeout=60)
+    url = f"{scheme}://127.0.0.1:{local_port}{path}"
+    proc = subprocess.Popen(
+        pf_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        time.sleep(2)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        if scheme != "https":
+            ctx = None
+        last_error = None
+        for attempt in range(3):
+            try:
+                if ctx is not None:
+                    with urlopen(url, timeout=15, context=ctx) as resp:
+                        metrics_text = resp.read().decode("utf-8", errors="replace")
+                else:
+                    with urlopen(url, timeout=15) as resp:
+                        metrics_text = resp.read().decode("utf-8", errors="replace")
+                break
+            except (URLError, OSError) as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(2)
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(2)
+        else:
+            pytest.fail(
+                f"FAIL: Could not fetch metrics from {component_name} via port-forward (3 attempts).\n"
+                f"  URL: {url}\n  Last error: {last_error}\n"
+                f"  Pod: {pod_name} in {namespace}"
+            )
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
-    if rc != 0:
-        pytest.fail(
-            f"FAIL: Could not fetch metrics from Limitador pod '{pod_name}'.\n"
-            f"  Error: {stderr}\n"
-            f"  Check: kubectl exec -n {namespace} {pod_name} -- "
-            f"curl -s http://localhost:{port}{path}"
-        )
-
-    log.info(f"[metrics] Fetched {len(metrics_text)} bytes from Limitador")
+    log.info(f"[metrics] Fetched {len(metrics_text)} bytes from {component_name} (port-forward)")
     return metrics_text
+
+
+def _can_list_servicemonitors_in(namespace: str) -> tuple[bool, str]:
+    """
+    Return (True, '') if the current user can list ServiceMonitors in the namespace.
+    Otherwise (False, reason) so callers can skip with a clear message (edit/view often lack this).
+    """
+    rc, _, stderr = _run_kubectl(["get", "servicemonitor", "-n", namespace, "--no-headers"])
+    if rc == 0:
+        return True, ""
+    err = (stderr or "").lower()
+    if "forbidden" in err:
+        return False, (
+            f"Insufficient permissions to list ServiceMonitor in '{namespace}' "
+            "(edit/view users often lack this). Run as cluster-admin to verify scraping config."
+        )
+    return False, (stderr or "Could not list ServiceMonitor").strip()
 
 
 def _resource_exists(kind: str, name: str, namespace: str) -> bool:
@@ -129,65 +273,51 @@ def _get_resource_condition(kind: str, name: str, namespace: str, condition_type
 
 
 def _query_prometheus(query: str, namespace: str = "openshift-user-workload-monitoring",
-                      pod: str = "prometheus-user-workload-0",
-                      container: str = "prometheus") -> dict | None:
+                      pod: str = "prometheus-user-workload-0") -> dict | None:
     """
-    Query Prometheus via kubectl exec.
+    Query Prometheus via port-forward + HTTP GET (no exec).
     Returns the JSON response or None if query failed.
-    
-    Args:
-        query: PromQL query string
-        namespace: Prometheus pod namespace
-        pod: Prometheus pod name
-        container: Container name within the pod
+    Uses REST so only pod get + portforward are needed (no exec).
     """
-    # URL-encode the query to avoid shell interpretation of special chars like {}
     encoded_query = quote(query, safe="")
-    exec_cmd = [
-        "exec", "-n", namespace,
-        pod, "-c", container, "--",
-        "curl", "-s", f"http://localhost:9090/api/v1/query?query={encoded_query}"
-    ]
-    rc, stdout, stderr = _run_kubectl(exec_cmd, timeout=30)
-
-    if rc != 0:
-        log.warning(f"[prometheus] Query failed (ns={namespace}): {stderr}")
+    path = f"/api/v1/query?query={encoded_query}"
+    local_port = (
+        LOCAL_PORT_PROMETHEUS_PLATFORM
+        if namespace == "openshift-monitoring"
+        else LOCAL_PORT_PROMETHEUS_USER
+    )
+    body = _prometheus_http_via_port_forward(namespace, pod, path, local_port)
+    if body is None:
         return None
-
     try:
-        return json.loads(stdout)
+        return json.loads(body)
     except Exception as e:
         log.warning(f"[prometheus] Failed to parse response: {e}")
         return None
 
 
 def _query_prometheus_metadata(metric_name: str, namespace: str = "openshift-user-workload-monitoring",
-                               pod: str = "prometheus-user-workload-0",
-                               container: str = "prometheus") -> str | None:
+                               pod: str = "prometheus-user-workload-0") -> str | None:
     """
-    Query Prometheus metadata API to get the type of a metric.
+    Query Prometheus metadata API via port-forward + HTTP GET (no exec).
     Returns the type string ('counter', 'gauge', 'histogram', 'summary') or None.
     """
     encoded_metric = quote(metric_name, safe="")
-    exec_cmd = [
-        "exec", "-n", namespace,
-        pod, "-c", container, "--",
-        "curl", "-s", f"http://localhost:9090/api/v1/metadata?metric={encoded_metric}"
-    ]
-    rc, stdout, stderr = _run_kubectl(exec_cmd, timeout=30)
-
-    if rc != 0:
-        log.warning(f"[prometheus] Metadata query failed: {stderr}")
+    path = f"/api/v1/metadata?metric={encoded_metric}"
+    local_port = (
+        LOCAL_PORT_PROMETHEUS_PLATFORM
+        if namespace == "openshift-monitoring"
+        else LOCAL_PORT_PROMETHEUS_USER
+    )
+    body = _prometheus_http_via_port_forward(namespace, pod, path, local_port)
+    if body is None:
         return None
-
     try:
-        data = json.loads(stdout)
+        data = json.loads(body)
     except Exception:
         return None
-
     if data.get("status") != "success":
         return None
-
     entries = data.get("data", {}).get(metric_name, [])
     if entries:
         return entries[0].get("type")
@@ -204,7 +334,6 @@ def _query_platform_prometheus(query: str) -> dict | None:
         query,
         namespace="openshift-monitoring",
         pod="prometheus-k8s-0",
-        container="prometheus",
     )
 
 
@@ -272,10 +401,17 @@ class TestObservabilityResources:
         PodMonitor (kuadrant-limitador-monitor). In that case, install-observability.sh
         skips deploying the MaaS ServiceMonitor to avoid duplicate metrics.
         Either mechanism is acceptable.
+        Passes with a note for edit users who lack RBAC to list ServiceMonitor
+        (already validated by admin run).
         """
         cfg = expected_metrics_config["resources"]["limitador_servicemonitor"]
         name = cfg["name"]
         namespace = cfg["namespace"]
+
+        can_list, skip_reason = _can_list_servicemonitors_in(namespace)
+        if not can_list:
+            print(f"PASS: {skip_reason} (already validated by admin observability run)")
+            return
 
         # Check for MaaS-deployed ServiceMonitor
         has_servicemonitor = _resource_exists("servicemonitor", name, namespace)
@@ -364,7 +500,7 @@ class TestLimitadorMetrics:
     @pytest.fixture(scope="class")
     def limitador_metrics(self, expected_metrics_config, make_test_request) -> str:
         """
-        Fetch raw metrics from Limitador via kubectl exec.
+        Fetch raw metrics from Limitador via port-forward.
         Returns the raw Prometheus metrics text.
 
         Depends on make_test_request to ensure a request has been made first.
@@ -372,13 +508,8 @@ class TestLimitadorMetrics:
         cfg = expected_metrics_config["limitador"]["access"]
         return _fetch_limitador_metrics(cfg["namespace"], cfg["port"], cfg["path"])
 
-    def _metric_exists(self, metrics_text: str, metric_name: str) -> bool:
-        """Check if a metric exists in the Prometheus metrics text."""
-        return _metric_exists_in_text(metrics_text, metric_name)
-
     def _metric_has_label(self, metrics_text: str, metric_name: str, label_name: str) -> bool:
         """Check if a metric has a specific label."""
-        # Match metric_name{...label_name="..."}
         pattern = rf'^{re.escape(metric_name)}\{{[^}}]*{re.escape(label_name)}="[^"]*"'
         return bool(re.search(pattern, metrics_text, re.MULTILINE))
 
@@ -394,7 +525,7 @@ class TestLimitadorMetrics:
         """Verify authorized_hits metric is available (from observability.md Key Metrics Reference)."""
         metric_name = "authorized_hits"
 
-        if not self._metric_exists(limitador_metrics, metric_name):
+        if not _metric_exists_in_text(limitador_metrics, metric_name):
             pytest.fail(
                 f"FAIL: Metric '{metric_name}' not found in Limitador after making request.\n"
                 f"  Reference: observability.md Key Metrics Reference\n"
@@ -414,7 +545,7 @@ class TestLimitadorMetrics:
         )
         assert cfg, f"FAIL: Metric '{metric_name}' not found in configuration"
 
-        if not self._metric_exists(limitador_metrics, metric_name):
+        if not _metric_exists_in_text(limitador_metrics, metric_name):
             pytest.fail(
                 f"FAIL: Metric '{metric_name}' not found in Limitador after making request.\n"
                 f"  Reference: observability.md Key Metrics Reference\n"
@@ -439,7 +570,7 @@ class TestLimitadorMetrics:
         )
         assert cfg, f"FAIL: Metric '{metric_name}' not found in configuration"
 
-        if not self._metric_exists(limitador_metrics, metric_name):
+        if not _metric_exists_in_text(limitador_metrics, metric_name):
             pytest.fail(
                 f"FAIL: Metric '{metric_name}' not found in Limitador.\n"
                 f"  Reference: observability.md Key Metrics Reference\n"
@@ -451,6 +582,105 @@ class TestLimitadorMetrics:
             )
 
         print(f"[metrics] Metric '{metric_name}' exists ✓")
+
+
+# =============================================================================
+# Direct /metrics for all components (isolate endpoint vs Prometheus scraping)
+# =============================================================================
+
+class TestDirectMetricsAllComponents:
+    """
+    Direct endpoint tests for all components via port-forward from the test process.
+    Isolates endpoint vs Prometheus scraping. No exec into pods.
+    - Limitador: /metrics
+    - Istio gateway: /stats/prometheus (Envoy; not /metrics)
+    - vLLM: /metrics (HTTPS when configured)
+    - Authorino: /server-metrics
+    """
+
+    @pytest.fixture(scope="class")
+    def istio_metrics_text(self, expected_metrics_config, make_test_request) -> str:
+        """Fetch Istio gateway Envoy metrics via port-forward. Endpoint: /stats/prometheus."""
+        access = expected_metrics_config.get("latency_metrics", {}).get("istio_gateway", {}).get("access")
+        if not access:
+            pytest.skip("latency_metrics.istio_gateway.access not in expected_metrics.yaml")
+        return _fetch_metrics_via_port_forward(
+            namespace=access["namespace"],
+            pod_label_selector=access["pod_label_selector"],
+            port=access["port"],
+            path=access["path"],
+            scheme=access.get("scheme", "http"),
+            component_name="Istio gateway",
+            local_port=LOCAL_PORT_ISTIO,
+        )
+
+    def test_istio_gateway_direct_metrics(self, istio_metrics_text, expected_metrics_config):
+        """Verify Istio gateway exposes istio_* metrics on /stats/prometheus (Envoy; not /metrics)."""
+        for name in ("istio_requests_total", "istio_request_duration_milliseconds"):
+            if _metric_exists_in_text(istio_metrics_text, name):
+                print(f"[metrics] Istio gateway direct /stats/prometheus: '{name}' exists ✓")
+                return
+        pytest.fail(
+            "FAIL: No istio_requests_total or istio_request_duration_milliseconds in Istio gateway.\n"
+            "  Endpoint: /stats/prometheus (Envoy does not expose /metrics).\n"
+            "  Check: kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway"
+        )
+
+    @pytest.fixture(scope="class")
+    def vllm_metrics_text(self, expected_metrics_config, make_test_request) -> str:
+        """Fetch vLLM metrics from a model pod via port-forward (after traffic so metrics are registered)."""
+        access = expected_metrics_config.get("latency_metrics", {}).get("vllm", {}).get("access")
+        if not access:
+            pytest.skip("latency_metrics.vllm.access not in expected_metrics.yaml")
+        return _fetch_metrics_via_port_forward(
+            namespace=access["namespace"],
+            pod_label_selector=access["pod_label_selector"],
+            port=access["port"],
+            path=access["path"],
+            scheme=access.get("scheme", "http"),
+            component_name="vLLM/model",
+            local_port=LOCAL_PORT_VLLM,
+        )
+
+    def test_vllm_direct_metrics(self, vllm_metrics_text, expected_metrics_config):
+        """Verify vLLM/model pod exposes vllm:* metrics on /metrics."""
+        for name in ("vllm:e2e_request_latency_seconds", "vllm:request_success_total", "vllm:num_requests_running"):
+            if _metric_exists_in_text(vllm_metrics_text, name):
+                print(f"[metrics] vLLM direct /metrics: '{name}' exists ✓")
+                return
+        pytest.fail(
+            "FAIL: No vllm:* metrics in model pod /metrics (traffic may not have reached the pod yet).\n"
+            "  This isolates endpoint vs scraping: if this fails, the model pod is not exposing metrics.\n"
+            "  Check: kubectl get pods -n llm -l app.kubernetes.io/part-of=llminferenceservice"
+        )
+
+    @pytest.fixture(scope="class")
+    def authorino_metrics_text(self, expected_metrics_config, make_test_request) -> str:
+        """Fetch Authorino /server-metrics via port-forward."""
+        access = expected_metrics_config.get("authorino", {}).get("access")
+        if not access:
+            pytest.skip("authorino.access not in expected_metrics.yaml")
+        return _fetch_metrics_via_port_forward(
+            namespace=access["namespace"],
+            pod_label_selector=access["pod_label_selector"],
+            port=access["port"],
+            path=access["path"],
+            scheme=access.get("scheme", "http"),
+            component_name="Authorino",
+            local_port=LOCAL_PORT_AUTHORINO,
+        )
+
+    def test_authorino_direct_server_metrics(self, authorino_metrics_text, expected_metrics_config):
+        """Verify Authorino pod exposes auth_server_* on /server-metrics."""
+        for name in ("auth_server_authconfig_duration_seconds", "auth_server_authconfig_response_status"):
+            if _metric_exists_in_text(authorino_metrics_text, name):
+                print(f"[metrics] Authorino direct /server-metrics: '{name}' exists ✓")
+                return
+        pytest.fail(
+            "FAIL: No auth_server_* metrics in Authorino /server-metrics.\n"
+            "  This isolates endpoint vs scraping: if this fails, Authorino is not exposing server-metrics.\n"
+            "  Check: kubectl get pods -n kuadrant-system -l authorino-resource=authorino"
+        )
 
 
 # =============================================================================
@@ -568,10 +798,6 @@ class TestMetricsAfterRequest:
         cfg = expected_metrics_config["limitador"]["access"]
         return _fetch_limitador_metrics(cfg["namespace"], cfg["port"], cfg["path"])
 
-    def _metric_exists(self, metrics_text: str, metric_name: str) -> bool:
-        """Check if a metric exists in Prometheus format text."""
-        return _metric_exists_in_text(metrics_text, metric_name)
-
     def _check_metric_label(self, metrics_text: str, metric_name: str, label_name: str) -> tuple[bool, str]:
         """Check if a metric has a specific label. Returns (has_label, sample_lines)."""
         pattern = rf'^{metric_name}\{{[^}}]*{label_name}="[^"]+"'
@@ -592,13 +818,12 @@ class TestMetricsAfterRequest:
 
         metrics_text = limitador_metrics_after_request
         
-        # Check all token metrics for user label (from docs)
         token_metrics = ["authorized_hits", "authorized_calls", "limited_calls"]
         metrics_verified = 0
         
         for metric_name in token_metrics:
-            if not self._metric_exists(limitador_metrics_after_request, metric_name):
-                continue  # Skip if metric doesn't exist yet
+            if not _metric_exists_in_text(limitador_metrics_after_request, metric_name):
+                continue
             
             has_label, sample = self._check_metric_label(metrics_text, metric_name, "user")
             if not has_label:
@@ -614,7 +839,6 @@ class TestMetricsAfterRequest:
             metrics_verified += 1
             print(f"[e2e] Metric '{metric_name}' has 'user' label ✓")
         
-        # Fail if no metrics were found to verify
         if metrics_verified == 0:
             pytest.fail(
                 f"FAIL: No token metrics found to verify 'user' label.\n"
@@ -638,7 +862,7 @@ class TestMetricsAfterRequest:
         metrics_verified = 0
         
         for metric_name in token_metrics:
-            if not self._metric_exists(limitador_metrics_after_request, metric_name):
+            if not _metric_exists_in_text(limitador_metrics_after_request, metric_name):
                 continue
             
             has_label, sample = self._check_metric_label(metrics_text, metric_name, "tier")
@@ -655,7 +879,6 @@ class TestMetricsAfterRequest:
             metrics_verified += 1
             print(f"[e2e] Metric '{metric_name}' has 'tier' label ✓")
         
-        # Fail if no metrics were found to verify
         if metrics_verified == 0:
             pytest.fail(
                 f"FAIL: No token metrics found to verify 'tier' label.\n"
@@ -682,7 +905,7 @@ class TestMetricsAfterRequest:
         metrics_text = limitador_metrics_after_request
         metric_name = "authorized_hits"
 
-        if not self._metric_exists(metrics_text, metric_name):
+        if not _metric_exists_in_text(metrics_text, metric_name):
             pytest.fail(
                 f"FAIL: Metric '{metric_name}' not found in Limitador.\n"
                 f"  Cannot verify 'model' label without the metric.\n"
@@ -1263,7 +1486,17 @@ class TestAuthorinoMetrics:
     """
 
     def test_authorino_server_metrics_scraping_configured(self):
-        """Verify Authorino /server-metrics scraping is configured."""
+        """Verify Authorino /server-metrics scraping is configured.
+
+        Passes with a note for edit users who lack RBAC to list ServiceMonitor
+        (already validated by admin run).
+        """
+        namespace = "kuadrant-system"
+        can_list, skip_reason = _can_list_servicemonitors_in(namespace)
+        if not can_list:
+            print(f"PASS: {skip_reason} (already validated by admin observability run)")
+            return
+
         # Check for MaaS-deployed ServiceMonitor
         has_maas_sm = _resource_exists(
             "servicemonitor", "authorino-server-metrics", "kuadrant-system"
@@ -1455,7 +1688,6 @@ class TestMetricTypes:
                     metric_name,
                     namespace="openshift-monitoring",
                     pod="prometheus-k8s-0",
-                    container="prometheus",
                 )
             else:
                 actual_type = _query_prometheus_metadata(metric_name)

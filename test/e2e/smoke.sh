@@ -56,22 +56,37 @@ fi
 USER="$(oc whoami)"
 echo "[smoke] Performing smoke test for user: ${USER}"
 
-# 1) Mint a MaaS token using your cluster token
+# 1) Mint a MaaS token using your cluster token (retry on transient 5xx)
 mkdir -p "${DIR}/reports"
 LOG="${DIR}/reports/smoke-${USER}.log"
 : > "${LOG}"
 
 FREE_OC_TOKEN="$(oc whoami -t || true)"
-TOKEN_RESPONSE="$(curl -skS \
-  -H "Authorization: Bearer ${FREE_OC_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"expiration":"10m"}' \
-  "${MAAS_API_BASE_URL}/v1/tokens" || true)"
+TOKEN=""
+TOKEN_RESPONSE=""
+MAX_ATTEMPTS="${SMOKE_TOKEN_MINT_ATTEMPTS:-3}"
+for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+  TOKEN_RESPONSE="$(curl -skS \
+    -H "Authorization: Bearer ${FREE_OC_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -X POST \
+    -d '{"expiration":"10m"}' \
+    -w "\n%{http_code}" \
+    "${MAAS_API_BASE_URL}/v1/tokens" 2>/dev/null || true)"
+  HTTP_CODE="$(echo "$TOKEN_RESPONSE" | tail -n1)"
+  BODY="$(echo "$TOKEN_RESPONSE" | sed '$d')"
+  TOKEN="$(echo "$BODY" | jq -r .token 2>/dev/null || true)"
+  if [[ -n "${TOKEN}" && "${TOKEN}" != "null" ]]; then
+    break
+  fi
+  if [[ $attempt -lt $MAX_ATTEMPTS ]]; then
+    echo "[smoke] Token mint attempt ${attempt}/${MAX_ATTEMPTS} failed (HTTP ${HTTP_CODE}), retrying in 5s..." | tee -a "${LOG}"
+    sleep 5
+  fi
+done
 
-TOKEN="$(echo "${TOKEN_RESPONSE}" | jq -r .token 2>/dev/null || true)"
 if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
-  echo "[smoke] ERROR: could not mint MaaS token" | tee -a "${LOG}"
+  echo "[smoke] ERROR: could not mint MaaS token after ${MAX_ATTEMPTS} attempt(s)" | tee -a "${LOG}"
   echo "${TOKEN_RESPONSE}" | tee -a "${LOG}"
   exit 1
 fi
