@@ -747,7 +747,7 @@ check_conflicting_operators() {
     log_error "Quit the execution of the script. You may try re-running again."
     return 1
   fi
-  log_info "No conflicting operators found. Proceeding to installing primary operator."
+  log_info "No conflicting operators found. Proceeding to installing the primary operator."
 }
 
 #──────────────────────────────────────────────────────────────
