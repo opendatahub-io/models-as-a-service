@@ -6,6 +6,8 @@ dist/
 build/
 .idea/
 .claude
+.cursor/
+AGENTS.md
 
 *.pid
 
