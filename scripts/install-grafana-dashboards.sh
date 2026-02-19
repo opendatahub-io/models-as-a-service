@@ -90,11 +90,15 @@ fi
 # ==========================================
 echo "🔍 Discovering Grafana instance(s)..."
 
-LIST_OPTS="-A --no-headers"
-[ -n "$GRAFANA_NAMESPACE" ] && LIST_OPTS="-n $GRAFANA_NAMESPACE --no-headers"
-[ -n "$GRAFANA_LABEL" ]    && LIST_OPTS="$LIST_OPTS -l $GRAFANA_LABEL"
+LIST_OPTS=("--no-headers")
+if [ -n "$GRAFANA_NAMESPACE" ]; then
+    LIST_OPTS+=("-n" "$GRAFANA_NAMESPACE")
+else
+    LIST_OPTS+=("-A")
+fi
+[ -n "$GRAFANA_LABEL" ] && LIST_OPTS+=("-l" "$GRAFANA_LABEL")
 
-GRAFANA_LIST=$(kubectl get grafanas.grafana.integreatly.org $LIST_OPTS 2>/dev/null || true)
+GRAFANA_LIST=$(kubectl get grafanas.grafana.integreatly.org "${LIST_OPTS[@]}" 2>/dev/null || true)
 if [ -z "$GRAFANA_LIST" ]; then
     GRAFANA_COUNT=0
 else
@@ -145,7 +149,7 @@ echo "   ✅ One Grafana instance found: $GRAFANA_NAME in namespace $TARGET_NS"
 echo ""
 echo "📊 Deploying MaaS dashboard definitions to namespace $TARGET_NS..."
 kustomize build "$OBSERVABILITY_DIR/dashboards" | \
-    sed "s/namespace: maas-api/namespace: $TARGET_NS/g" | \
+    sed "s/^  namespace: maas-api$/  namespace: $TARGET_NS/" | \
     kubectl apply -f -
 
 echo "   ✅ Dashboards applied (Platform Admin, AI Engineer)."

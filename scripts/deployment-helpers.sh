@@ -854,7 +854,8 @@ wait_for_csv() {
 
   echo "⏳ Waiting for CSV ${csv_name} to succeed (timeout: ${timeout}s)..."
   while [ $SECONDS -lt $end_time ]; do
-    local phase=$(kubectl get csv -n "$namespace" "$csv_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    local phase
+    phase=$(kubectl get csv -n "$namespace" "$csv_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
     local elapsed=$((SECONDS - (end_time - timeout)))
 
     case "$phase" in
@@ -1246,4 +1247,42 @@ wait_authorino_ready() {
 
   echo "  WARNING: Auth request verification timed out, continuing anyway"
   return 0
+}
+
+# ==========================================
+# Python Virtual Environment Functions
+# ==========================================
+
+# setup_python_venv project_root [label]
+#   Creates (if needed), activates, and installs dependencies into a Python venv
+#   at <project_root>/test/e2e/.venv. Shared by smoke.sh and prow_run_smoke_test.sh
+#   so both use the same logic and venv path.
+#
+# Arguments:
+#   project_root - Absolute path to the repository root
+#   label        - Optional log prefix (default: "venv")
+#
+# Side effects:
+#   - Creates .venv if it doesn't exist
+#   - Activates the virtual environment (caller must deactivate when done)
+#   - Installs pip + requirements.txt
+setup_python_venv() {
+  local project_root="${1:?project_root is required}"
+  local label="${2:-venv}"
+  local venv_dir="${project_root}/test/e2e/.venv"
+
+  if [[ ! -f "${venv_dir}/bin/activate" ]]; then
+    echo "[$label] Creating virtual environment at ${venv_dir}"
+    rm -rf "${venv_dir}"  # Clean up any corrupt/incomplete venv
+    python3 -m venv "${venv_dir}" --upgrade-deps
+  fi
+
+  # Activate virtual environment
+  # shellcheck disable=SC1091
+  source "${venv_dir}/bin/activate"
+
+  # Install dependencies
+  python -m pip install --upgrade pip --quiet
+  python -m pip install -r "${project_root}/test/e2e/requirements.txt" --quiet
+  echo "[$label] Virtual environment ready"
 }
