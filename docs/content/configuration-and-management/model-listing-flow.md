@@ -88,6 +88,6 @@ You can use the [maas-controller examples](https://github.com/opendatahub-io/mod
 
 ## Related documentation
 
-- [MaaS Controller README](../../../maas-controller/README.md) — install and MaaSModel/MaaSAuthPolicy/MaaSSubscription
+- [MaaS Controller README](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) — install and MaaSModel/MaaSAuthPolicy/MaaSSubscription
 - [Model setup](./model-setup.md) — configuring LLMInferenceServices (gateway reference, tier annotation) as backends for MaaSModel
 - [Architecture](../architecture.md) — overall MaaS architecture

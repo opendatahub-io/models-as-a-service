@@ -159,7 +159,8 @@ kubectl get crd | grep maas.opendatahub.io
 | CRDs | `config/crd/` | MaaSModel, MaaSAuthPolicy, MaaSSubscription |
 | RBAC | `config/rbac/` | ClusterRole, ServiceAccount, bindings |
 | Controller | `config/manager/` | Deployment (`quay.io/maas/maas-controller:latest`) |
-| Default deny policy | `config/policies/` | Gateway-level TokenRateLimitPolicy with 0 tokens (deny unsubscribed) |
+| Default auth policy | `config/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |
+| Default deny policy | `config/policies/` | Gateway-level TokenRateLimitPolicy with 0 tokens (deny unsubscribed, 429) |
 
 ## Examples
 

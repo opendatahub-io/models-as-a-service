@@ -330,6 +330,9 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 		"app.kubernetes.io/part-of":    "maas-subscription",
 	}
 	if err := r.List(ctx, policyList, labelSelector); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("failed to list TRLPs for cleanup: %w", err)
 	}
 	for i := range policyList.Items {
