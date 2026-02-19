@@ -249,17 +249,35 @@ else
     print_fail "No MaaS API pods running" "Pods may be starting or failed" "Check: kubectl get pods -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api"
 fi
 
-# Check Kuadrant pods
-print_check "Kuadrant system pods"
+# Check Kuadrant/RHCL pods (policy engine)
+print_check "Policy engine (Kuadrant/RHCL) pods"
+POLICY_ENGINE_FOUND=false
+POLICY_ENGINE_TOTAL_PODS=0
+
 if kubectl get namespace kuadrant-system &>/dev/null; then
     KUADRANT_PODS=$(kubectl get pods -n kuadrant-system --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+    POLICY_ENGINE_TOTAL_PODS=$((POLICY_ENGINE_TOTAL_PODS + KUADRANT_PODS))
+    POLICY_ENGINE_FOUND=true
     if [ "$KUADRANT_PODS" -gt 0 ]; then
-        print_success "Kuadrant has $KUADRANT_PODS running pod(s)"
+        print_info "  kuadrant-system namespace: $KUADRANT_PODS running pod(s)"
+    fi
+elif kubectl get namespace rh-connectivity-link &>/dev/null; then
+    RHCL_PODS=$(kubectl get pods -n rh-connectivity-link --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+    POLICY_ENGINE_TOTAL_PODS=$((POLICY_ENGINE_TOTAL_PODS + RHCL_PODS))
+    POLICY_ENGINE_FOUND=true
+    if [ "$RHCL_PODS" -gt 0 ]; then
+        print_info "  rh-connectivity-link namespace: $RHCL_PODS running pod(s)"
+    fi
+fi
+
+if [ "$POLICY_ENGINE_FOUND" = true ]; then
+    if [ "$POLICY_ENGINE_TOTAL_PODS" -gt 0 ]; then
+        print_success "Policy engine has $POLICY_ENGINE_TOTAL_PODS total running pod(s)"
     else
-        print_fail "No Kuadrant pods running" "Kuadrant operators may not be installed" "Check: kubectl get pods -n kuadrant-system"
+        print_fail "No policy engine pods running" "Kuadrant/RHCL operators may not be installed" "Check: kubectl get pods -n kuadrant-system || kubectl get pods -n rh-connectivity-link"
     fi
 else
-    print_fail "Kuadrant namespace not found" "Kuadrant may not be installed" "Run: ./scripts/install-dependencies.sh --kuadrant"
+    print_fail "Policy engine namespace not found" "Kuadrant/RHCL may not be installed" "Run: ./scripts/deploy.sh"
 fi
 
 # Check OpenDataHub/KServe pods
@@ -384,7 +402,7 @@ if [ "$AUTHPOLICY_COUNT" -gt 0 ]; then
     if [ "$AUTHPOLICY_STATUS" = "True" ]; then
         print_success "AuthPolicy is configured and accepted"
     else
-        print_warning "AuthPolicy found but status: $AUTHPOLICY_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager"
+        print_warning "AuthPolicy found but status: $AUTHPOLICY_STATUS" "Policy may still be reconciling. Try deleting the policy engine operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager || kubectl delete pod -n rh-connectivity-link -l control-plane=controller-manager"
     fi
 else
     print_fail "No AuthPolicy found" "Authentication may not be enforced" "Check: kubectl get authpolicy -A"
@@ -397,7 +415,7 @@ if [ "$RATELIMIT_COUNT" -gt 0 ]; then
     if [ "$RATELIMIT_STATUS" = "True" ]; then
         print_success "TokenRateLimitPolicy is configured and accepted"
     else
-        print_warning "TokenRateLimitPolicy found but status: $RATELIMIT_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager"
+        print_warning "TokenRateLimitPolicy found but status: $RATELIMIT_STATUS" "Policy may still be reconciling. Try deleting the policy engine operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager || kubectl delete pod -n rh-connectivity-link -l control-plane=controller-manager"
     fi
 else
     print_fail "No TokenRateLimitPolicy found" "Rate limiting may not be enforced" "Check: kubectl get tokenratelimitpolicy -A"
@@ -733,7 +751,8 @@ else
     echo ""
     echo "Common fixes:"
     echo "  - Wait for pods to start: kubectl get pods -A | grep -v Running"
-    echo "  - Check operator logs: kubectl logs -n kuadrant-system -l app.kubernetes.io/name=kuadrant-operator"
+    echo "  - Check policy engine logs (ODH): kubectl logs -n kuadrant-system -l app.kubernetes.io/name=kuadrant-operator"
+    echo "  - Check policy engine logs (RHOAI): kubectl logs -n rh-connectivity-link -l control-plane=controller-manager"
     echo "  - Re-run deployment: ./scripts/deploy.sh"
     echo ""
     echo "Usage: ./scripts/validate-deployment.sh [MODEL_NAME]"
