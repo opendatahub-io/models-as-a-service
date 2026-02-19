@@ -2,6 +2,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+var ErrModelNotFound = errors.New("MaaSModel not found")
 
 // findHTTPRouteForModel is a shared helper used by MaaSAuthPolicy and MaaSSubscription controllers.
 // It finds the MaaSModel by name, determines the HTTPRoute name and namespace based on the model
@@ -39,7 +42,7 @@ func findHTTPRouteForModel(ctx context.Context, c client.Reader, defaultNS, mode
 	}
 
 	if maasModel == nil {
-		return "", "", fmt.Errorf("MaaSModel %s not found", modelName)
+		return "", "", fmt.Errorf("%w: %s", ErrModelNotFound, modelName)
 	}
 
 	var httpRouteName string

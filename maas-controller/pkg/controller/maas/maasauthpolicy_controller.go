@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -103,9 +104,11 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 	for _, modelName := range policy.Spec.ModelRefs {
 		httpRouteName, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, policy.Namespace, modelName)
 		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, ErrModelNotFound) {
 				log.Info("model not found, cleaning up generated AuthPolicy", "model", modelName)
-				r.deleteModelAuthPolicy(ctx, log, modelName)
+				if delErr := r.deleteModelAuthPolicy(ctx, log, modelName); delErr != nil {
+					return nil, fmt.Errorf("failed to clean up AuthPolicy for missing model %s: %w", modelName, delErr)
+				}
 				continue
 			}
 			return nil, fmt.Errorf("failed to resolve HTTPRoute for model %s: %w", modelName, err)
@@ -263,7 +266,7 @@ func (r *MaaSAuthPolicyReconciler) findHTTPRouteForModel(ctx context.Context, lo
 }
 
 // deleteModelAuthPolicy deletes the aggregated AuthPolicy for a model by label.
-func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelName string) {
+func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelName string) error {
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"})
 	labelSelector := client.MatchingLabels{
@@ -272,27 +275,26 @@ func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, lo
 		"app.kubernetes.io/part-of":    "maas-auth-policy",
 	}
 	if err := r.List(ctx, policyList, labelSelector); err != nil {
-		log.Error(err, "failed to list AuthPolicies for cleanup", "model", modelName)
-		return
+		return fmt.Errorf("failed to list AuthPolicies for cleanup: %w", err)
 	}
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
 		log.Info("Deleting AuthPolicy", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
-			log.Error(err, "failed to delete AuthPolicy", "name", p.GetName())
+			return fmt.Errorf("failed to delete AuthPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
 		}
 	}
+	return nil
 }
 
 func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(policy, maasAuthPolicyFinalizer) {
-		// Delete the model-scoped AuthPolicy for each model this policy referenced.
-		// The deletion event triggers the watch (mapGeneratedAuthPolicyToParent),
-		// which finds another auth policy for the same model and re-reconciles it.
-		// That reconcile rebuilds the AuthPolicy from remaining MaaSAuthPolicies.
 		for _, modelName := range policy.Spec.ModelRefs {
 			log.Info("Deleting model AuthPolicy so remaining policies can rebuild it", "model", modelName)
-			r.deleteModelAuthPolicy(ctx, log, modelName)
+			if err := r.deleteModelAuthPolicy(ctx, log, modelName); err != nil {
+				log.Error(err, "failed to clean up AuthPolicy, will retry", "model", modelName)
+				return ctrl.Result{}, err
+			}
 		}
 		controllerutil.RemoveFinalizer(policy, maasAuthPolicyFinalizer)
 		if err := r.Update(ctx, policy); err != nil {

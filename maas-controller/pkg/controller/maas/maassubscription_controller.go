@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -98,9 +99,11 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 	for _, modelRef := range subscription.Spec.ModelRefs {
 		httpRouteName, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, subscription.Namespace, modelRef.Name)
 		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, ErrModelNotFound) {
 				log.Info("model not found, cleaning up generated TRLP", "model", modelRef.Name)
-				r.deleteModelTRLP(ctx, log, modelRef.Name)
+				if delErr := r.deleteModelTRLP(ctx, log, modelRef.Name); delErr != nil {
+					return fmt.Errorf("failed to clean up TRLP for missing model %s: %w", modelRef.Name, delErr)
+				}
 				continue
 			}
 			return fmt.Errorf("failed to resolve HTTPRoute for model %s: %w", modelRef.Name, err)
@@ -318,7 +321,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 }
 
 // deleteModelTRLP deletes the aggregated TRLP for a model by label.
-func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log logr.Logger, modelName string) {
+func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log logr.Logger, modelName string) error {
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"})
 	labelSelector := client.MatchingLabels{
@@ -327,16 +330,16 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 		"app.kubernetes.io/part-of":    "maas-subscription",
 	}
 	if err := r.List(ctx, policyList, labelSelector); err != nil {
-		log.Error(err, "failed to list TRLPs for cleanup", "model", modelName)
-		return
+		return fmt.Errorf("failed to list TRLPs for cleanup: %w", err)
 	}
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
 		log.Info("Deleting TRLP", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
-			log.Error(err, "failed to delete TRLP", "name", p.GetName())
+			return fmt.Errorf("failed to delete TRLP %s/%s: %w", p.GetNamespace(), p.GetName(), err)
 		}
 	}
+	return nil
 }
 
 // findHTTPRouteForModel delegates to the shared helper in helpers.go.
@@ -346,14 +349,12 @@ func (r *MaaSSubscriptionReconciler) findHTTPRouteForModel(ctx context.Context, 
 
 func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
-		// For each model referenced by this subscription, delete the aggregated TRLP.
-		// The TRLP deletion event triggers the watch (mapGeneratedTRLPToParent), which
-		// finds another subscription for the same model and re-reconciles it. That
-		// reconcile rebuilds the TRLP from remaining subscriptions.
-		// If no other subscriptions exist, the model falls back to gateway-default-deny.
 		for _, modelRef := range subscription.Spec.ModelRefs {
 			log.Info("Deleting model TRLP so remaining subscriptions can rebuild it", "model", modelRef.Name)
-			r.deleteModelTRLP(ctx, log, modelRef.Name)
+			if err := r.deleteModelTRLP(ctx, log, modelRef.Name); err != nil {
+				log.Error(err, "failed to clean up TRLP, will retry", "model", modelRef.Name)
+				return ctrl.Result{}, err
+			}
 		}
 
 		controllerutil.RemoveFinalizer(subscription, maasSubscriptionFinalizer)

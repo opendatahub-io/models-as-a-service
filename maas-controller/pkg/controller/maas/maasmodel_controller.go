@@ -257,9 +257,6 @@ func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log l
 				},
 			},
 			},
-			Hostnames: []gatewayapiv1.Hostname{
-				"maas.*", // Match any hostname under maas domain
-			},
 			Rules: []gatewayapiv1.HTTPRouteRule{
 				{
 					Matches: []gatewayapiv1.HTTPRouteMatch{
@@ -371,9 +368,13 @@ func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Lo
 	return true, nil
 }
 
-// getEndpointFromLLMISvc returns the endpoint URL from LLMInferenceService status as-reported.
-// Prefers gateway-external with https, then any gateway-external, then first address, then status.URL.
+// getEndpointFromLLMISvc returns the endpoint URL from LLMInferenceService status.
+// Prefers status.URL (leverages LLMISvc's own URL promotion logic), then
+// gateway-external addresses, then first address.
 func (r *MaaSModelReconciler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInferenceService) string {
+	if llmisvc.Status.URL != nil {
+		return llmisvc.Status.URL.String()
+	}
 	var gatewayExternalURLs []string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.Name != nil && *addr.Name == "gateway-external" && addr.URL != nil {
@@ -391,55 +392,47 @@ func (r *MaaSModelReconciler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLM
 	if len(llmisvc.Status.Addresses) > 0 && llmisvc.Status.Addresses[0].URL != nil {
 		return llmisvc.Status.Addresses[0].URL.String()
 	}
-	if llmisvc.Status.URL != nil {
-		return llmisvc.Status.URL.String()
-	}
 	return ""
 }
 
 // getModelEndpoint constructs the endpoint URL from MaaSModel status (HTTPRoute hostnames) or Gateway.
 func (r *MaaSModelReconciler) getModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (string, error) {
-	// First, try to use HTTPRoute hostname from status (if already set)
-	if len(model.Status.HTTPRouteHostnames) > 0 {
-		hostname := model.Status.HTTPRouteHostnames[0]
-		return fmt.Sprintf("https://%s/%s", hostname, model.Name), nil
-	}
-
-	// If HTTPRoute hostname not available, get it from the gateway
-	// Get the gateway to find its external address/hostname
 	gatewayName := "maas-default-gateway"
 	gatewayNS := "openshift-ingress"
 
 	gateway := &gatewayapiv1.Gateway{}
-	key := client.ObjectKey{
-		Name:      gatewayName,
-		Namespace: gatewayNS,
-	}
-
+	key := client.ObjectKey{Name: gatewayName, Namespace: gatewayNS}
 	if err := r.Get(ctx, key, gateway); err != nil {
 		return "", fmt.Errorf("failed to get gateway %s/%s: %w", gatewayNS, gatewayName, err)
 	}
 
-	// Try to get hostname from gateway listeners first
-	if len(gateway.Spec.Listeners) > 0 {
-		for _, listener := range gateway.Spec.Listeners {
-			if listener.Hostname != nil {
-				hostname := string(*listener.Hostname)
-				return fmt.Sprintf("https://%s/%s", hostname, model.Name), nil
-			}
+	scheme := "http"
+	for _, listener := range gateway.Spec.Listeners {
+		if listener.TLS != nil || (listener.Protocol == gatewayapiv1.HTTPSProtocolType || listener.Protocol == gatewayapiv1.TLSProtocolType) {
+			scheme = "https"
+			break
 		}
 	}
 
-	// Fall back to gateway status addresses (external addresses)
+	if len(model.Status.HTTPRouteHostnames) > 0 {
+		hostname := model.Status.HTTPRouteHostnames[0]
+		return fmt.Sprintf("%s://%s/%s", scheme, hostname, model.Name), nil
+	}
+
+	for _, listener := range gateway.Spec.Listeners {
+		if listener.Hostname != nil {
+			hostname := string(*listener.Hostname)
+			return fmt.Sprintf("%s://%s/%s", scheme, hostname, model.Name), nil
+		}
+	}
+
 	if len(gateway.Status.Addresses) > 0 {
-		// Prefer hostname type addresses
 		for _, addr := range gateway.Status.Addresses {
 			if addr.Type != nil && *addr.Type == gatewayapiv1.HostnameAddressType {
-				return fmt.Sprintf("https://%s/%s", addr.Value, model.Name), nil
+				return fmt.Sprintf("%s://%s/%s", scheme, addr.Value, model.Name), nil
 			}
 		}
-		// If no hostname type, use the first address
-		return fmt.Sprintf("https://%s/%s", gateway.Status.Addresses[0].Value, model.Name), nil
+		return fmt.Sprintf("%s://%s/%s", scheme, gateway.Status.Addresses[0].Value, model.Name), nil
 	}
 
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)
@@ -527,21 +520,25 @@ func (r *MaaSModelReconciler) reconcileGatewayDefaults(ctx context.Context, log 
 		return fmt.Errorf("failed to list MaaSModels: %w", err)
 	}
 
-	nsSet := map[string]bool{}
+	pathPrefixSet := map[string]bool{}
 	for _, m := range models.Items {
 		if !m.GetDeletionTimestamp().IsZero() {
 			continue
 		}
-		ns := m.Spec.ModelRef.Namespace
-		if ns == "" {
-			ns = m.Namespace
+		if m.Spec.ModelRef.Kind == "ExternalModel" {
+			pathPrefixSet[m.Name] = true
+		} else {
+			ns := m.Spec.ModelRef.Namespace
+			if ns == "" {
+				ns = m.Namespace
+			}
+			pathPrefixSet[ns] = true
 		}
-		nsSet[ns] = true
 	}
 
 	var pathPredicates []string
-	for ns := range nsSet {
-		pathPredicates = append(pathPredicates, fmt.Sprintf(`request.path.startsWith("/%s/")`, ns))
+	for prefix := range pathPrefixSet {
+		pathPredicates = append(pathPredicates, fmt.Sprintf(`request.path.startsWith("/%s/")`, prefix))
 	}
 
 	var whenPredicate string
