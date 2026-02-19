@@ -4,11 +4,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
@@ -19,7 +20,8 @@ const (
 )
 
 func TestMapper_GetTierForGroups(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	configMap := fixtures.CreateTierConfigMap(testNamespace)
 	mapper := tier.NewMapper(testLogger, fixtures.NewConfigMapLister(configMap), testTenant, testNamespace)
 
@@ -150,7 +152,8 @@ func TestMapper_GetTierForGroups(t *testing.T) {
 }
 
 func TestMapper_GetTierForGroups_SameLevels(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      constant.TierMappingConfigMap,
@@ -187,7 +190,8 @@ func TestMapper_GetTierForGroups_SameLevels(t *testing.T) {
 }
 
 func TestMapper_GetTierForGroups_InvalidConfig(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	tests := []struct {
 		name        string
 		tiersYAML   string

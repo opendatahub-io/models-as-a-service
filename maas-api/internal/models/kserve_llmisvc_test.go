@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/zapr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -19,7 +21,6 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
@@ -27,7 +28,8 @@ import (
 // TestListAvailableLLMs_AlwaysAllowed tests gateway/route matching logic
 // by using a mock server that always returns 200 (authorized) with a valid /v1/models response.
 func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) { //nolint:maintidx // table-driven test
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	tests := []struct {
@@ -317,7 +319,8 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) { //nolint:maintidx // ta
 // TestListAvailableLLMs_MultiModelDiscovery tests scenarios where a single
 // inference service serves multiple models (e.g., via served model names/aliases).
 func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx // comprehensive test suite
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	// Helper to create a standard LLMInferenceService with Ready status
@@ -790,7 +793,8 @@ func TestListAvailableLLMs_MultiModelDiscovery(t *testing.T) { //nolint:maintidx
 
 // TestListAvailableLLMs_Authorization tests that authorization is enforced correctly.
 func TestListAvailableLLMs_Authorization(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	// Create mock HTTP server to simulate gateway authorization responses.
@@ -860,7 +864,8 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 // TestListAvailableLLMs_ExternalAddressTriedFirst tests that external addresses
 // are tried before internal addresses when discovering models.
 func TestListAvailableLLMs_ExternalAddressTriedFirst(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	var callOrder []string
@@ -925,7 +930,8 @@ func TestListAvailableLLMs_ExternalAddressTriedFirst(t *testing.T) {
 // TestListAvailableLLMs_FallbackToInternal tests that when external address fails,
 // the internal address is tried as fallback.
 func TestListAvailableLLMs_FallbackToInternal(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	var callOrder []string
@@ -985,7 +991,8 @@ func TestListAvailableLLMs_FallbackToInternal(t *testing.T) {
 // TestListAvailableLLMs_DenialFromOneGatewaySuccessFromAnother tests multi-tenant
 // scenarios where different gateways have different AuthPolicies.
 func TestListAvailableLLMs_DenialFromOneGatewaySuccessFromAnother(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	var callOrder []string
@@ -1043,7 +1050,8 @@ func TestListAvailableLLMs_DenialFromOneGatewaySuccessFromAnother(t *testing.T) 
 // TestListAvailableLLMs_AllAddressesDenied tests that when all addresses deny access,
 // the model is not returned.
 func TestListAvailableLLMs_AllAddressesDenied(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	var callCount atomic.Int32
@@ -1099,7 +1107,8 @@ func TestListAvailableLLMs_AllAddressesDenied(t *testing.T) {
 // TestListAvailableLLMs_ModelURLUsesAccessibleAddress tests that the returned model
 // URL is the address that was actually accessible.
 func TestListAvailableLLMs_ModelURLUsesAccessibleAddress(t *testing.T) {
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	gateway := models.GatewayRef{Name: "maas-gateway", Namespace: "gateway-ns"}
 
 	// External server that denies access - simulates inaccessible external endpoint
