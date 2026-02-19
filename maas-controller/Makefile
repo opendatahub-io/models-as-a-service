@@ -42,7 +42,7 @@ tidy:
 
 # Generate deepcopy code for API types
 generate:
-	controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
+	controller-gen object paths="./api/..."
 
 # Generate CRD manifests
 manifests:
