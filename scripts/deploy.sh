@@ -248,6 +248,38 @@ parse_arguments() {
 }
 
 #──────────────────────────────────────────────────────────────
+# PREREQUISITE CHECKS
+#──────────────────────────────────────────────────────────────
+
+check_required_tools() {
+  local missing=()
+
+  command -v oc &>/dev/null || missing+=("oc (OpenShift CLI)")
+  command -v kubectl &>/dev/null || missing+=("kubectl")
+  command -v jq &>/dev/null || missing+=("jq")
+  if command -v kustomize &>/dev/null; then
+    local kustomize_version 
+    local required="5.7.0"
+    kustomize_version=$(kustomize version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [[ -z "$kustomize_version" ]] || \
+       [[ "$(printf '%s\n%s' "$required" "$kustomize_version" | sort -V | head -1)" != "$required" ]]; then
+      missing+=("kustomize (v5.7.0+ required, found ${kustomize_version:-unknown})")
+    fi
+  else
+    missing+=("kustomize (v5.7.0+)")
+  fi
+  command -v gsed &>/dev/null || missing+=("gsed (GNU sed)")
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    log_error "Missing or incompatible required tools:"
+    for tool in "${missing[@]}"; do
+      log_error "  - $tool"
+    done
+    return 1
+  fi
+}
+
+#──────────────────────────────────────────────────────────────
 # CONFIGURATION VALIDATION
 #──────────────────────────────────────────────────────────────
 
@@ -326,6 +358,7 @@ main() {
   log_info "==================================================="
 
   parse_arguments "$@"
+  check_required_tools
   validate_configuration
 
   log_info "Deployment configuration:"
@@ -370,6 +403,9 @@ deploy_via_operator() {
   # Install rate limiter component
   install_policy_engine
 
+  # Check for conflicting operators
+  check_conflicting_operators
+  
   # Install primary operator
   install_primary_operator
 
@@ -687,6 +723,37 @@ EOF
 # PRIMARY OPERATOR INSTALLATION
 #──────────────────────────────────────────────────────────────
 
+check_conflicting_operators() {
+  log_info "Checking if there are any conflicting operators..."
+  local conflicting_operator
+  if [[ "$OPERATOR_TYPE" == "odh" ]]; then
+    conflicting_operator="rhods-operator"
+  else
+    conflicting_operator="opendatahub-operator"
+  fi
+  # Check all namespaces for a conflicting subscription
+  local conflict
+  conflict=$(oc get subscription.operators.coreos.com --all-namespaces --no-headers 2>/dev/null | grep "$conflicting_operator" || true)
+
+  if [[ -n "$conflict" ]]; then
+    local ns=$(echo "$conflict" | awk '{print $1}')
+    log_error "Conflicting operator found: $conflicting_operator in namespace $ns. ODH and RHOAI operators cannot coexist (they manage the same CRDs)."
+    log_info "Remove the conflicting operator before proceeding (suggested steps):"
+    log_info "  1. Delete custom resources: oc delete datasciencecluster --all && oc delete dscinitializations --all"
+    log_info "  2. Delete subscription: oc delete subscription.operators.coreos.com $conflicting_operator -n $ns"
+    log_info "  3. Delete CSV: oc delete csv -n $ns -l operators.coreos.com/$conflicting_operator"
+    log_info "  4. Try uninstalling $conflicting_operator (can be done via a console as well) before attempting to run deploy.sh again."
+    log_info "  5. Sanity check: delete any lingering operator groups, old namespaces and projects."
+    log_error "Quit the execution of the script. You may try re-running again."
+    return 1
+  fi
+  log_info "No conflicting operators found. Proceeding to installing the primary operator."
+}
+
+#──────────────────────────────────────────────────────────────
+# PRIMARY OPERATOR INSTALLATION
+#──────────────────────────────────────────────────────────────
+
 install_primary_operator() {
   log_info "Installing primary operator: $OPERATOR_TYPE"
 
@@ -846,10 +913,47 @@ EOF
 apply_dsc() {
   log_info "Applying DataScienceCluster with ModelsAsService..."
 
-  # Check if a DataScienceCluster already exists, skip creation if so
+  local data_dir="${SCRIPT_DIR}/data"
+
   if kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
-    log_info "DataScienceCluster already exists in the cluster. Skipping creation."
-    return 0
+    local existing_dsc
+    existing_dsc=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    # Extract all spec.components leaf paths and expected values from the manifest
+    # jq produces lines like: .spec.components.kserve.managementState=Managed
+    local dsc_manifest="${data_dir}/datasciencecluster.yaml"
+    local mismatches=()
+
+    while IFS='=' read -r field_path expected; do
+      local full_path=".spec.components${field_path}"
+      local actual
+      actual=$(kubectl get datasciencecluster "$existing_dsc" \
+        -o jsonpath="{${full_path}}" 2>/dev/null || echo "")
+      if [[ "$actual" != "$expected" ]]; then
+        mismatches+=("${full_path}: '${actual:-unset}' (expected '${expected}')")
+      fi
+    done < <(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
+      # Recursively flatten .spec.components into dot-notation paths with values
+      def leaf_paths:
+        . as $in |
+        paths(scalars) | . as $p |
+        ($in | getpath($p)) as $v |
+        [($p | map(tostring) | join(".")), ($v | tostring)];
+      .spec.components | leaf_paths | ".\(.[0])=\(.[1])"
+    ')
+
+    if [[ ${#mismatches[@]} -eq 0 ]]; then
+      log_info "Existing DataScienceCluster '$existing_dsc' meets MaaS requirements, skipping creation"
+      return 0
+    fi
+
+    log_warn "Existing DataScienceCluster '$existing_dsc' does not meet MaaS requirements:"
+    for mismatch in "${mismatches[@]}"; do
+      log_warn "  $mismatch"
+    done
+
+    log_error "Fix the required fields in DSC deployment and try again..."
+    return 1
   fi
 
   # Apply DSC with modelsAsService - this is REQUIRED for MaaS deployment
@@ -858,7 +962,6 @@ apply_dsc() {
   #
   # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
   #       Only ODH currently supports this feature
-  local data_dir="${SCRIPT_DIR}/data"
   kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
 }
 
