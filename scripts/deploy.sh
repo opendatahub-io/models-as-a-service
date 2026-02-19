@@ -919,45 +919,39 @@ apply_dsc() {
     local existing_dsc
     existing_dsc=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
-    # Verify the existing DSC meets MaaS requirements
-    local kserve_state 
-    kserve_state=$(kubectl get datasciencecluster "$existing_dsc" \
-      -o jsonpath='{.spec.components.kserve.managementState}' 2>/dev/null || echo "")
+    # Extract all spec.components leaf paths and expected values from the manifest
+    # jq produces lines like: .spec.components.kserve.managementState=Managed
+    local dsc_manifest="${data_dir}/datasciencecluster.yaml"
+    local mismatches=()
 
-    local kserve_deploy_state 
-    kserve_deploy_state=$(kubectl get datasciencecluster "$existing_dsc" \
-      -o jsonpath='{.spec.components.kserve.defaultDeploymentMode}' 2>/dev/null || echo "")
+    while IFS='=' read -r field_path expected; do
+      local full_path=".spec.components${field_path}"
+      local actual
+      actual=$(kubectl get datasciencecluster "$existing_dsc" \
+        -o jsonpath="{${full_path}}" 2>/dev/null || echo "")
+      if [[ "$actual" != "$expected" ]]; then
+        mismatches+=("${full_path}: '${actual:-unset}' (expected '${expected}')")
+      fi
+    done < <(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
+      # Recursively flatten .spec.components into dot-notation paths with values
+      def leaf_paths:
+        . as $in |
+        paths(scalars) | . as $p |
+        ($in | getpath($p)) as $v |
+        [($p | map(tostring) | join(".")), ($v | tostring)];
+      .spec.components | leaf_paths | ".\(.[0])=\(.[1])"
+    ')
 
-    local nim_state 
-    nim_state=$(kubectl get datasciencecluster "$existing_dsc" \
-      -o jsonpath='{.spec.components.kserve.nim.managementState}' 2>/dev/null || echo "")
-    
-    local raw_dep_service_config 
-    raw_dep_service_config=$(kubectl get datasciencecluster "$existing_dsc" \
-      -o jsonpath='{.spec.components.kserve.rawDeploymentServiceConfig}' 2>/dev/null || echo "")
-
-    local knative_state 
-    knative_state=$(kubectl get datasciencecluster "$existing_dsc" \
-      -o jsonpath='{.spec.components.kserve.serving.managementState}' 2>/dev/null || echo "")
-    
-    local maas_state
-    maas_state=$(kubectl get datasciencecluster "$existing_dsc" \
-      -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
-
-    if [[ "$kserve_state" == "Managed" && "$raw_dep_service_config" == "Headless" && "$maas_state" == "Managed" && "$kserve_deploy_state" == "RawDeployment" && "$nim_state" == "Managed" && "$knative_state" == "Removed" ]]; then
+    if [[ ${#mismatches[@]} -eq 0 ]]; then
       log_info "Existing DataScienceCluster '$existing_dsc' meets MaaS requirements, skipping creation"
       return 0
     fi
 
-    # Existing DSC doesn't meet requirements — replace it
     log_warn "Existing DataScienceCluster '$existing_dsc' does not meet MaaS requirements:"
-    [[ "$kserve_state" != "Managed" ]] && log_warn "  kserve.managementState: '${kserve_state:-unset}' (expected 'Managed')"
-    [[ "$kserve_deploy_state" != "RawDeployment" ]] && log_warn "  kserve.defaultDeploymentMode: '${kserve_deploy_state:-unset}' (expected 'RawDeployment')"
-    [[ "$nim_state" != "Managed" ]] && log_warn "  kserve.nim.managementState: '${nim_state:-unset}' (expected 'Managed')"
-    [[ "$raw_dep_service_config" != "Headless" ]] && log_warn "  kserve.rawDeploymentServiceConfig: '${raw_dep_service_config:-unset}' (expected 'Headless')"
-    [[ "$knative_state" != "Removed" ]] && log_warn "  kserve.serving.managementState: '${knative_state:-unset}' (expected 'Removed')"
-    [[ "$maas_state" != "Managed" ]] && log_warn "  kserve.modelsAsService.managementState: '${maas_state:-unset}' (expected 'Managed')"
-    
+    for mismatch in "${mismatches[@]}"; do
+      log_warn "  $mismatch"
+    done
+
     log_error "Fix the required fields in DSC deployment and try again..."
     return 1
   fi
