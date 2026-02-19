@@ -404,7 +404,7 @@ deploy_via_operator() {
   install_policy_engine
 
   # Check for conflicting operators
-    check_conflicting_operators
+  check_conflicting_operators
   
   # Install primary operator
   install_primary_operator
@@ -738,11 +738,12 @@ check_conflicting_operators() {
   if [[ -n "$conflict" ]]; then
     local ns=$(echo "$conflict" | awk '{print $1}')
     log_error "Conflicting operator found: $conflicting_operator in namespace $ns. ODH and RHOAI operators cannot coexist (they manage the same CRDs)."
-    log_error "Remove the conflicting operator before proceeding (suggested steps):"
-    log_error "  1. Delete custom resources: oc delete datasciencecluster --all && oc delete dscinitializations --all"
-    log_error "  2. Delete subscription: oc delete subscription.operators.coreos.com $conflicting_operator -n $ns"
-    log_error "  3. Delete CSV: oc delete csv -n $ns -l operators.coreos.com/$conflicting_operator"
-    log_error "  4. Try uninstalling $conflicting_operator before attempting to run deploy.sh again."
+    log_info "Remove the conflicting operator before proceeding (suggested steps):"
+    log_info "  1. Delete custom resources: oc delete datasciencecluster --all && oc delete dscinitializations --all"
+    log_info "  2. Delete subscription: oc delete subscription.operators.coreos.com $conflicting_operator -n $ns"
+    log_info "  3. Delete CSV: oc delete csv -n $ns -l operators.coreos.com/$conflicting_operator"
+    log_info "  4. Try uninstalling $conflicting_operator (can be done via a console as well) before attempting to run deploy.sh again."
+    log_info "  5. Sanity check: delete any lingering operator groups, old namespaces and projects."
     log_error "Quit the execution of the script. You may try re-running again."
     return 1
   fi
@@ -922,16 +923,28 @@ apply_dsc() {
     local kserve_state 
     kserve_state=$(kubectl get datasciencecluster "$existing_dsc" \
       -o jsonpath='{.spec.components.kserve.managementState}' 2>/dev/null || echo "")
+
+    local kserve_deploy_state 
+    kserve_deploy_state=$(kubectl get datasciencecluster "$existing_dsc" \
+      -o jsonpath='{.spec.components.kserve.defaultDeploymentMode}' 2>/dev/null || echo "")
+
+    local nim_state 
+    nim_state=$(kubectl get datasciencecluster "$existing_dsc" \
+      -o jsonpath='{.spec.components.kserve.nim.managementState}' 2>/dev/null || echo "")
     
     local raw_dep_service_config 
     raw_dep_service_config=$(kubectl get datasciencecluster "$existing_dsc" \
       -o jsonpath='{.spec.components.kserve.rawDeploymentServiceConfig}' 2>/dev/null || echo "")
+
+    local knative_state 
+    knative_state=$(kubectl get datasciencecluster "$existing_dsc" \
+      -o jsonpath='{.spec.components.kserve.serving.managementState}' 2>/dev/null || echo "")
     
     local maas_state
     maas_state=$(kubectl get datasciencecluster "$existing_dsc" \
       -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
 
-    if [[ "$kserve_state" == "Managed" && "$raw_dep_service_config" == "Headless" && "$maas_state" == "Managed" ]]; then
+    if [[ "$kserve_state" == "Managed" && "$raw_dep_service_config" == "Headless" && "$maas_state" == "Managed" && "$kserve_deploy_state" == "RawDeployment" && "$nim_state" == "Managed" && "$knative_state" == "Removed"]]; then
       log_info "Existing DataScienceCluster '$existing_dsc' meets MaaS requirements, skipping creation"
       return 0
     fi
@@ -939,7 +952,10 @@ apply_dsc() {
     # Existing DSC doesn't meet requirements — replace it
     log_warn "Existing DataScienceCluster '$existing_dsc' does not meet MaaS requirements:"
     [[ "$kserve_state" != "Managed" ]] && log_warn "  kserve.managementState: '${kserve_state:-unset}' (expected 'Managed')"
+    [[ "$kserve_deploy_state" != "RawDeployment" ]] && log_warn "  kserve.defaultDeploymentMode: '${kserve_deploy_state:-unset}' (expected 'RawDeployment')"
+    [[ "$nim_state" != "Managed" ]] && log_warn "  kserve.nim.managementState: '${nim_state:-unset}' (expected 'Managed')"
     [[ "$raw_dep_service_config" != "Headless" ]] && log_warn "  kserve.rawDeploymentServiceConfig: '${raw_dep_service_config:-unset}' (expected 'Headless')"
+    [[ "$knative_state" != "Removed" ]] && log_warn "  kserve.serving.managementState: '${knative_state:-unset}' (expected 'Removed')"
     [[ "$maas_state" != "Managed" ]] && log_warn "  kserve.modelsAsService.managementState: '${maas_state:-unset}' (expected 'Managed')"
     
     log_error "Fix the required fields in DSC deployment and try again..."
