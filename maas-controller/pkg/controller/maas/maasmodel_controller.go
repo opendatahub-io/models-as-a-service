@@ -102,15 +102,16 @@ func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Update status based on referenced model
-	modelStatusFailed := false
-	if err := r.updateModelStatus(ctx, log, model); err != nil {
+	ready, err := r.updateModelStatus(ctx, log, model)
+	if err != nil {
 		log.Error(err, "failed to update model status")
-		modelStatusFailed = true
+		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to update model status: %v", err))
+		return ctrl.Result{}, err
 	}
-
-	// Set Ready unless updateModelStatus failed in the current reconciliation
-	if !modelStatusFailed {
+	if ready {
 		r.updateStatus(ctx, model, "Ready", "Successfully reconciled")
+	} else {
+		r.updateStatus(ctx, model, model.Status.Phase, "Waiting for backend to become ready")
 	}
 	return ctrl.Result{}, nil
 }
@@ -246,12 +247,15 @@ func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log l
 		// This routes requests to the model endpoint
 		route.Spec = gatewayapiv1.HTTPRouteSpec{
 			CommonRouteSpec: gatewayapiv1.CommonRouteSpec{
-				ParentRefs: []gatewayapiv1.ParentReference{
-					{
-						Name:      gatewayapiv1.ObjectName("maas-default-gateway"),
-						Namespace: (*gatewayapiv1.Namespace)(&model.Namespace),
-					},
+			ParentRefs: []gatewayapiv1.ParentReference{
+				{
+					Name: gatewayapiv1.ObjectName("maas-default-gateway"),
+					Namespace: func() *gatewayapiv1.Namespace {
+						ns := gatewayapiv1.Namespace("openshift-ingress")
+						return &ns
+					}(),
 				},
+			},
 			},
 			Hostnames: []gatewayapiv1.Hostname{
 				"maas.*", // Match any hostname under maas domain
@@ -304,8 +308,11 @@ func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log l
 	return nil
 }
 
-func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
-	// For llmisvc: read endpoint and readiness directly from LLMInferenceService status.
+// updateModelStatus updates model.Status.Phase and Endpoint from the backing
+// resource. Returns true when the model is ready (caller should persist the
+// Ready status) or false when it is not (caller should persist the non-Ready
+// phase that was already set on model.Status).
+func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (bool, error) {
 	if model.Spec.ModelRef.Kind == "llmisvc" {
 		llmisvcNS := model.Namespace
 		if model.Spec.ModelRef.Namespace != "" {
@@ -317,9 +324,9 @@ func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Lo
 			if apierrors.IsNotFound(err) {
 				model.Status.Phase = "Failed"
 				model.Status.Endpoint = ""
-				return nil
+				return false, nil
 			}
-			return err
+			return false, err
 		}
 		ready := false
 		for _, c := range llmisvc.Status.Conditions {
@@ -331,7 +338,7 @@ func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Lo
 		if !ready {
 			model.Status.Phase = "Pending"
 			model.Status.Endpoint = ""
-			return nil
+			return false, nil
 		}
 		endpoint := r.getEndpointFromLLMISvc(llmisvc)
 		if endpoint == "" {
@@ -341,12 +348,12 @@ func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Lo
 				log.Error(err, "failed to get model endpoint fallback")
 				model.Status.Phase = "Failed"
 				model.Status.Endpoint = ""
-				return nil
+				return false, nil
 			}
 		}
 		model.Status.Endpoint = endpoint
 		model.Status.Phase = "Ready"
-		return nil
+		return true, nil
 	}
 
 	if model.Spec.ModelRef.Kind == "ExternalModel" {
@@ -355,13 +362,13 @@ func (r *MaaSModelReconciler) updateModelStatus(ctx context.Context, log logr.Lo
 			log.Error(err, "failed to get model endpoint for ExternalModel")
 			model.Status.Phase = "Failed"
 			model.Status.Endpoint = ""
-			return nil
+			return false, nil
 		}
 		model.Status.Endpoint = endpoint
 		model.Status.Phase = "Ready"
 	}
 
-	return nil
+	return true, nil
 }
 
 // getEndpointFromLLMISvc returns the endpoint URL from LLMInferenceService status as-reported.
@@ -613,9 +620,13 @@ func (r *MaaSModelReconciler) updateStatus(ctx context.Context, model *maasv1alp
 		Message:            message,
 		LastTransitionTime: metav1.Now(),
 	}
-	if phase == "Failed" {
+	if phase != "Ready" {
 		condition.Status = metav1.ConditionFalse
-		condition.Reason = "ReconcileFailed"
+		if phase == "Failed" {
+			condition.Reason = "ReconcileFailed"
+		} else {
+			condition.Reason = "BackendNotReady"
+		}
 	}
 
 	// Update condition
