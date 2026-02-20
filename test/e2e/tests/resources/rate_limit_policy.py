@@ -22,7 +22,7 @@ class RateLimitPolicy(NamespacedResource):
     ) -> None:
         r"""
         Args:
-            defaults (dict[str, Any]): Rules to apply as defaults. Can be overridden by more specific policiy
+            defaults (dict[str, Any]): Rules to apply as defaults. Can be overridden by more specific policy
               rules lower in the hierarchy and by less specific policy
               overrides. Use one of: defaults, overrides, or bare set of policy
               rules (implicit defaults).

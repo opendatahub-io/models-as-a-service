@@ -13,7 +13,9 @@ setup_python_venv() {
     # Create virtual environment if it doesn't exist
     if [[ ! -d "${VENV_DIR}" ]]; then
         echo "[smoke] Creating virtual environment at ${VENV_DIR}"
-        python3 -m venv "${VENV_DIR}" --upgrade-deps
+        # python3 -m venv "${VENV_DIR}" --upgrade-deps
+        PYTHON_BIN="${PYTHON_BIN:-python3}"
+        "${PYTHON_BIN}" -m venv "${VENV_DIR}" --upgrade-deps
     fi
     
     # Activate virtual environment
@@ -143,7 +145,7 @@ PYTEST_ARGS=(
 
 python -c 'import pytest_html' >/dev/null 2>&1 || echo "[smoke] WARNING: pytest-html not found (but we still passed --html)"
 
-pytest "${PYTEST_ARGS[@]}"
+PYTHONWARNINGS="ignore" python -m pytest "${PYTEST_ARGS[@]}"
 
 echo "[smoke] Reports:"
 echo " - JUnit XML : ${XML}"

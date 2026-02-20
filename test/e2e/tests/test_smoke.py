@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 import requests
 import json
 
-from test.e2e.tests.utils import (
+from .utils import (
     MaasEnv,
     TestSummary,
     build_inference_endpoint,
@@ -112,6 +112,7 @@ class TestSmoke:
             maas_api_base_url=maas_env.maas_api_base_url,
             maas_token=maas_token,
         )
+        assert models_list, "Models catalog is empty; expected at least one model"
         model_entry = models_list[0]
 
         endpoint_url, model_id = build_inference_endpoint(
@@ -148,6 +149,8 @@ class TestSmoke:
             maas_api_base_url=maas_env.maas_api_base_url,
             maas_token=maas_token,
         )
+
+        assert models_list, "Models catalog is empty; expected at least one model"
         model_entry = models_list[0]
 
         endpoint_url, model_id = build_inference_endpoint(
@@ -209,6 +212,7 @@ class TestSmoke:
             maas_api_base_url=maas_env.maas_api_base_url,
             maas_token=maas_token,
         )
+        assert models_list, "Models catalog is empty; expected at least one model"
         model_entry = models_list[0]
 
         endpoint_url, model_id = build_inference_endpoint(

@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import json
+import logging
+import subprocess
 from typing import Any, Dict, Optional
 
 import pytest
-import subprocess
 import requests
 from kubernetes.dynamic import DynamicClient
 from ocp_resources.resource import get_client
-from simple_logger.logger import get_logger
 
-from test.e2e.tests.utils import (
+from .utils import (
     MaasEnv,
+    TestSummary,
     collect_infrastructure_diagnostics,
     detect_scheme_via_llmisvc,
     env_bool,
@@ -21,10 +22,14 @@ from test.e2e.tests.utils import (
     is_openshift_cluster,
     mint_maas_token,
     normalize_url,
-    TestSummary
 )
 
-LOGGER = get_logger(name=__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+LOGGER = logging.getLogger(__name__)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

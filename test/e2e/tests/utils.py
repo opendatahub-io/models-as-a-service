@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import time
@@ -18,14 +19,13 @@ from ocp_resources.ingress_config_openshift_io import Ingress as IngressConfig
 from ocp_resources.llm_inference_service import LLMInferenceService
 from ocp_resources.resource import ResourceEditor
 from requests import Response
-from simple_logger.logger import get_logger
 from timeout_sampler import TimeoutSampler
+from timeout_sampler import TimeoutExpiredError
 
-from test.e2e.tests.resources.rate_limit_policy import RateLimitPolicy
-from test.e2e.tests.resources.token_rate_limit_policy import TokenRateLimitPolicy
+from .resources.rate_limit_policy import RateLimitPolicy
+from .resources.token_rate_limit_policy import TokenRateLimitPolicy
 
-
-LOGGER = get_logger(name=__name__)
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -91,14 +91,18 @@ def wait_for_condition(
     sleep_seconds: int = 10,
 ) -> Any:
     last_value: Any = None
-    for last_value in TimeoutSampler(
-        wait_timeout=timeout_seconds,
-        sleep=sleep_seconds,
-        func=condition_callable,
-    ):
-        if last_value:
-            return last_value
-    raise AssertionError(f"Timed out waiting for condition: {description}. Last value: {last_value!r}")
+    try:
+        for last_value in TimeoutSampler(
+            wait_timeout=timeout_seconds,
+            sleep=sleep_seconds,
+            func=condition_callable,
+        ):
+            if last_value:
+                return last_value
+    except TimeoutExpiredError as exc:
+        raise AssertionError(
+            f"Timed out waiting for condition: {description}. Last value: {last_value!r}"
+        ) from exc
 
 
 def is_openshift_cluster(admin_client: DynamicClient) -> bool:
@@ -115,7 +119,6 @@ def host_from_ingress_domain(admin_client: DynamicClient) -> str:
     domain = ingress_config.instance.spec.get("domain")
     assert domain, "Ingress 'cluster' missing spec.domain (ingresses.config.openshift.io)"
     return f"maas.{domain}"
-
 
 def first_ready_llmisvc(
     admin_client: DynamicClient,
