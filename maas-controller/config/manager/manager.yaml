@@ -27,6 +27,13 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --gateway-name=$(GATEWAY_NAME)
+          - --gateway-namespace=$(GATEWAY_NAMESPACE)
+        env:
+          - name: GATEWAY_NAME
+            value: "maas-default-gateway"
+          - name: GATEWAY_NAMESPACE
+            value: "openshift-ingress"
         image: quay.io/maas/maas-controller:latest
         name: manager
         imagePullPolicy: Always
