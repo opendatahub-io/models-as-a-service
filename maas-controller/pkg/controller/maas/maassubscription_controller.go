@@ -182,7 +182,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				parts = append(parts, fmt.Sprintf(`auth.identity.groups_str.split(",").exists(g, %s)`, strings.Join(comparisons, " || ")))
 			}
 			for _, u := range users {
-				parts = append(parts, fmt.Sprintf(`auth.identity.user.username == "%s"`, u))
+				parts = append(parts, fmt.Sprintf(`auth.identity.userid == "%s"`, u))
 			}
 			return strings.Join(parts, " || ")
 		}
