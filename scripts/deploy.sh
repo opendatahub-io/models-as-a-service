@@ -253,22 +253,26 @@ parse_arguments() {
 
 check_required_tools() {
   local missing=()
+  local required_kustomize="5.7.0"
 
   command -v oc &>/dev/null || missing+=("oc (OpenShift CLI)")
   command -v kubectl &>/dev/null || missing+=("kubectl")
   command -v jq &>/dev/null || missing+=("jq")
   if command -v kustomize &>/dev/null; then
-    local kustomize_version 
-    local required="5.7.0"
+    local kustomize_version
     kustomize_version=$(kustomize version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     if [[ -z "$kustomize_version" ]] || \
-       [[ "$(printf '%s\n%s' "$required" "$kustomize_version" | sort -V | head -1)" != "$required" ]]; then
-      missing+=("kustomize (v$required+ required, found ${kustomize_version:-unknown})")
+       [[ "$(printf '%s\n%s' "$required_kustomize" "$kustomize_version" | sort -V | head -1)" != "$required_kustomize" ]]; then
+      missing+=("kustomize (v$required_kustomize+ required, found ${kustomize_version:-unknown})")
     fi
   else
-    missing+=("kustomize (v$required+)")
+    missing+=("kustomize (v$required_kustomize+)")
   fi
-  command -v gsed &>/dev/null || missing+=("gsed (GNU sed)")
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    command -v gsed &>/dev/null || missing+=("gsed (GNU sed) for MacOS")
+  else
+    command -v sed &>/dev/null || missing+=("sed (GNU sed)")
+  fi
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     log_error "Missing or incompatible required tools:"
