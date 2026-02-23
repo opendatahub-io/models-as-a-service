@@ -20,6 +20,7 @@ import (
 	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -149,8 +150,13 @@ func SetupTestRouter(manager *token.Manager) (*gin.Engine, func() error) {
 
 	store := api_keys.NewMockStore()
 
+	// Create test config with optional expiration policy
+	testConfig := &config.Config{
+		APIKeyExpirationPolicy: "optional",
+	}
+
 	tokenHandler := token.NewHandler(testLogger, "test", manager)
-	apiKeyService := api_keys.NewService(manager, store)
+	apiKeyService := api_keys.NewService(manager, store, testConfig)
 	apiKeyHandler := api_keys.NewHandler(testLogger, apiKeyService)
 
 	protected := router.Group("/v1")

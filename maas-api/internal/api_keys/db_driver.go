@@ -14,7 +14,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
 	"k8s.io/utils/env"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/db/migrations"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/db/schema"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -25,7 +25,7 @@ const (
 )
 
 // NewPostgresStoreFromURL creates a PostgreSQL store from a connection URL.
-// It automatically applies database migrations on startup using golang-migrate.
+// It automatically applies database schema migrations on startup using golang-migrate.
 // URL format: postgresql://user:password@host:port/database
 func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseURL string) (*PostgresStore, error) {
 	databaseURL = strings.TrimSpace(databaseURL)
@@ -48,46 +48,46 @@ func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseUR
 		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
 	}
 
-	// Apply migrations
+	// Apply schema migrations
 	if err := runMigrations(db, log); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to apply migrations: %w", err)
+		return nil, fmt.Errorf("failed to apply schema migrations: %w", err)
 	}
 
-	log.Info("Connected to PostgreSQL database (migrations applied)")
+	log.Info("Connected to PostgreSQL database (schema applied)")
 	return &PostgresStore{db: db, logger: log}, nil
 }
 
-// runMigrations applies database migrations using golang-migrate.
+// runMigrations applies database schema migrations using golang-migrate.
 func runMigrations(db *sql.DB, log *logger.Logger) error {
-	// Create migration source from embedded files (from migrations package)
-	source, err := iofs.New(migrations.FS, ".")
+	// Create migration source from embedded schema files
+	source, err := iofs.New(schema.FS, ".")
 	if err != nil {
-		return fmt.Errorf("failed to create migration source: %w", err)
+		return fmt.Errorf("failed to create schema migration source: %w", err)
 	}
 
-	// Create database driver for migrations
+	// Create database driver for schema migrations
 	driver, err := postgres.WithInstance(db, &postgres.Config{})
 	if err != nil {
-		return fmt.Errorf("failed to create migration driver: %w", err)
+		return fmt.Errorf("failed to create schema migration driver: %w", err)
 	}
 
-	// Create migrator
+	// Create schema migrator
 	m, err := migrate.NewWithInstance("iofs", source, "postgres", driver)
 	if err != nil {
-		return fmt.Errorf("failed to create migrator: %w", err)
+		return fmt.Errorf("failed to create schema migrator: %w", err)
 	}
 
-	// Run migrations
+	// Run schema migrations
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return fmt.Errorf("migration failed: %w", err)
+		return fmt.Errorf("schema migration failed: %w", err)
 	}
 
 	version, dirty, _ := m.Version()
 	if dirty {
-		log.Warn("Database migration is in dirty state", "version", version)
+		log.Warn("Database schema is in dirty state", "version", version)
 	} else {
-		log.Info("Database migrations applied", "version", version)
+		log.Info("Database schema applied", "version", version)
 	}
 
 	return nil

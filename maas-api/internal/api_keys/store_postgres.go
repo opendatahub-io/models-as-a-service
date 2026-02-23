@@ -15,13 +15,13 @@ import (
 )
 
 // PostgresStore implements MetadataStore using PostgreSQL.
-// It expects the schema to be managed by golang-migrate (see internal/db/migrations).
+// It expects the schema to be managed by golang-migrate (see db/schema).
 type PostgresStore struct {
 	db     *sql.DB
 	logger *logger.Logger
 }
 
-// Compile-time check that PostgresStore implements MetadataStore
+// Compile-time check that PostgresStore implements MetadataStore.
 var _ MetadataStore = (*PostgresStore)(nil)
 
 // NewPostgresStore creates a new PostgreSQL-backed store.
@@ -33,7 +33,7 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 	}
 }
 
-// Add stores a legacy API key (for backward compatibility with K8s SA tokens)
+// Add stores a legacy API key (for backward compatibility with K8s SA tokens).
 func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey) error {
 	if apiKey.JTI == "" {
 		return ErrEmptyJTI
@@ -61,8 +61,8 @@ func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey
 	return nil
 }
 
-// AddPermanentKey stores an API key with hash-only storage (no plaintext)
-func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string, expiresAt *time.Time) error {
+// AddPermanentKey stores an API key with hash-only storage (no plaintext).
+func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -72,24 +72,24 @@ func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, ke
 	if keyHash == "" {
 		return errors.New("key hash is required")
 	}
-	if tierName == "" {
-		return errors.New("tier name is required")
+	if userGroups == "" {
+		return errors.New("user groups are required")
 	}
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, tier_name, original_user_groups, status, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10)
+		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, user_groups, status, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9)
 	`
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, keyPrefix, tierName, originalUserGroups, time.Now().UTC(), expiresAt)
+	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, keyPrefix, userGroups, time.Now().UTC(), expiresAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
 
-	s.logger.Debug("Stored API key", "id", keyID, "prefix", keyPrefix, "user", username, "tier", tierName)
+	s.logger.Debug("Stored API key", "id", keyID, "prefix", keyPrefix, "user", username)
 	return nil
 }
 
-// List returns all API keys for a user
+// List returns all API keys for a user.
 func (s *PostgresStore) List(ctx context.Context, username string) ([]ApiKeyMetadata, error) {
 	query := `
 		SELECT id, key_prefix, name, description, created_at, expires_at, status, last_used_at
@@ -135,7 +135,7 @@ func (s *PostgresStore) List(ctx context.Context, username string) ([]ApiKeyMeta
 	return keys, nil
 }
 
-// Get retrieves a single API key by ID
+// Get retrieves a single API key by ID.
 func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, error) {
 	query := `
 		SELECT id, key_prefix, name, description, username, created_at, expires_at, status, last_used_at
@@ -170,10 +170,10 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata,
 	return &k, nil
 }
 
-// GetByHash looks up an API key by its SHA-256 hash (critical path for validation)
+// GetByHash looks up an API key by its SHA-256 hash (critical path for validation).
 func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetadata, error) {
 	query := `
-		SELECT id, username, name, description, key_prefix, tier_name, original_user_groups, status, expires_at, last_used_at
+		SELECT id, username, name, description, key_prefix, user_groups, status, expires_at, last_used_at
 		FROM api_keys
 		WHERE key_hash = $1
 	`
@@ -181,9 +181,9 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 
 	var k ApiKeyMetadata
 	var expiresAt, lastUsedAt sql.NullTime
-	var description, tierName, originalUserGroups sql.NullString
+	var description, userGroups sql.NullString
 
-	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, &k.KeyPrefix, &tierName, &originalUserGroups, &k.Status, &expiresAt, &lastUsedAt); err != nil {
+	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, &k.KeyPrefix, &userGroups, &k.Status, &expiresAt, &lastUsedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}
@@ -193,13 +193,10 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 	if description.Valid {
 		k.Description = description.String
 	}
-	if tierName.Valid {
-		k.TierName = tierName.String
-	}
-	if originalUserGroups.Valid && originalUserGroups.String != "" {
+	if userGroups.Valid && userGroups.String != "" {
 		// Parse JSON array of groups
 		var groups []string
-		if err := json.Unmarshal([]byte(originalUserGroups.String), &groups); err == nil {
+		if err := json.Unmarshal([]byte(userGroups.String), &groups); err == nil {
 			k.OriginalUserGroups = groups
 		}
 	}
@@ -227,7 +224,7 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 	return &k, nil
 }
 
-// InvalidateAll revokes all active keys for a user
+// InvalidateAll revokes all active keys for a user.
 func (s *PostgresStore) InvalidateAll(ctx context.Context, username string) error {
 	query := `UPDATE api_keys SET status = 'revoked' WHERE username = $1 AND status = 'active'`
 	result, err := s.db.ExecContext(ctx, query, username)
@@ -240,7 +237,7 @@ func (s *PostgresStore) InvalidateAll(ctx context.Context, username string) erro
 	return nil
 }
 
-// Revoke marks a specific API key as revoked
+// Revoke marks a specific API key as revoked.
 func (s *PostgresStore) Revoke(ctx context.Context, keyID string) error {
 	query := `UPDATE api_keys SET status = 'revoked' WHERE id = $1 AND status = 'active'`
 	result, err := s.db.ExecContext(ctx, query, keyID)
@@ -260,7 +257,7 @@ func (s *PostgresStore) Revoke(ctx context.Context, keyID string) error {
 	return nil
 }
 
-// UpdateLastUsed updates the last_used_at timestamp
+// UpdateLastUsed updates the last_used_at timestamp.
 func (s *PostgresStore) UpdateLastUsed(ctx context.Context, keyID string) error {
 	query := `UPDATE api_keys SET last_used_at = $1 WHERE id = $2`
 	_, err := s.db.ExecContext(ctx, query, time.Now().UTC(), keyID)

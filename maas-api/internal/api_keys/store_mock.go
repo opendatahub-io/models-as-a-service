@@ -2,6 +2,7 @@ package api_keys
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -28,7 +29,7 @@ func NewMockStore() *MockStore {
 	}
 }
 
-// Compile-time check that MockStore implements MetadataStore
+// Compile-time check that MockStore implements MetadataStore.
 var _ MetadataStore = (*MockStore)(nil)
 
 func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey) error {
@@ -64,7 +65,7 @@ func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey) er
 	return nil
 }
 
-func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string, expiresAt *time.Time) error {
+func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -80,15 +81,21 @@ func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHas
 		expiresAtTime = *expiresAt
 	}
 
+	// Parse user groups from JSON
+	var groups []string
+	if userGroups != "" {
+		_ = json.Unmarshal([]byte(userGroups), &groups)
+	}
+
 	m.keys[keyID] = &storedKey{
 		metadata: ApiKeyMetadata{
-			ID:           keyID,
-			Name:         name,
-			Description:  description,
-			KeyPrefix:    keyPrefix,
-			TierName:     tierName,
-			Status:       TokenStatusActive,
-			CreationDate: time.Now().UTC().Format(time.RFC3339),
+			ID:                 keyID,
+			Name:               name,
+			Description:        description,
+			KeyPrefix:          keyPrefix,
+			OriginalUserGroups: groups,
+			Status:             TokenStatusActive,
+			CreationDate:       time.Now().UTC().Format(time.RFC3339),
 		},
 		username:  username,
 		keyHash:   keyHash,

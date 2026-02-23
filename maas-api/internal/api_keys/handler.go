@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
@@ -169,9 +170,9 @@ func (h *Handler) RevokeAllTokens(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// CreatePermanentKeyRequest is the request body for creating a permanent API key
+// CreatePermanentKeyRequest is the request body for creating a permanent API key.
 type CreatePermanentKeyRequest struct {
-	Name        string          `json:"name" binding:"required"`
+	Name        string          `binding:"required"           json:"name"`
 	Description string          `json:"description,omitempty"`
 	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"`
 }
@@ -225,14 +226,14 @@ func (h *Handler) CreatePermanentAPIKey(c *gin.Context) {
 	c.JSON(http.StatusCreated, result)
 }
 
-// ValidateAPIKeyRequest is the request body for validating an API key
+// ValidateAPIKeyRequest is the request body for validating an API key.
 type ValidateAPIKeyRequest struct {
-	Key string `json:"key" binding:"required"`
+	Key string `binding:"required" json:"key"`
 }
 
 // ValidateAPIKeyHandler handles POST /internal/v1/api-keys/validate
 // This endpoint is called by Authorino via HTTP external auth callback
-// Per Feature Refinement "Gateway Integration (Inference Flow)"
+// Per Feature Refinement "Gateway Integration (Inference Flow)".
 func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 	var req ValidateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -258,7 +259,7 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 }
 
 // RevokeAPIKey handles DELETE /v1/api-keys/:id
-// Revokes a specific permanent API key (soft delete)
+// Revokes a specific permanent API key (soft delete).
 func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	// TODO(production): Add authorization check - verify user owns key or is admin
 	// Currently any authenticated user can revoke any key by ID

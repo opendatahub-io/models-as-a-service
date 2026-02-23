@@ -11,43 +11,39 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 type Service struct {
 	tokenManager *token.Manager
 	store        MetadataStore
-	tierMapper   *tier.Mapper
 	logger       *logger.Logger
 	config       *config.Config
 }
 
-func NewService(tokenManager *token.Manager, store MetadataStore, tierMapper *tier.Mapper, cfg *config.Config) *Service {
+func NewService(tokenManager *token.Manager, store MetadataStore, cfg *config.Config) *Service {
 	return &Service{
 		tokenManager: tokenManager,
 		store:        store,
-		tierMapper:   tierMapper,
 		logger:       logger.Production(),
 		config:       cfg,
 	}
 }
 
-// NewServiceWithLogger creates a new service with a custom logger (for testing)
-func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, tierMapper *tier.Mapper, cfg *config.Config, log *logger.Logger) *Service {
+// NewServiceWithLogger creates a new service with a custom logger (for testing).
+func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, cfg *config.Config, log *logger.Logger) *Service {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Service{
 		tokenManager: tokenManager,
 		store:        store,
-		tierMapper:   tierMapper,
 		logger:       log,
 		config:       cfg,
 	}
 }
 
-// CreateAPIKey creates a K8s ServiceAccount-based API key (legacy, with expiration)
+// CreateAPIKey creates a K8s ServiceAccount-based API key (legacy, with expiration).
 func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, name string, description string, expiration time.Duration) (*APIKey, error) {
 	// Generate token
 	tok, err := s.tokenManager.GenerateToken(ctx, user, expiration)
@@ -70,10 +66,10 @@ func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, nam
 }
 
 // CreatePermanentKeyResponse is returned when creating an API key
-// Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time
+// Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
 type CreatePermanentKeyResponse struct {
-	Key       string  `json:"key"`              // Plaintext key - SHOWN ONCE, NEVER STORED
-	KeyPrefix string  `json:"keyPrefix"`        // Display prefix for UI
+	Key       string  `json:"key"`       // Plaintext key - SHOWN ONCE, NEVER STORED
+	KeyPrefix string  `json:"keyPrefix"` // Display prefix for UI
 	ID        string  `json:"id"`
 	Name      string  `json:"name"`
 	CreatedAt string  `json:"createdAt"`
@@ -85,7 +81,7 @@ type CreatePermanentKeyResponse struct {
 // - Generates cryptographically secure key with sk-oai-* prefix
 // - Stores ONLY the SHA-256 hash (plaintext never stored)
 // - Returns plaintext ONCE at creation ("show-once" pattern)
-// - Determines tier from user groups and stores for authorization
+// - Determines tier from user groups and stores for authorization.
 func (s *Service) CreatePermanentAPIKey(ctx context.Context, user *token.UserContext, name, description string, expiresIn *time.Duration) (*CreatePermanentKeyResponse, error) {
 	// Validate expiration based on policy
 	if s.config != nil && s.config.APIKeyExpirationPolicy == "required" && expiresIn == nil {
@@ -108,24 +104,21 @@ func (s *Service) CreatePermanentAPIKey(ctx context.Context, user *token.UserCon
 		return nil, fmt.Errorf("failed to generate API key: %w", err)
 	}
 
-	// Determine tier from user groups (same logic as token generation)
-	userTier, err := s.tierMapper.GetTierForGroups(user.Groups...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to determine user tier: %w", err)
-	}
-
 	// Generate unique ID for this key
 	keyID := uuid.New().String()
 
-	// Marshal original user groups for audit trail (optional)
-	originalGroups, _ := json.Marshal(user.Groups)
+	// Marshal user groups for storage (used for authorization)
+	userGroups, err := json.Marshal(user.Groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal user groups: %w", err)
+	}
 
 	// Store in database (hash only, plaintext NEVER stored)
-	if err := s.store.AddPermanentKey(ctx, user.Username, keyID, hash, prefix, name, description, userTier.Name, string(originalGroups), expiresAt); err != nil {
+	if err := s.store.AddPermanentKey(ctx, user.Username, keyID, hash, prefix, name, description, string(userGroups), expiresAt); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
-	s.logger.Info("Created permanent API key", "user", user.Username, "tier", userTier.Name, "id", keyID)
+	s.logger.Info("Created permanent API key", "user", user.Username, "groups", user.Groups, "id", keyID)
 
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
 	response := &CreatePermanentKeyResponse{
@@ -171,7 +164,7 @@ func (s *Service) RevokeAll(ctx context.Context, user *token.UserContext) error 
 // Per Feature Refinement "Gateway Integration (Inference Flow)":
 // - Computes SHA-256 hash of incoming key
 // - Looks up hash in database
-// - Returns user identity if valid, rejection reason if invalid
+// - Returns user identity if valid, rejection reason if invalid.
 func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationResult, error) {
 	// Check key format
 	if !IsValidKeyFormat(key) {
@@ -221,12 +214,12 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		}
 	}()
 
-	// Generate synthetic ServiceAccount group from tier name
-	// This matches the pattern used by actual ServiceAccount tokens
-	var groups []string
-	if metadata.TierName != "" {
-		syntheticGroup := fmt.Sprintf("system:serviceaccounts:maas-default-gateway-tier-%s", metadata.TierName)
-		groups = []string{syntheticGroup}
+	// Return the user's original groups (stored at key creation time)
+	// These groups are used directly by subscription-based authorization
+	// Note: Groups are immutable - they reflect user's group membership at creation time
+	groups := metadata.OriginalUserGroups
+	if groups == nil {
+		groups = []string{} // Return empty array if no groups stored
 	}
 
 	// Success - return user identity and groups for Authorino
@@ -235,11 +228,11 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		UserID:   metadata.Username,
 		Username: metadata.Username,
 		KeyID:    metadata.ID,
-		Groups:   groups, // Synthetic groups for tier lookup and authorization
+		Groups:   groups, // Original user groups for subscription-based authorization
 	}, nil
 }
 
-// RevokeAPIKey revokes a specific permanent API key
+// RevokeAPIKey revokes a specific permanent API key.
 func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 	return s.store.Revoke(ctx, keyID)
 }

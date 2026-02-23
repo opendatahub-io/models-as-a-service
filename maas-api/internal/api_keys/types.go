@@ -16,7 +16,7 @@ type APIKey struct {
 // Per Feature Refinement "Hash-Only Storage": stores hash-only (plaintext never stored).
 type PermanentAPIKey struct {
 	ID          string `json:"id"`
-	KeyPrefix   string `json:"keyPrefix"`             // Display prefix: sk-oai-abc123...
+	KeyPrefix   string `json:"keyPrefix"` // Display prefix: sk-oai-abc123...
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Username    string `json:"username"`
@@ -40,7 +40,7 @@ type ApiKeyMetadata struct {
 	LastUsedAt         string   `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
 }
 
-// ValidationResult holds the result of API key validation (for Authorino HTTP callback)
+// ValidationResult holds the result of API key validation (for Authorino HTTP callback).
 type ValidationResult struct {
 	Valid    bool     `json:"valid"`
 	UserID   string   `json:"userId,omitempty"`

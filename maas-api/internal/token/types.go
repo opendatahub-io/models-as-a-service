@@ -10,10 +10,10 @@ import (
 )
 
 // ParseDurationWithDays extends time.ParseDuration to support "d" (days) suffix
-// Supports: "30d", "6h", "90m", "2h30m", "1.5h"
+// Supports: "30d", "6h", "90m", "2h30m", "1.5h".
 func ParseDurationWithDays(s string) (time.Duration, error) {
-	if strings.HasSuffix(s, "d") {
-		daysStr := strings.TrimSuffix(s, "d")
+	if before, ok := strings.CutSuffix(s, "d"); ok {
+		daysStr := before
 		days, err := strconv.ParseFloat(daysStr, 64)
 		if err != nil {
 			return 0, fmt.Errorf("invalid days value: %w", err)

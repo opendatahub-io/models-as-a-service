@@ -52,7 +52,7 @@ func TestGenerateAPIKey_Uniqueness(t *testing.T) {
 	keys := make(map[string]bool)
 	hashes := make(map[string]bool)
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		plaintext, hash, _, err := GenerateAPIKey()
 		if err != nil {
 			t.Fatalf("GenerateAPIKey() iteration %d returned error: %v", i, err)
@@ -143,15 +143,15 @@ func TestEncodeBase62(t *testing.T) {
 }
 
 func BenchmarkGenerateAPIKey(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _, _, _ = GenerateAPIKey()
 	}
 }
 
 func BenchmarkHashAPIKey(b *testing.B) {
 	key := "sk-oai-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		_ = HashAPIKey(key)
 	}
 }

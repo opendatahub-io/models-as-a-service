@@ -2,14 +2,20 @@ module github.com/opendatahub-io/models-as-a-service/maas-api
 
 go 1.25
 
+toolchain go1.25.5
+
 require (
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.10.1
 	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/golang-migrate/migrate/v4 v4.19.1
+	github.com/google/uuid v1.6.0
+	github.com/jackc/pgx/v5 v5.7.6
 	github.com/kserve/kserve v0.0.0-20251121160314-57d83d202f36
 	github.com/openai/openai-go/v2 v2.3.1
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/zap v1.27.0
+	golang.org/x/sync v0.18.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
@@ -17,13 +23,6 @@ require (
 	k8s.io/utils v0.0.0-20250820121507-0af2bda4dd1d
 	knative.dev/pkg v0.0.0-20250915135827-db4c336acdbe
 	sigs.k8s.io/gateway-api v1.4.0
-)
-
-require (
-	github.com/golang-migrate/migrate/v4 v4.19.1
-	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.7.6
-	golang.org/x/sync v0.18.0
 )
 
 require (

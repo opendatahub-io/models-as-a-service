@@ -1,6 +1,6 @@
-// Package migrations provides embedded database migration files.
+// Package schema provides embedded database schema definition files.
 // These can be used by the application and e2e tests.
-package migrations
+package schema
 
 import "embed"
 

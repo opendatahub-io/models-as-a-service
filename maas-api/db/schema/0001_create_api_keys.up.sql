@@ -1,6 +1,6 @@
 -- Migration: 0001_create_api_keys
--- Description: Initial schema for API Key Management with tier-based groups support
--- Includes: hash-only storage, status tracking, usage tracking, tier information
+-- Description: Initial schema for API Key Management with group-based authorization
+-- Includes: hash-only storage, status tracking, usage tracking, user groups
 
 CREATE TABLE IF NOT EXISTS api_keys (
     id TEXT PRIMARY KEY,
@@ -10,8 +10,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     key_hash TEXT NOT NULL,
     key_prefix TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
-    tier_name TEXT NOT NULL DEFAULT 'free',
-    original_user_groups TEXT,
+    user_groups TEXT NOT NULL, -- JSON array of user's groups at creation time
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ,
     last_used_at TIMESTAMPTZ,
@@ -29,6 +28,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
 
 -- Index for finding stale keys (audit/cleanup queries)
 CREATE INDEX IF NOT EXISTS idx_api_keys_last_used ON api_keys(last_used_at) WHERE last_used_at IS NOT NULL;
-
--- Index for tier-based queries
-CREATE INDEX IF NOT EXISTS idx_api_keys_tier ON api_keys(tier_name);

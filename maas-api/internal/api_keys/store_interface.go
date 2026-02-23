@@ -24,10 +24,9 @@ type MetadataStore interface {
 	Add(ctx context.Context, username string, apiKey *APIKey) error
 
 	// AddPermanentKey stores a permanent API key with hash-only storage (no plaintext)
-	// tierName is required for generating synthetic groups during validation
-	// originalUserGroups is optional JSON array for audit trail
+	// userGroups is a JSON array of user's groups (used for authorization)
 	// expiresAt is optional - nil means permanent key
-	AddPermanentKey(ctx context.Context, username string, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string, expiresAt *time.Time) error
+	AddPermanentKey(ctx context.Context, username string, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error
 
 	List(ctx context.Context, username string) ([]ApiKeyMetadata, error)
 
