@@ -42,12 +42,20 @@ spec:
         display:
           name: "Gateway Namespace"
         value: "openshift-ingress"
-    - kind: TextVariable
+    - kind: ListVariable
       spec:
         name: llm_namespace
         display:
           name: "LLM Namespace"
-        value: "llm"
+        allowMultiple: true
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: namespace
+            matchers:
+              - vllm:num_requests_running
     - kind: ListVariable
       spec:
         name: model
@@ -198,7 +206,7 @@ spec:
       spec:
         display:
           name: "🔐 Auth Evaluation Latency (P50/P95/P99)"
-          description: "Authentication/authorization evaluation latency. Shows how long Authorino takes to evaluate each request."
+          description: "Authentication/authorization evaluation latency for MaaS AuthPolicies. Shows how long Authorino takes to evaluate each request."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -215,28 +223,28 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "P50"
-                  query: histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))
+                  query: histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=""}[5m])) by (le))
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "P95"
-                  query: histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))
+                  query: histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=""}[5m])) by (le))
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "P99"
-                  query: histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))
+                  query: histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=""}[5m])) by (le))
 
     authSuccessDenyRate:
       kind: Panel
       spec:
         display:
           name: "🔐 Auth Success / Deny Rate"
-          description: "Rate of auth evaluation outcomes from Authorino. Shows successful authentications vs denials over time."
+          description: "Rate of auth evaluation outcomes from Authorino for MaaS AuthPolicies. Shows successful authentications vs denials over time."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -253,7 +261,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{status}}"
-                  query: sum by (status) (rate(auth_server_authconfig_response_status[5m]))
+                  query: sum by (status) (rate(auth_server_authconfig_response_status{authconfig!=""}[5m]))
 
     # =============================================
     # Section: Key Metrics (8 panels)
@@ -395,7 +403,7 @@ spec:
       spec:
         display:
           name: "⏱️ P50 Response Latency"
-          description: "Median (50th percentile) response latency measured at the gateway over a 15m window."
+          description: "Median (50th percentile) response latency measured at the MaaS gateway over a 15m window."
         plugin:
           kind: StatChart
           spec:
@@ -410,7 +418,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "P50"
-                  query: (histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket[15m])) by (le)) >= 0) OR vector(0)
+                  query: (histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket{tier!="",tier!="unknown"}[15m])) by (le)) >= 0) OR vector(0)
 
     rateLimitRatio:
       kind: Panel
@@ -466,7 +474,7 @@ spec:
       spec:
         display:
           name: "❌ Overall Error Rate"
-          description: "Error rates by type. 4xx = client errors excluding 429, 5xx = server errors, Rate Limited = 429 quota exceeded."
+          description: "Error rates by type. 4xx = client errors excluding 429, 5xx = server errors, Rate Limited = 429 quota exceeded. Scoped to MaaS gateway traffic via tier label."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -483,14 +491,14 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "4xx Errors (excl. 429)"
-                  query: sum(rate(istio_requests_total{response_code=~"4..", response_code!="429"}[5m])) OR vector(0)
+                  query: sum(rate(istio_requests_total{tier!="", response_code=~"4..", response_code!="429"}[5m])) OR vector(0)
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "5xx Errors"
-                  query: sum(rate(istio_requests_total{response_code=~"5.."}[5m])) OR vector(0)
+                  query: sum(rate(istio_requests_total{tier!="", response_code=~"5.."}[5m])) OR vector(0)
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -552,7 +560,7 @@ spec:
       spec:
         display:
           name: "⏱️ P95 Latency by Service"
-          description: "95th percentile latency per backend service. Excludes unknown (404s to non-existent paths)."
+          description: "95th percentile latency per backend service. Scoped to MaaS gateway traffic via tier label. Excludes unknown (404s to non-existent paths)."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -569,7 +577,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{destination_service_name}}"
-                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{destination_service_name!="unknown"}[5m])))
+                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{tier!="",tier!="unknown", destination_service_name!="unknown"}[5m])))
 
     rateLimitViolationsByTier:
       kind: Panel
@@ -627,7 +635,7 @@ spec:
       spec:
         display:
           name: "🔒 Unauthorized Requests"
-          description: "Rate of unauthorized (401) requests at the gateway."
+          description: "Rate of unauthorized (401) requests at the MaaS gateway. Scoped via tier label on istio_requests_total."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -644,7 +652,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Unauthorized (401)"
-                  query: sum(rate(istio_requests_total{response_code="401"}[5m])) OR vector(0)
+                  query: sum(rate(istio_requests_total{tier!="", response_code="401"}[5m])) OR vector(0)
 
     # =============================================
     # Section: Model Metrics (12 panels)
@@ -1221,7 +1229,7 @@ spec:
       spec:
         display:
           name: "⏱️ P95 Latency per Model"
-          description: "P95 latency per model (backend service). Each KServe model gets a dedicated service."
+          description: "P95 latency per model (backend service). Scoped to MaaS gateway traffic via tier label. Each KServe model gets a dedicated service."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -1238,7 +1246,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{destination_service_name}}"
-                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{destination_service_name!="",destination_service_name!="unknown"}[5m])))
+                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{tier!="",tier!="unknown", destination_service_name!="",destination_service_name!="unknown"}[5m])))
 
     tokenVolumeByTier:
       kind: Panel

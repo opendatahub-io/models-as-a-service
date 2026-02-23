@@ -175,25 +175,25 @@ spec:
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "Authentication/authorization evaluation latency (P50/P95/P99). Shows how long Authorino takes to evaluate each request. High latency here adds directly to overall request latency. Requires the authorino-server-metrics ServiceMonitor.",
+          "description": "Authentication/authorization evaluation latency (P50/P95/P99) for MaaS AuthPolicies. Shows how long Authorino takes to evaluate each request. High latency here adds directly to overall request latency. Requires the authorino-server-metrics ServiceMonitor.",
           "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.1}, {"color": "red", "value": 0.5}]}, "unit": "s", "noValue": "No Data\nDeploy authorino-server-metrics ServiceMonitor"}, "overrides": []},
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 23},
           "id": 52,
           "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P99", "refId": "C"}],
+          "targets": [{"expr": "histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=\"\"}[5m])) by (le))", "legendFormat": "P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=\"\"}[5m])) by (le))", "legendFormat": "P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=\"\"}[5m])) by (le))", "legendFormat": "P99", "refId": "C"}],
           "title": "🔐 Auth Evaluation Latency (P50/P95/P99)",
           "type": "timeseries"
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "Rate of auth evaluation outcomes from Authorino. Shows successful authentications vs denials over time. A rising denial rate may indicate misconfigured policies or an attack. Requires the authorino-server-metrics ServiceMonitor.",
+          "description": "Rate of auth evaluation outcomes from Authorino for MaaS AuthPolicies. Shows successful authentications vs denials over time. A rising denial rate may indicate misconfigured policies or an attack. Requires the authorino-server-metrics ServiceMonitor.",
           "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "ops", "noValue": "No Data\nDeploy authorino-server-metrics ServiceMonitor"}, "overrides": [{"matcher": {"id": "byRegexp", "options": ".*OK.*"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}, {"matcher": {"id": "byRegexp", "options": ".*(PERMISSION_DENIED|UNAUTHENTICATED).*"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]}]},
           "gridPos": {"h": 8, "w": 12, "x": 12, "y": 23},
           "id": 53,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (status) (rate(auth_server_authconfig_response_status[5m]))", "legendFormat": "{{status}}", "refId": "A"}],
+          "targets": [{"expr": "sum by (status) (rate(auth_server_authconfig_response_status{authconfig!=\"\"}[5m]))", "legendFormat": "{{status}}", "refId": "A"}],
           "title": "🔐 Auth Success / Deny Rate",
           "type": "timeseries"
         },
@@ -284,8 +284,8 @@ spec:
           "id": 17,
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket[15m])) by (le))", "instant": true, "refId": "A"}],
-          "description": "Median (50th percentile) response latency measured at the gateway over a 15m window. 50% of requests complete faster than this value.",
+          "targets": [{"expr": "histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket{tier!=\"\",tier!=\"unknown\"}[15m])) by (le))", "instant": true, "refId": "A"}],
+          "description": "Median (50th percentile) response latency measured at the MaaS gateway over a 15m window. Scoped to MaaS traffic via tier label.",
           "title": "⏱️ P50 Response Latency",
           "type": "stat"
         },
@@ -328,8 +328,8 @@ spec:
           "id": 6,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(rate(istio_requests_total{response_code=~\"4..\", response_code!=\"429\"}[5m])) OR vector(0)", "legendFormat": "4xx Errors (excl. 429)", "refId": "A"}, {"expr": "sum(rate(istio_requests_total{response_code=~\"5..\"}[5m])) OR vector(0)", "legendFormat": "5xx Errors", "refId": "B"}, {"expr": "sum(rate(limited_calls[5m])) OR vector(0)", "legendFormat": "429 Rate Limited", "refId": "C"}],
-          "description": "Error rates by type. 4xx = client errors excluding 429 (401 auth, 400 bad request), 5xx = server errors, Rate Limited = 429 quota exceeded (from Limitador).",
+          "targets": [{"expr": "sum(rate(istio_requests_total{tier!=\"\", response_code=~\"4..\", response_code!=\"429\"}[5m])) OR vector(0)", "legendFormat": "4xx Errors (excl. 429)", "refId": "A"}, {"expr": "sum(rate(istio_requests_total{tier!=\"\", response_code=~\"5..\"}[5m])) OR vector(0)", "legendFormat": "5xx Errors", "refId": "B"}, {"expr": "sum(rate(limited_calls[5m])) OR vector(0)", "legendFormat": "429 Rate Limited", "refId": "C"}],
+          "description": "Error rates by type. Scoped to MaaS gateway traffic via tier label. 4xx = client errors excluding 429, 5xx = server errors, Rate Limited = 429 quota exceeded (from Limitador).",
           "title": "❌ Overall Error Rate",
           "type": "timeseries"
         },
@@ -364,8 +364,8 @@ spec:
           "id": 18,
           "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{destination_service_name!=\"unknown\"}[5m])))", "legendFormat": "{{destination_service_name}}", "refId": "A"}],
-          "description": "95th percentile latency per backend service. Excludes 'unknown' (404s to non-existent paths).",
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{tier!=\"\",tier!=\"unknown\", destination_service_name!=\"unknown\"}[5m])))", "legendFormat": "{{destination_service_name}}", "refId": "A"}],
+          "description": "95th percentile latency per backend service. Scoped to MaaS gateway traffic via tier label. Excludes 'unknown' (404s to non-existent paths).",
           "title": "⏱️ P95 Latency by Service",
           "type": "timeseries"
         },
@@ -408,7 +408,7 @@ spec:
           "id": 16,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(rate(istio_requests_total{response_code=\"401\"}[5m])) OR vector(0)", "legendFormat": "Unauthorized (401)", "refId": "A"}],
+          "targets": [{"expr": "sum(rate(istio_requests_total{tier!=\"\", response_code=\"401\"}[5m])) OR vector(0)", "legendFormat": "Unauthorized (401)", "refId": "A"}],
           "title": "🔒 Unauthorized Requests",
           "type": "timeseries"
         },
@@ -676,7 +676,7 @@ spec:
           "id": 32,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{destination_service_name!=\"\",destination_service_name!=\"unknown\"}[5m])))", "legendFormat": "{{destination_service_name}}", "refId": "A"}],
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{tier!=\"\",tier!=\"unknown\", destination_service_name!=\"\",destination_service_name!=\"unknown\"}[5m])))", "legendFormat": "{{destination_service_name}}", "refId": "A"}],
           "title": "⏱️ P95 Latency per Model",
           "type": "timeseries"
         },
@@ -702,7 +702,7 @@ spec:
           {"current": {"selected": false, "text": "maas-api", "value": "maas-api"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)", "description": "Auto-detected namespace where MaaS API is deployed", "hide": 0, "includeAll": false, "label": "MaaS Namespace", "multi": false, "name": "maas_namespace", "options": [], "query": {"qryType": 1, "query": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"},
           {"current": {"selected": false, "text": "kuadrant-system", "value": "kuadrant-system"}, "description": "Namespace where Kuadrant (Authorino, Limitador) is deployed", "hide": 0, "label": "Kuadrant Namespace", "name": "kuadrant_namespace", "options": [{"selected": true, "text": "kuadrant-system", "value": "kuadrant-system"}], "query": "kuadrant-system", "skipUrlSync": false, "type": "textbox"},
           {"current": {"selected": false, "text": "openshift-ingress", "value": "openshift-ingress"}, "description": "Namespace where the Istio/Gateway pods run", "hide": 0, "label": "Gateway Namespace", "name": "gateway_namespace", "options": [{"selected": true, "text": "openshift-ingress", "value": "openshift-ingress"}], "query": "openshift-ingress", "skipUrlSync": false, "type": "textbox"},
-          {"current": {"selected": false, "text": "llm", "value": "llm"}, "description": "Namespace where LLM model pods are deployed", "hide": 0, "label": "LLM Namespace", "name": "llm_namespace", "options": [{"selected": true, "text": "llm", "value": "llm"}], "query": "llm", "skipUrlSync": false, "type": "textbox"},
+          {"current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(vllm:num_requests_running, namespace)", "description": "Auto-detected namespace(s) where LLM model pods are deployed", "hide": 0, "includeAll": true, "allValue": ".*", "label": "LLM Namespace", "multi": true, "name": "llm_namespace", "options": [], "query": {"qryType": 1, "query": "label_values(vllm:num_requests_running, namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"},
           {"current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(vllm:num_requests_running, model_name)", "description": "Filter by model", "hide": 0, "includeAll": true, "allValue": ".*", "label": "Model", "multi": true, "name": "model", "options": [], "query": {"qryType": 1, "query": "label_values(vllm:num_requests_running, model_name)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"}
         ]
       },
