@@ -740,7 +740,12 @@ check_conflicting_operators() {
   conflict=$(oc get subscription.operators.coreos.com --all-namespaces --no-headers 2>/dev/null | grep "$conflicting_operator" || true)
 
   if [[ -n "$conflict" ]]; then
-    local ns=$(echo "$conflict" | awk '{print $1}')
+    local ns
+    ns=$(echo "$conflict" | awk '{print $1}')
+    if [[ -z "$ns" ]]; then
+      log_error "Conflicting operator '$conflicting_operator' detected but could not determine its namespace"
+      return 1
+    fi
     log_error "Conflicting operator found: $conflicting_operator in namespace $ns. ODH and RHOAI operators cannot coexist (they manage the same CRDs)."
     log_info "Remove the conflicting operator before proceeding (suggested steps):"
     log_info "  1. Delete custom resources: oc delete datasciencecluster --all && oc delete dscinitializations --all"
@@ -928,15 +933,8 @@ apply_dsc() {
     local dsc_manifest="${data_dir}/datasciencecluster.yaml"
     local mismatches=()
 
-    while IFS='=' read -r field_path expected; do
-      local full_path=".spec.components${field_path}"
-      local actual
-      actual=$(kubectl get datasciencecluster "$existing_dsc" \
-        -o jsonpath="{${full_path}}" 2>/dev/null || echo "")
-      if [[ "$actual" != "$expected" ]]; then
-        mismatches+=("${full_path}: '${actual:-unset}' (expected '${expected}')")
-      fi
-    done < <(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
+    local expected_fields
+    expected_fields=$(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
       # Recursively flatten .spec.components into dot-notation paths with values
       def leaf_paths:
         . as $in |
@@ -945,6 +943,21 @@ apply_dsc() {
         [($p | map(tostring) | join(".")), ($v | tostring)];
       .spec.components | leaf_paths | ".\(.[0])=\(.[1])"
     ')
+
+    if [[ -z "$expected_fields" ]]; then
+      log_warn "Failed to parse DSC manifest at ${dsc_manifest}. Skipping validation, proceeding with existing DSC '$existing_dsc'."
+      return 0
+    fi
+
+    while IFS='=' read -r field_path expected; do
+      local full_path=".spec.components${field_path}"
+      local actual
+      actual=$(kubectl get datasciencecluster "$existing_dsc" \
+        -o jsonpath="{${full_path}}" 2>/dev/null || echo "")
+      if [[ "$actual" != "$expected" ]]; then
+        mismatches+=("${full_path}: '${actual:-unset}' (expected '${expected}')")
+      fi
+    done <<< "$expected_fields"
 
     if [[ ${#mismatches[@]} -eq 0 ]]; then
       log_info "Existing DataScienceCluster '$existing_dsc' meets MaaS requirements, skipping creation"
