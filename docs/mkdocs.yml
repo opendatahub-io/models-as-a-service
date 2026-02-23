@@ -51,7 +51,6 @@ nav:
   - Home: index.md
   - Quick Start: quickstart.md
   - Architecture: architecture.md
-  - Release Strategy: release-strategy.md
   - Administrator Guide:
     - Prerequisites:
       - Overview: install/prerequisites.md

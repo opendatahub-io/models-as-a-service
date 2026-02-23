@@ -9,6 +9,7 @@ Thanks for your interest in contributing. This guide explains how to work with t
   - [Getting started](#getting-started)
   - [Development setup](#development-setup)
   - [Pull request process](#pull-request-process)
+  - [Release strategy](#release-strategy)
   - [Repository layout](#repository-layout)
   - [CI and checks](#ci-and-checks)
   - [Testing](#testing)
@@ -45,6 +46,10 @@ Thanks for your interest in contributing. This guide explains how to work with t
    - Draft/WIP PRs can use the `draft` or `wip` label to skip title validation.
 3. **Keep changes focused** and ensure CI passes (see below).
 4. **Address review feedback** from [OWNERS](OWNERS); maintainers will approve and merge when ready.
+
+## Release strategy
+
+This project follows a **Stream-Lake-Ocean** release model. Code flows from active development (`main`) through quality-gated branches (`stable`, `rhoai`) to the downstream RHOAI repository. See the full details in [docs/release-strategy.md](docs/release-strategy.md).
 
 ## Repository layout
 
