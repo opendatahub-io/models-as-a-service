@@ -63,7 +63,7 @@ When using the full deployment script, this is applied automatically:
 
 ### CI observability tests
 
-The e2e pipeline runs observability tests (see [E2E Testing](../../../test/e2e/README.md)) as part of the same CI flow. **Observability tests run as admin and edit.** Admin runs the full suite including infrastructure validation. Edit runs the same suite, verifying that edit-level users can access metrics via port-forward (edit is granted access to platform Prometheus via a Role/RoleBinding in `openshift-monitoring` so it can query Istio metrics). View users only run smoke tests -- observability requires Prometheus/port-forward access that view users don't have by OpenShift RBAC design. The test flow is validated by running the e2e script (`prow_run_smoke_test.sh`) manually or in CI; there is no separate unit test for the script itself.
+The e2e pipeline runs observability tests (see [E2E Testing](https://github.com/opendatahub-io/models-as-a-service/blob/main/test/e2e/README.md)) as part of the same CI flow. **Observability tests run once as admin** (cluster-admin) — this validates the full infrastructure: metrics endpoints, Prometheus scraping, labels, and metric types. Edit and view users only run smoke tests. Running observability as edit/view is redundant: the metrics pipeline doesn't depend on who queries it, and port-forward access is an OpenShift RBAC concern, not an observability one. The test flow is validated by running the e2e script (`prow_run_smoke_test.sh`) manually or in CI; there is no separate unit test for the script itself.
 
 **How metrics are validated:**
 
@@ -266,12 +266,12 @@ To enable persistent metric counts, refer to the detailed guide:
 
 **[Configuring Redis storage for rate limiting](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/configure-redis_connectivity-link)**
 
-This Red Hat documentation provides:
+This documentation covers:
 
-- Step-by-step Redis configuration for OpenShift
+- Redis and Redis-cached storage backends
 - Secret management for Redis credentials
-- Limitador custom resource updates
-- Production-ready setup instructions
+- Limitador custom resource configuration
+- Production-ready setup options
 
 For local development and testing, you can also use our [Limitador Persistence](limitador-persistence.md) guide which includes a basic Redis setup script that works with any Kubernetes cluster.
 

@@ -401,8 +401,7 @@ class TestObservabilityResources:
         PodMonitor (kuadrant-limitador-monitor). In that case, install-observability.sh
         skips deploying the MaaS ServiceMonitor to avoid duplicate metrics.
         Either mechanism is acceptable.
-        Passes with a note for edit users who lack RBAC to list ServiceMonitor
-        (already validated by admin run).
+        Requires cluster-admin (observability tests run as admin only).
         """
         cfg = expected_metrics_config["resources"]["limitador_servicemonitor"]
         name = cfg["name"]
@@ -410,8 +409,7 @@ class TestObservabilityResources:
 
         can_list, skip_reason = _can_list_servicemonitors_in(namespace)
         if not can_list:
-            print(f"PASS: {skip_reason} (already validated by admin observability run)")
-            return
+            pytest.skip(f"Requires cluster-admin: {skip_reason}")
 
         # Check for MaaS-deployed ServiceMonitor
         has_servicemonitor = _resource_exists("servicemonitor", name, namespace)
@@ -1488,14 +1486,12 @@ class TestAuthorinoMetrics:
     def test_authorino_server_metrics_scraping_configured(self):
         """Verify Authorino /server-metrics scraping is configured.
 
-        Passes with a note for edit users who lack RBAC to list ServiceMonitor
-        (already validated by admin run).
+        Requires cluster-admin (observability tests run as admin only).
         """
         namespace = "kuadrant-system"
         can_list, skip_reason = _can_list_servicemonitors_in(namespace)
         if not can_list:
-            print(f"PASS: {skip_reason} (already validated by admin observability run)")
-            return
+            pytest.skip(f"Requires cluster-admin: {skip_reason}")
 
         # Check for MaaS-deployed ServiceMonitor
         has_maas_sm = _resource_exists(

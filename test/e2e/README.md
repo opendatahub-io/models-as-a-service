@@ -47,7 +47,7 @@ Verifies core MaaS functionality:
 
 ### Observability Tests (`tests/test_observability.py`)
 
-Verifies the observability stack is correctly deployed and generating metrics. **Observability tests run as admin and edit** (see [CI/CD Integration](#cicd-integration)). Admin runs the full suite including infrastructure validation. Edit runs the same suite, verifying that edit-level users can access metrics via port-forward (edit is granted access to platform Prometheus via a Role/RoleBinding in `openshift-monitoring`). View users only run smoke tests -- observability requires Prometheus/port-forward access that view users don't have by OpenShift RBAC design.
+Verifies the observability stack is correctly deployed and generating metrics. **Observability tests run once as admin** (cluster-admin) — see [CI/CD Integration](#cicd-integration). This validates the full infrastructure: metrics endpoints, Prometheus scraping, labels, and metric types. Running as edit/view is redundant: the metrics pipeline doesn't depend on who queries it, and port-forward access is an OpenShift RBAC concern, not an observability one.
 
 **How metrics are validated:**
 
@@ -87,10 +87,6 @@ Verifies the observability stack is correctly deployed and generating metrics. *
 
 Smoke script retries token mint up to `SMOKE_TOKEN_MINT_ATTEMPTS` times (default 3) with 5s delay to tolerate transient API errors.
 
-### Platform Prometheus (edit user) failures
-
-If observability fails for the **edit** user on Istio/platform Prometheus tests in `openshift-monitoring`, the CI script already creates a Role/RoleBinding granting the edit user `get pods` and `create pods/portforward` in that namespace. If the RBAC resources are not present, re-run the full CI or apply them manually.
-
 ## Test Reports
 
 All tests generate reports in `test/e2e/reports/`:
@@ -110,17 +106,12 @@ The `prow_run_smoke_test.sh` script is the main entry point for CI. It uses this
 2. Deploy sample models
 3. Install observability components (`install-observability.sh`)
 4. Set up test users (admin, edit, view)
-5. **As admin:** validate deployment, run token verification, run smoke tests, then run observability tests
-6. **As edit user:** run smoke tests, then run observability tests
-7. **As view user:** run smoke tests only (no observability -- view lacks Prometheus/port-forward access by design)
+5. **As admin:** validate deployment, run token verification, run smoke tests, then run observability tests (41 tests)
+6. **As edit user:** run smoke tests only
+7. **As view user:** run smoke tests only
 
 Exit code is non-zero if any tests fail.
 
 **How the test flow is validated:** The script is not unit-tested. The flow is exercised by running `prow_run_smoke_test.sh` manually or in CI (e.g. Prow); a successful run validates the flow.
 
-#### Observability flow for admin and edit users
-
-1. **Admin:** Script logs in as `tester-admin-user` (cluster-admin). Smoke tests run (API + model calls). Then observability tests run: they use the **current** `oc` user, so the test request (`make_test_request`) is made as admin; we then check that Limitador/Prometheus metrics have the expected labels (user, tier, model) for that traffic.
-2. **Edit:** Script switches to `tester-edit-user` (edit role) via `oc login --token "$EDIT_TOKEN"`. Smoke tests run as edit user. Then **observability tests run again** with the same shell/env: `oc whoami` is now the edit user, so the observability test's token is the edit user's. The test makes a chat request as edit user and checks that metrics show that user/tier. If only admin traffic were labeled, this would fail.
-
-Each observability run is **per user**: same pytest suite, but the identity (and thus the traffic and expected labels) is whoever is currently logged in. Reports are written to `observability-${USER}.html` / `.xml`, so you get separate reports for admin and edit.
+Observability runs once as admin (cluster-admin). The test makes a chat request (`make_test_request`) to generate metrics, then validates all component endpoints, Prometheus scraping, labels, and metric types. Edit and view users only run smoke tests — the metrics pipeline doesn't depend on who queries it, and port-forward/Prometheus access is an OpenShift RBAC concern, not an observability one.

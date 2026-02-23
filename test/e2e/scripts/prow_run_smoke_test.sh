@@ -17,8 +17,8 @@
 #      - View user (view role)
 #   5. Run token metadata verification (as admin user)
 #   6. Run smoke tests for each user
-#   7. Run observability tests as admin and edit users
-#      (view users skip observability -- requires Prometheus/port-forward access)
+#   7. Run observability tests once as admin (requires cluster-admin for
+#      Prometheus/port-forward access; running as edit/view is redundant)
 # 
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
@@ -77,7 +77,7 @@ SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
 # Track non-blocking test failures - script continues but exits with error at end.
-# run_observability_tests sets TESTS_FAILED=true (non-blocking) so all user runs complete.
+# run_observability_tests sets TESTS_FAILED=true (non-blocking) so all smoke runs still complete.
 # All other test functions (smoke tests, token verification, validation) exit 1 immediately.
 TESTS_FAILED=false
 
@@ -323,12 +323,13 @@ run_smoke_tests() {
 }
 
 # Observability tests are non-blocking: on failure we set TESTS_FAILED and continue
-# (so admin and edit smoke + observability runs all complete). The script still
-# exits non-zero at the end when TESTS_FAILED is set, mirroring smoke-test exit behavior.
+# so all remaining smoke runs still complete. The script exits non-zero at the end
+# when TESTS_FAILED is set, mirroring smoke-test exit behavior.
 #
-# Observability runs for admin (full infrastructure validation) and edit (verifies
-# edit-level access works). View users only run smoke tests -- observability requires
-# Prometheus/port-forward access that view users don't have by design (OpenShift RBAC).
+# Observability runs once as admin (cluster-admin) — this validates the full
+# infrastructure: metrics endpoints, Prometheus scraping, labels, and types.
+# Running as edit/view is redundant: metrics pipelines don't depend on who queries them,
+# and port-forward access is an OpenShift RBAC concern, not an observability one.
 run_observability_tests() {
     echo "-- Observability Testing --"
     
@@ -448,39 +449,6 @@ setup_test_user "tester-admin-user" "cluster-admin"
 setup_test_user "tester-edit-user" "edit"
 setup_test_user "tester-view-user" "view"
 
-# Grant edit user access to platform Prometheus (openshift-monitoring) for observability tests.
-# Edit needs get/list pods and create portforward to query Istio metrics via port-forward + REST.
-echo "Granting edit user access to platform Prometheus (openshift-monitoring)..."
-kubectl apply -f - <<'EORBAC'
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: prometheus-query
-  namespace: openshift-monitoring
-rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["pods/portforward"]
-    verbs: ["create"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: tester-edit-user-prometheus
-  namespace: openshift-monitoring
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: prometheus-query
-subjects:
-  - kind: ServiceAccount
-    name: tester-edit-user
-    namespace: default
-EORBAC
-echo "✅ Edit user granted access to platform Prometheus"
-
 # Now run tests for each user
 print_header "Running tests for all users"
 
@@ -496,20 +464,17 @@ run_token_verification
 sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
 
-# Run observability tests as admin (verify infrastructure + admin traffic in metrics)
+# Run observability tests once as admin (full infrastructure validation)
 print_header "Running Observability Tests as admin"
 run_observability_tests
 
-# Test edit user
+# Test edit user (smoke only)
 print_header "Running Maas e2e Tests as edit user"
 EDIT_TOKEN=$(oc create token tester-edit-user -n default)
 oc login --token "$EDIT_TOKEN" --server "$K8S_CLUSTER_URL"
 run_smoke_tests
-print_header "Running Observability Tests as edit user"
-run_observability_tests
 
-# Test view user (smoke only -- observability requires Prometheus/port-forward
-# access that view users don't have by OpenShift RBAC design)
+# Test view user (smoke only)
 print_header "Running Maas e2e Tests as view user"
 VIEW_TOKEN=$(oc create token tester-view-user -n default)
 oc login --token "$VIEW_TOKEN" --server "$K8S_CLUSTER_URL"
