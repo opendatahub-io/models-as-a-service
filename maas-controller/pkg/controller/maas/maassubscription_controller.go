@@ -26,6 +26,7 @@ import (
 	"github.com/go-logr/logr"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -210,7 +211,6 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			}
 
 			// Build branch selection: explicit header OR auto-select with exclusions.
-			// These remain OR'd in one predicate because they share the same counter.
 			explicitBranch := fmt.Sprintf(`%s == "%s"`, headerCheck, si.sub.Name)
 			autoBranch := "!" + headerExists
 			if exclusionCheck := buildMembershipCheck(excludeGroups, excludeUsers); exclusionCheck != "" {
@@ -226,6 +226,16 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				"counters": []interface{}{
 					map[string]interface{}{"expression": "auth.identity.userid"},
 				},
+			}
+
+			// Deny users who explicitly select this subscription but don't belong to it.
+			limitsMap[fmt.Sprintf("deny-not-member-%s-%s", si.sub.Name, si.mRef.Name)] = map[string]interface{}{
+				"rates": []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
+				"when": []interface{}{
+					map[string]interface{}{"predicate": explicitBranch},
+					map[string]interface{}{"predicate": "!(" + membershipCheck + ")"},
+				},
+				"counters": []interface{}{map[string]interface{}{"expression": "auth.identity.userid"}},
 			}
 		}
 
@@ -330,7 +340,7 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 		"app.kubernetes.io/part-of":    "maas-subscription",
 	}
 	if err := r.List(ctx, policyList, labelSelector); err != nil {
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
 		return fmt.Errorf("failed to list TRLPs for cleanup: %w", err)

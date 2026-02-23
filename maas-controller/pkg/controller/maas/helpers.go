@@ -47,6 +47,9 @@ func findHTTPRouteForModel(ctx context.Context, c client.Reader, defaultNS, mode
 
 	var httpRouteName string
 	httpRouteNS := maasModel.Namespace
+	if maasModel.Spec.ModelRef.Namespace != "" {
+		httpRouteNS = maasModel.Spec.ModelRef.Namespace
+	}
 
 	switch maasModel.Spec.ModelRef.Kind {
 	case "LLMInferenceService":
