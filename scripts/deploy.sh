@@ -972,9 +972,9 @@ apply_dsc() {
       return 0
     fi
 
-    log_warn "Existing DataScienceCluster '$existing_dsc' does not meet MaaS requirements:"
+    log_error "Existing DataScienceCluster '$existing_dsc' does not meet MaaS requirements:"
     for mismatch in "${mismatches[@]}"; do
-      log_warn "  $mismatch"
+      log_error "  $mismatch"
     done
 
     log_error "Fix the required fields in DSC deployment and try again..."
