@@ -222,11 +222,12 @@ func (r *MaaSModelReconciler) updateStatusWithReason(ctx context.Context, model 
 		Message:            message,
 		LastTransitionTime: metav1.Now(),
 	}
-	if phase == "Failed" {
+	if phase != "Ready" {
 		condition.Status = metav1.ConditionFalse
-		condition.Reason = "ReconcileFailed"
-		if reason != "" {
-			condition.Reason = reason
+		if phase == "Failed" {
+			condition.Reason = "ReconcileFailed"
+		} else {
+			condition.Reason = "BackendNotReady"
 		}
 	}
 
