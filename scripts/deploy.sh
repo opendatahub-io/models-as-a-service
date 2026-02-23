@@ -401,15 +401,15 @@ main() {
 deploy_via_operator() {
   log_info "Starting operator-based deployment..."
 
+  # Check for conflicting operators before modifying the cluster
+  check_conflicting_operators
+
   # Install optional operators
   install_optional_operators
 
   # Install rate limiter component
   install_policy_engine
 
-  # Check for conflicting operators
-  check_conflicting_operators
-  
   # Install primary operator
   install_primary_operator
 
