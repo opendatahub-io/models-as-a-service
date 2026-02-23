@@ -737,7 +737,7 @@ check_conflicting_operators() {
   fi
   # Check all namespaces for a conflicting subscription
   local conflict
-  conflict=$(oc get subscription.operators.coreos.com --all-namespaces --no-headers 2>/dev/null | grep "$conflicting_operator" || true)
+  conflict=$(oc get subscription.operators.coreos.com --all-namespaces --no-headers 2>/dev/null | grep -w "$conflicting_operator" | head -n1 || true)
 
   if [[ -n "$conflict" ]]; then
     local ns
