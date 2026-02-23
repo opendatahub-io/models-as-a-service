@@ -261,9 +261,14 @@ check_required_tools() {
   if command -v kustomize &>/dev/null; then
     local kustomize_version
     kustomize_version=$(kustomize version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-    if [[ -z "$kustomize_version" ]] || \
-       [[ "$(printf '%s\n%s' "$required_kustomize" "$kustomize_version" | sort -V | head -1)" != "$required_kustomize" ]]; then
-      missing+=("kustomize (v$required_kustomize+ required, found ${kustomize_version:-unknown})")
+    # Fallback: extract version from Go binary metadata (works for dev builds)
+    if [[ -z "$kustomize_version" ]] && command -v go &>/dev/null; then
+      kustomize_version=$(go version -m "$(command -v kustomize)" 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | tr -d 'v')
+    fi
+    if [[ -z "$kustomize_version" ]]; then
+      log_warn "kustomize is a dev build with unverifiable version. Cannot guarantee compatibility with v$required_kustomize+."
+    elif [[ "$(printf '%s\n%s' "$required_kustomize" "$kustomize_version" | sort -V | head -1)" != "$required_kustomize" ]]; then
+      missing+=("kustomize (v$required_kustomize+ required, found ${kustomize_version})")
     fi
   else
     missing+=("kustomize (v$required_kustomize+)")
