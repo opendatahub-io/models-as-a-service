@@ -125,11 +125,11 @@ For detailed validation and troubleshooting, see the [Validation Guide](install/
 
 ### Deploy Sample Models
 
-These sample models deploys to the `llm` namespace, and should be created if it doesn't already exist.
+These sample models deploy to the `llm` namespace. Create it if it doesn't already exist:
 
 ```bash
-# Create namespace where models will be deployed to
-kubectl create namespace llm
+# Create namespace where models will deploy to if it doesn't already exist
+kubectl get namespace llm || kubectl create namespace llm
 ```
 
 #### Simulator Model (CPU)
