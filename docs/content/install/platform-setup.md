@@ -307,6 +307,9 @@ spec:
       serving.kserve.io/gateway: kserve-ingress-gateway
 ```
 
+!!! info "Gateway Architecture"
+    MaaS uses a segregated gateway approach where models explicitly opt-in to MaaS capabilities. The `openshift-ai-inference` gateway above is for standard KServe inference, while `maas-default-gateway` (created later) enables token authentication and rate limiting. For details, see [Model Setup - Gateway Architecture](../configuration-and-management/model-setup.md#gateway-architecture).
+
 Now install the platform operator for your environment:
 
 === "Red Hat OpenShift AI"
@@ -539,6 +542,8 @@ Expected output:
 ```json
 {"status":"healthy"}
 ```
+
+For end-to-end validation and troubleshooting, see the [Validation Guide](validation.md).
 
 ## Next Steps
 

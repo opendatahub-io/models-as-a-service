@@ -2,6 +2,9 @@
 
 This guide covers TLS configuration for the MaaS API component to enable encrypted communication for all API traffic.
 
+!!! tip "Quick Verification"
+    For TLS verification commands, see [Validation Guide - TLS Verification](../install/validation.md#tls-verification).
+
 ## Overview
 
 The MaaS API supports end-to-end TLS encryption across all traffic paths:
@@ -30,7 +33,7 @@ When TLS is enabled:
 - All certificate validation uses a trusted CA bundle
 
 !!! note "Default deployment"
-    TLS is enabled by default when deploying via `deploy-openshift.sh` or using the `odh` overlay (used by ODH/RHOAI operator). Both rely on OpenShift [service-ca-operator](https://docs.openshift.com/container-platform/latest/security/certificates/service-serving-certificate.html) for automatic certificate provisioning.
+    TLS is enabled by default when deploying via `./scripts/deploy.sh` (both operator and kustomize modes). The deployment relies on OpenShift [service-ca-operator](https://docs.openshift.com/container-platform/latest/security/certificates/service-serving-certificate.html) for automatic certificate provisioning. Use `--disable-tls-backend` to deploy with HTTP instead.
 
 ## Prerequisites
 
@@ -41,9 +44,9 @@ Authorino handles two TLS-protected traffic flows:
 * **inbound** from the Gateway (listener TLS) 
 * **outbound** to `maas-api` (for metadata lookups). 
 
-For ODH/RHOAI deployments, the inbound flow is a [platform pre-requisite](https://github.com/opendatahub-io/kserve/tree/release-v0.15/docs/samples/llmisvc/ocp-setup-for-GA#ssl-authorino) for secure `LLMInferenceService` communication; only the outbound configuration is needed for MaaS. 
+For ODH/RHOAI deployments, the inbound flow is a [platform pre-requisite](https://github.com/opendatahub-io/kserve/tree/release-v0.15/docs/samples/llmisvc/ocp-setup-for-GA#ssl-authorino) for secure `LLMInferenceService` communication; only the outbound configuration is needed for MaaS.
 
-For standalone deployments using `deploy-openshift.sh`, both flows are configured automatically via `configure-authorino-tls.sh`.
+For all deployments using `./scripts/deploy.sh` (both operator and kustomize modes with TLS enabled), both flows are configured automatically via `configure-authorino-tls.sh`.
 
 #### Gateway → Authorino (Listener TLS)
 

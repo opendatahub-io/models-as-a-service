@@ -2,6 +2,14 @@
 
 This guide provides instructions for validating and testing your MaaS Platform deployment.
 
+## Namespace Reference
+
+| Component | RHOAI | ODH |
+|-----------|-------|-----|
+| MaaS API | redhat-ods-applications | opendatahub |
+| Kuadrant/RHCL | kuadrant-system | kuadrant-system |
+| Gateway | openshift-ingress | openshift-ingress |
+
 ## Manual Validation (Recommended)
 
 Follow these steps to validate your deployment and understand each component:
@@ -123,6 +131,31 @@ For faster validation, you can use the automated validation script to run the ma
 
 The script automates the manual validation steps above and provides detailed feedback with specific suggestions for fixing any issues found. This is useful when you need to quickly verify deployment status, but understanding the manual steps above helps with troubleshooting.
 
+## TLS Verification
+
+TLS is enabled by default when deploying via the automated script or ODH overlay.
+
+### Check Certificate
+
+```bash
+# View certificate details (RHOAI)
+kubectl get secret maas-api-serving-cert -n redhat-ods-applications \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -text -noout
+
+# Check expiry
+kubectl get secret maas-api-serving-cert -n redhat-ods-applications \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -enddate -noout
+```
+
+### Test HTTPS Endpoint
+
+```bash
+kubectl run curl --rm -it --image=curlimages/curl -- \
+  curl -vk https://maas-api.redhat-ods-applications.svc:8443/health
+```
+
+For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).
+
 ## Troubleshooting
 
 ### Common Issues
@@ -131,7 +164,32 @@ The script automates the manual validation steps above and provides detailed fee
       - [ ] Verify Gateway status and HTTPRoute configuration
 2. **Getting `401` Unauthorized errors when trying to get a token**: Authentication maas-api is not working.
       - [ ] Verify `maas-api-auth-policy` AuthPolicy is applied
-      - [ ] Validate the AuthPolicy audience matches the token audience (audiences: ["https://kubernetes.default.svc", "maas-default-gateway-sa"])
+      - [ ] Check if your cluster uses a custom token review audience:
+
+      ```bash
+      # Detect your cluster's audience
+      AUD="$(kubectl create token default --duration=10m 2>/dev/null | \
+        cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
+      echo "Cluster audience: ${AUD}"
+      ```
+
+      If the audience is NOT `https://kubernetes.default.svc`, patch the AuthPolicy:
+
+      ```bash
+      # For RHOAI:
+      kubectl patch authpolicy maas-api-auth-policy -n redhat-ods-applications \
+        --type=merge --patch "
+      spec:
+        rules:
+          authentication:
+            openshift-identities:
+              kubernetesTokenReview:
+                audiences:
+                  - ${AUD}
+                  - maas-default-gateway-sa"
+      ```
+
+      For ODH, use namespace `opendatahub` instead of `redhat-ods-applications`.
 3. **Getting `401` errors when trying to get models**: Authentication is not working for the models endpoint.
       - [ ] Create a new token (default expiration is 10 minutes)
       - [ ] Verify `gateway-auth-policy` AuthPolicy is applied

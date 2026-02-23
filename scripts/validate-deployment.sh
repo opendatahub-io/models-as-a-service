@@ -50,6 +50,10 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  -n, --namespace NS        Namespace where MaaS API is deployed"
     echo "                            Default: opendatahub (or MAAS_API_NAMESPACE env var)"
     echo ""
+    echo "Environment (for non-admin users):"
+    echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
+    echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
+    echo ""
     echo "Examples:"
     echo "  # Basic validation"
     echo "  $0                                              # Validate using first available model (default chat format)"
@@ -236,7 +240,9 @@ print_header "1️⃣ Component Status Checks"
 
 # Check MaaS API pods
 print_check "MaaS API pods"
-MAAS_PODS=$(kubectl get pods -n "$MAAS_API_NAMESPACE" -l app.kubernetes.io/name=maas-api --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+MAAS_PODS=$(kubectl get pods -n "$MAAS_API_NAMESPACE" -l app.kubernetes.io/name=maas-api --no-headers 2>/dev/null | grep -c "Running" || true)
+# Ensure MAAS_PODS is a valid integer (fixes edge case with empty/multiline output)
+[[ "$MAAS_PODS" =~ ^[0-9]+$ ]] || MAAS_PODS=0
 if [ "$MAAS_PODS" -gt 0 ]; then
     print_success "MaaS API has $MAAS_PODS running pod(s)"
 else
@@ -340,14 +346,30 @@ else
 fi
 
 print_check "Gateway hostname"
-# Get cluster domain and construct the MaaS gateway hostname
-CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
-if [ -n "$CLUSTER_DOMAIN" ]; then
-    HOST="https://maas.${CLUSTER_DOMAIN}"
-    print_success "Gateway hostname: $HOST"
+# Resolve MaaS gateway host: prefer env override, then Gateway listener (no cluster-admin), then cluster ingress config
+if [ -n "${MAAS_GATEWAY_HOST:-}" ]; then
+    # Normalize to https://host (strip existing protocol if present)
+    HOST="${MAAS_GATEWAY_HOST#*://}"
+    HOST="https://${HOST}"
+    print_success "Gateway hostname (from MAAS_GATEWAY_HOST): $HOST"
 else
-    print_fail "Could not determine cluster domain" "Cannot test API endpoints" "Check: kubectl get ingresses.config.openshift.io cluster"
-    HOST=""
+    GATEWAY_HOSTNAME=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[?(@.protocol=="HTTPS")].hostname}' 2>/dev/null | awk '{print $1}')
+    if [ -z "$GATEWAY_HOSTNAME" ]; then
+        GATEWAY_HOSTNAME=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[0].hostname}' 2>/dev/null)
+    fi
+    if [ -n "$GATEWAY_HOSTNAME" ]; then
+        HOST="https://${GATEWAY_HOSTNAME}"
+        print_success "Gateway hostname: $HOST"
+    else
+        CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
+        if [ -n "$CLUSTER_DOMAIN" ]; then
+            HOST="https://maas.${CLUSTER_DOMAIN}"
+            print_success "Gateway hostname: $HOST"
+        else
+            print_fail "Could not determine cluster domain or gateway hostname" "Cannot test API endpoints" "As non-admin, set MAAS_GATEWAY_HOST (e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com) or ask an admin for the cluster domain"
+            HOST=""
+        fi
+    fi
 fi
 
 # ==========================================
@@ -638,12 +660,28 @@ else
             fi
         done
         
+        # Rate Limiting Validation Logic:
+        # ┌─────────────────────────────────────────────────────────────────────────────────┐
+        # │ Condition                              │ Result                                 │
+        # ├─────────────────────────────────────────────────────────────────────────────────┤
+        # │ 429s received AND no failures          │ ✅ PASS - Rate limiting working        │
+        # │ 429s received BUT some failures        │ ❌ FAIL - Partial success, instability │
+        # │ All 200s, no 429s, no failures         │ ❌ FAIL - Rate limiting not enforced   │
+        # │ Some 200s, some failures, no 429s      │ ❌ FAIL - Inconclusive                 │
+        # │ All requests failed                    │ ❌ FAIL - Complete failure             │
+        # └─────────────────────────────────────────────────────────────────────────────────┘
         if [ "$RATE_LIMITED_COUNT" -gt 0 ]; then
-            print_success "Rate limiting is working ($SUCCESS_COUNT successful, $RATE_LIMITED_COUNT rate limited)"
+            if [ "$FAILED_COUNT" -gt 0 ]; then
+                print_fail "Rate limiting partially working but errors observed" \
+                    "$SUCCESS_COUNT succeeded, $RATE_LIMITED_COUNT rate limited, $FAILED_COUNT failed" \
+                    "Check auth service stability and model endpoint health"
+            else
+                print_success "Rate limiting is working ($SUCCESS_COUNT successful, $RATE_LIMITED_COUNT rate limited)"
+            fi
         elif [ "$SUCCESS_COUNT" -gt 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
-            print_warning "Rate limiting may not be enforced" "All $SUCCESS_COUNT requests succeeded without rate limiting"
+            print_fail "Rate limiting not enforced" "All $SUCCESS_COUNT requests succeeded without rate limiting" "Check TokenRateLimitPolicy and Limitador configuration"
         elif [ "$SUCCESS_COUNT" -gt 0 ]; then
-            print_warning "Rate limiting test inconclusive" "$SUCCESS_COUNT succeeded, $FAILED_COUNT failed (auth may still be stabilizing)"
+            print_fail "Rate limiting test inconclusive" "$SUCCESS_COUNT succeeded, $FAILED_COUNT failed (auth may still be stabilizing)" "Check TokenRateLimitPolicy and auth service health"
         else
             print_fail "Rate limiting test failed" "All $RATE_LIMIT_TEST_COUNT requests failed (got $FAILED_COUNT errors)" "Check TokenRateLimitPolicy, Limitador, and auth service health"
         fi
@@ -696,7 +734,7 @@ else
     echo "Common fixes:"
     echo "  - Wait for pods to start: kubectl get pods -A | grep -v Running"
     echo "  - Check operator logs: kubectl logs -n kuadrant-system -l app.kubernetes.io/name=kuadrant-operator"
-    echo "  - Re-run deployment: ./scripts/deploy-openshift.sh"
+    echo "  - Re-run deployment: ./scripts/deploy.sh"
     echo ""
     echo "Usage: ./scripts/validate-deployment.sh [MODEL_NAME]"
     echo "  MODEL_NAME: Optional. Specify a model to validate against"

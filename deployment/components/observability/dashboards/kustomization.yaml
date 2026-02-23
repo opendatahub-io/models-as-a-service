@@ -2,12 +2,13 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 metadata:
-  name: maas-observability
+  name: maas-dashboards
   annotations:
     config.kubernetes.io/local-config: "true"
 
-namespace: llm-observability
+namespace: maas-api
 
 resources:
-  - grafana-instance.yaml
-  - route.yaml
+  - dashboard-platform-admin.yaml
+  - dashboard-ai-engineer.yaml
+

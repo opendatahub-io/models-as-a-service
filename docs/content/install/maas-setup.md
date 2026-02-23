@@ -34,40 +34,8 @@ kubectl apply --server-side=true \
        sed "s/maas-api\.maas-api\.svc/maas-api.opendatahub.svc/g")
 ```
 
-### Configuring Custom Token Review Audience
-
-If your cluster uses a custom token review audience (not the default `https://kubernetes.default.svc`),
-you must patch the `maas-api-auth-policy` to include your cluster's audience:
-
-```shell
-# Detect your cluster's audience
-AUD="$(kubectl create token default --duration=10m 2>/dev/null | cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
-
-echo "Cluster audience: ${AUD}"
-
-# Patch the MaaS API AuthPolicy with your cluster's audience
-# For RHOAI installations:
-kubectl patch authpolicy maas-api-auth-policy -n redhat-ods-applications --type=merge --patch "
-spec:
-  rules:
-    authentication:
-      openshift-identities:
-        kubernetesTokenReview:
-          audiences:
-            - ${AUD}
-            - maas-default-gateway-sa"
-
-# For ODH installations:
-kubectl patch authpolicy maas-api-auth-policy -n opendatahub --type=merge --patch "
-spec:
-  rules:
-    authentication:
-      openshift-identities:
-        kubernetesTokenReview:
-          audiences:
-            - ${AUD}
-            - maas-default-gateway-sa"
-```
+!!! note "Custom Token Review Audience"
+    If you encounter `401 Unauthorized` errors when obtaining tokens, your cluster may use a custom token review audience. See [Troubleshooting - 401 Errors](validation.md#common-issues) for detection and resolution steps.
 
 ## Install Usage Policies
 
@@ -91,8 +59,8 @@ configuring usage policies and tiers.
 
 ## Next steps
 
-* **Deploy models.** In the Quick Start, we provide
-  [sample deployments](../quickstart.md#deploy-sample-models-optional) that you
+* **Deploy models.** See the Quick Start for
+  [sample model deployments](../quickstart.md#model-setup) that you
   can use to try the MaaS capability.
 * **Perform validation.** Follow the [validation guide](validation.md) to verify that
   MaaS is working correctly.
