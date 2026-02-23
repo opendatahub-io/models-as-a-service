@@ -939,7 +939,7 @@ apply_dsc() {
     local mismatches=()
 
     local expected_fields
-    expected_fields=$(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
+    if ! expected_fields=$(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
       # Recursively flatten .spec.components into dot-notation paths with values
       def leaf_paths:
         . as $in |
@@ -947,10 +947,13 @@ apply_dsc() {
         ($in | getpath($p)) as $v |
         [($p | map(tostring) | join(".")), ($v | tostring)];
       .spec.components | leaf_paths | ".\(.[0])=\(.[1])"
-    ')
+    '); then
+      log_warn "Failed to parse DSC manifest at ${dsc_manifest}. Skipping validation, proceeding with existing DSC '$existing_dsc'."
+      return 0
+    fi
 
     if [[ -z "$expected_fields" ]]; then
-      log_warn "Failed to parse DSC manifest at ${dsc_manifest}. Skipping validation, proceeding with existing DSC '$existing_dsc'."
+      log_warn "DSC manifest at ${dsc_manifest} produced no fields. Skipping validation, proceeding with existing DSC '$existing_dsc'."
       return 0
     fi
 
