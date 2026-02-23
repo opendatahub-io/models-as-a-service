@@ -263,10 +263,10 @@ check_required_tools() {
     kustomize_version=$(kustomize version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     if [[ -z "$kustomize_version" ]] || \
        [[ "$(printf '%s\n%s' "$required" "$kustomize_version" | sort -V | head -1)" != "$required" ]]; then
-      missing+=("kustomize (v5.7.0+ required, found ${kustomize_version:-unknown})")
+      missing+=("kustomize (v$required+ required, found ${kustomize_version:-unknown})")
     fi
   else
-    missing+=("kustomize (v5.7.0+)")
+    missing+=("kustomize (v$required+)")
   fi
   command -v gsed &>/dev/null || missing+=("gsed (GNU sed)")
 
