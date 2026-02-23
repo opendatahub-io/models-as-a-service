@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -19,19 +20,21 @@ type Service struct {
 	store        MetadataStore
 	tierMapper   *tier.Mapper
 	logger       *logger.Logger
+	config       *config.Config
 }
 
-func NewService(tokenManager *token.Manager, store MetadataStore, tierMapper *tier.Mapper) *Service {
+func NewService(tokenManager *token.Manager, store MetadataStore, tierMapper *tier.Mapper, cfg *config.Config) *Service {
 	return &Service{
 		tokenManager: tokenManager,
 		store:        store,
 		tierMapper:   tierMapper,
 		logger:       logger.Production(),
+		config:       cfg,
 	}
 }
 
 // NewServiceWithLogger creates a new service with a custom logger (for testing)
-func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, tierMapper *tier.Mapper, log *logger.Logger) *Service {
+func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, tierMapper *tier.Mapper, cfg *config.Config, log *logger.Logger) *Service {
 	if log == nil {
 		log = logger.Production()
 	}
@@ -40,6 +43,7 @@ func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, tier
 		store:        store,
 		tierMapper:   tierMapper,
 		logger:       log,
+		config:       cfg,
 	}
 }
 
@@ -68,11 +72,12 @@ func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, nam
 // CreatePermanentKeyResponse is returned when creating an API key
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time
 type CreatePermanentKeyResponse struct {
-	Key       string `json:"key"`       // Plaintext key - SHOWN ONCE, NEVER STORED
-	KeyPrefix string `json:"keyPrefix"` // Display prefix for UI
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"createdAt"`
+	Key       string  `json:"key"`              // Plaintext key - SHOWN ONCE, NEVER STORED
+	KeyPrefix string  `json:"keyPrefix"`        // Display prefix for UI
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	CreatedAt string  `json:"createdAt"`
+	ExpiresAt *string `json:"expiresAt,omitempty"` // RFC3339 timestamp
 }
 
 // CreatePermanentAPIKey creates a new API key (sk-oai-* format)
@@ -81,7 +86,22 @@ type CreatePermanentKeyResponse struct {
 // - Stores ONLY the SHA-256 hash (plaintext never stored)
 // - Returns plaintext ONCE at creation ("show-once" pattern)
 // - Determines tier from user groups and stores for authorization
-func (s *Service) CreatePermanentAPIKey(ctx context.Context, user *token.UserContext, name, description string) (*CreatePermanentKeyResponse, error) {
+func (s *Service) CreatePermanentAPIKey(ctx context.Context, user *token.UserContext, name, description string, expiresIn *time.Duration) (*CreatePermanentKeyResponse, error) {
+	// Validate expiration based on policy
+	if s.config != nil && s.config.APIKeyExpirationPolicy == "required" && expiresIn == nil {
+		return nil, errors.New("expiration is required by system policy")
+	}
+	if expiresIn != nil && *expiresIn <= 0 {
+		return nil, errors.New("expiration must be positive")
+	}
+
+	// Calculate absolute expiration timestamp
+	var expiresAt *time.Time
+	if expiresIn != nil {
+		expiry := time.Now().UTC().Add(*expiresIn)
+		expiresAt = &expiry
+	}
+
 	// Generate the API key
 	plaintext, hash, prefix, err := GenerateAPIKey()
 	if err != nil {
@@ -101,20 +121,26 @@ func (s *Service) CreatePermanentAPIKey(ctx context.Context, user *token.UserCon
 	originalGroups, _ := json.Marshal(user.Groups)
 
 	// Store in database (hash only, plaintext NEVER stored)
-	if err := s.store.AddPermanentKey(ctx, user.Username, keyID, hash, prefix, name, description, userTier.Name, string(originalGroups)); err != nil {
+	if err := s.store.AddPermanentKey(ctx, user.Username, keyID, hash, prefix, name, description, userTier.Name, string(originalGroups), expiresAt); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
 	s.logger.Info("Created permanent API key", "user", user.Username, "tier", userTier.Name, "id", keyID)
 
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
-	return &CreatePermanentKeyResponse{
+	response := &CreatePermanentKeyResponse{
 		Key:       plaintext, // SHOWN ONCE, NEVER AGAIN
 		KeyPrefix: prefix,
 		ID:        keyID,
 		Name:      name,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-	}, nil
+	}
+	if expiresAt != nil {
+		formatted := expiresAt.Format(time.RFC3339)
+		response.ExpiresAt = &formatted
+	}
+
+	return response, nil
 }
 
 func (s *Service) ListAPIKeys(ctx context.Context, user *token.UserContext) ([]ApiKeyMetadata, error) {
@@ -170,7 +196,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		if errors.Is(err, ErrInvalidKey) {
 			return &ValidationResult{
 				Valid:  false,
-				Reason: "key revoked",
+				Reason: "key revoked or expired",
 			}, nil
 		}
 		return nil, fmt.Errorf("validation lookup failed: %w", err)

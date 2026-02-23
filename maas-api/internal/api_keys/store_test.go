@@ -182,7 +182,7 @@ func TestPermanentKeyOperations(t *testing.T) {
 	defer store.Close()
 
 	t.Run("AddPermanentKey", func(t *testing.T) {
-		err := store.AddPermanentKey(ctx, "user1", "key-id-1", "hash123", "sk-oai-abc", "my-key", "test key")
+		err := store.AddPermanentKey(ctx, "user1", "key-id-1", "hash123", "sk-oai-abc", "my-key", "test key", "default", "{}", nil)
 		require.NoError(t, err)
 
 		keys, err := store.List(ctx, "user1")
@@ -215,7 +215,7 @@ func TestPermanentKeyOperations(t *testing.T) {
 
 	t.Run("UpdateLastUsed", func(t *testing.T) {
 		// Add another key for this test
-		err := store.AddPermanentKey(ctx, "user2", "key-id-2", "hash456", "sk-oai-def", "key2", "")
+		err := store.AddPermanentKey(ctx, "user2", "key-id-2", "hash456", "sk-oai-def", "key2", "", "default", "{}", nil)
 		require.NoError(t, err)
 
 		err = store.UpdateLastUsed(ctx, "key-id-2")

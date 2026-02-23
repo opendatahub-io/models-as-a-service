@@ -3,6 +3,7 @@ package api_keys
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 var (
@@ -25,7 +26,8 @@ type MetadataStore interface {
 	// AddPermanentKey stores a permanent API key with hash-only storage (no plaintext)
 	// tierName is required for generating synthetic groups during validation
 	// originalUserGroups is optional JSON array for audit trail
-	AddPermanentKey(ctx context.Context, username string, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string) error
+	// expiresAt is optional - nil means permanent key
+	AddPermanentKey(ctx context.Context, username string, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string, expiresAt *time.Time) error
 
 	List(ctx context.Context, username string) ([]ApiKeyMetadata, error)
 

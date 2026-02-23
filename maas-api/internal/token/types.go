@@ -4,8 +4,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
+
+// ParseDurationWithDays extends time.ParseDuration to support "d" (days) suffix
+// Supports: "30d", "6h", "90m", "2h30m", "1.5h"
+func ParseDurationWithDays(s string) (time.Duration, error) {
+	if strings.HasSuffix(s, "d") {
+		daysStr := strings.TrimSuffix(s, "d")
+		days, err := strconv.ParseFloat(daysStr, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid days value: %w", err)
+		}
+		return time.Duration(days * 24 * float64(time.Hour)), nil
+	}
+	return time.ParseDuration(s)
+}
 
 // UserContext holds user information extracted from the token.
 type UserContext struct {
@@ -52,7 +68,7 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 			return nil // Let the caller handle defaulting
 		}
 		var err error
-		d.Duration, err = time.ParseDuration(value)
+		d.Duration, err = ParseDurationWithDays(value)
 		if err != nil {
 			return err
 		}

@@ -171,8 +171,9 @@ func (h *Handler) RevokeAllTokens(c *gin.Context) {
 
 // CreatePermanentKeyRequest is the request body for creating a permanent API key
 type CreatePermanentKeyRequest struct {
-	Name        string `json:"name" binding:"required"`
-	Description string `json:"description,omitempty"`
+	Name        string          `json:"name" binding:"required"`
+	Description string          `json:"description,omitempty"`
+	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"`
 }
 
 // CreatePermanentAPIKey handles POST /v1/api-keys/permanent
@@ -201,10 +202,17 @@ func (h *Handler) CreatePermanentAPIKey(c *gin.Context) {
 		return
 	}
 
-	result, err := h.service.CreatePermanentAPIKey(c.Request.Context(), user, req.Name, req.Description)
+	// Parse expiration duration if provided
+	var expiresIn *time.Duration
+	if req.ExpiresIn != nil {
+		d := req.ExpiresIn.Duration
+		expiresIn = &d
+	}
+
+	result, err := h.service.CreatePermanentAPIKey(c.Request.Context(), user, req.Name, req.Description, expiresIn)
 	if err != nil {
 		h.logger.Error("Failed to create permanent API key", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create API key"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 

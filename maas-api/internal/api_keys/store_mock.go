@@ -64,7 +64,7 @@ func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey) er
 	return nil
 }
 
-func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string) error {
+func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -74,6 +74,11 @@ func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHas
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	var expiresAtTime time.Time
+	if expiresAt != nil {
+		expiresAtTime = *expiresAt
+	}
 
 	m.keys[keyID] = &storedKey{
 		metadata: ApiKeyMetadata{
@@ -85,8 +90,9 @@ func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHas
 			Status:       TokenStatusActive,
 			CreationDate: time.Now().UTC().Format(time.RFC3339),
 		},
-		username: username,
-		keyHash:  keyHash,
+		username:  username,
+		keyHash:   keyHash,
+		expiresAt: expiresAtTime,
 	}
 
 	return nil
@@ -149,14 +155,24 @@ func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, err
 }
 
 func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetadata, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	for _, k := range m.keys {
 		if k.keyHash == keyHash {
-			if k.metadata.Status == TokenStatusRevoked {
+			// Check expiration and auto-update status if expired
+			now := time.Now().UTC()
+			if !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
+				if k.metadata.Status == TokenStatusActive {
+					k.metadata.Status = TokenStatusExpired
+				}
+			}
+
+			// Reject revoked/expired keys
+			if k.metadata.Status == TokenStatusRevoked || k.metadata.Status == TokenStatusExpired {
 				return nil, ErrInvalidKey
 			}
+
 			meta := k.metadata
 			meta.Username = k.username
 			if k.lastUsedAt != nil {

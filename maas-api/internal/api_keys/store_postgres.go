@@ -62,7 +62,7 @@ func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey
 }
 
 // AddPermanentKey stores an API key with hash-only storage (no plaintext)
-func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string) error {
+func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, tierName, originalUserGroups string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -77,10 +77,10 @@ func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, ke
 	}
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, tier_name, original_user_groups, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9)
+		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, tier_name, original_user_groups, status, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10)
 	`
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, keyPrefix, tierName, originalUserGroups, time.Now().UTC())
+	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, keyPrefix, tierName, originalUserGroups, time.Now().UTC(), expiresAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
@@ -173,17 +173,17 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata,
 // GetByHash looks up an API key by its SHA-256 hash (critical path for validation)
 func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetadata, error) {
 	query := `
-		SELECT id, username, name, description, key_prefix, tier_name, original_user_groups, status, last_used_at
+		SELECT id, username, name, description, key_prefix, tier_name, original_user_groups, status, expires_at, last_used_at
 		FROM api_keys
 		WHERE key_hash = $1
 	`
 	row := s.db.QueryRowContext(ctx, query, keyHash)
 
 	var k ApiKeyMetadata
-	var lastUsedAt sql.NullTime
+	var expiresAt, lastUsedAt sql.NullTime
 	var description, tierName, originalUserGroups sql.NullString
 
-	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, &k.KeyPrefix, &tierName, &originalUserGroups, &k.Status, &lastUsedAt); err != nil {
+	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, &k.KeyPrefix, &tierName, &originalUserGroups, &k.Status, &expiresAt, &lastUsedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}
@@ -207,8 +207,20 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 		k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
 	}
 
-	// Reject revoked keys immediately
-	if k.Status == TokenStatusRevoked {
+	// Check expiration and auto-update status if expired
+	if expiresAt.Valid && time.Now().UTC().After(expiresAt.Time) {
+		if k.Status == TokenStatusActive {
+			// Auto-update status to expired
+			updateQuery := `UPDATE api_keys SET status = 'expired' WHERE id = $1 AND status = 'active'`
+			if _, err := s.db.ExecContext(ctx, updateQuery, k.ID); err != nil {
+				s.logger.Warn("Failed to update expired key status", "key_id", k.ID, "error", err)
+			}
+			k.Status = TokenStatusExpired
+		}
+	}
+
+	// Reject revoked/expired keys
+	if k.Status == TokenStatusRevoked || k.Status == TokenStatusExpired {
 		return nil, ErrInvalidKey
 	}
 

@@ -176,7 +176,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, tokenManager)
 
-	apiKeyService := api_keys.NewServiceWithLogger(tokenManager, store, tierMapper, log)
+	apiKeyService := api_keys.NewServiceWithLogger(tokenManager, store, tierMapper, cfg, log)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)

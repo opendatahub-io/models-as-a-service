@@ -33,6 +33,10 @@ type Config struct {
 	// Format: postgresql://user:password@host:port/database
 	DBConnectionURL string
 
+	// APIKeyExpirationPolicy controls whether API keys must have expiration
+	// Values: "optional" (default) or "required"
+	APIKeyExpirationPolicy string
+
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
 }
@@ -44,15 +48,16 @@ func Load() *Config {
 	secure, _ := env.GetBool("SECURE", false)
 
 	c := &Config{
-		Name:             env.GetString("INSTANCE_NAME", gatewayName),
-		Namespace:        env.GetString("NAMESPACE", constant.DefaultNamespace),
-		GatewayName:      gatewayName,
-		GatewayNamespace: env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
-		Address:          env.GetString("ADDRESS", ""),
-		Secure:           secure,
-		TLS:              loadTLSConfig(),
-		DebugMode:        debugMode,
-		DBConnectionURL:  env.GetString("DB_CONNECTION_URL", ""),
+		Name:                   env.GetString("INSTANCE_NAME", gatewayName),
+		Namespace:              env.GetString("NAMESPACE", constant.DefaultNamespace),
+		GatewayName:            gatewayName,
+		GatewayNamespace:       env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
+		Address:                env.GetString("ADDRESS", ""),
+		Secure:                 secure,
+		TLS:                    loadTLSConfig(),
+		DebugMode:              debugMode,
+		DBConnectionURL:        env.GetString("DB_CONNECTION_URL", ""),
+		APIKeyExpirationPolicy: env.GetString("API_KEY_EXPIRATION_POLICY", "optional"),
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}
@@ -105,6 +110,11 @@ func (c *Config) Validate() error {
 		} else {
 			c.Address = DefaultInsecureAddr
 		}
+	}
+
+	// Validate API key expiration policy
+	if c.APIKeyExpirationPolicy != "optional" && c.APIKeyExpirationPolicy != "required" {
+		return errors.New("API_KEY_EXPIRATION_POLICY must be 'optional' or 'required'")
 	}
 
 	return nil
