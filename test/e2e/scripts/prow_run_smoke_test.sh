@@ -66,8 +66,10 @@ source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
+SKIP_SUBSCRIPTION_TESTS=${SKIP_SUBSCRIPTION_TESTS:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
+ENABLE_SUBSCRIPTIONS=${ENABLE_SUBSCRIPTIONS:-true}
 
 # Operator configuration
 # OPERATOR_TYPE determines which operator and policy engine to use:
@@ -163,6 +165,10 @@ deploy_maas_platform() {
     # Add optional operator image if specified
     if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         deploy_cmd+=(--operator-image "${OPERATOR_IMAGE}")
+    fi
+
+    if [[ "${ENABLE_SUBSCRIPTIONS}" == "true" ]]; then
+        deploy_cmd+=(--enable-subscriptions)
     fi
 
     if ! "${deploy_cmd[@]}"; then
@@ -297,6 +303,79 @@ run_smoke_tests() {
     fi
 }
 
+deploy_subscription_crs() {
+    if [[ "${ENABLE_SUBSCRIPTIONS}" != "true" ]]; then
+        echo "⏭️  Subscriptions not enabled, skipping CR deployment"
+        return 0
+    fi
+
+    echo "Deploying MaaS subscription example CRs..."
+    if ! kubectl apply -k "$PROJECT_ROOT/maas-controller/examples/"; then
+        echo "❌ ERROR: Failed to deploy subscription CRs"
+        exit 1
+    fi
+
+    echo "Waiting for MaaSModels to be Ready..."
+    local retries=0
+    while [[ $retries -lt 30 ]]; do
+        local all_ready=true
+        while IFS= read -r phase; do
+            if [[ "$phase" != "Ready" ]]; then
+                all_ready=false
+                break
+            fi
+        done < <(oc get maasmodels -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        if $all_ready && [[ -n "$(oc get maasmodels -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
+            break
+        fi
+        retries=$((retries + 1))
+        sleep 5
+    done
+
+    echo "✅ Subscription CRs deployed"
+    oc get maasmodels,maasauthpolicies,maassubscriptions -n "$MAAS_NAMESPACE" 2>/dev/null || true
+}
+
+run_subscription_tests() {
+    echo "-- Subscription Controller Tests --"
+
+    if [[ "${SKIP_SUBSCRIPTION_TESTS}" == "true" || "${ENABLE_SUBSCRIPTIONS}" != "true" ]]; then
+        echo "⏭️  Skipping subscription tests"
+        return 0
+    fi
+
+    export GATEWAY_HOST="${HOST}"
+    export MAAS_NAMESPACE
+
+    local test_dir="$PROJECT_ROOT/test/e2e"
+    local reports_dir="$test_dir/reports"
+    mkdir -p "$reports_dir"
+
+    # Activate venv (should already exist from smoke.sh)
+    if [[ -d "$test_dir/.venv" ]]; then
+        source "$test_dir/.venv/bin/activate"
+    fi
+
+    local user
+    user="$(oc whoami 2>/dev/null || echo 'unknown')"
+    local html="$reports_dir/subscription-${user}.html"
+    local xml="$reports_dir/subscription-${user}.xml"
+
+    if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
+        -q --maxfail=3 --disable-warnings \
+        --junitxml="$xml" \
+        --html="$html" --self-contained-html \
+        --capture=tee-sys --show-capture=all --log-level=INFO \
+        "$test_dir/tests/test_subscription.py"; then
+        echo "❌ ERROR: Subscription tests failed"
+        exit 1
+    fi
+
+    echo "✅ Subscription tests completed"
+    echo " - JUnit XML : ${xml}"
+    echo " - HTML      : ${html}"
+}
+
 run_token_verification() {
     echo "-- Token Metadata Verification --"
     
@@ -343,6 +422,9 @@ deploy_maas_platform
 print_header "Deploying Models"  
 deploy_models
 
+print_header "Deploying Subscription CRs"
+deploy_subscription_crs
+
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
@@ -366,6 +448,7 @@ run_token_verification
 
 sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
+run_subscription_tests
 
 # Test edit user  
 print_header "Running Maas e2e Tests as edit user"
