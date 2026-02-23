@@ -44,6 +44,45 @@ Relationships are many-to-many: multiple MaaSAuthPolicies/MaaSSubscriptions can 
 
 **Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModel** CRs (in the API’s namespace). Each MaaSModel’s `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModel objects is the source of truth for “which models are available” in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
 
+### Model kinds and the provider pattern
+
+MaaSModel's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TRLP). These are registered in `pkg/controller/maas/providers.go`.
+
+| Kind (CRD value) | Behaviour |
+|------------------|-----------|
+| **LLMInferenceService** | Validates that an HTTPRoute exists for the referenced LLMInferenceService (created by KServe). Reads endpoint and readiness from the LLMInferenceService/HTTPRoute. |
+| **ExternalModel** | Stub: not yet implemented. Controller sets status **Phase=Failed** and condition **Reason=Unsupported**. When implemented, users supply the HTTPRoute (controller does not create it); see `providers_external.go`. |
+
+The CRD enum for `kind` is `LLMInferenceService` and `ExternalModel` (see `api/maas/v1alpha1/maasmodel_types.go`). The registry accepts **LLMInferenceService** (and the alias **llmisvc** for backwards compatibility). Use `kind: LLMInferenceService` in MaaSModel specs.
+
+**Status for unimplemented kinds:** If a kind returns `ErrKindNotImplemented` (e.g. ExternalModel), the controller updates status with Phase=Failed and Ready condition Reason=**Unsupported** (instead of ReconcileFailed), so UIs can distinguish "not implemented" from other failures.
+
+### Adding a new provider
+
+To support a new model kind (e.g. a new backend type):
+
+1. **Extend the API (optional)**  
+   If the new kind needs extra fields (e.g. `endpoint` for ExternalModel), add them to `ModelReference` in `api/maas/v1alpha1/maasmodel_types.go` and add the new value to the `Kind` enum. Run `make generate` and `make manifests` in the controller directory.
+
+2. **Implement BackendHandler**  
+   Create a new file (e.g. `providers_mykind.go`) and implement the `BackendHandler` interface:
+   - **ReconcileRoute**: create/update the HTTPRoute for this model (or validate it exists), and optionally fill `model.Status` with route/gateway info.
+   - **Status**: return `(endpointURL, ready, err)`. The controller sets `model.Status.Endpoint` and Phase (Ready/Pending/Failed) from this.
+   - **CleanupOnDelete**: if your kind creates an HTTPRoute, delete it here; otherwise no-op.
+
+3. **Implement RouteResolver**  
+   Implement the `RouteResolver` interface: **HTTPRouteForModel** should return the HTTPRoute name and namespace for the given MaaSModel. This is used by `findHTTPRouteForModel` and by the AuthPolicy/Subscription controllers to attach policies to the correct route.
+
+4. **Register the provider**  
+   In `providers.go` `init()`, register both the handler and the resolver under the same kind string (the CRD enum value, e.g. `MyNewKind`):
+   - `backendHandlerFactories["MyNewKind"] = func(r *MaaSModelReconciler) BackendHandler { return &myNewKindHandler{r} }`
+   - `routeResolverFactories["MyNewKind"] = func() RouteResolver { return &myNewKindRouteResolver{} }`
+
+5. **Tests**  
+   Add tests in `providers_test.go`: `GetBackendHandler("MyNewKind", r)` and `GetRouteResolver("MyNewKind")` return non-nil; add tests for `findHTTPRouteForModel` with a fake client if useful. Run `make test`.
+
+The controller will then route MaaSModels with `spec.modelRef.kind: MyNewKind` to your handler. No changes are required in the main reconciler logic.
+
 ### Controller watches
 
 The controller watches these resources and re-reconciles automatically:

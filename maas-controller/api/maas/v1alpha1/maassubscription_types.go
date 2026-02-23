@@ -29,9 +29,9 @@ type MaaSSubscriptionSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	ModelRefs []ModelSubscriptionRef `json:"modelRefs"`
 
-	// BillingMetadata contains billing information
+	// TokenMetadata contains metadata for token attribution and metering
 	// +optional
-	BillingMetadata *BillingMetadata `json:"billingMetadata,omitempty"`
+	TokenMetadata *TokenMetadata `json:"tokenMetadata,omitempty"`
 
 	// Priority determines subscription priority when user has multiple subscriptions
 	// Higher numbers have higher priority. Defaults to 0.
@@ -85,17 +85,17 @@ type BillingRate struct {
 	PerToken string `json:"perToken"`
 }
 
-// BillingMetadata contains billing information
-type BillingMetadata struct {
-	// OrganizationID is the organization identifier for billing
+// TokenMetadata contains metadata for token usage attribution and metering
+type TokenMetadata struct {
+	// OrganizationID is the organization identifier for metering and billing
 	// +optional
 	OrganizationID string `json:"organizationId,omitempty"`
 
-	// CostCenter is the cost center for billing attribution
+	// CostCenter is the cost center for usage attribution
 	// +optional
 	CostCenter string `json:"costCenter,omitempty"`
 
-	// Labels are additional labels for tracking
+	// Labels are additional labels for tracking and metrics
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
 }
