@@ -79,7 +79,7 @@ Check deployment status:
 
 ```bash
 # Check all namespaces
-kubectl get ns | grep -E "kuadrant-system|rh-connectivity-link|kserve|opendatahub|redhat-ods-applications|llm"
+kubectl get ns | grep -E "kuadrant-system|kserve|opendatahub|redhat-ods-applications|llm"
 
 # Check Gateway status
 kubectl get gateway -n openshift-ingress maas-default-gateway
@@ -99,11 +99,7 @@ kubectl get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
 kubectl get svc -n redhat-ods-applications maas-api
 
 # Check policy engine operators
-# For ODH (Kuadrant):
 kubectl get pods -n kuadrant-system
-
-# For RHOAI (RHCL):
-kubectl get pods -n rh-connectivity-link
 
 # Check KServe controller (runs in operator namespace, not separate kserve namespace)
 # For ODH:

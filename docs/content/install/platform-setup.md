@@ -112,8 +112,6 @@ Check that LWS deployments are ready:
 
 === "Open Data Hub"
 
-    For kubectl installation method (as shown above):
-
     ```shell
     kubectl get deployments --namespace lws-system
 
@@ -164,19 +162,19 @@ Now install the Gateway API controller for your platform:
     apiVersion: v1
     kind: Namespace
     metadata:
-      name: rh-connectivity-link
+      name: kuadrant-system
     ---
     apiVersion: operators.coreos.com/v1
     kind: OperatorGroup
     metadata:
       name: kuadrant-operator-group
-      namespace: rh-connectivity-link
+      namespace: kuadrant-system
     ---
     apiVersion: operators.coreos.com/v1alpha1
     kind: Subscription
     metadata:
       name: kuadrant-operator
-      namespace: rh-connectivity-link
+      namespace: kuadrant-system
     spec:
       channel: stable
       installPlanApproval: Automatic
@@ -192,7 +190,7 @@ Now install the Gateway API controller for your platform:
     kind: Kuadrant
     metadata:
       name: kuadrant
-      namespace: rh-connectivity-link
+      namespace: kuadrant-system
     ```
 
 === "Open Data Hub"
@@ -282,33 +280,23 @@ Now install the Gateway API controller for your platform:
 
 Check that Gateway API controller deployments are ready:
 
-=== "Red Hat OpenShift AI"
+```shell
+kubectl get deployments -n kuadrant-system
 
-    ```shell
-    kubectl get deployments -n rh-connectivity-link
+NAME                                    READY   UP-TO-DATE   AVAILABLE   AGE
+authorino-operator                      1/1     1            1           80s
+dns-operator-controller-manager         1/1     1            1           77s
+kuadrant-console-plugin                 1/1     1            1           58s
+kuadrant-operator-controller-manager    1/1     1            1           69s
+limitador-operator-controller-manager   1/1     1            1           73s
+```
 
-    NAME                                    READY   UP-TO-DATE   AVAILABLE   AGE
-    authorino                               1/1     1            1           81s
-    authorino-operator                      1/1     1            1           80s
-    dns-operator-controller-manager         1/1     1            1           77s
-    kuadrant-console-plugin                 1/1     1            1           58s
-    kuadrant-operator-controller-manager    1/1     1            1           69s
-    limitador-limitador                     1/1     1            1           82s
-    limitador-operator-controller-manager   1/1     1            1           73s
-    ```
+For RHOAI installations, you should also see:
 
-=== "Open Data Hub"
-
-    ```shell
-    kubectl get deployments -n kuadrant-system
-
-    NAME                                    READY   UP-TO-DATE   AVAILABLE   AGE
-    authorino-operator                      1/1     1            1           80s
-    dns-operator-controller-manager         1/1     1            1           77s
-    kuadrant-console-plugin                 1/1     1            1           58s
-    kuadrant-operator-controller-manager    1/1     1            1           69s
-    limitador-operator-controller-manager   1/1     1            1           73s
-    ```
+```shell
+authorino                               1/1     1            1           81s
+limitador-limitador                     1/1     1            1           82s
+```
 
 ## Install Platform with Model Serving
 
@@ -546,10 +534,10 @@ Verify that Authorino can communicate with the MaaS API:
 
     ```shell
     # Get Authorino pod
-    AUTHORINO_POD=$(kubectl get pods -n rh-connectivity-link -l authorino-resource=authorino -o jsonpath='{.items[0].metadata.name}')
+    AUTHORINO_POD=$(kubectl get pods -n kuadrant-system -l authorino-resource=authorino -o jsonpath='{.items[0].metadata.name}')
 
     # Test connectivity (TLS is enabled by default, uses port 8443)
-    kubectl exec -n rh-connectivity-link $AUTHORINO_POD -- curl -s -k \
+    kubectl exec -n kuadrant-system $AUTHORINO_POD -- curl -s -k \
       https://maas-api.redhat-ods-applications.svc.cluster.local:8443/health
     ```
 
