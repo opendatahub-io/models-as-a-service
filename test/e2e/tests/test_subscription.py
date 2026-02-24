@@ -8,6 +8,20 @@ Requires:
   - GATEWAY_HOST env var (e.g. maas.apps.cluster.example.com)
   - maas-controller deployed with example CRs applied
   - oc/kubectl access to create service account tokens
+
+Environment variables (all optional, with defaults):
+  - GATEWAY_HOST: Gateway hostname (required)
+  - MAAS_NAMESPACE: MaaS namespace (default: opendatahub)
+  - E2E_TIMEOUT: Request timeout in seconds (default: 30)
+  - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
+  - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
+  - E2E_PREMIUM_MODEL_PATH: Path to premium model (default: /llm/premium-simulated-simulated-premium)
+  - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
+  - E2E_MODEL_REF: Model ref for CRs (default: facebook-opt-125m-simulated)
+  - E2E_PREMIUM_MODEL_REF: Premium model ref for CRs (default: premium-simulated-simulated-premium)
+  - E2E_SIMULATOR_SUBSCRIPTION: Simulator subscription name (default: simulator-subscription)
+  - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
+  - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 429 test (default: nonexistent-sub)
 """
 
 import logging
@@ -20,11 +34,17 @@ import requests
 
 log = logging.getLogger(__name__)
 
-TIMEOUT = 30
-RECONCILE_WAIT = 8
-MODEL_PATH = "/llm/facebook-opt-125m-simulated"
-PREMIUM_MODEL_PATH = "/llm/premium-simulated-simulated-premium"
-MODEL_NAME = "facebook/opt-125m"
+# Constants (override with env vars)
+TIMEOUT = int(os.environ.get("E2E_TIMEOUT", "30"))
+RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "8"))
+MODEL_PATH = os.environ.get("E2E_MODEL_PATH", "/llm/facebook-opt-125m-simulated")
+PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simulated-simulated-premium")
+MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
+MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
+PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
+SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
+INVALID_SUBSCRIPTION = os.environ.get("E2E_INVALID_SUBSCRIPTION", "nonexistent-sub")
 
 
 def _ns():
@@ -87,7 +107,8 @@ def _cr_exists(kind, name, namespace=None):
     return result.returncode == 0
 
 
-def _inference(token, path=MODEL_PATH, extra_headers=None):
+def _inference(token, path=None, extra_headers=None):
+    path = path or MODEL_PATH
     url = f"{_gateway_url()}{path}/v1/completions"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     if extra_headers:
@@ -141,7 +162,7 @@ class TestAuthEnforcement:
         sa = "e2e-test-wrong-group"
         try:
             token = _create_sa_token(sa)
-            r = _inference(token, path="/llm/premium-simulated-simulated-premium")
+            r = _inference(token, path=PREMIUM_MODEL_PATH)
             log.info(f"Wrong group -> premium model: {r.status_code}")
             assert r.status_code == 403, f"Expected 403, got {r.status_code}"
         finally:
@@ -167,7 +188,7 @@ class TestSubscriptionEnforcement:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-test-nosub-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": ["premium-simulated-simulated-premium"],
+                    "modelRefs": [PREMIUM_MODEL_REF],
                     "subjects": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
                 },
             })
@@ -180,12 +201,12 @@ class TestSubscriptionEnforcement:
 
     def test_invalid_subscription_header_gets_429(self):
         token = _get_cluster_token()
-        r = _inference(token, extra_headers={"x-maas-subscription": "nonexistent-sub"})
+        r = _inference(token, extra_headers={"x-maas-subscription": INVALID_SUBSCRIPTION})
         assert r.status_code == 429, f"Expected 429, got {r.status_code}"
 
     def test_explicit_subscription_header_works(self):
         token = _get_cluster_token()
-        r = _inference(token, extra_headers={"x-maas-subscription": "simulator-subscription"})
+        r = _inference(token, extra_headers={"x-maas-subscription": SIMULATOR_SUBSCRIPTION})
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
 
 
@@ -208,7 +229,7 @@ class TestMultipleSubscriptionsPerModel:
                 "metadata": {"name": "e2e-extra-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "nonexistent-group-xyz"}]},
-                    "modelRefs": [{"name": "facebook-opt-125m-simulated", "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -233,7 +254,7 @@ class TestMultipleSubscriptionsPerModel:
                 "metadata": {"name": "e2e-premium-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "premium-user"}]},
-                    "modelRefs": [{"name": "facebook-opt-125m-simulated", "tokenRateLimits": [{"limit": 500, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 500, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -257,7 +278,7 @@ class TestMultipleSubscriptionsPerModel:
                 "metadata": {"name": "e2e-high-tier", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": "facebook-opt-125m-simulated", "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -286,7 +307,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-sa-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": ["premium-simulated-simulated-premium"],
+                    "modelRefs": [PREMIUM_MODEL_REF],
                     "subjects": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
                 },
             })
@@ -296,7 +317,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "metadata": {"name": "e2e-sa-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
-                    "modelRefs": [{"name": "premium-simulated-simulated-premium", "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -325,7 +346,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-extra-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": ["premium-simulated-simulated-premium"],
+                    "modelRefs": [PREMIUM_MODEL_REF],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -356,7 +377,7 @@ class TestCascadeDeletion:
                 "metadata": {"name": "e2e-temp-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": "facebook-opt-125m-simulated", "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -376,7 +397,7 @@ class TestCascadeDeletion:
         ns = _ns()
         token = _get_cluster_token()
         try:
-            _delete_cr("maassubscription", "simulator-subscription")
+            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
             _wait_reconcile(12)
 
             r = _inference(token)
@@ -386,10 +407,10 @@ class TestCascadeDeletion:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
-                "metadata": {"name": "simulator-subscription", "namespace": ns},
+                "metadata": {"name": SIMULATOR_SUBSCRIPTION, "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": "facebook-opt-125m-simulated", "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -399,7 +420,7 @@ class TestCascadeDeletion:
         ns = _ns()
         token = _get_cluster_token()
         try:
-            _delete_cr("maasauthpolicy", "simulator-access")
+            _delete_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
             _wait_reconcile(12)
 
             r = _inference(token)
@@ -409,9 +430,9 @@ class TestCascadeDeletion:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSAuthPolicy",
-                "metadata": {"name": "simulator-access", "namespace": ns},
+                "metadata": {"name": SIMULATOR_ACCESS_POLICY, "namespace": ns},
                 "spec": {
-                    "modelRefs": ["facebook-opt-125m-simulated"],
+                    "modelRefs": [MODEL_REF],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -434,7 +455,7 @@ class TestOrderingEdgeCases:
                 "metadata": {"name": "e2e-ordering-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
-                    "modelRefs": [{"name": "premium-simulated-simulated-premium", "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -448,7 +469,7 @@ class TestOrderingEdgeCases:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-ordering-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": ["premium-simulated-simulated-premium"],
+                    "modelRefs": [PREMIUM_MODEL_REF],
                     "subjects": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
                 },
             })
