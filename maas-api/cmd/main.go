@@ -187,9 +187,9 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	// V2 API routes - Complete CRUD for hash-based key architecture
 	v2Routes := router.Group("/v2")
 	v2ApiKeyRoutes := v2Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
-	v2ApiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)      // Create hash-based key
-	v2ApiKeyRoutes.GET("", apiKeyHandler.ListAPIKeys)        // List all keys
-	v2ApiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)      // Get specific key
+	v2ApiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)       // Create hash-based key
+	v2ApiKeyRoutes.GET("", apiKeyHandler.ListAPIKeys)         // List all keys
+	v2ApiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)       // Get specific key
 	v2ApiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey) // Revoke specific key
 
 	// Internal routes for Authorino HTTP callback (no auth required - called by Authorino)

@@ -3,6 +3,7 @@ package api_keys
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,36 @@ func NewHandler(log *logger.Logger, service *Service) *Handler {
 		service: service,
 		logger:  log,
 	}
+}
+
+// getUserContext extracts and validates the user context from the Gin context.
+// Returns the user context on success, or responds with an error and returns nil.
+func (h *Handler) getUserContext(c *gin.Context) *token.UserContext {
+	userCtx, exists := c.Get("user")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "User context not found"})
+		return nil
+	}
+
+	user, ok := userCtx.(*token.UserContext)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user context type"})
+		return nil
+	}
+
+	return user
+}
+
+// isAuthorizedForKey checks if the user is authorized to access the API key.
+// User is authorized if they own the key or are an admin.
+func (h *Handler) isAuthorizedForKey(user *token.UserContext, keyOwner string) bool {
+	// Check if user owns the key
+	if user.Username == keyOwner {
+		return true
+	}
+
+	// Check if user is admin (has admin-users group)
+	return slices.Contains(user.Groups, "admin-users")
 }
 
 type CreateRequest struct {
@@ -58,15 +89,8 @@ func (h *Handler) CreateServiceAccountAPIKey(c *gin.Context) {
 		req.Expiration = &token.Duration{Duration: time.Hour * 24 * 30} // Default to 30 days
 	}
 
-	userCtx, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "User context not found"})
-		return
-	}
-
-	user, ok := userCtx.(*token.UserContext)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user context type"})
+	user := h.getUserContext(c)
+	if user == nil {
 		return
 	}
 
@@ -96,15 +120,8 @@ func (h *Handler) CreateServiceAccountAPIKey(c *gin.Context) {
 }
 
 func (h *Handler) ListAPIKeys(c *gin.Context) {
-	userCtx, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "User context not found"})
-		return
-	}
-
-	user, ok := userCtx.(*token.UserContext)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user context type"})
+	user := h.getUserContext(c)
+	if user == nil {
 		return
 	}
 
@@ -121,17 +138,22 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
-	// TODO(production): Add authorization check - verify user owns key or is admin
-	// Currently any authenticated user can view any key by ID
 	tokenID := c.Param("id")
 	if tokenID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Token ID required"})
 		return
 	}
 
+	// Extract user context for authorization
+	user := h.getUserContext(c)
+	if user == nil {
+		return
+	}
+
+	// Get the API key to check ownership
 	tok, err := h.service.GetAPIKey(c.Request.Context(), tokenID)
 	if err != nil {
-		if errors.Is(err, ErrTokenNotFound) {
+		if errors.Is(err, ErrKeyNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 			return
 		}
@@ -142,20 +164,24 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 		return
 	}
 
+	// Check authorization - user must own the key or be admin
+	if !h.isAuthorizedForKey(user, tok.Username) {
+		h.logger.Warn("Unauthorized API key access attempt",
+			"requestingUser", user.Username,
+			"keyOwner", tok.Username,
+			"keyId", tokenID,
+		)
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied: you can only view your own API keys"})
+		return
+	}
+
 	c.JSON(http.StatusOK, tok)
 }
 
 // RevokeAllTokens handles DELETE /v1/tokens.
 func (h *Handler) RevokeAllTokens(c *gin.Context) {
-	userCtx, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "User context not found"})
-		return
-	}
-
-	user, ok := userCtx.(*token.UserContext)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user context type"})
+	user := h.getUserContext(c)
+	if user == nil {
 		return
 	}
 
@@ -190,15 +216,8 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		return
 	}
 
-	userCtx, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "User context not found"})
-		return
-	}
-
-	user, ok := userCtx.(*token.UserContext)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user context type"})
+	user := h.getUserContext(c)
+	if user == nil {
 		return
 	}
 
@@ -248,8 +267,9 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 	}
 
 	if !result.Valid {
-		// Return 401 with reason for invalid keys
-		c.JSON(http.StatusUnauthorized, result)
+		// Return 200 with validation result for Authorino
+		// Per design doc section 7.7: invalid keys should return 200 with valid:false
+		c.JSON(http.StatusOK, result)
 		return
 	}
 
@@ -260,14 +280,42 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 // RevokeAPIKey handles DELETE /v1/api-keys/:id
 // Revokes a specific permanent API key (soft delete).
 func (h *Handler) RevokeAPIKey(c *gin.Context) {
-	// TODO(production): Add authorization check - verify user owns key or is admin
-	// Currently any authenticated user can revoke any key by ID
 	keyID := c.Param("id")
 	if keyID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API key ID required"})
 		return
 	}
 
+	// Extract user context for authorization
+	user := h.getUserContext(c)
+	if user == nil {
+		return
+	}
+
+	// Get the API key to check ownership before revoking
+	keyMetadata, err := h.service.GetAPIKey(c.Request.Context(), keyID)
+	if err != nil {
+		if errors.Is(err, ErrKeyNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
+			return
+		}
+		h.logger.Error("Failed to get API key for authorization check", "error", err, "keyId", keyID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve API key"})
+		return
+	}
+
+	// Check authorization - user must own the key or be admin
+	if !h.isAuthorizedForKey(user, keyMetadata.Username) {
+		h.logger.Warn("Unauthorized API key revocation attempt",
+			"requestingUser", user.Username,
+			"keyOwner", keyMetadata.Username,
+			"keyId", keyID,
+		)
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied: you can only revoke your own API keys"})
+		return
+	}
+
+	// Perform the revocation
 	if err := h.service.RevokeAPIKey(c.Request.Context(), keyID); err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
@@ -278,6 +326,6 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Revoked API key", "keyId", keyID)
+	h.logger.Info("Revoked API key", "keyId", keyID, "revokedBy", user.Username)
 	c.Status(http.StatusNoContent)
 }
