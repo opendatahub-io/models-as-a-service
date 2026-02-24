@@ -202,7 +202,7 @@ deploy_maas_platform() {
 }
 
 deploy_models() {
-    echo "Deploying simulator Model"
+    echo "Deploying simulator models (regular + premium)"
     # Create llm namespace if it does not exist
     if ! kubectl get namespace llm >/dev/null 2>&1; then
         echo "Creating 'llm' namespace..."
@@ -213,22 +213,39 @@ deploy_models() {
     else
         echo "'llm' namespace already exists"
     fi
+
+    # Deploy regular simulator
     if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator/ | kubectl apply -f -); then
         echo "❌ ERROR: Failed to deploy simulator model"
         exit 1
     fi
-    echo "✅ Simulator model deployed"
-    
-    echo "Waiting for model to be ready..."
+    echo "✅ Regular simulator deployed"
+
+    # Deploy premium simulator (required for subscription tests and premium MaaSModel/MaaSAuthPolicy)
+    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator-premium/ | kubectl apply -f -); then
+        echo "❌ ERROR: Failed to deploy premium simulator model"
+        exit 1
+    fi
+    echo "✅ Premium simulator deployed"
+
+    echo "Waiting for models to be ready..."
     if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for model to be ready"
+        echo "❌ ERROR: Timed out waiting for regular simulator to be ready"
         echo "=== LLMInferenceService YAML dump ==="
         oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
         echo "=== Events in llm namespace ==="
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
     fi
-    echo "✅ Simulator Model deployed"
+    if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout=300s; then
+        echo "❌ ERROR: Timed out waiting for premium simulator to be ready"
+        echo "=== LLMInferenceService YAML dump ==="
+        oc get llminferenceservice/premium-simulated-simulated-premium -n llm -o yaml || true
+        echo "=== Events in llm namespace ==="
+        oc get events -n llm --sort-by='.lastTimestamp' || true
+        exit 1
+    fi
+    echo "✅ Simulator models deployed"
 }
 
 validate_deployment() {
