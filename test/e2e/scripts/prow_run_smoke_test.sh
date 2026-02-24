@@ -56,22 +56,11 @@ ensure_python_312() {
     return 0
   fi
 
-  if ! command -v dnf >/dev/null 2>&1; then
-    echo "❌ [prow] python3.12 not found and dnf is not available to install it"
-    echo "   Current python: $(python3 --version 2>/dev/null || echo 'missing')"
-    exit 1
-  fi
-
-  echo "[prow] Installing python3.12 via dnf..."
-  dnf -y install python3.12 python3.12-pip python3.12-devel
-
-  if command -v python3.12 >/dev/null 2>&1; then
-    python3.12 --version
-    export PYTHON_BIN=python3.12
-  else
-    echo "❌ [prow] python3.12 installation completed but python3.12 still not found"
-    exit 1
-  fi
+  echo "❌ [prow] python3.12 not found in test image."
+  echo "   This job runs as non-root, so installing via dnf/yum at runtime is not supported."
+  echo "   Fix: bake python3.12 into build_root image in openshift/release."
+  echo "   Current python: $(python3 --version 2>/dev/null || echo 'missing')"
+  exit 1
 }
 
 # Find project root before sourcing helpers (helpers need to be sourced from correct path)
