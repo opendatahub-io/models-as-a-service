@@ -91,6 +91,11 @@ func (c *Config) Validate() error {
 	// Handle backward compatibility for deprecated flags
 	c.handleDeprecatedFlags()
 
+	// Validate required fields
+	if c.DBConnectionURL == "" {
+		return errors.New("db connection URL is required")
+	}
+
 	if err := c.TLS.validate(); err != nil {
 		return err
 	}

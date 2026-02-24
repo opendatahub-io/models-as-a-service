@@ -32,7 +32,7 @@ func NewMockStore() *MockStore {
 // Compile-time check that MockStore implements MetadataStore.
 var _ MetadataStore = (*MockStore)(nil)
 
-func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey) error {
+func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey, userGroups string) error {
 	if apiKey.JTI == "" {
 		return ErrEmptyJTI
 	}
@@ -50,13 +50,20 @@ func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey) er
 		createdAt = time.Now().UTC()
 	}
 
+	// Parse user groups from JSON
+	var groups []string
+	if userGroups != "" {
+		_ = json.Unmarshal([]byte(userGroups), &groups)
+	}
+
 	m.keys[apiKey.JTI] = &storedKey{
 		metadata: ApiKeyMetadata{
-			ID:           apiKey.JTI,
-			Name:         apiKey.Name,
-			Description:  apiKey.Description,
-			Status:       TokenStatusActive,
-			CreationDate: createdAt.Format(time.RFC3339),
+			ID:                 apiKey.JTI,
+			Name:               apiKey.Name,
+			Description:        apiKey.Description,
+			OriginalUserGroups: groups,
+			Status:             TokenStatusActive,
+			CreationDate:       createdAt.Format(time.RFC3339),
 		},
 		username:  username,
 		expiresAt: time.Unix(apiKey.ExpiresAt, 0).UTC(),
@@ -65,7 +72,9 @@ func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey) er
 	return nil
 }
 
-func (m *MockStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error {
+// AddKey stores an API key with hash-only storage (no plaintext).
+// Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
+func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -109,7 +118,7 @@ func (m *MockStore) List(ctx context.Context, username string) ([]ApiKeyMetadata
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var result []ApiKeyMetadata
+	result := make([]ApiKeyMetadata, 0, len(m.keys))
 	now := time.Now().UTC()
 
 	for _, k := range m.keys {

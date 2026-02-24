@@ -296,9 +296,9 @@ paths:
         post:
             tags:
                 - api-keys
-            summary: Create a new named API key (long-lived token)
-            description: Creates a new named API key with specified expiration. Named tokens are tracked in the database and can be listed. Revocation is supported only via the bulk DELETE /v1/tokens endpoint (per-key revocation is not currently supported).
-            operationId: api-keys#create
+            summary: Create a legacy ServiceAccount-backed API key
+            description: "LEGACY: Creates a ServiceAccount-backed API key (JWT format). This endpoint is maintained for backwards compatibility. New applications should use POST /v2/api-keys for hash-based keys. List/get/delete operations have moved to /v2/api-keys endpoints."
+            operationId: api-keys#create-legacy
             requestBody:
                 required: true
                 content:
@@ -327,12 +327,81 @@ paths:
                     description: Bad Request response.
                 "401":
                     description: Unauthorized response.
+    /v2/api-keys:
+        post:
+            tags:
+                - api-keys-v2
+            summary: Create a new hash-based API key
+            description: Creates a new OpenAI-compatible API key (sk-oai-* format). Supports both permanent keys (no expiration) and expiring keys (with expiresIn parameter). The plaintext key is shown ONLY ONCE at creation time and cannot be retrieved again.
+            operationId: api-keys-v2#create
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required:
+                                - name
+                            properties:
+                                name:
+                                    type: string
+                                    description: Human-readable name for the API key
+                                description:
+                                    type: string
+                                    description: Optional description
+                                expiresIn:
+                                    type: string
+                                    description: Optional expiration duration (e.g., "30d", "90d", "1h"). Omit for permanent key.
+                        examples:
+                            permanent_key:
+                                summary: Permanent API key (no expiration)
+                                value:
+                                    name: my-permanent-key
+                                    description: Production API key
+                            expiring_key:
+                                summary: Expiring API key (90 days)
+                                value:
+                                    name: my-expiring-key
+                                    description: 90-day test key
+                                    expiresIn: 90d
+            responses:
+                "201":
+                    description: Created response.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    key:
+                                        type: string
+                                        description: Plaintext API key (SHOWN ONCE, NEVER AGAIN)
+                                    keyPrefix:
+                                        type: string
+                                        description: Display prefix for UI (e.g., sk-oai-abc)
+                                    id:
+                                        type: string
+                                        description: Unique identifier for the key
+                                    name:
+                                        type: string
+                                        description: Name of the key
+                                    createdAt:
+                                        type: string
+                                        format: date-time
+                                        description: Creation timestamp (RFC3339)
+                                    expiresAt:
+                                        type: string
+                                        format: date-time
+                                        description: Expiration timestamp (RFC3339), omitted for permanent keys
+                "400":
+                    description: Bad Request response.
+                "401":
+                    description: Unauthorized response.
         get:
             tags:
-                - api-keys
+                - api-keys-v2
             summary: List all API keys for the authenticated user
-            description: Returns a list of all API key metadata for the current user with their creation dates, expiration dates, and status.
-            operationId: api-keys#list
+            description: Returns a list of all API key metadata (both v1 and v2 keys) for the current user with their creation dates, expiration dates, and status.
+            operationId: api-keys-v2#list
             responses:
                 "200":
                     description: OK response.
@@ -344,13 +413,13 @@ paths:
                                     $ref: '#/components/schemas/TokenMetadata'
                 "401":
                     description: Unauthorized response.
-    /v1/api-keys/{id}:
+    /v2/api-keys/{id}:
         get:
             tags:
-                - api-keys
+                - api-keys-v2
             summary: Get a specific API key by ID
-            description: Returns metadata for a single API key by its ID.
-            operationId: api-keys#get
+            description: Returns metadata for a single API key by its ID (works for both v1 and v2 keys).
+            operationId: api-keys-v2#get
             parameters:
                 - in: path
                   name: id
@@ -365,6 +434,26 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/TokenMetadata'
+                "404":
+                    description: Not Found. API key not found.
+                "401":
+                    description: Unauthorized response.
+        delete:
+            tags:
+                - api-keys-v2
+            summary: Revoke a specific API key
+            description: Revokes (soft deletes) a specific API key by ID. The key will be marked as revoked and will no longer be valid for authentication.
+            operationId: api-keys-v2#delete
+            parameters:
+                - in: path
+                  name: id
+                  schema:
+                      type: string
+                  required: true
+                  description: ID of the API key to revoke
+            responses:
+                "204":
+                    description: No Content. Key successfully revoked.
                 "404":
                     description: Not Found. API key not found.
                 "401":

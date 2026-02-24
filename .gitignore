@@ -23,11 +23,6 @@ coverage.html
 # Go binaries
 bin/
 
-# sqlc generated files (generated during build via 'make sqlc-generate')
-maas-api/internal/db/db.go
-maas-api/internal/db/models.go
-maas-api/internal/db/queries.sql.go
-
 # Python
 __pycache__/
 *.py[cod]

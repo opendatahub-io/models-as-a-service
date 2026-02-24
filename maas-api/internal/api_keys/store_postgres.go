@@ -34,7 +34,7 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 }
 
 // Add stores a legacy API key (for backward compatibility with K8s SA tokens).
-func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey) error {
+func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey, userGroups string) error {
 	if apiKey.JTI == "" {
 		return ErrEmptyJTI
 	}
@@ -51,18 +51,19 @@ func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey
 	expiresAt := time.Unix(apiKey.ExpiresAt, 0).UTC()
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, status, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, '', '', 'active', $5, $6)
+		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, user_groups, status, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, '', '', $5, 'active', $6, $7)
 	`
-	_, err := s.db.ExecContext(ctx, query, apiKey.JTI, username, apiKey.Name, apiKey.Description, createdAt, expiresAt)
+	_, err := s.db.ExecContext(ctx, query, apiKey.JTI, username, apiKey.Name, apiKey.Description, userGroups, createdAt, expiresAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert key: %w", err)
 	}
 	return nil
 }
 
-// AddPermanentKey stores an API key with hash-only storage (no plaintext).
-func (s *PostgresStore) AddPermanentKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error {
+// AddKey stores an API key with hash-only storage (no plaintext).
+// Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
+func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}

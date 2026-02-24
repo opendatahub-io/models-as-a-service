@@ -220,7 +220,7 @@ list_models() {
 get_api_key() {
     local jti="$1"
     local token=$(get_token)
-    local response=$(curl -sSk -H "Authorization: Bearer $token" -w "\n%{http_code}" "${GATEWAY_URL}/maas-api/v1/api-keys/$jti")
+    local response=$(curl -sSk -H "Authorization: Bearer $token" -w "\n%{http_code}" "${GATEWAY_URL}/maas-api/v2/api-keys/$jti")
     local status=$(echo "$response" | tail -1)
     local body=$(echo "$response" | sed '$d')
     [ "$status" == "200" ] && echo "$body" && return 0

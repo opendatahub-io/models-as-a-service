@@ -30,6 +30,8 @@ const (
 // - Base62 encoding (alphanumeric only, URL-safe)
 // - SHA-256 hash for storage (plaintext never stored)
 // - Display prefix for UI identification.
+//
+//nolint:nonamedreturns // Named returns improve readability for multiple return values.
 func GenerateAPIKey() (plaintext, hash, prefix string, err error) {
 	// 1. Generate 32 bytes (256 bits) of cryptographic entropy
 	entropy := make([]byte, entropyBytes)

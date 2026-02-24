@@ -150,7 +150,7 @@ fi
 echo -n "  • Verifying ephemeral token NOT in API keys list... "
 KEYS_LIST=$(curl -sSk \
     -H "Authorization: Bearer $OC_TOKEN" \
-    "${API_BASE}/maas-api/v1/api-keys")
+    "${API_BASE}/maas-api/v2/api-keys")
 
 EPHEMERAL_JTI=$(echo "$response_body" | jq -r '.jti // empty')
 if [ -n "$EPHEMERAL_JTI" ]; then
@@ -166,7 +166,7 @@ fi
 echo ""
 
 # 3. API Keys (Persistent)
-echo -e "${MAGENTA}3. Testing API Keys (Persistent /v1/api-keys)...${NC}"
+echo -e "${MAGENTA}3. Testing API Keys (Legacy SA-backed, POST /v1/api-keys, list/get via /v2/api-keys)...${NC}"
 
 KEY_NAME="test-key-$(date +%s)"
 
@@ -254,7 +254,7 @@ echo -n "  • Listing API Keys... "
 LIST_RESPONSE=$(curl -sSk \
     -H "Authorization: Bearer $OC_TOKEN" \
     -w "\nHTTP_STATUS:%{http_code}\n" \
-    "${API_BASE}/maas-api/v1/api-keys")
+    "${API_BASE}/maas-api/v2/api-keys")
 
 http_status=$(echo "$LIST_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
 list_body=$(echo "$LIST_RESPONSE" | sed '/HTTP_STATUS:/d')
@@ -321,7 +321,7 @@ echo -n "  • Getting API Key by ID ($API_KEY_JTI)... "
 GET_RESPONSE=$(curl -sSk \
     -H "Authorization: Bearer $OC_TOKEN" \
     -w "\nHTTP_STATUS:%{http_code}\n" \
-    "${API_BASE}/maas-api/v1/api-keys/$API_KEY_JTI")
+    "${API_BASE}/maas-api/v2/api-keys/$API_KEY_JTI")
 
 http_status=$(echo "$GET_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
 get_body=$(echo "$GET_RESPONSE" | sed '/HTTP_STATUS:/d')
@@ -391,7 +391,7 @@ else
 fi
 
 # Test 3.5: Note - Single key deletion removed for initial release
-echo -e "${BLUE}ℹ Note: Single API key deletion (DELETE /v1/api-keys/:id) removed for initial release${NC}"
+echo -e "${BLUE}ℹ Note: Single API key deletion now available at DELETE /v2/api-keys/:id${NC}"
 echo "    Use DELETE /v1/tokens to revoke all tokens (recreates Service Account)"
 
 echo ""
@@ -456,7 +456,7 @@ echo -n "  • Verifying tokens marked as expired... "
 LIST_RESPONSE=$(curl -sSk \
     -H "Authorization: Bearer $OC_TOKEN" \
     -w "\nHTTP_STATUS:%{http_code}\n" \
-    "${API_BASE}/maas-api/v1/api-keys")
+    "${API_BASE}/maas-api/v2/api-keys")
 
 http_status=$(echo "$LIST_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
 list_body=$(echo "$LIST_RESPONSE" | sed '/HTTP_STATUS:/d')
