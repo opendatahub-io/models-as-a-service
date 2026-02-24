@@ -55,7 +55,8 @@ def _gateway_url():
     host = os.environ.get("GATEWAY_HOST", "")
     if not host:
         raise RuntimeError("GATEWAY_HOST env var is required")
-    return f"https://{host}"
+    scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
+    return f"{scheme}://{host}"
 
 
 def _get_cluster_token():
