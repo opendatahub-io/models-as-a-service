@@ -18,17 +18,17 @@ The observability stack consists of:
 
 - **Limitador**: Rate limiting service that exposes usage and rate-limit metrics (with labels from TelemetryPolicy)
 - **Authorino**: Authentication/authorization service that exposes auth evaluation metrics (`auth_server_*`)
-- **Istio Telemetry**: Adds `tier` to gateway latency metrics for per-tier latency (P50/P95/P99)
+- **Istio Telemetry**: Adds `tier` to gateway latency and request count metrics, enabling per-tier latency (P50/P95/P99) and MaaS traffic scoping
 - **vLLM / llm-d / Simulator**: Expose inference metrics (TTFT, ITL, queue depth, token throughput, KV-cache usage); llm-d also exposes EPP routing metrics
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
 - **ServiceMonitors**: Deployed to configure Prometheus metric scraping
-- **Visualization**: Grafana dashboards (see [Grafana documentation](https://grafana.com/docs/grafana/latest/))
+- **Visualization**: Grafana dashboards or Perses dashboards (OpenShift Console integration)
 
 ### Component Metrics Status
 
 | Component | Exposes Metrics? | Scraped into Prometheus? | In Dashboards? |
 |-----------|-----------------|--------------------------|----------------|
-| **Limitador** | Yes (`/metrics`) | Yes (Kuadrant PodMonitor or MaaS ServiceMonitor) | Yes — 16 panels use `authorized_hits`, `authorized_calls`, `limited_calls`, `limitador_up` |
+| **Limitador** | Yes (`/metrics`) | Yes (Kuadrant PodMonitor or MaaS ServiceMonitor) | Yes — 16 panels use `authorized_hits`, `authorized_calls`, `limited_calls`; health check uses `kube_pod_status_phase` |
 | **Authorino** | Yes (`/metrics` + `/server-metrics`) | Yes — `/metrics` via Kuadrant operator; `/server-metrics` via MaaS `authorino-server-metrics` ServiceMonitor | Yes — Auth Evaluation Latency (P50/P95/P99), Auth Success/Deny Rate, plus pod-up check |
 | **Istio Gateway** | Yes (Envoy `/stats/prometheus`) | Yes (`istio-gateway-metrics` ServiceMonitor) | Yes — latency histograms, request counts, error rates |
 | **maas-api** | **No** — returns 404 on `/metrics` | No | Only pod-up check via `kube_pod_status_phase` |
@@ -43,23 +43,22 @@ The observability stack is defined in `deployment/base/observability/`. It inclu
 
 | Resource | Purpose |
 |----------|---------|
-| **TelemetryPolicy** (`telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
-| **Istio Telemetry** (`istio-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
+| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
+| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) and request counts (`istio_requests_total`) for per-tier metrics and MaaS traffic scoping. |
 
 **Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Tier` is injected):
 
     ./scripts/install-observability.sh [--namespace NAMESPACE]
 
-When using the full deployment script, this is applied automatically:
-
-    ./scripts/deploy.sh
+!!! info
+    Observability is **not** included in `deploy.sh` — it must be installed separately using `install-observability.sh`.
 
 !!! note "Prerequisites"
     - **Tools**: `kubectl`, `kustomize`, `jq`, `yq` must be installed
     - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and tier lookup must be deployed first. The AuthPolicy injects `X-MaaS-Tier`, which Istio Telemetry reads to label latency by tier. Without it, the `tier` label on gateway latency will be empty.
     - **Namespace**: Use `--namespace` if your MaaS API is deployed to a namespace other than `maas-api` (e.g. `--namespace opendatahub`)
 
-**Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/components/observability/monitors/` if your deployment includes that component.
+**Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/base/observability/` if your deployment includes that component.
 
 ## Metrics Collection
 
@@ -115,6 +114,9 @@ Authorino exposes metrics on two separate endpoints:
 
 !!! note "MaaS ServiceMonitor"
     The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime stats). MaaS deploys an additional `authorino-server-metrics` ServiceMonitor to scrape `/server-metrics` for auth evaluation metrics. This is deployed automatically by `install-observability.sh`.
+
+!!! note "Authconfig label values are hashed"
+    In Kuadrant deployments, the `authconfig` label on Authorino metrics contains SHA-256 hashes (e.g. `18e32965...`) rather than human-readable AuthPolicy names. Kuadrant creates AuthConfig CRs in `kuadrant-system` with hashed names derived from the policy and route configuration. Since all AuthConfig CRs in a MaaS deployment are Kuadrant-managed MaaS auth policies, dashboard panels use `authconfig!=""` to include all evaluations. This is safe because Authorino is deployed exclusively for MaaS via Kuadrant.
 
 !!! note "Lazily registered metrics"
     Authorino upstream [documents](https://github.com/Kuadrant/authorino/blob/main/docs/user-guides/observability.md) additional per-evaluator metrics (`auth_server_evaluator_total`, `auth_server_evaluator_duration_seconds`, `auth_server_evaluator_cancelled`, `auth_server_evaluator_denied`). These are **lazily registered** and only appear when specific evaluator types (e.g. OPA, HTTP authorization) are triggered. The MaaS AuthPolicy uses `kubernetesTokenReview`, which does not emit these metrics. They are not listed in the table above because they are not present in a standard MaaS deployment.
@@ -246,7 +248,7 @@ By default, Limitador stores rate-limiting counters in memory, which means:
 
 To enable persistent metric counts, refer to the detailed guide:
 
-**[Configuring Redis storage for rate limiting](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.1/html/installing_connectivity_link_on_openshift/configure-redis_connectivity-link)**
+**[Configuring Redis storage for rate limiting](https://docs.kuadrant.io/1.0.x/limitador-operator/doc/storage/)**
 
 This Red Hat documentation provides:
 
@@ -259,14 +261,26 @@ For local development and testing, you can also use our [Limitador Persistence](
 
 ## Visualization
 
-For dashboard visualization options, see:
+MaaS provides two visualization options — choose one (or both):
+
+| Platform | Integration | Install Script |
+|----------|------------|----------------|
+| **Grafana** | Standalone Grafana Operator; GrafanaDashboard CRs | `./scripts/install-grafana-dashboards.sh` |
+| **Perses** | OpenShift Console native (via Cluster Observability Operator UIPlugin) | `./scripts/install-perses-dashboards.sh` |
+
+Both options deploy the same two dashboards (Platform Admin and AI Engineer) with equivalent metrics coverage. Choose based on your environment:
+
+- **Grafana**: Feature-rich, standalone UI. Best when a Grafana instance already exists or when you need advanced alerting, annotations, or external sharing.
+- **Perses**: CNCF native, integrated into the OpenShift Console. Best for OpenShift-native workflows where a separate Grafana instance is not desired.
+
+For general references:
 
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
 - **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25/html/managing_and_monitoring_models/index)
 
 ### Included Dashboards
 
-MaaS includes two Grafana dashboards for different personas:
+MaaS includes two dashboards for different personas (available in both Grafana and Perses):
 
 #### Platform Admin Dashboard
 
@@ -293,7 +307,7 @@ Provides a comprehensive view of system health, usage across all users, and reso
     | `$maas_namespace` | auto-detected | MaaS API namespace (auto-detected from `kube_pod_info{pod=~"maas-api.*"}`) |
     | `$kuadrant_namespace` | `kuadrant-system` | Kuadrant components namespace |
     | `$gateway_namespace` | `openshift-ingress` | Istio/Gateway namespace |
-    | `$llm_namespace` | `llm` | LLM model pods namespace |
+    | `$llm_namespace` | `All` (auto-detected) | LLM model pods namespace(s) (auto-detected from `vllm:num_requests_running`) |
     | `$model` | `All` | Filter by model name |
 
     To customize for your environment, change the variable values in Grafana's dashboard settings (gear icon → Variables).
@@ -306,10 +320,15 @@ Personal usage view for individual developers:
 |---------|---------|
 | **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Inference Success Rate |
 | **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
+| **Hourly Usage Patterns** | Hourly Token Usage by Model |
 | **Detailed Analysis** | Token Volume by Model, Rate Limited by Tier |
+| **Usage Summary** | My Usage Summary by Model & Tier |
 
 !!! note "Inference Success Rate"
     Both dashboards use `rate()` on vLLM counters (`request_success_total`, `e2e_request_latency_seconds_count`) instead of raw counter values. This handles pod restarts correctly (counters reset independently and raw division produces incorrect results). When no traffic is present, `rate()/rate()` produces `NaN`; the dashboards use `((ratio) >= 0) OR vector(1)` to filter `NaN` and default to 100% (healthy) when no traffic exists.
+
+!!! info "Inference Success Rate is platform-wide"
+    The Inference Success Rate panel in the AI Engineer dashboard shows the **platform-wide** model success rate, not per-user. This is because vLLM metrics do not carry user labels — they are emitted by the model backend and measure all inference requests regardless of caller. All other panels in the AI Engineer dashboard are filtered by the selected user.
 
 !!! info "Tokens vs Requests"
     Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
@@ -323,30 +342,48 @@ Personal usage view for individual developers:
 
 ### Prerequisites
 
+**For Grafana dashboards:**
+
 - **Grafana** must be installed (for example via your observability team's process, a centralized instance, or the [Grafana Operator](https://grafana.github.io/grafana-operator/docs/installation/)). The dashboard helper does **not** install Grafana; it only deploys MaaS dashboard definitions and **never fails** (warnings only if none or multiple instances are found).
 - Ensure the Grafana instance has label `app=grafana` so MaaS dashboard definitions attach.
 - Configure a **Prometheus or Thanos datasource** in Grafana; the MaaS dashboards use the default Prometheus datasource.
 
+**For Perses dashboards (two-step install):**
+
+- **OpenShift 4.18+** with the Cluster Observability Operator available in the operator catalog.
+- **Step 1** — Run `scripts/installers/install-perses.sh` to install the Cluster Observability Operator and wait for Perses CRDs to become available.
+- **Step 2** — Run `scripts/install-perses-dashboards.sh` to enable the Perses UIPlugin in the OpenShift Console and deploy MaaS dashboard definitions.
+- Both scripts must be run in sequence; `install-perses-dashboards.sh` will exit with a warning if CRDs from step 1 are not yet present.
+- Perses dashboards are accessed via the OpenShift Console (Observe → Dashboards → Perses tab).
+
 ### Deploying Dashboards
 
-Monitoring is installed by `install-observability.sh`. Dashboards are installed by a **separate helper** that discovers Grafana cluster-wide:
+Monitoring is installed by `install-observability.sh`. Dashboards are installed by **separate helpers** — one for each visualization platform:
+
+**Grafana:**
 
     ./scripts/install-grafana-dashboards.sh
 
-**Behavior:** Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning (and, for multiple, lists them) and exits without error. Use flags to target a specific instance:
+Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning and exits without error. Use flags to target a specific instance:
 
     ./scripts/install-grafana-dashboards.sh --grafana-namespace maas-api
     ./scripts/install-grafana-dashboards.sh --grafana-label app=grafana
 
-To deploy only the dashboard manifests manually (same namespace as your Grafana):
+**Perses:**
 
-    kustomize build deployment/components/observability/dashboards | \
+    ./scripts/install-perses-dashboards.sh
+
+Checks for Perses CRDs and, if they are missing, exits with a warning directing you to run `install-perses.sh` first (operator installation is a separate step handled by `scripts/installers/install-perses.sh`). When CRDs are present, `install-perses-dashboards.sh` enables the Perses UIPlugin in the OpenShift Console and deploys PersesDashboard CRs to `openshift-operators`. After installation, dashboards are accessible at **Observe → Dashboards → Perses tab** in the OpenShift Console.
+
+**Manual Grafana import (dashboard JSON only):**
+
+    kustomize build deployment/components/observability/grafana/dashboards | \
       sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
       kubectl apply -f -
 
 ### Sample Dashboard JSON
 
-For manual import, a sample dashboard JSON file is available:
+For manual Grafana import, a sample dashboard JSON file is available:
 
 - [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
@@ -383,20 +420,26 @@ To import into Grafana:
 
 #### Per-Tier Latency Tracking
 
-The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to gateway latency metrics. This enables tracking request latency per access tier (e.g. free, premium, enterprise). Gateway latency is labeled by **tier only** (not by user) to keep metric cardinality bounded and to align with latency-by-tier requirements (e.g. P50/P95/P99 per tier). Per-user metrics remain available from Limitador (`authorized_hits`, `authorized_calls`, `limited_calls`).
+The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to gateway metrics. This serves two purposes: (1) tracking request latency per access tier (e.g. free, premium, enterprise), and (2) scoping Istio metrics to MaaS gateway traffic so dashboard panels exclude non-MaaS requests. Gateway metrics are labeled by **tier only** (not by user) to keep metric cardinality bounded. Per-user metrics remain available from Limitador (`authorized_hits`, `authorized_calls`, `limited_calls`).
 
 **How it works:**
 
 1. The `gateway-auth-policy` injects the `X-MaaS-Tier` header from the resolved tier
-2. The Istio Telemetry resource extracts this header and adds it as a `tier` label to the `REQUEST_DURATION` metric
+2. The Istio Telemetry resource extracts this header and adds it as a `tier` label to both `REQUEST_DURATION` and `REQUEST_COUNT` metrics
 3. Prometheus scrapes these metrics from the Istio gateway
+4. Dashboard panels use two filtering levels depending on intent:
+    - **Latency panels** use `tier!="",tier!="unknown"` — only authenticated MaaS traffic where the tier was resolved
+    - **Error panels** use `tier!=""` — all MaaS gateway traffic including unauthenticated errors
 
-**Configuration** (`deployment/base/observability/istio-telemetry.yaml`):
+!!! note "tier=unknown"
+    When the `X-MaaS-Tier` header is absent (unauthenticated requests, rate-limited before tier resolution, maas-api routes), Istio sets `tier="unknown"`. Latency panels exclude `tier="unknown"` so they only measure authenticated request performance. Error panels (4xx, 5xx, Unauthorized) include `tier="unknown"` because errors occur at any stage of the request lifecycle — before, during, or after authentication. In a multi-gateway cluster, `tier!=""` scopes metrics to the MaaS gateway since only MaaS gateway metrics carry the `tier` label.
+
+**Configuration** (`deployment/base/observability/istio-gateway-telemetry.yaml`):
 
     apiVersion: telemetry.istio.io/v1
     kind: Telemetry
     metadata:
-      name: latency-per-tier
+      name: maas-gateway-metrics
       namespace: openshift-ingress
     spec:
       selector:
@@ -408,6 +451,13 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
         overrides:
         - match:
             metric: REQUEST_DURATION
+            mode: CLIENT_AND_SERVER
+          tagOverrides:
+            tier:
+              operation: UPSERT
+              value: request.headers["x-maas-tier"]
+        - match:
+            metric: REQUEST_COUNT
             mode: CLIENT_AND_SERVER
           tagOverrides:
             tier:
@@ -505,6 +555,7 @@ Some features require upstream changes and are currently blocked:
 | **Input/output token breakdown per user** | vLLM does not label its own metrics with `user` | Total tokens per user available via `authorized_hits{user="..."}`; vLLM prompt/generation token metrics are per-model only |
 | **Kuadrant policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` etc. are defined in Kuadrant dev but not yet shipped in RHCL 1.x | Enable `observability.enable: true` on the Kuadrant CR; the ServiceMonitors are created but policy-specific gauges will appear in a future operator release |
 | **Authorino auth server metrics (upstream)** | The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime); `/server-metrics` is not scraped by the upstream operator | **Resolved by MaaS**: The `authorino-server-metrics` ServiceMonitor (deployed by `install-observability.sh`) scrapes `/server-metrics`. Auth evaluation latency and success/deny rate are visualized in the Platform Admin dashboard. |
+| **`tier="unknown"` on 429/500 responses** | The Kuadrant WASM plugin (position #2 in the Envoy HTTP filter chain) handles both auth (Authorino) and rate limiting (Limitador) in a single filter. When auth succeeds but rate limiting rejects (429), or when the plugin itself fails (500), it calls `sendLocalReply()` which short-circuits the filter chain. The `X-MaaS-Tier` header is only injected via `continueRequest()` on the success path. The `istio.stats` filter (position #7) reads `request.headers["x-maas-tier"]` but never sees the header on short-circuited responses, resulting in `tier="unknown"`. Backend 500s (where the request passed the WASM plugin) DO carry the correct tier. | 429s: use `limited_calls` from Limitador (has correct `tier` and `user` labels). WASM-generated 500s: visible in `istio_requests_total{response_code=~"5.."}` but without tier breakdown. **Requires upstream Kuadrant change**: the WASM plugin would need to inject `X-MaaS-Tier` into request headers after auth succeeds but before evaluating rate limits, so `sendLocalReply(429)` still has the header visible to `istio.stats`. |
 | **maas-api application metrics** | The maas-api Go service does not expose a `/metrics` endpoint | No workaround available. Metrics such as API key creation rate, token issuance rate, model discovery latency, and handler durations require adding Prometheus instrumentation to the Go service (e.g. `promhttp` handler, custom counters/histograms). |
 | **PromQL "name does not end in _total" warnings** | Limitador metrics (`authorized_hits`, `authorized_calls`, `limited_calls`) and Authorino's `auth_server_authconfig_response_status` are counters but do not follow the Prometheus naming convention of ending in `_total`. When `rate()` is applied, Prometheus generates a warning that Grafana displays on panels. This is [Grafana issue #84636](https://github.com/grafana/grafana/issues/84636) (open). | The warnings are cosmetic and do not affect data correctness. All dashboard queries correctly apply `rate()` or `increase()` to these counters. The metric names are defined by upstream Kuadrant (Limitador) and Authorino — renaming requires upstream changes. |
 
@@ -523,6 +574,9 @@ Some features require upstream changes and are currently blocked:
 | **Requests per tier** | `authorized_calls` | `tier` |
 | **Rate limited per user** | `limited_calls` | `user` |
 | **Rate limited per tier** | `limited_calls` | `tier` |
+
+!!! warning "TelemetryPolicy `user` label dependency"
+    The `user` label on Limitador metrics (`authorized_hits`, `authorized_calls`, `limited_calls`) is added by TelemetryPolicy. Removing it would break: Active Users count, Top Users by Token Consumption, Top Users by Request Volume, Top Rate-Limited Users, User Activity Table, and the **entire AI Engineer dashboard** (all panels filter by `user`). Aggregate views (per-tier, per-model, latency, error rates) and Istio/Authorino panels are unaffected — they do not use the `user` label.
 
 ### Requirements Alignment
 

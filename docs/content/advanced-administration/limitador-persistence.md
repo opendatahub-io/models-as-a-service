@@ -63,7 +63,7 @@ To configure Limitador to use Redis for persistent storage, you need to:
 
 For detailed, official instructions on production Redis setup, refer to the Red Hat documentation:
 
-- [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.1/html/installing_connectivity_link_on_openshift/configure-redis_connectivity-link)
+- [Red Hat Connectivity Link - Configure Redis](https://docs.kuadrant.io/1.0.x/limitador-operator/doc/storage/)
 
 ---
 
@@ -151,4 +151,4 @@ The script will:
 
 ## Related Documentation
 
-- [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.1/html/installing_connectivity_link_on_openshift/configure-redis_connectivity-link) - Official Red Hat documentation for production Redis setup
+- [Red Hat Connectivity Link - Configure Redis](https://docs.kuadrant.io/1.0.x/limitador-operator/doc/storage/) - Official Red Hat documentation for production Redis setup
