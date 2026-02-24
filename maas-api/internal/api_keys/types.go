@@ -49,3 +49,22 @@ type ValidationResult struct {
 	Groups   []string `json:"groups,omitempty"` // Synthetic groups for tier-based authorization
 	Reason   string   `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
 }
+
+// PaginationParams holds query parameters for paginated list requests.
+type PaginationParams struct {
+	Limit  int
+	Offset int
+}
+
+// PaginatedResult holds the result of a paginated query.
+type PaginatedResult struct {
+	Keys    []ApiKeyMetadata
+	HasMore bool
+}
+
+// ListAPIKeysResponse is the HTTP response for GET /v2/api-keys.
+type ListAPIKeysResponse struct {
+	Object  string           `json:"object"`   // Always "list"
+	Data    []ApiKeyMetadata `json:"data"`
+	HasMore bool             `json:"has_more"`
+}

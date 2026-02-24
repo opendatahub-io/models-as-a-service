@@ -30,7 +30,9 @@ type MetadataStore interface {
 	// userGroups is a JSON array of user's groups (used for authorization).
 	AddKey(ctx context.Context, username string, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error
 
-	List(ctx context.Context, username string) ([]ApiKeyMetadata, error)
+	// List returns a paginated list of API keys for a user.
+	// Pagination is mandatory - no unbounded queries allowed.
+	List(ctx context.Context, username string, params PaginationParams) (*PaginatedResult, error)
 
 	Get(ctx context.Context, jti string) (*ApiKeyMetadata, error)
 

@@ -399,18 +399,62 @@ paths:
         get:
             tags:
                 - api-keys-v2
-            summary: List all API keys for the authenticated user
-            description: Returns a list of all API key metadata (both v1 and v2 keys) for the current user with their creation dates, expiration dates, and status.
+            summary: List API keys for the authenticated user with pagination
+            description: Returns a paginated list of all API key metadata (both v1 and v2 keys) for the current user with their creation dates, expiration dates, and status.
             operationId: api-keys-v2#list
+            parameters:
+                - in: query
+                  name: limit
+                  schema:
+                      type: integer
+                      minimum: 1
+                      maximum: 100
+                      default: 50
+                  description: Maximum number of keys to return per page (default 50, max 100)
+                - in: query
+                  name: offset
+                  schema:
+                      type: integer
+                      minimum: 0
+                      default: 0
+                  description: Number of keys to skip for pagination (default 0)
             responses:
                 "200":
                     description: OK response.
                     content:
                         application/json:
                             schema:
-                                type: array
-                                items:
-                                    $ref: '#/components/schemas/TokenMetadata'
+                                $ref: '#/components/schemas/ApiKeyListResponse'
+                            example:
+                                object: list
+                                data:
+                                    - id: key_abc123
+                                      keyPrefix: sk-oai-abc
+                                      name: my-production-key
+                                      creationDate: "2024-01-15T10:30:00Z"
+                                      status: active
+                                    - id: key_def456
+                                      keyPrefix: sk-oai-def
+                                      name: my-test-key
+                                      creationDate: "2024-01-14T09:15:00Z"
+                                      expirationDate: "2024-04-14T09:15:00Z"
+                                      status: active
+                                has_more: true
+                "400":
+                    description: Bad Request. Invalid pagination parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                            examples:
+                                invalid_limit:
+                                    summary: Invalid limit value
+                                    value:
+                                        error: "invalid limit parameter: must be a number"
+                                invalid_offset:
+                                    summary: Invalid offset value
+                                    value:
+                                        error: "invalid offset parameter: must be non-negative"
                 "401":
                     description: Unauthorized response.
     /v2/api-keys/{id}:
@@ -648,6 +692,10 @@ components:
                 id:
                     type: string
                     description: Unique identifier for the token metadata
+                keyPrefix:
+                    type: string
+                    description: Display prefix for the key (e.g., sk-oai-abc)
+                    example: sk-oai-abc
                 name:
                     type: string
                     description: User-friendly name
@@ -709,6 +757,28 @@ components:
                 - token
                 - expiration
                 - expiresAt
+
+        # API Key List Response (paginated)
+        ApiKeyListResponse:
+            type: object
+            properties:
+                object:
+                    type: string
+                    description: Object type, always "list"
+                    example: list
+                data:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/TokenMetadata'
+                    description: Array of API key metadata objects
+                has_more:
+                    type: boolean
+                    description: Whether there are more results beyond this page
+                    example: true
+            required:
+                - object
+                - data
+                - has_more
 tags:
     - name: tokens
       description: "\U0001F511 Ephemeral Token Management service. Short-lived tokens for temporary access."

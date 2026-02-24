@@ -90,15 +90,30 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, ke
 	return nil
 }
 
-// List returns all API keys for a user.
-func (s *PostgresStore) List(ctx context.Context, username string) ([]ApiKeyMetadata, error) {
+// List returns a paginated list of API keys for a user.
+// Pagination is mandatory - no unbounded queries allowed.
+// Fetches limit+1 items to efficiently determine if more pages exist.
+func (s *PostgresStore) List(ctx context.Context, username string, params PaginationParams) (*PaginatedResult, error) {
+	// Validate params
+	if params.Limit < 1 || params.Limit > 100 {
+		return nil, errors.New("limit must be between 1 and 100")
+	}
+	if params.Offset < 0 {
+		return nil, errors.New("offset must be non-negative")
+	}
+
+	// Fetch limit+1 to determine hasMore
+	fetchLimit := params.Limit + 1
+
 	query := `
 		SELECT id, key_prefix, name, description, created_at, expires_at, status, last_used_at
-		FROM api_keys 
+		FROM api_keys
 		WHERE username = $1
 		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3
 	`
-	rows, err := s.db.QueryContext(ctx, query, username)
+
+	rows, err := s.db.QueryContext(ctx, query, username, fetchLimit, params.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list keys: %w", err)
 	}
@@ -133,7 +148,17 @@ func (s *PostgresStore) List(ctx context.Context, username string) ([]ApiKeyMeta
 		return nil, fmt.Errorf("row iteration error: %w", err)
 	}
 
-	return keys, nil
+	// Determine if there are more results
+	hasMore := len(keys) > params.Limit
+	if hasMore {
+		// Trim to requested limit
+		keys = keys[:params.Limit]
+	}
+
+	return &PaginatedResult{
+		Keys:    keys,
+		HasMore: hasMore,
+	}, nil
 }
 
 // Get retrieves a single API key by ID.
