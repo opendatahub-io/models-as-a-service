@@ -256,6 +256,47 @@ parse_arguments() {
 }
 
 #──────────────────────────────────────────────────────────────
+# PREREQUISITE CHECKS
+#──────────────────────────────────────────────────────────────
+
+check_required_tools() {
+  local missing=()
+  local required_kustomize="5.7.0"
+
+  command -v oc &>/dev/null || missing+=("oc (OpenShift CLI)")
+  command -v kubectl &>/dev/null || missing+=("kubectl")
+  command -v jq &>/dev/null || missing+=("jq")
+  if command -v kustomize &>/dev/null; then
+    local kustomize_version
+    kustomize_version=$(kustomize version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    # Fallback: extract version from Go binary metadata (works for dev builds)
+    if [[ -z "$kustomize_version" ]] && command -v go &>/dev/null; then
+      kustomize_version=$(go version -m "$(command -v kustomize)" 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | tr -d 'v')
+    fi
+    if [[ -z "$kustomize_version" ]]; then
+      log_warn "kustomize is a dev build with unverifiable version. Cannot guarantee compatibility with v$required_kustomize+."
+    elif [[ "$(printf '%s\n%s' "$required_kustomize" "$kustomize_version" | sort -V | head -1)" != "$required_kustomize" ]]; then
+      missing+=("kustomize (v$required_kustomize+ required, found ${kustomize_version})")
+    fi
+  else
+    missing+=("kustomize (v$required_kustomize+)")
+  fi
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    command -v gsed &>/dev/null || missing+=("gsed (GNU sed) for MacOS")
+  else
+    command -v sed &>/dev/null || missing+=("sed (GNU sed)")
+  fi
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    log_error "Missing or incompatible required tools:"
+    for tool in "${missing[@]}"; do
+      log_error "  - $tool"
+    done
+    return 1
+  fi
+}
+
+#──────────────────────────────────────────────────────────────
 # CONFIGURATION VALIDATION
 #──────────────────────────────────────────────────────────────
 
@@ -334,6 +375,7 @@ main() {
   log_info "==================================================="
 
   parse_arguments "$@"
+  check_required_tools
   validate_configuration
 
   log_info "Deployment configuration:"
@@ -402,6 +444,9 @@ main() {
 
 deploy_via_operator() {
   log_info "Starting operator-based deployment..."
+
+  # Check for conflicting operators before modifying the cluster
+  check_conflicting_operators
 
   # Install optional operators
   install_optional_operators
@@ -726,6 +771,42 @@ EOF
 # PRIMARY OPERATOR INSTALLATION
 #──────────────────────────────────────────────────────────────
 
+check_conflicting_operators() {
+  log_info "Checking if there are any conflicting operators..."
+  local conflicting_operator
+  if [[ "$OPERATOR_TYPE" == "odh" ]]; then
+    conflicting_operator="rhods-operator"
+  else
+    conflicting_operator="opendatahub-operator"
+  fi
+  # Check all namespaces for a conflicting subscription
+  local conflict
+  conflict=$(oc get subscription.operators.coreos.com --all-namespaces --no-headers 2>/dev/null | grep -w "$conflicting_operator" | head -n1 || true)
+
+  if [[ -n "$conflict" ]]; then
+    local ns
+    ns=$(echo "$conflict" | awk '{print $1}')
+    if [[ -z "$ns" ]]; then
+      log_error "Conflicting operator '$conflicting_operator' detected but could not determine its namespace"
+      return 1
+    fi
+    log_error "Conflicting operator found: $conflicting_operator in namespace $ns. ODH and RHOAI operators cannot coexist (they manage the same CRDs)."
+    log_info "Remove the conflicting operator before proceeding (suggested steps):"
+    log_info "  1. Delete custom resources: oc delete datasciencecluster --all && oc delete dscinitializations --all"
+    log_info "  2. Delete subscription: oc delete subscription.operators.coreos.com $conflicting_operator -n $ns"
+    log_info "  3. Delete CSV: oc delete csv -n $ns -l operators.coreos.com/$conflicting_operator"
+    log_info "  4. Try uninstalling $conflicting_operator (can be done via a console as well) before attempting to run deploy.sh again."
+    log_info "  5. Sanity check: delete any lingering operator groups, old namespaces and projects."
+    log_error "Quit the execution of the script. You may try re-running again."
+    return 1
+  fi
+  log_info "No conflicting operators found. Proceeding to installing the primary operator."
+}
+
+#──────────────────────────────────────────────────────────────
+# PRIMARY OPERATOR INSTALLATION
+#──────────────────────────────────────────────────────────────
+
 install_primary_operator() {
   log_info "Installing primary operator: $OPERATOR_TYPE"
 
@@ -885,10 +966,58 @@ EOF
 apply_dsc() {
   log_info "Applying DataScienceCluster with ModelsAsService..."
 
-  # Check if a DataScienceCluster already exists, skip creation if so
+  local data_dir="${SCRIPT_DIR}/data"
+
   if kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
-    log_info "DataScienceCluster already exists in the cluster. Skipping creation."
-    return 0
+    local existing_dsc
+    existing_dsc=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    # Extract all spec.components leaf paths and expected values from the manifest
+    # jq produces lines like: .spec.components.kserve.managementState=Managed
+    local dsc_manifest="${data_dir}/datasciencecluster.yaml"
+    local mismatches=()
+
+    local expected_fields
+    if ! expected_fields=$(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
+      # Recursively flatten .spec.components into dot-notation paths with values
+      def leaf_paths:
+        . as $in |
+        paths(scalars) | . as $p |
+        ($in | getpath($p)) as $v |
+        [($p | map(tostring) | join(".")), ($v | tostring)];
+      .spec.components | leaf_paths | ".\(.[0])=\(.[1])"
+    '); then
+      log_warn "Failed to parse DSC manifest at ${dsc_manifest}. Skipping validation, proceeding with existing DSC '$existing_dsc'."
+      return 0
+    fi
+
+    if [[ -z "$expected_fields" ]]; then
+      log_warn "DSC manifest at ${dsc_manifest} produced no fields. Skipping validation, proceeding with existing DSC '$existing_dsc'."
+      return 0
+    fi
+
+    while IFS='=' read -r field_path expected; do
+      local full_path=".spec.components${field_path}"
+      local actual
+      actual=$(kubectl get datasciencecluster "$existing_dsc" \
+        -o jsonpath="{${full_path}}" 2>/dev/null || echo "")
+      if [[ "$actual" != "$expected" ]]; then
+        mismatches+=("${full_path}: '${actual:-unset}' (expected '${expected}')")
+      fi
+    done <<< "$expected_fields"
+
+    if [[ ${#mismatches[@]} -eq 0 ]]; then
+      log_info "Existing DataScienceCluster '$existing_dsc' meets MaaS requirements, skipping creation"
+      return 0
+    fi
+
+    log_error "Existing DataScienceCluster '$existing_dsc' does not meet MaaS requirements:"
+    for mismatch in "${mismatches[@]}"; do
+      log_error "  $mismatch"
+    done
+
+    log_error "Fix the required fields in DSC deployment and try again..."
+    return 1
   fi
 
   # Apply DSC with modelsAsService - this is REQUIRED for MaaS deployment
@@ -897,7 +1026,6 @@ apply_dsc() {
   #
   # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
   #       Only ODH currently supports this feature
-  local data_dir="${SCRIPT_DIR}/data"
   kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
 }
 
