@@ -25,11 +25,11 @@ Our goal is to create a comprehensive platform for **Models as a Service** with 
 Use the unified deployment script for all deployment scenarios:
 
 ```bash
-# Deploy ODH (default)
+# Deploy RHOAI (default)
 ./scripts/deploy.sh
 
-# Deploy RHOAI
-./scripts/deploy.sh --operator-type rhoai
+# Deploy ODH
+./scripts/deploy.sh --operator-type odh
 
 # Deploy via Kustomize
 ./scripts/deploy.sh --deployment-mode kustomize
@@ -83,11 +83,11 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 #### Standard Deployments
 
 ```bash
-# Deploy ODH (default - uses kuadrant policy engine)
-./scripts/deploy.sh
-
 # Deploy RHOAI (uses rhcl policy engine)
 ./scripts/deploy.sh --operator-type rhoai
+
+# Deploy ODH (default - uses kuadrant policy engine)
+./scripts/deploy.sh --operator-type odh
 ```
 
 #### Testing PRs
