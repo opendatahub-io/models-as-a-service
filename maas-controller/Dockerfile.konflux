@@ -1,0 +1,23 @@
+# Temporary placeholder Dockerfile.konflux for maas-controller.
+# Will be replaced with the actual build when the controller is implemented.
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:80f3902b6dcb47005a90e14140eef9080ccc1bb22df70ee16b27d5891524edb2
+
+WORKDIR /app
+
+RUN chgrp -R 0 /app && \
+    chmod -R g=u /app
+
+USER 1001
+
+ENTRYPOINT ["echo", "maas-controller placeholder"]
+
+LABEL com.redhat.component="odh-maas-controller-rhel9" \
+      name="rhoai/odh-maas-controller-rhel9" \
+      description="odh-maas-controller" \
+      summary="odh-maas-controller" \
+      maintainer="['managed-open-data-hub@redhat.com']" \
+      io.openshift.expose-services="" \
+      io.k8s.display-name="odh-maas-controller" \
+      io.k8s.description="odh-maas-controller" \
+      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf"
