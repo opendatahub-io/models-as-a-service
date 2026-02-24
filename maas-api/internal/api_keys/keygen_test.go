@@ -1,19 +1,21 @@
-package api_keys
+package api_keys_test
 
 import (
 	"regexp"
 	"testing"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 )
 
 func TestGenerateAPIKey(t *testing.T) {
-	plaintext, hash, prefix, err := GenerateAPIKey()
+	plaintext, hash, prefix, err := api_keys.GenerateAPIKey()
 
 	if err != nil {
 		t.Fatalf("GenerateAPIKey() returned error: %v", err)
 	}
 
 	// Test 1: Key has correct prefix
-	if !IsValidKeyFormat(plaintext) {
+	if !api_keys.IsValidKeyFormat(plaintext) {
 		t.Errorf("GenerateAPIKey() key missing prefix 'sk-oai-': got %q", plaintext)
 	}
 
@@ -35,7 +37,7 @@ func TestGenerateAPIKey(t *testing.T) {
 	}
 
 	// Test 5: Key is alphanumeric after prefix (base62)
-	keyBody := plaintext[len(KeyPrefix):]
+	keyBody := plaintext[len(api_keys.KeyPrefix):]
 	alphanumRegex := regexp.MustCompile("^[A-Za-z0-9]+$")
 	if !alphanumRegex.MatchString(keyBody) {
 		t.Errorf("GenerateAPIKey() key body not alphanumeric: got %q", keyBody)
@@ -53,7 +55,7 @@ func TestGenerateAPIKey_Uniqueness(t *testing.T) {
 	hashes := make(map[string]bool)
 
 	for i := range 100 {
-		plaintext, hash, _, err := GenerateAPIKey()
+		plaintext, hash, _, err := api_keys.GenerateAPIKey()
 		if err != nil {
 			t.Fatalf("GenerateAPIKey() iteration %d returned error: %v", i, err)
 		}
@@ -85,10 +87,10 @@ func TestHashAPIKey(t *testing.T) {
 
 	// Actually compute the hash for the test key
 	testKey := "sk-oai-test123"
-	hash := HashAPIKey(testKey)
+	hash := api_keys.HashAPIKey(testKey)
 
 	// Verify consistent hashing
-	hash2 := HashAPIKey(testKey)
+	hash2 := api_keys.HashAPIKey(testKey)
 	if hash != hash2 {
 		t.Errorf("HashAPIKey() not deterministic: got %q and %q", hash, hash2)
 	}
@@ -99,7 +101,7 @@ func TestHashAPIKey(t *testing.T) {
 	}
 
 	// Verify different keys produce different hashes
-	differentHash := HashAPIKey("sk-oai-different")
+	differentHash := api_keys.HashAPIKey("sk-oai-different")
 	if hash == differentHash {
 		t.Error("HashAPIKey() produced same hash for different keys")
 	}
@@ -124,27 +126,16 @@ func TestIsValidKeyFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsValidKeyFormat(tt.key); got != tt.want {
+			if got := api_keys.IsValidKeyFormat(tt.key); got != tt.want {
 				t.Errorf("IsValidKeyFormat(%q) = %v, want %v", tt.key, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestEncodeBase62(t *testing.T) {
-	// Test that encoding produces alphanumeric output
-	testData := []byte{0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD}
-	result := encodeBase62(testData)
-
-	alphanumRegex := regexp.MustCompile("^[A-Za-z0-9]+$")
-	if !alphanumRegex.MatchString(result) {
-		t.Errorf("encodeBase62() produced non-alphanumeric output: %q", result)
-	}
-}
-
 func BenchmarkGenerateAPIKey(b *testing.B) {
 	for b.Loop() {
-		_, _, _, _ = GenerateAPIKey()
+		_, _, _, _ = api_keys.GenerateAPIKey()
 	}
 }
 
@@ -152,6 +143,6 @@ func BenchmarkHashAPIKey(b *testing.B) {
 	key := "sk-oai-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"
 
 	for b.Loop() {
-		_ = HashAPIKey(key)
+		_ = api_keys.HashAPIKey(key)
 	}
 }

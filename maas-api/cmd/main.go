@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -124,17 +123,12 @@ func serve() error {
 }
 
 // initStore creates the PostgreSQL store for API key management.
-// Requires DB_CONNECTION_URL environment variable or --db-connection-url flag.
+// DBConnectionURL is validated in cfg.Validate() before this is called.
 //
-//nolint:ireturn // Returns MetadataStore interface by design for pluggable storage backends.
+//nolint:ireturn // Returns MetadataStore interface by design.
 func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
-	dbURL := strings.TrimSpace(cfg.DBConnectionURL)
-	if dbURL == "" {
-		return nil, errors.New("database connection URL is required. Set DB_CONNECTION_URL or use --db-connection-url")
-	}
-
 	log.Info("Connecting to PostgreSQL database...")
-	return api_keys.NewPostgresStoreFromURL(ctx, log, dbURL)
+	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL)
 }
 
 func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, store api_keys.MetadataStore) error {
@@ -185,17 +179,23 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	tokenRoutes.POST("", tokenHandler.IssueToken)
 	tokenRoutes.DELETE("", apiKeyHandler.RevokeAllTokens)
 
+	// V1 API routes - ONLY legacy ServiceAccount-backed key creation
 	apiKeyRoutes := v1Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
-	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)
-	apiKeyRoutes.GET("", apiKeyHandler.ListAPIKeys)
-	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)
-	// Permanent API keys (sk-oai-* format) - POC
-	apiKeyRoutes.POST("/permanent", apiKeyHandler.CreatePermanentAPIKey)
-	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)
+	apiKeyRoutes.POST("", apiKeyHandler.CreateServiceAccountAPIKey) // ServiceAccount-backed keys (legacy, will be removed in future)
+	// No GET, GET/:id, or DELETE/:id routes - they return 404 (moved to v2)
+
+	// V2 API routes - Complete CRUD for hash-based key architecture
+	v2Routes := router.Group("/v2")
+	v2ApiKeyRoutes := v2Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
+	v2ApiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)      // Create hash-based key
+	v2ApiKeyRoutes.GET("", apiKeyHandler.ListAPIKeys)        // List all keys
+	v2ApiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)      // Get specific key
+	v2ApiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey) // Revoke specific key
 
 	// Internal routes for Authorino HTTP callback (no auth required - called by Authorino)
-	internalRoutes := router.Group("/internal/v1")
+	internalRoutes := router.Group("/internal/v2")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
+	// No /internal/v1 routes - they return 404 (moved to v2)
 
 	return nil
 }

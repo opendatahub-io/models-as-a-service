@@ -26,16 +26,19 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 
 ## API Endpoint Reference
 
-| Endpoint             | Method | Purpose                                | Request Body      | Response                    |
-|----------------------|--------|----------------------------------------|-------------------|-----------------------------|
-| `/health`            | GET    | Service health check                   | None              | Health status               |
-| `/v1/models`         | GET    | List available LLMInferenceServices    | None              | OpenAI-compatible list      |
-| `/v1/tokens`         | POST   | Issue ephemeral short-lived token      | `{"expiration"}` | Token with expiration       |
-| `/v1/tokens`         | DELETE | Revoke all ephemeral tokens for user   | None              | Success confirmation        |
-| `/v1/api-keys`       | POST   | Create named API key (long-lived)      | `{"expiration", "name"}` | Token with metadata |
-| `/v1/api-keys`       | GET    | List all API keys for user             | None              | Array of API key metadata   |
-| `/v1/api-keys/{id}`  | GET    | Get specific API key by ID             | Bearer token      | API key metadata            |
-| `/v1/tiers/lookup`   | POST   | Lookup tier for user groups (internal) | `{"groups"}`     | `{"tier", "displayName"}`                 |
+| Endpoint              | Method | Purpose                                      | Request Body      | Response                    |
+|-----------------------|--------|----------------------------------------------|-------------------|-----------------------------|
+| `/health`             | GET    | Service health check                         | None              | Health status               |
+| `/v1/models`          | GET    | List available LLMInferenceServices          | None              | OpenAI-compatible list      |
+| `/v1/tokens`          | POST   | Issue ephemeral short-lived token            | `{"expiration"}` | Token with expiration       |
+| `/v1/tokens`          | DELETE | Revoke all ephemeral tokens for user         | None              | Success confirmation        |
+| `/v1/api-keys`        | POST   | Create legacy SA-backed API key              | `{"expiration", "name"}` | JWT token with metadata |
+| `/v2/api-keys`        | POST   | Create hash-based API key (sk-oai-*)         | `{"name", "description", "expiresIn"}` | API key (shown once) |
+| `/v2/api-keys`        | GET    | List all API keys for user (v1 and v2)       | None              | Array of API key metadata   |
+| `/v2/api-keys/{id}`   | GET    | Get specific API key by ID                   | None              | API key metadata            |
+| `/v2/api-keys/{id}`   | DELETE | Revoke specific API key                      | None              | Success (204 No Content)    |
+| `/v1/tiers/lookup`    | POST   | Lookup tier for user groups (internal)       | `{"groups"}`      | `{"tier", "displayName"}`   |
+| `/internal/v2/api-keys/validate` | POST | Validate API key (Authorino callback) | `{"key"}`         | `{"valid", "userId", "groups"}` |
 
 ## Core Architecture Components
 
@@ -69,10 +72,14 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 #### Gateway AuthPolicy
 
 - **Target**: `maas-default-gateway` (Gateway)
-- **Authentication**: Service Account tokens via `kubernetesTokenReview`
+- **Authentication**:
+  - Service Account tokens (JWT format: `eyJ...`) via `kubernetesTokenReview` (legacy)
+  - Hash-based API keys (OpenAI format: `sk-oai-...`) via HTTP callback to `/internal/v2/api-keys/validate`
 - **Metadata Enrichment**: Calls MaaS API `/v1/tiers/lookup` to determine user tier (cached for 300s)
-- **Authorization**: Kubernetes SubjectAccessReview for model access (checks user can POST to specific LLMInferenceService)
-- **Identity Injection**: Adds `userid` and `tier` to request context for downstream policies
+- **Authorization**:
+  - API key validation (checks key is valid and not revoked)
+  - Kubernetes SubjectAccessReview for model access (checks user can POST to specific LLMInferenceService)
+- **Identity Injection**: Adds `userid`, `tier`, and `keyId` to request context for downstream policies
 
 #### MaaS API AuthPolicy
 

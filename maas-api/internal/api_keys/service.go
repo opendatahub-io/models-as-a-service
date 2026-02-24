@@ -43,8 +43,9 @@ func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, cfg 
 	}
 }
 
-// CreateAPIKey creates a K8s ServiceAccount-based API key (legacy, with expiration).
-func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, name string, description string, expiration time.Duration) (*APIKey, error) {
+// CreateServiceAccountAPIKey creates a K8s ServiceAccount-based API key (legacy, will be removed in future).
+// Note: ServiceAccount-based tokens are NOT stored in the database - they are validated via Kubernetes TokenReview API.
+func (s *Service) CreateServiceAccountAPIKey(ctx context.Context, user *token.UserContext, name string, description string, expiration time.Duration) (*APIKey, error) {
 	// Generate token
 	tok, err := s.tokenManager.GenerateToken(ctx, user, expiration)
 	if err != nil {
@@ -58,16 +59,15 @@ func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, nam
 		Description: description,
 	}
 
-	if err := s.store.Add(ctx, user.Username, apiKey); err != nil {
-		return nil, fmt.Errorf("failed to persist api key metadata: %w", err)
-	}
+	// Legacy SA tokens are NOT stored in database
+	// Authorization is handled by Kubernetes TokenReview API, not database lookup
 
 	return apiKey, nil
 }
 
-// CreatePermanentKeyResponse is returned when creating an API key
+// CreateAPIKeyResponse is returned when creating an API key.
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
-type CreatePermanentKeyResponse struct {
+type CreateAPIKeyResponse struct {
 	Key       string  `json:"key"`       // Plaintext key - SHOWN ONCE, NEVER STORED
 	KeyPrefix string  `json:"keyPrefix"` // Display prefix for UI
 	ID        string  `json:"id"`
@@ -76,13 +76,14 @@ type CreatePermanentKeyResponse struct {
 	ExpiresAt *string `json:"expiresAt,omitempty"` // RFC3339 timestamp
 }
 
-// CreatePermanentAPIKey creates a new API key (sk-oai-* format)
+// CreateAPIKey creates a new API key (sk-oai-* format).
+// Keys can be permanent (expiresIn=nil) or expiring (expiresIn set).
 // Per Feature Refinement "Key Format & Security":
 // - Generates cryptographically secure key with sk-oai-* prefix
 // - Stores ONLY the SHA-256 hash (plaintext never stored)
 // - Returns plaintext ONCE at creation ("show-once" pattern)
 // - Determines tier from user groups and stores for authorization.
-func (s *Service) CreatePermanentAPIKey(ctx context.Context, user *token.UserContext, name, description string, expiresIn *time.Duration) (*CreatePermanentKeyResponse, error) {
+func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, name, description string, expiresIn *time.Duration) (*CreateAPIKeyResponse, error) {
 	// Validate expiration based on policy
 	if s.config != nil && s.config.APIKeyExpirationPolicy == "required" && expiresIn == nil {
 		return nil, errors.New("expiration is required by system policy")
@@ -114,14 +115,14 @@ func (s *Service) CreatePermanentAPIKey(ctx context.Context, user *token.UserCon
 	}
 
 	// Store in database (hash only, plaintext NEVER stored)
-	if err := s.store.AddPermanentKey(ctx, user.Username, keyID, hash, prefix, name, description, string(userGroups), expiresAt); err != nil {
+	if err := s.store.AddKey(ctx, user.Username, keyID, hash, prefix, name, description, string(userGroups), expiresAt); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
-	s.logger.Info("Created permanent API key", "user", user.Username, "groups", user.Groups, "id", keyID)
+	s.logger.Info("Created API key", "user", user.Username, "groups", user.Groups, "id", keyID)
 
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
-	response := &CreatePermanentKeyResponse{
+	response := &CreateAPIKeyResponse{
 		Key:       plaintext, // SHOWN ONCE, NEVER AGAIN
 		KeyPrefix: prefix,
 		ID:        keyID,
@@ -196,6 +197,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	}
 
 	// Update last_used_at asynchronously (don't block validation response)
+	//nolint:contextcheck // Intentionally using background context - original may be cancelled.
 	go func() {
 		// Recover from panics to prevent crashing the entire process
 		defer func() {

@@ -41,7 +41,8 @@ type Response struct {
 	Description string `json:"description,omitempty"`
 }
 
-func (h *Handler) CreateAPIKey(c *gin.Context) {
+// CreateServiceAccountAPIKey creates a K8s ServiceAccount-based API key (legacy, will be removed in future).
+func (h *Handler) CreateServiceAccountAPIKey(c *gin.Context) {
 	var req CreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -75,7 +76,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		return
 	}
 
-	tok, err := h.service.CreateAPIKey(c.Request.Context(), user, req.Name, req.Description, expiration)
+	tok, err := h.service.CreateServiceAccountAPIKey(c.Request.Context(), user, req.Name, req.Description, expiration)
 	if err != nil {
 		h.logger.Error("Failed to generate API key",
 			"error", err,
@@ -170,22 +171,20 @@ func (h *Handler) RevokeAllTokens(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// CreatePermanentKeyRequest is the request body for creating a permanent API key.
-type CreatePermanentKeyRequest struct {
+// CreateAPIKeyRequest is the request body for creating an API key.
+// Keys can be permanent (no expiresIn) or expiring (with expiresIn).
+type CreateAPIKeyRequest struct {
 	Name        string          `binding:"required"           json:"name"`
 	Description string          `json:"description,omitempty"`
-	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"`
+	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"` // Optional - nil means permanent
 }
 
-// CreatePermanentAPIKey handles POST /v1/api-keys/permanent
-// Creates a new API key (sk-oai-* format) per Feature Refinement
-// Per "Keys Shown Only Once": key is returned ONCE at creation and never again
-//
-// TODO(post-POC): After removing SA-backed endpoint, consolidate to POST /v1/api-keys
-// and deprecate /permanent suffix. Will support both permanent and expiring keys via
-// optional expiresAt field in request body.
-func (h *Handler) CreatePermanentAPIKey(c *gin.Context) {
-	var req CreatePermanentKeyRequest
+// CreateAPIKey handles POST /v2/api-keys
+// Creates a new API key (sk-oai-* format) per Feature Refinement.
+// Keys can be permanent (no expiresIn) or expiring (with expiresIn).
+// Per "Keys Shown Only Once": key is returned ONCE at creation and never again.
+func (h *Handler) CreateAPIKey(c *gin.Context) {
+	var req CreateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -210,14 +209,14 @@ func (h *Handler) CreatePermanentAPIKey(c *gin.Context) {
 		expiresIn = &d
 	}
 
-	result, err := h.service.CreatePermanentAPIKey(c.Request.Context(), user, req.Name, req.Description, expiresIn)
+	result, err := h.service.CreateAPIKey(c.Request.Context(), user, req.Name, req.Description, expiresIn)
 	if err != nil {
-		h.logger.Error("Failed to create permanent API key", "error", err)
+		h.logger.Error("Failed to create API key", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	h.logger.Info("Created permanent API key",
+	h.logger.Info("Created API key",
 		"keyId", result.ID,
 		"keyPrefix", result.KeyPrefix,
 	)
@@ -231,7 +230,7 @@ type ValidateAPIKeyRequest struct {
 	Key string `binding:"required" json:"key"`
 }
 
-// ValidateAPIKeyHandler handles POST /internal/v1/api-keys/validate
+// ValidateAPIKeyHandler handles POST /internal/v2/api-keys/validate
 // This endpoint is called by Authorino via HTTP external auth callback
 // Per Feature Refinement "Gateway Integration (Inference Flow)".
 func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {

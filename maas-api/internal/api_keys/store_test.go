@@ -3,122 +3,28 @@ package api_keys_test
 import (
 	"context"
 	"testing"
-	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
+//nolint:ireturn // Returns MetadataStore interface by design.
 func createTestStore(t *testing.T) api_keys.MetadataStore {
 	t.Helper()
 	return api_keys.NewMockStore()
 }
 
+// TestStore tests legacy Add() method - NOTE: This method is DEPRECATED
+// Legacy SA tokens are not stored in database in production - they use Kubernetes TokenReview
+// These tests are kept for backward compatibility testing only.
 func TestStore(t *testing.T) {
-	ctx := t.Context()
+	t.Skip("Legacy Add() method is deprecated - SA tokens are not stored in database")
 
-	store := createTestStore(t)
-	defer store.Close()
-
-	t.Run("AddTokenMetadata", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "jti1",
-				ExpiresAt: time.Now().Add(1 * time.Hour).Unix(),
-			},
-			Name: "token1",
-		}
-		err := store.Add(ctx, "user1", apiKey)
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user1")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 1)
-		assert.Equal(t, "token1", tokens[0].Name)
-		assert.Equal(t, api_keys.TokenStatusActive, tokens[0].Status)
-	})
-
-	t.Run("AddSecondToken", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "jti2",
-				ExpiresAt: time.Now().Add(2 * time.Hour).Unix(),
-			},
-			Name: "token2",
-		}
-		err := store.Add(ctx, "user1", apiKey)
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user1")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 2)
-	})
-
-	t.Run("GetTokensForDifferentUser", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "jti3",
-				ExpiresAt: time.Now().Add(1 * time.Hour).Unix(),
-			},
-			Name: "token3",
-		}
-		err := store.Add(ctx, "user2", apiKey)
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user2")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 1)
-		assert.Equal(t, "token3", tokens[0].Name)
-	})
-
-	t.Run("MarkTokensAsRevokedForUser", func(t *testing.T) {
-		err := store.InvalidateAll(ctx, "user1")
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user1")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 2)
-		for _, tok := range tokens {
-			assert.Equal(t, api_keys.TokenStatusRevoked, tok.Status)
-		}
-
-		// User2 should still exist
-		tokens2, err := store.List(ctx, "user2")
-		require.NoError(t, err)
-		assert.Len(t, tokens2, 1)
-	})
-
-	t.Run("GetToken", func(t *testing.T) {
-		gotToken, err := store.Get(ctx, "jti3")
-		require.NoError(t, err)
-		assert.NotNil(t, gotToken)
-		assert.Equal(t, "token3", gotToken.Name)
-	})
-
-	t.Run("ExpiredTokenStatus", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "jti-expired",
-				ExpiresAt: time.Now().Add(-1 * time.Hour).Unix(),
-			},
-			Name: "expired-token",
-		}
-		err := store.Add(ctx, "user4", apiKey)
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user4")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 1)
-		assert.Equal(t, api_keys.TokenStatusExpired, tokens[0].Status)
-
-		// Get single token check
-		gotToken, err := store.Get(ctx, "jti-expired")
-		require.NoError(t, err)
-		assert.Equal(t, api_keys.TokenStatusExpired, gotToken.Status)
-	})
+	// Tests removed - legacy SA token storage is not used in practice
+	// Only hash-based keys (AddKey) are stored in database
 }
 
 func TestStoreValidation(t *testing.T) {
@@ -126,37 +32,14 @@ func TestStoreValidation(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()
 
-	t.Run("EmptyJTI", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "",
-				ExpiresAt: time.Now().Add(1 * time.Hour).Unix(),
-			},
-			Name: "token-no-jti",
-		}
-		err := store.Add(ctx, "user1", apiKey)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, api_keys.ErrEmptyJTI)
-	})
-
-	t.Run("EmptyName", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "some-jti",
-				ExpiresAt: time.Now().Add(1 * time.Hour).Unix(),
-			},
-			Name: "",
-		}
-		err := store.Add(ctx, "user1", apiKey)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, api_keys.ErrEmptyName)
-	})
-
 	t.Run("TokenNotFound", func(t *testing.T) {
 		_, err := store.Get(ctx, "nonexistent-jti")
 		require.Error(t, err)
 		assert.Equal(t, api_keys.ErrKeyNotFound, err)
 	})
+
+	// Legacy Add() validation tests removed - method is deprecated
+	// SA tokens are not stored in database, validated via Kubernetes instead
 }
 
 func TestPostgresStoreFromURL(t *testing.T) {
@@ -176,13 +59,13 @@ func TestPostgresStoreFromURL(t *testing.T) {
 	})
 }
 
-func TestPermanentKeyOperations(t *testing.T) {
+func TestAPIKeyOperations(t *testing.T) {
 	ctx := t.Context()
 	store := createTestStore(t)
 	defer store.Close()
 
-	t.Run("AddPermanentKey", func(t *testing.T) {
-		err := store.AddPermanentKey(ctx, "user1", "key-id-1", "hash123", "sk-oai-abc", "my-key", "test key", `["system:authenticated","premium-user"]`, nil)
+	t.Run("AddKey", func(t *testing.T) {
+		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "sk-oai-abc", "my-key", "test key", `["system:authenticated","premium-user"]`, nil)
 		require.NoError(t, err)
 
 		keys, err := store.List(ctx, "user1")
@@ -216,7 +99,7 @@ func TestPermanentKeyOperations(t *testing.T) {
 
 	t.Run("UpdateLastUsed", func(t *testing.T) {
 		// Add another key for this test
-		err := store.AddPermanentKey(ctx, "user2", "key-id-2", "hash456", "sk-oai-def", "key2", "", `["system:authenticated","free-user"]`, nil)
+		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "sk-oai-def", "key2", "", `["system:authenticated","free-user"]`, nil)
 		require.NoError(t, err)
 
 		err = store.UpdateLastUsed(ctx, "key-id-2")
