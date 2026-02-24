@@ -430,6 +430,19 @@ main() {
 
       log_info "  Subscription controller installed."
       log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
+
+      # Patch cluster audience if non-standard (HyperShift/ROSA) so controller-generated
+      # per-model AuthPolicies use the correct audience for TokenReview.
+      local cluster_aud
+      cluster_aud=$(get_cluster_audience 2>/dev/null || echo "")
+      if [[ -n "$cluster_aud" && "$cluster_aud" != "https://kubernetes.default.svc" ]]; then
+        log_info "  Patching maas-controller with cluster audience: $cluster_aud"
+        if kubectl set env deployment/maas-controller -n "$NAMESPACE" CLUSTER_AUDIENCE="$cluster_aud"; then
+          kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
+        else
+          log_warn "  Failed to patch maas-controller with cluster audience — per-model auth may fail"
+        fi
+      fi
     fi
   fi
 
@@ -1302,8 +1315,9 @@ patch_operator_csv() {
 #   1. Detects the cluster's OIDC audience from a service account token
 #   2. If non-standard, patches the maas-api AuthPolicy with the cluster-specific audience
 #   3. Annotates the AuthPolicy to prevent operator from reverting the patch
-#   4. If subscriptions are enabled, patches the maas-controller deployment so
-#      controller-generated per-model AuthPolicies also use the correct audience
+#
+#   Note: maas-controller audience patching is handled separately in the subscription
+#   controller installation block (after the controller deployment exists).
 configure_cluster_audience() {
   log_info "Checking cluster OIDC audience..."
 
@@ -1386,20 +1400,6 @@ EOF
     log_warn "  This may cause authentication failures on Hypershift/ROSA clusters"
   fi
 
-  # Step 4: Patch maas-controller so controller-generated per-model AuthPolicies
-  # also use the correct cluster audience for TokenReview.
-  if [[ "$ENABLE_SUBSCRIPTIONS" == "true" ]]; then
-    if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
-      log_info "  Patching maas-controller with cluster audience..."
-      if kubectl set env deployment/maas-controller -n "$NAMESPACE" CLUSTER_AUDIENCE="$cluster_aud"; then
-        log_info "  maas-controller patched, waiting for rollout..."
-        kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
-      else
-        log_warn "  Failed to patch maas-controller with cluster audience"
-        log_warn "  Per-model auth may fail on this cluster"
-      fi
-    fi
-  fi
 }
 
 #──────────────────────────────────────────────────────────────
