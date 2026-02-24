@@ -3,6 +3,7 @@ package api_keys
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 )
@@ -114,11 +115,22 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, keyPre
 	return nil
 }
 
-func (m *MockStore) List(ctx context.Context, username string) ([]ApiKeyMetadata, error) {
+// List returns a paginated list of API keys for a user.
+// Pagination is mandatory - no unbounded queries allowed.
+func (m *MockStore) List(ctx context.Context, username string, params PaginationParams) (*PaginatedResult, error) {
+	// Validate params (same as PostgresStore)
+	if params.Limit < 1 || params.Limit > 100 {
+		return nil, errors.New("limit must be between 1 and 100")
+	}
+	if params.Offset < 0 {
+		return nil, errors.New("offset must be non-negative")
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	result := make([]ApiKeyMetadata, 0, len(m.keys))
+	// Get all keys for user
+	allKeys := make([]ApiKeyMetadata, 0)
 	now := time.Now().UTC()
 
 	for _, k := range m.keys {
@@ -127,7 +139,7 @@ func (m *MockStore) List(ctx context.Context, username string) ([]ApiKeyMetadata
 		}
 
 		meta := k.metadata
-		// Compute status
+		// Auto-expire logic
 		if meta.Status == TokenStatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
 			meta.Status = TokenStatusExpired
 		}
@@ -137,10 +149,35 @@ func (m *MockStore) List(ctx context.Context, username string) ([]ApiKeyMetadata
 		if k.lastUsedAt != nil {
 			meta.LastUsedAt = k.lastUsedAt.Format(time.RFC3339)
 		}
-		result = append(result, meta)
+		allKeys = append(allKeys, meta)
 	}
 
-	return result, nil
+	// Apply pagination
+	start := params.Offset
+	end := start + params.Limit + 1 // Fetch limit+1 for hasMore check
+
+	if start >= len(allKeys) {
+		return &PaginatedResult{
+			Keys:    []ApiKeyMetadata{},
+			HasMore: false,
+		}, nil
+	}
+
+	if end > len(allKeys) {
+		end = len(allKeys)
+	}
+
+	pagedKeys := allKeys[start:end]
+	hasMore := len(pagedKeys) > params.Limit
+
+	if hasMore {
+		pagedKeys = pagedKeys[:params.Limit]
+	}
+
+	return &PaginatedResult{
+		Keys:    pagedKeys,
+		HasMore: hasMore,
+	}, nil
 }
 
 func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, error) {

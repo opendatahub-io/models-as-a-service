@@ -137,8 +137,10 @@ func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, nam
 	return response, nil
 }
 
-func (s *Service) ListAPIKeys(ctx context.Context, user *token.UserContext) ([]ApiKeyMetadata, error) {
-	return s.store.List(ctx, user.Username)
+// List returns a paginated list of API keys for a user.
+// Pagination is mandatory - no unbounded queries allowed.
+func (s *Service) List(ctx context.Context, user *token.UserContext, params PaginationParams) (*PaginatedResult, error) {
+	return s.store.List(ctx, user.Username, params)
 }
 
 func (s *Service) GetAPIKey(ctx context.Context, id string) (*ApiKeyMetadata, error) {

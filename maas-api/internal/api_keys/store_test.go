@@ -2,6 +2,7 @@ package api_keys_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -68,11 +69,13 @@ func TestAPIKeyOperations(t *testing.T) {
 		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "sk-oai-abc", "my-key", "test key", `["system:authenticated","premium-user"]`, nil)
 		require.NoError(t, err)
 
-		keys, err := store.List(ctx, "user1")
+		params := api_keys.PaginationParams{Limit: 10, Offset: 0}
+		result, err := store.List(ctx, "user1", params)
 		require.NoError(t, err)
-		assert.Len(t, keys, 1)
-		assert.Equal(t, "my-key", keys[0].Name)
-		assert.Equal(t, "sk-oai-abc", keys[0].KeyPrefix)
+		assert.Len(t, result.Keys, 1)
+		assert.Equal(t, "my-key", result.Keys[0].Name)
+		assert.Equal(t, "sk-oai-abc", result.Keys[0].KeyPrefix)
+		assert.False(t, result.HasMore)
 	})
 
 	t.Run("GetByHash", func(t *testing.T) {
@@ -108,5 +111,49 @@ func TestAPIKeyOperations(t *testing.T) {
 		key, err := store.GetByHash(ctx, "hash456")
 		require.NoError(t, err)
 		assert.NotEmpty(t, key.LastUsedAt)
+	})
+}
+
+func TestList(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	// Create 125 test keys to test pagination
+	const totalKeys = 125
+	username := "paginated-user"
+
+	for i := 1; i <= totalKeys; i++ {
+		keyID := fmt.Sprintf("key-%d", i)
+		keyHash := fmt.Sprintf("hash-%d", i)
+		keyPrefix := fmt.Sprintf("sk-oai-%03d", i)
+		name := fmt.Sprintf("Key %d", i)
+		err := store.AddKey(ctx, username, keyID, keyHash, keyPrefix, name, "", `["system:authenticated"]`, nil)
+		require.NoError(t, err)
+	}
+
+	t.Run("FirstPage", func(t *testing.T) {
+		params := api_keys.PaginationParams{Limit: 50, Offset: 0}
+		result, err := store.List(ctx, username, params)
+		require.NoError(t, err)
+		assert.Len(t, result.Keys, 50, "should return exactly 50 keys")
+		assert.True(t, result.HasMore, "should indicate more pages exist")
+	})
+
+	t.Run("LastPage", func(t *testing.T) {
+		params := api_keys.PaginationParams{Limit: 50, Offset: 100}
+		result, err := store.List(ctx, username, params)
+		require.NoError(t, err)
+		assert.Len(t, result.Keys, 25, "should return remaining 25 keys")
+		assert.False(t, result.HasMore, "should indicate no more pages")
+	})
+
+	t.Run("ValidationErrors", func(t *testing.T) {
+		t.Run("NegativeLimit", func(t *testing.T) {
+			params := api_keys.PaginationParams{Limit: 0, Offset: 0}
+			_, err := store.List(ctx, username, params)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "limit must be between 1 and 100")
+		})
 	})
 }

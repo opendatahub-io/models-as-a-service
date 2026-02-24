@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -55,6 +56,49 @@ func (h *Handler) isAuthorizedForKey(user *token.UserContext, keyOwner string) b
 
 	// Check if user is admin (has admin-users group)
 	return slices.Contains(user.Groups, "admin-users")
+}
+
+// parsePaginationParams extracts and validates pagination query parameters.
+func (h *Handler) parsePaginationParams(c *gin.Context) (PaginationParams, error) {
+	const (
+		defaultLimit = 50
+		maxLimit     = 100
+	)
+
+	params := PaginationParams{
+		Limit:  defaultLimit,
+		Offset: 0,
+	}
+
+	// Parse limit
+	if limitStr := c.Query("limit"); limitStr != "" {
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil {
+			return params, errors.New("invalid limit parameter: must be a number")
+		}
+		if limit < 1 {
+			return params, errors.New("invalid limit parameter: must be at least 1")
+		}
+		// Silently cap at maximum (user-friendly)
+		if limit > maxLimit {
+			limit = maxLimit
+		}
+		params.Limit = limit
+	}
+
+	// Parse offset
+	if offsetStr := c.Query("offset"); offsetStr != "" {
+		offset, err := strconv.Atoi(offsetStr)
+		if err != nil {
+			return params, errors.New("invalid offset parameter: must be a number")
+		}
+		if offset < 0 {
+			return params, errors.New("invalid offset parameter: must be non-negative")
+		}
+		params.Offset = offset
+	}
+
+	return params, nil
 }
 
 type CreateRequest struct {
@@ -125,16 +169,34 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 		return
 	}
 
-	tokens, err := h.service.ListAPIKeys(c.Request.Context(), user)
+	// Parse pagination parameters
+	params, err := h.parsePaginationParams(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Get paginated results
+	result, err := h.service.List(c.Request.Context(), user, params)
 	if err != nil {
 		h.logger.Error("Failed to list API keys",
 			"error", err,
+			"username", user.Username,
+			"limit", params.Limit,
+			"offset", params.Offset,
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list api keys"})
 		return
 	}
 
-	c.JSON(http.StatusOK, tokens)
+	// Build response
+	response := ListAPIKeysResponse{
+		Object:  "list",
+		Data:    result.Keys,
+		HasMore: result.HasMore,
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
