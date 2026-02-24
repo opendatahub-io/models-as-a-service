@@ -6,7 +6,7 @@ resources:
   - ../../base/policies
 
 patches:
-  # Set HTTPS URL for tier lookup
+  # Set HTTPS URL for tier lookup (both V2 and SA paths)
   - target:
       group: kuadrant.io
       version: v1
@@ -14,6 +14,9 @@ patches:
       name: gateway-auth-policy
     patch: |-
       - op: replace
-        path: /spec/rules/metadata/matchedTier/http/url
+        path: /spec/rules/metadata/matchedTier-v2/http/url
+        value: https://maas-api.maas-api.svc.cluster.local:8443/v1/tiers/lookup
+      - op: replace
+        path: /spec/rules/metadata/matchedTier-sa/http/url
         value: https://maas-api.maas-api.svc.cluster.local:8443/v1/tiers/lookup
 
