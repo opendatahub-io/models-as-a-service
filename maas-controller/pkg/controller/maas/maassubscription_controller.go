@@ -305,7 +305,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 		} else if err != nil {
 			return fmt.Errorf("failed to get existing TRLP: %w", err)
 		} else {
-			if isOptedOut(existing) {
+			if isManaged(existing) {
 				log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
 			} else {
 				mergedAnnotations := existing.GetAnnotations()
