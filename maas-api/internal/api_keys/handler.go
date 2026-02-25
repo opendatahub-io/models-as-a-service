@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -46,6 +47,11 @@ func (h *Handler) getUserContext(c *gin.Context) *token.UserContext {
 	return user
 }
 
+// isAdmin checks if the user has admin privileges.
+func (h *Handler) isAdmin(user *token.UserContext) bool {
+	return slices.Contains(user.Groups, "admin-users")
+}
+
 // isAuthorizedForKey checks if the user is authorized to access the API key.
 // User is authorized if they own the key or are an admin.
 func (h *Handler) isAuthorizedForKey(user *token.UserContext, keyOwner string) bool {
@@ -54,8 +60,8 @@ func (h *Handler) isAuthorizedForKey(user *token.UserContext, keyOwner string) b
 		return true
 	}
 
-	// Check if user is admin (has admin-users group)
-	return slices.Contains(user.Groups, "admin-users")
+	// Check if user is admin
+	return h.isAdmin(user)
 }
 
 // parsePaginationParams extracts and validates pagination query parameters.
@@ -169,6 +175,45 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 		return
 	}
 
+	// Check if user is admin
+	isAdmin := h.isAdmin(user)
+
+	// Parse filter parameters
+	filterUsername := c.Query("username")
+	filterStatus := c.Query("status")
+
+	// Determine target username for filtering
+	var targetUsername string
+	if isAdmin {
+		// Admin behavior: default to ALL users (empty string), or filter if provided
+		targetUsername = filterUsername // Empty string = all users
+	} else {
+		// Regular user behavior: always filter to own keys only
+		if filterUsername != "" && filterUsername != user.Username {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "non-admin users can only view their own API keys",
+			})
+			return
+		}
+		targetUsername = user.Username // Always their own username
+	}
+
+	// Parse status filters
+	var statusFilters []string
+	if filterStatus != "" {
+		statusFilters = strings.Split(filterStatus, ",")
+		// Validate each status
+		for _, status := range statusFilters {
+			trimmed := strings.TrimSpace(status)
+			if trimmed != "active" && trimmed != "revoked" && trimmed != "expired" {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": "invalid status filter: must be active, revoked, or expired",
+				})
+				return
+			}
+		}
+	}
+
 	// Parse pagination parameters
 	params, err := h.parsePaginationParams(c)
 	if err != nil {
@@ -176,12 +221,12 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 		return
 	}
 
-	// Get paginated results
-	result, err := h.service.List(c.Request.Context(), user, params)
+	// Get paginated results with filters
+	result, err := h.service.List(c.Request.Context(), targetUsername, params, statusFilters)
 	if err != nil {
 		h.logger.Error("Failed to list API keys",
 			"error", err,
-			"username", user.Username,
+			"username", targetUsername,
 			"limit", params.Limit,
 			"offset", params.Offset,
 		)
@@ -261,10 +306,12 @@ func (h *Handler) RevokeAllTokens(c *gin.Context) {
 
 // CreateAPIKeyRequest is the request body for creating an API key.
 // Keys can be permanent (no expiresIn) or expiring (with expiresIn).
+// Admins can optionally specify a username to create keys for other users.
 type CreateAPIKeyRequest struct {
 	Name        string          `binding:"required"           json:"name"`
 	Description string          `json:"description,omitempty"`
 	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"` // Optional - nil means permanent
+	Username    string          `json:"username,omitempty"`  // Optional - admin can create for other users
 }
 
 // CreateAPIKey handles POST /v2/api-keys
@@ -283,6 +330,19 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		return
 	}
 
+	// Determine target username (admin can create for other users)
+	targetUsername := req.Username
+	if targetUsername == "" {
+		// No username provided - use authenticated user
+		targetUsername = user.Username
+	} else if targetUsername != user.Username && !h.isAdmin(user) {
+		// Username provided - only admins can create for other users
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "only admins can create API keys for other users",
+		})
+		return
+	}
+
 	// Parse expiration duration if provided
 	var expiresIn *time.Duration
 	if req.ExpiresIn != nil {
@@ -290,7 +350,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		expiresIn = &d
 	}
 
-	result, err := h.service.CreateAPIKey(c.Request.Context(), user, req.Name, req.Description, expiresIn)
+	result, err := h.service.CreateAPIKey(c.Request.Context(), targetUsername, user.Groups, req.Name, req.Description, expiresIn)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

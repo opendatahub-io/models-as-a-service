@@ -28,11 +28,14 @@ type MetadataStore interface {
 	// AddKey stores an API key with hash-only storage (no plaintext).
 	// Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 	// userGroups is a JSON array of user's groups (used for authorization).
-	AddKey(ctx context.Context, username string, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error
+	// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
+	AddKey(ctx context.Context, username string, keyID, keyHash, name, description, userGroups string, expiresAt *time.Time) error
 
-	// List returns a paginated list of API keys for a user.
+	// List returns a paginated list of API keys with optional filtering.
 	// Pagination is mandatory - no unbounded queries allowed.
-	List(ctx context.Context, username string, params PaginationParams) (*PaginatedResult, error)
+	// username can be empty (admin viewing all users) or specific username.
+	// statuses can filter by status (active, revoked, expired) - empty means all statuses.
+	List(ctx context.Context, username string, params PaginationParams, statuses []string) (*PaginatedResult, error)
 
 	Get(ctx context.Context, jti string) (*ApiKeyMetadata, error)
 

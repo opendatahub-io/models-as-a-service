@@ -5,24 +5,24 @@
 
 -- name: CreateAPIKey :exec
 INSERT INTO api_keys (
-    id, username, name, description, key_hash, key_prefix, status, created_at, expires_at
+    id, username, name, description, key_hash, status, created_at, expires_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8
 );
 
 -- name: GetAPIKeyByID :one
-SELECT id, username, name, description, key_prefix, status, created_at, expires_at, last_used_at
+SELECT id, username, name, description, status, created_at, expires_at, last_used_at
 FROM api_keys
 WHERE id = $1;
 
 -- name: GetAPIKeyByHash :one
 -- Critical path: called on every authenticated request via Authorino
-SELECT id, username, name, description, key_prefix, status, last_used_at
+SELECT id, username, name, description, status, last_used_at
 FROM api_keys
 WHERE key_hash = $1;
 
 -- name: ListAPIKeysByUser :many
-SELECT id, key_prefix, name, description, status, created_at, expires_at, last_used_at
+SELECT id, name, description, status, created_at, expires_at, last_used_at
 FROM api_keys
 WHERE username = $1
 ORDER BY created_at DESC;
@@ -49,7 +49,7 @@ WHERE username = $1 AND status = 'active';
 
 -- name: GetStaleKeys :many
 -- Find keys not used in the specified interval (for cleanup/audit)
-SELECT id, username, name, key_prefix, created_at, last_used_at
+SELECT id, username, name, created_at, last_used_at
 FROM api_keys
 WHERE status = 'active'
   AND (last_used_at IS NULL OR last_used_at < $1);

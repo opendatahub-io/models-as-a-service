@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS api_keys (
     name TEXT NOT NULL,
     description TEXT,
     key_hash TEXT NOT NULL,
-    key_prefix TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     user_groups TEXT NOT NULL, -- JSON array of user's groups at creation time
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

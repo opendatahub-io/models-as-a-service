@@ -66,15 +66,15 @@ func TestAPIKeyOperations(t *testing.T) {
 	defer store.Close()
 
 	t.Run("AddKey", func(t *testing.T) {
-		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "sk-oai-abc", "my-key", "test key", `["system:authenticated","premium-user"]`, nil)
+		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", `["system:authenticated","premium-user"]`, nil)
 		require.NoError(t, err)
 
 		params := api_keys.PaginationParams{Limit: 10, Offset: 0}
-		result, err := store.List(ctx, "user1", params)
+		result, err := store.List(ctx, "user1", params, nil)
 		require.NoError(t, err)
 		assert.Len(t, result.Keys, 1)
 		assert.Equal(t, "my-key", result.Keys[0].Name)
-		assert.Equal(t, "sk-oai-abc", result.Keys[0].KeyPrefix)
+		// KeyPrefix is NOT stored (security - reduces brute-force attack surface)
 		assert.False(t, result.HasMore)
 	})
 
@@ -102,7 +102,7 @@ func TestAPIKeyOperations(t *testing.T) {
 
 	t.Run("UpdateLastUsed", func(t *testing.T) {
 		// Add another key for this test
-		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "sk-oai-def", "key2", "", `["system:authenticated","free-user"]`, nil)
+		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", `["system:authenticated","free-user"]`, nil)
 		require.NoError(t, err)
 
 		err = store.UpdateLastUsed(ctx, "key-id-2")
@@ -126,15 +126,14 @@ func TestList(t *testing.T) {
 	for i := 1; i <= totalKeys; i++ {
 		keyID := fmt.Sprintf("key-%d", i)
 		keyHash := fmt.Sprintf("hash-%d", i)
-		keyPrefix := fmt.Sprintf("sk-oai-%03d", i)
 		name := fmt.Sprintf("Key %d", i)
-		err := store.AddKey(ctx, username, keyID, keyHash, keyPrefix, name, "", `["system:authenticated"]`, nil)
+		err := store.AddKey(ctx, username, keyID, keyHash, name, "", `["system:authenticated"]`, nil)
 		require.NoError(t, err)
 	}
 
 	t.Run("FirstPage", func(t *testing.T) {
 		params := api_keys.PaginationParams{Limit: 50, Offset: 0}
-		result, err := store.List(ctx, username, params)
+		result, err := store.List(ctx, username, params, nil)
 		require.NoError(t, err)
 		assert.Len(t, result.Keys, 50, "should return exactly 50 keys")
 		assert.True(t, result.HasMore, "should indicate more pages exist")
@@ -142,7 +141,7 @@ func TestList(t *testing.T) {
 
 	t.Run("LastPage", func(t *testing.T) {
 		params := api_keys.PaginationParams{Limit: 50, Offset: 100}
-		result, err := store.List(ctx, username, params)
+		result, err := store.List(ctx, username, params, nil)
 		require.NoError(t, err)
 		assert.Len(t, result.Keys, 25, "should return remaining 25 keys")
 		assert.False(t, result.HasMore, "should indicate no more pages")
@@ -151,7 +150,7 @@ func TestList(t *testing.T) {
 	t.Run("ValidationErrors", func(t *testing.T) {
 		t.Run("NegativeLimit", func(t *testing.T) {
 			params := api_keys.PaginationParams{Limit: 0, Offset: 0}
-			_, err := store.List(ctx, username, params)
+			_, err := store.List(ctx, username, params, nil)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "limit must be between 1 and 100")
 		})

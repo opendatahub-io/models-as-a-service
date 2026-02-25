@@ -28,9 +28,9 @@ func (q *Queries) CountActiveKeysByUser(ctx context.Context, username string) (i
 const createAPIKey = `-- name: CreateAPIKey :exec
 
 INSERT INTO api_keys (
-    id, username, name, description, key_hash, key_prefix, status, created_at, expires_at
+    id, username, name, description, key_hash, status, created_at, expires_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8
 )
 `
 
@@ -40,7 +40,6 @@ type CreateAPIKeyParams struct {
 	Name        string             `json:"name"`
 	Description *string            `json:"description"`
 	KeyHash     string             `json:"key_hash"`
-	KeyPrefix   string             `json:"key_prefix"`
 	Status      string             `json:"status"`
 	CreatedAt   time.Time          `json:"created_at"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
@@ -57,7 +56,6 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) erro
 		arg.Name,
 		arg.Description,
 		arg.KeyHash,
-		arg.KeyPrefix,
 		arg.Status,
 		arg.CreatedAt,
 		arg.ExpiresAt,
@@ -66,7 +64,7 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) erro
 }
 
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
-SELECT id, username, name, description, key_prefix, status, last_used_at
+SELECT id, username, name, description, status, last_used_at
 FROM api_keys
 WHERE key_hash = $1
 `
@@ -76,7 +74,6 @@ type GetAPIKeyByHashRow struct {
 	Username    string             `json:"username"`
 	Name        string             `json:"name"`
 	Description *string            `json:"description"`
-	KeyPrefix   string             `json:"key_prefix"`
 	Status      string             `json:"status"`
 	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
 }
@@ -90,7 +87,6 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 		&i.Username,
 		&i.Name,
 		&i.Description,
-		&i.KeyPrefix,
 		&i.Status,
 		&i.LastUsedAt,
 	)
@@ -98,7 +94,7 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 }
 
 const getAPIKeyByID = `-- name: GetAPIKeyByID :one
-SELECT id, username, name, description, key_prefix, status, created_at, expires_at, last_used_at
+SELECT id, username, name, description, status, created_at, expires_at, last_used_at
 FROM api_keys
 WHERE id = $1
 `
@@ -108,7 +104,6 @@ type GetAPIKeyByIDRow struct {
 	Username    string             `json:"username"`
 	Name        string             `json:"name"`
 	Description *string            `json:"description"`
-	KeyPrefix   string             `json:"key_prefix"`
 	Status      string             `json:"status"`
 	CreatedAt   time.Time          `json:"created_at"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
@@ -123,7 +118,6 @@ func (q *Queries) GetAPIKeyByID(ctx context.Context, id string) (GetAPIKeyByIDRo
 		&i.Username,
 		&i.Name,
 		&i.Description,
-		&i.KeyPrefix,
 		&i.Status,
 		&i.CreatedAt,
 		&i.ExpiresAt,
@@ -133,7 +127,7 @@ func (q *Queries) GetAPIKeyByID(ctx context.Context, id string) (GetAPIKeyByIDRo
 }
 
 const getStaleKeys = `-- name: GetStaleKeys :many
-SELECT id, username, name, key_prefix, created_at, last_used_at
+SELECT id, username, name, created_at, last_used_at
 FROM api_keys
 WHERE status = 'active'
   AND (last_used_at IS NULL OR last_used_at < $1)
@@ -143,7 +137,6 @@ type GetStaleKeysRow struct {
 	ID         string             `json:"id"`
 	Username   string             `json:"username"`
 	Name       string             `json:"name"`
-	KeyPrefix  string             `json:"key_prefix"`
 	CreatedAt  time.Time          `json:"created_at"`
 	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
 }
@@ -162,7 +155,6 @@ func (q *Queries) GetStaleKeys(ctx context.Context, lastUsedAt pgtype.Timestampt
 			&i.ID,
 			&i.Username,
 			&i.Name,
-			&i.KeyPrefix,
 			&i.CreatedAt,
 			&i.LastUsedAt,
 		); err != nil {
@@ -177,7 +169,7 @@ func (q *Queries) GetStaleKeys(ctx context.Context, lastUsedAt pgtype.Timestampt
 }
 
 const listAPIKeysByUser = `-- name: ListAPIKeysByUser :many
-SELECT id, key_prefix, name, description, status, created_at, expires_at, last_used_at
+SELECT id, name, description, status, created_at, expires_at, last_used_at
 FROM api_keys
 WHERE username = $1
 ORDER BY created_at DESC
@@ -185,7 +177,6 @@ ORDER BY created_at DESC
 
 type ListAPIKeysByUserRow struct {
 	ID          string             `json:"id"`
-	KeyPrefix   string             `json:"key_prefix"`
 	Name        string             `json:"name"`
 	Description *string            `json:"description"`
 	Status      string             `json:"status"`
@@ -205,7 +196,6 @@ func (q *Queries) ListAPIKeysByUser(ctx context.Context, username string) ([]Lis
 		var i ListAPIKeysByUserRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.KeyPrefix,
 			&i.Name,
 			&i.Description,
 			&i.Status,

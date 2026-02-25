@@ -16,7 +16,6 @@ type ApiKey struct {
 	Name        string             `json:"name"`
 	Description *string            `json:"description"`
 	KeyHash     string             `json:"key_hash"`
-	KeyPrefix   string             `json:"key_prefix"`
 	Status      string             `json:"status"`
 	UserGroups  string             `json:"user_groups"`
 	CreatedAt   time.Time          `json:"created_at"`

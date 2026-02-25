@@ -83,7 +83,8 @@ type CreateAPIKeyResponse struct {
 // - Stores ONLY the SHA-256 hash (plaintext never stored)
 // - Returns plaintext ONCE at creation ("show-once" pattern)
 // - Determines tier from user groups and stores for authorization.
-func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, name, description string, expiresIn *time.Duration) (*CreateAPIKeyResponse, error) {
+// Admins can create keys for other users by specifying a different username.
+func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups []string, name, description string, expiresIn *time.Duration) (*CreateAPIKeyResponse, error) {
 	// Validate expiration based on policy
 	if s.config != nil && s.config.APIKeyExpirationPolicy == "required" && expiresIn == nil {
 		return nil, errors.New("expiration is required by system policy")
@@ -109,17 +110,18 @@ func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, nam
 	keyID := uuid.New().String()
 
 	// Marshal user groups for storage (used for authorization)
-	userGroups, err := json.Marshal(user.Groups)
+	groupsJSON, err := json.Marshal(userGroups)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal user groups: %w", err)
 	}
 
 	// Store in database (hash only, plaintext NEVER stored)
-	if err := s.store.AddKey(ctx, user.Username, keyID, hash, prefix, name, description, string(userGroups), expiresAt); err != nil {
+	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
+	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, string(groupsJSON), expiresAt); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
-	s.logger.Info("Created API key", "user", user.Username, "groups", user.Groups, "id", keyID)
+	s.logger.Info("Created API key", "user", username, "groups", userGroups, "id", keyID)
 
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
 	response := &CreateAPIKeyResponse{
@@ -137,10 +139,11 @@ func (s *Service) CreateAPIKey(ctx context.Context, user *token.UserContext, nam
 	return response, nil
 }
 
-// List returns a paginated list of API keys for a user.
+// List returns a paginated list of API keys for a user with optional filtering.
 // Pagination is mandatory - no unbounded queries allowed.
-func (s *Service) List(ctx context.Context, user *token.UserContext, params PaginationParams) (*PaginatedResult, error) {
-	return s.store.List(ctx, user.Username, params)
+// Admins can filter by username (empty = all users) and status.
+func (s *Service) List(ctx context.Context, username string, params PaginationParams, statuses []string) (*PaginatedResult, error) {
+	return s.store.List(ctx, username, params, statuses)
 }
 
 func (s *Service) GetAPIKey(ctx context.Context, id string) (*ApiKeyMetadata, error) {

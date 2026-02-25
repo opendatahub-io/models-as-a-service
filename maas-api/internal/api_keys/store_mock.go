@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 )
@@ -75,7 +76,8 @@ func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey, us
 
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
-func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error {
+// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
+func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description, userGroups string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -102,7 +104,6 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, keyPre
 			ID:                 keyID,
 			Name:               name,
 			Description:        description,
-			KeyPrefix:          keyPrefix,
 			OriginalUserGroups: groups,
 			Status:             TokenStatusActive,
 			CreationDate:       time.Now().UTC().Format(time.RFC3339),
@@ -115,9 +116,11 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, keyPre
 	return nil
 }
 
-// List returns a paginated list of API keys for a user.
+// List returns a paginated list of API keys with optional filtering.
 // Pagination is mandatory - no unbounded queries allowed.
-func (m *MockStore) List(ctx context.Context, username string, params PaginationParams) (*PaginatedResult, error) {
+// username can be empty (all users) or specific username.
+// statuses can filter by status - empty means all statuses.
+func (m *MockStore) List(ctx context.Context, username string, params PaginationParams, statuses []string) (*PaginatedResult, error) {
 	// Validate params (same as PostgresStore)
 	if params.Limit < 1 || params.Limit > 100 {
 		return nil, errors.New("limit must be between 1 and 100")
@@ -129,12 +132,13 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// Get all keys for user
+	// Get all keys matching filters
 	allKeys := make([]ApiKeyMetadata, 0)
 	now := time.Now().UTC()
 
 	for _, k := range m.keys {
-		if k.username != username {
+		// Filter by username (empty = all users)
+		if username != "" && k.username != username {
 			continue
 		}
 
@@ -143,6 +147,12 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 		if meta.Status == TokenStatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
 			meta.Status = TokenStatusExpired
 		}
+
+		// Filter by status
+		if len(statuses) > 0 && !slices.Contains(statuses, meta.Status) {
+			continue
+		}
+
 		if !k.expiresAt.IsZero() {
 			meta.ExpirationDate = k.expiresAt.Format(time.RFC3339)
 		}

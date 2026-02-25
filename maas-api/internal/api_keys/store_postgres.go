@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
@@ -51,8 +52,8 @@ func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey
 	expiresAt := time.Unix(apiKey.ExpiresAt, 0).UTC()
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, user_groups, status, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, '', '', $5, 'active', $6, $7)
+		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, status, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, '', $5, 'active', $6, $7)
 	`
 	_, err := s.db.ExecContext(ctx, query, apiKey.JTI, username, apiKey.Name, apiKey.Description, userGroups, createdAt, expiresAt)
 	if err != nil {
@@ -63,7 +64,8 @@ func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey
 
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
-func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, keyPrefix, name, description, userGroups string, expiresAt *time.Time) error {
+// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
+func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description, userGroups string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -78,22 +80,24 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, ke
 	}
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, key_prefix, user_groups, status, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9)
+		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, status, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
 	`
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, keyPrefix, userGroups, time.Now().UTC(), expiresAt)
+	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, userGroups, time.Now().UTC(), expiresAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
 
-	s.logger.Debug("Stored API key", "id", keyID, "prefix", keyPrefix, "user", username)
+	s.logger.Debug("Stored API key", "id", keyID, "user", username)
 	return nil
 }
 
-// List returns a paginated list of API keys for a user.
+// List returns a paginated list of API keys with optional filtering.
 // Pagination is mandatory - no unbounded queries allowed.
 // Fetches limit+1 items to efficiently determine if more pages exist.
-func (s *PostgresStore) List(ctx context.Context, username string, params PaginationParams) (*PaginatedResult, error) {
+// username can be empty (admin viewing all users) or specific username.
+// statuses can filter by status (active, revoked, expired) - empty means all statuses.
+func (s *PostgresStore) List(ctx context.Context, username string, params PaginationParams, statuses []string) (*PaginatedResult, error) {
 	// Validate params
 	if params.Limit < 1 || params.Limit > 100 {
 		return nil, errors.New("limit must be between 1 and 100")
@@ -102,18 +106,47 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 		return nil, errors.New("offset must be non-negative")
 	}
 
+	// Build WHERE clause dynamically
+	var whereClauses []string
+	var args []any
+	argPos := 1
+
+	if username != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("username = $%d", argPos))
+		args = append(args, username)
+		argPos++
+	}
+
+	if len(statuses) > 0 {
+		placeholders := make([]string, len(statuses))
+		for i, status := range statuses {
+			placeholders[i] = fmt.Sprintf("$%d", argPos)
+			args = append(args, strings.TrimSpace(status))
+			argPos++
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("status IN (%s)", strings.Join(placeholders, ",")))
+	}
+
+	whereClause := ""
+	if len(whereClauses) > 0 {
+		whereClause = "WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
 	// Fetch limit+1 to determine hasMore
 	fetchLimit := params.Limit + 1
 
-	query := `
-		SELECT id, key_prefix, name, description, created_at, expires_at, status, last_used_at
+	//nolint:gosec // Dynamic WHERE clause is safe - uses parameterized queries
+	query := fmt.Sprintf(`
+		SELECT id, name, description, created_at, expires_at, status, last_used_at
 		FROM api_keys
-		WHERE username = $1
+		%s
 		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
-	`
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argPos, argPos+1)
 
-	rows, err := s.db.QueryContext(ctx, query, username, fetchLimit, params.Offset)
+	args = append(args, fetchLimit, params.Offset)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list keys: %w", err)
 	}
@@ -126,7 +159,7 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 		var expiresAt, lastUsedAt sql.NullTime
 		var description sql.NullString
 
-		if err := rows.Scan(&k.ID, &k.KeyPrefix, &k.Name, &description, &createdAt, &expiresAt, &k.Status, &lastUsedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.Name, &description, &createdAt, &expiresAt, &k.Status, &lastUsedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
@@ -164,8 +197,8 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 // Get retrieves a single API key by ID.
 func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, error) {
 	query := `
-		SELECT id, key_prefix, name, description, username, created_at, expires_at, status, last_used_at
-		FROM api_keys 
+		SELECT id, name, description, username, created_at, expires_at, status, last_used_at
+		FROM api_keys
 		WHERE id = $1
 	`
 	row := s.db.QueryRowContext(ctx, query, keyID)
@@ -175,7 +208,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata,
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
 
-	if err := row.Scan(&k.ID, &k.KeyPrefix, &k.Name, &description, &k.Username, &createdAt, &expiresAt, &k.Status, &lastUsedAt); err != nil {
+	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &createdAt, &expiresAt, &k.Status, &lastUsedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}
@@ -199,7 +232,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata,
 // GetByHash looks up an API key by its SHA-256 hash (critical path for validation).
 func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetadata, error) {
 	query := `
-		SELECT id, username, name, description, key_prefix, user_groups, status, expires_at, last_used_at
+		SELECT id, username, name, description, user_groups, status, expires_at, last_used_at
 		FROM api_keys
 		WHERE key_hash = $1
 	`
@@ -209,7 +242,7 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 	var expiresAt, lastUsedAt sql.NullTime
 	var description, userGroups sql.NullString
 
-	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, &k.KeyPrefix, &userGroups, &k.Status, &expiresAt, &lastUsedAt); err != nil {
+	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, &userGroups, &k.Status, &expiresAt, &lastUsedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}

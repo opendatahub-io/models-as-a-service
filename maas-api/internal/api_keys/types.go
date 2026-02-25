@@ -26,9 +26,10 @@ type PermanentAPIKey struct {
 
 // ApiKeyMetadata represents metadata for a single API key (without the token itself).
 // Used for listing and retrieving API key metadata from the database.
+// Note: KeyPrefix is NOT included - it's only shown once at creation (show-once pattern).
+// Users should identify keys by name/description for security.
 type ApiKeyMetadata struct {
 	ID                 string   `json:"id"`
-	KeyPrefix          string   `json:"keyPrefix,omitempty"` // For permanent keys: sk-oai-abc123...
 	Name               string   `json:"name"`
 	Description        string   `json:"description,omitempty"`
 	Username           string   `json:"username,omitempty"`
