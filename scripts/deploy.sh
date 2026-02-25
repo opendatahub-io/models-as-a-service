@@ -303,7 +303,7 @@ validate_configuration() {
 
   # Determine namespace based on deployment mode
   if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
-    # Kustomize mode: use provided namespace or default to maas-api
+    # Kustomize mode: use provided namespace or default to opendatahub
     if [[ -z "$NAMESPACE" ]]; then
       NAMESPACE="opendatahub"
     fi
@@ -377,7 +377,8 @@ main() {
   local config_dir="$controller_dir/config/default"
 
   if [[ ! -d "$controller_dir" ]]; then
-    log_warn "maas-controller directory not found at $controller_dir — skipping subscription controller"
+    log_error "maas-controller directory not found at $controller_dir — subscription controller required"
+    return 1
   else
     if [[ "$DEPLOYMENT_MODE" != "kustomize" ]]; then
       log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
@@ -387,9 +388,15 @@ main() {
       fi
       if [[ "$NAMESPACE" != "opendatahub" ]]; then
         (cd "$project_root" && kustomize build maas-controller/config/default | \
-          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f -
+          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
+          log_error "Failed to apply maas-controller manifests"
+          return 1
+        }
       else
-        kubectl apply -k "$config_dir"
+        kubectl apply -k "$config_dir" || {
+          log_error "Failed to apply maas-controller manifests"
+          return 1
+        }
       fi
     else
       log_info "  Controller deployed via kustomize overlay (maas-controller/config/default)"
@@ -493,28 +500,28 @@ deploy_via_kustomize() {
 #──────────────────────────────────────────────────────────────
 
 install_optional_operators() {
-  log_info "Installing optional operators (cert-manager first, then LWS)..."
+  log_info "Installing optional operators (cert-manager and LWS in parallel)..."
 
   local data_dir="${SCRIPT_DIR}/data"
 
-  # cert-manager MUST be installed first - LWS operator depends on it per Red Hat docs
-  log_info "Installing cert-manager operator..."
+  # Apply both subscriptions so OLM can process them in parallel
+  log_info "Applying cert-manager and LWS subscriptions..."
   if ! kubectl apply -f "${data_dir}/cert-manager-subscription.yaml"; then
     log_error "Failed to apply cert-manager subscription"
     return 1
   fi
+  if ! kubectl apply -f "${data_dir}/lws-subscription.yaml"; then
+    log_error "Failed to apply LWS subscription"
+    return 1
+  fi
+
+  # cert-manager MUST be ready before LWS (LWS depends on it per Red Hat docs)
   log_info "Waiting for cert-manager operator..."
   if ! waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator"; then
     log_error "cert-manager operator installation failed"
     return 1
   fi
 
-  # Now install LWS (requires cert-manager to be ready)
-  log_info "Installing LeaderWorkerSet operator..."
-  if ! kubectl apply -f "${data_dir}/lws-subscription.yaml"; then
-    log_error "Failed to apply LWS subscription"
-    return 1
-  fi
   log_info "Waiting for LeaderWorkerSet operator..."
   if ! waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set"; then
     log_error "LWS operator installation failed"
@@ -526,7 +533,10 @@ install_optional_operators() {
   # required to actually deploy the LWS API (controller-manager pods).
   # See: https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/ai_workloads/leader-worker-set-operator
   log_info "Activating LeaderWorkerSet API..."
-  kubectl apply -f "${data_dir}/lws-operator-cr.yaml"
+  if ! kubectl apply -f "${data_dir}/lws-operator-cr.yaml"; then
+    log_error "Failed to apply LeaderWorkerSetOperator CR"
+    return 1
+  fi
 
   log_info "Optional operators installed"
 }
