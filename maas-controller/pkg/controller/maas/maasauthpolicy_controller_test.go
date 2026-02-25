@@ -32,11 +32,6 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-// nsRestScope implements apimeta.RESTScope for namespace-scoped resources.
-type nsRestScope struct{}
-
-func (nsRestScope) Name() apimeta.RESTScopeName { return apimeta.RESTScopeNameNamespace }
-
 // authPolicyTestRESTMapper builds a REST mapper that covers all GVKs exercised in
 // these tests, including the Kuadrant AuthPolicy which is not registered in the scheme.
 func authPolicyTestRESTMapper() apimeta.RESTMapper {

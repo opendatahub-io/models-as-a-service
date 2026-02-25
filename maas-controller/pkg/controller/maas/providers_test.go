@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"testing"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -39,6 +40,11 @@ func init() {
 }
 
 var scheme = runtime.NewScheme()
+
+// nsRestScope implements apimeta.RESTScope for namespace-scoped resources.
+type nsRestScope struct{}
+
+func (nsRestScope) Name() apimeta.RESTScopeName { return apimeta.RESTScopeNameNamespace }
 
 func TestGetBackendHandler_UnknownKind_ReturnsNil(t *testing.T) {
 	r := &MaaSModelReconciler{}
