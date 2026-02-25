@@ -205,19 +205,16 @@ flowchart LR
     end
 
     subgraph Install["Install steps"]
-        Disable["Disable gateway-auth-policy\n(hack script)"]
-        InstallController["install-maas-controller.sh"]
+        Deploy["deploy.sh"]
         Examples["Optional: install-examples.sh"]
     end
 
-    Prereqs --> Disable
-    Disable --> InstallController
-    InstallController --> Examples
+    Prereqs --> Deploy
+    Deploy --> Examples
 ```
 
 - **Namespace**: Controller and default MaaS CRs live in **opendatahub** (configurable).
-- **Gateway-auth-policy**: The shared `gateway-auth-policy` in `openshift-ingress` is disabled (annotate + point at non-existent gateway) so MaaSAuthPolicy can manage auth per HTTPRoute.
-- **Install**: `./scripts/install-maas-controller.sh` applies CRDs, RBAC, and the controller Deployment. Optionally run `./scripts/install-examples.sh` for sample MaaSModel, MaaSAuthPolicy, and MaaSSubscription.
+- **Install**: `./scripts/deploy.sh` installs the full stack including the controller. Optionally run `./scripts/install-examples.sh` for sample MaaSModel, MaaSAuthPolicy, and MaaSSubscription.
 
 ---
 
@@ -242,6 +239,6 @@ The Kuadrant AuthPolicy validates this token via **Kubernetes TokenReview** and 
 | **Where** | Single controller in `maas-controller`; CRs and generated resources can live in opendatahub or other namespaces. |
 | **How** | Three reconcilers watch MaaS CRs (and related resources); each creates/updates HTTPRoutes, AuthPolicies, or TokenRateLimitPolicies. |
 | **Identity bridge** | AuthPolicy exposes all user groups as a comma-separated `groups_str`; TokenRateLimitPolicy uses `groups_str.split(",").exists(...)` for subscription matching (the “string trick”). |
-| **Deploy** | Disable shared gateway-auth-policy, then run install-maas-controller.sh; optionally install examples. |
+| **Deploy** | Run `./scripts/deploy.sh`; optionally install examples. |
 
 This overview should be enough to explain what was created and how it works in talks or written docs.

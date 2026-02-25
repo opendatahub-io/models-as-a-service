@@ -28,8 +28,7 @@ Example MaaS CRs for both **regular** and **premium** simulator LLMInferenceServ
 
 ## Prerequisites
 
-- MaaS controller installed (`maas-controller/scripts/install-maas-controller.sh` from repo root).
-- Gateway-auth-policy disabled (`maas-controller/hack/disable-gateway-auth-policy.sh`).
+- MaaS controller installed (via `./scripts/deploy.sh` or `kubectl apply -k maas-controller/config/default`).
 - Both simulator LLMInferenceServices deployed (see install script below).
 
 ## Install

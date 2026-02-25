@@ -154,35 +154,25 @@ All commands below are meant to be run from the **repository root** (the directo
 Deploy the entire MaaS stack including the subscription controller in one command:
 
 ```bash
-./scripts/deploy.sh --operator-type odh --enable-subscriptions
+./scripts/deploy.sh --operator-type odh
 ```
 
 This installs all infrastructure (cert-manager, LWS, Kuadrant, ODH, gateway, policies)
-plus the subscription controller. It also disables the old gateway-auth-policy automatically.
+plus the subscription controller.
 
 ### Option B: Add subscription controller to an existing deployment
 
 If MaaS infrastructure is already deployed, install just the controller:
 
-1. Disable the shared gateway-auth-policy (so the controller can manage auth per HTTPRoute):
+```bash
+kubectl apply -k maas-controller/config/default
+```
 
-   ```bash
-   NAMESPACE=opendatahub ./maas-controller/hack/disable-gateway-auth-policy.sh
-   ```
+To install into another namespace:
 
-   The policy may be in `opendatahub` or `openshift-ingress` depending on deployment.
-
-2. Install the controller (CRDs + RBAC + deployment + default deny policy):
-
-   ```bash
-   ./maas-controller/scripts/install-maas-controller.sh
-   ```
-
-   To install into another namespace:
-
-   ```bash
-   ./maas-controller/scripts/install-maas-controller.sh my-namespace
-   ```
+```bash
+kustomize build maas-controller/config/default | sed "s/namespace: opendatahub/namespace: my-namespace/g" | kubectl apply -f -
+```
 
 ### Verify
 
@@ -311,6 +301,6 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 ## Configuration
 
-- **Controller namespace**: Default is `opendatahub`. Override by passing a namespace to `maas-controller/scripts/install-maas-controller.sh`.
+- **Controller namespace**: Default is `opendatahub`. Override via `kustomize build maas-controller/config/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
 - **Image**: Default is `quay.io/maas/maas-controller:latest`. Override in the deployment or via Kustomize.
 - **Gateway name**: The default deny policy targets `maas-default-gateway` in `openshift-ingress`. Edit `config/policies/gateway-default-deny.yaml` if your gateway has a different name.

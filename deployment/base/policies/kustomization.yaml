@@ -5,5 +5,4 @@ metadata:
   name: maas-gateway-policies
 
 resources:
-- auth-policies
 - usage-policies

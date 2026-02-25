@@ -75,7 +75,6 @@ OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
 NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
-ENABLE_SUBSCRIPTIONS="${ENABLE_SUBSCRIPTIONS:-false}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
@@ -108,9 +107,6 @@ OPTIONS:
       Enable TLS backend for Authorino and MaaS API (default: enabled)
       Configures HTTPS tier lookup URL
 
-  --enable-subscriptions
-      Install the MaaS subscription controller (per-model auth + rate limiting)
-      Runs alongside existing tier-based flow. Does not replace it.
   --disable-tls-backend
       Disable TLS backend for Authorino and MaaS API
       Uses HTTP tier lookup URL instead
@@ -208,10 +204,6 @@ parse_arguments() {
         ENABLE_TLS_BACKEND="false"
         shift
         ;;
-      --enable-subscriptions)
-        ENABLE_SUBSCRIPTIONS="true"
-        shift
-        ;;
       --namespace)
         require_flag_value "$1" "${2:-}"
         NAMESPACE="$2"
@@ -302,7 +294,7 @@ validate_configuration() {
   if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
     # Kustomize mode: use provided namespace or default to maas-api
     if [[ -z "$NAMESPACE" ]]; then
-      NAMESPACE="maas-api"
+      NAMESPACE="opendatahub"
     fi
     log_debug "Using namespace for kustomize mode: $NAMESPACE"
   else
@@ -344,9 +336,6 @@ main() {
   log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
-  if [[ "$ENABLE_SUBSCRIPTIONS" == "true" ]]; then
-    log_info "  Subscriptions: ENABLED (per-model auth + rate limiting)"
-  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log_info "DRY RUN MODE - no changes will be applied"
@@ -363,32 +352,43 @@ main() {
       ;;
   esac
 
-  # Install subscription controller if enabled (additive, doesn't replace tier-based flow)
-  if [[ "$ENABLE_SUBSCRIPTIONS" == "true" ]]; then
-    log_info ""
-    log_info "Installing MaaS Subscription Controller..."
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local controller_dir="$script_dir/../maas-controller"
+  # Install subscription controller (always deployed)
+  # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script.
+  log_info ""
+  log_info "MaaS Subscription Controller..."
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local project_root="$script_dir/.."
+  local controller_dir="$project_root/maas-controller"
+  local config_dir="$controller_dir/config/default"
 
-    if [[ ! -d "$controller_dir" ]]; then
-      log_warn "maas-controller directory not found at $controller_dir — skipping subscription controller"
-    else
+  if [[ ! -d "$controller_dir" ]]; then
+    log_warn "maas-controller directory not found at $controller_dir — skipping subscription controller"
+  else
+    if [[ "$DEPLOYMENT_MODE" != "kustomize" ]]; then
       log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
-      "$controller_dir/scripts/install-maas-controller.sh" "$NAMESPACE"
-
-      log_info "  Waiting for maas-controller to be ready..."
-      if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
-        log_error "maas-controller deployment not ready — skipping gateway-auth-policy disable to avoid inconsistent state"
+      if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
+        log_error "Namespace $NAMESPACE does not exist. Create it first (e.g. via ODH operator)."
         return 1
       fi
-
-      log_info "  Disabling old gateway-auth-policy (replaced by per-route policies)..."
-      "$controller_dir/hack/disable-gateway-auth-policy.sh"
-
-      log_info "  Subscription controller installed."
-      log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
+      if [[ "$NAMESPACE" != "opendatahub" ]]; then
+        (cd "$project_root" && kustomize build maas-controller/config/default | \
+          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f -
+      else
+        kubectl apply -k "$config_dir"
+      fi
+    else
+      log_info "  Controller deployed via kustomize overlay (maas-controller/config/default)"
     fi
+
+    log_info "  Waiting for maas-controller to be ready..."
+    if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
+      log_error "maas-controller deployment not ready"
+      return 1
+    fi
+
+    log_info "  Subscription controller ready."
+    log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
   fi
 
   log_info "==================================================="
@@ -480,50 +480,30 @@ deploy_via_kustomize() {
 #──────────────────────────────────────────────────────────────
 
 install_optional_operators() {
-  log_info "Installing optional operators in parallel..."
+  log_info "Installing optional operators (cert-manager first, then LWS)..."
 
   local data_dir="${SCRIPT_DIR}/data"
 
-  # Apply both subscriptions in parallel (they're independent)
-  log_info "Applying cert-manager and LeaderWorkerSet subscriptions..."
-  kubectl apply -f "${data_dir}/cert-manager-subscription.yaml" &
-  local cert_manager_pid=$!
-  kubectl apply -f "${data_dir}/lws-subscription.yaml" &
-  local lws_pid=$!
-
-  # Wait for both apply commands to complete and capture individual exit codes
-  local cert_manager_apply_rc=0
-  local lws_apply_rc=0
-  wait $cert_manager_pid || cert_manager_apply_rc=$?
-  wait $lws_pid || lws_apply_rc=$?
-
-  if [[ $cert_manager_apply_rc -ne 0 ]]; then
-    log_error "Failed to apply cert-manager subscription (exit code: $cert_manager_apply_rc)"
+  # cert-manager MUST be installed first - LWS operator depends on it per Red Hat docs
+  log_info "Installing cert-manager operator..."
+  if ! kubectl apply -f "${data_dir}/cert-manager-subscription.yaml"; then
+    log_error "Failed to apply cert-manager subscription"
     return 1
   fi
-  if [[ $lws_apply_rc -ne 0 ]]; then
-    log_error "Failed to apply LWS subscription (exit code: $lws_apply_rc)"
-    return 1
-  fi
-
-  # Wait for both subscriptions to be installed (can run in parallel too)
-  log_info "Waiting for operators to be installed..."
-  waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
-  local cert_wait_pid=$!
-  waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
-  local lws_wait_pid=$!
-
-  # Wait for both to complete and capture individual exit codes
-  local cert_wait_rc=0
-  local lws_wait_rc=0
-  wait $cert_wait_pid || cert_wait_rc=$?
-  wait $lws_wait_pid || lws_wait_rc=$?
-
-  if [[ $cert_wait_rc -ne 0 ]]; then
+  log_info "Waiting for cert-manager operator..."
+  if ! waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator"; then
     log_error "cert-manager operator installation failed"
     return 1
   fi
-  if [[ $lws_wait_rc -ne 0 ]]; then
+
+  # Now install LWS (requires cert-manager to be ready)
+  log_info "Installing LeaderWorkerSet operator..."
+  if ! kubectl apply -f "${data_dir}/lws-subscription.yaml"; then
+    log_error "Failed to apply LWS subscription"
+    return 1
+  fi
+  log_info "Waiting for LeaderWorkerSet operator..."
+  if ! waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set"; then
     log_error "LWS operator installation failed"
     return 1
   fi
@@ -1327,7 +1307,6 @@ configure_tls_backend() {
   kubectl rollout status deployment/authorino -n "$authorino_namespace" --timeout=120s 2>/dev/null || log_warn "Authorino rollout status check timed out"
 
   log_info "TLS backend configuration complete"
-  log_info "Tier lookup URL: https://maas-api.${maas_namespace}.svc.cluster.local:8443/v1/tiers/lookup"
 }
 
 #──────────────────────────────────────────────────────────────
