@@ -69,7 +69,6 @@ SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_SUBSCRIPTION_TESTS=${SKIP_SUBSCRIPTION_TESTS:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
-ENABLE_SUBSCRIPTIONS=${ENABLE_SUBSCRIPTIONS:-true}
 
 # Operator configuration
 # OPERATOR_TYPE determines which operator and policy engine to use:
@@ -167,10 +166,6 @@ deploy_maas_platform() {
         deploy_cmd+=(--operator-image "${OPERATOR_IMAGE}")
     fi
 
-    if [[ "${ENABLE_SUBSCRIPTIONS}" == "true" ]]; then
-        deploy_cmd+=(--enable-subscriptions)
-    fi
-
     if ! "${deploy_cmd[@]}"; then
         echo "❌ ERROR: MaaS platform deployment failed"
         exit 1
@@ -214,14 +209,12 @@ deploy_models() {
         echo "'llm' namespace already exists"
     fi
 
-    # Deploy regular simulator
     if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator/ | kubectl apply -f -); then
         echo "❌ ERROR: Failed to deploy simulator model"
         exit 1
     fi
     echo "✅ Regular simulator deployed"
 
-    # Deploy premium simulator (required for subscription tests and premium MaaSModel/MaaSAuthPolicy)
     if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator-premium/ | kubectl apply -f -); then
         echo "❌ ERROR: Failed to deploy premium simulator model"
         exit 1
@@ -231,17 +224,13 @@ deploy_models() {
     echo "Waiting for models to be ready..."
     if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
         echo "❌ ERROR: Timed out waiting for regular simulator to be ready"
-        echo "=== LLMInferenceService YAML dump ==="
         oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
-        echo "=== Events in llm namespace ==="
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
     fi
     if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout=300s; then
         echo "❌ ERROR: Timed out waiting for premium simulator to be ready"
-        echo "=== LLMInferenceService YAML dump ==="
         oc get llminferenceservice/premium-simulated-simulated-premium -n llm -o yaml || true
-        echo "=== Events in llm namespace ==="
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
     fi
@@ -321,11 +310,6 @@ run_smoke_tests() {
 }
 
 deploy_subscription_crs() {
-    if [[ "${ENABLE_SUBSCRIPTIONS}" != "true" ]]; then
-        echo "⏭️  Subscriptions not enabled, skipping CR deployment"
-        return 0
-    fi
-
     echo "Deploying MaaS subscription example CRs..."
     if ! kubectl apply -k "$PROJECT_ROOT/maas-controller/examples/"; then
         echo "❌ ERROR: Failed to deploy subscription CRs"
@@ -348,6 +332,9 @@ deploy_subscription_crs() {
         retries=$((retries + 1))
         sleep 5
     done
+    if [[ $retries -ge 30 ]]; then
+        echo "⚠️  WARNING: MaaSModels did not all become Ready within timeout"
+    fi
 
     echo "✅ Subscription CRs deployed"
     oc get maasmodels,maasauthpolicies,maassubscriptions -n "$MAAS_NAMESPACE" 2>/dev/null || true
@@ -356,11 +343,6 @@ deploy_subscription_crs() {
 run_subscription_tests() {
     echo "-- Subscription Controller Tests --"
 
-    if [[ "${SKIP_SUBSCRIPTION_TESTS}" == "true" || "${ENABLE_SUBSCRIPTIONS}" != "true" ]]; then
-        echo "⏭️  Skipping subscription tests"
-        return 0
-    fi
-
     export GATEWAY_HOST="${HOST}"
     export MAAS_NAMESPACE
 
@@ -368,7 +350,6 @@ run_subscription_tests() {
     local reports_dir="$test_dir/reports"
     mkdir -p "$reports_dir"
 
-    # Activate venv (should already exist from smoke.sh)
     if [[ -d "$test_dir/.venv" ]]; then
         source "$test_dir/.venv/bin/activate"
     fi
@@ -391,6 +372,24 @@ run_subscription_tests() {
     echo "✅ Subscription tests completed"
     echo " - JUnit XML : ${xml}"
     echo " - HTML      : ${html}"
+}
+
+cleanup_subscription_resources() {
+    echo "Cleaning up subscription resources so other tests are not affected..."
+
+    oc delete maasauthpolicies --all -n "$MAAS_NAMESPACE" --timeout=60s 2>/dev/null || true
+    oc delete maassubscriptions --all -n "$MAAS_NAMESPACE" --timeout=60s 2>/dev/null || true
+    oc delete maasmodels --all -n "$MAAS_NAMESPACE" --timeout=60s 2>/dev/null || true
+
+    oc delete authpolicy -n openshift-ingress -l app.kubernetes.io/managed-by=maas-controller --timeout=30s 2>/dev/null || true
+    oc delete tokenratelimitpolicy -n openshift-ingress -l app.kubernetes.io/managed-by=maas-controller --timeout=30s 2>/dev/null || true
+    oc delete authpolicy --all -n llm --timeout=30s 2>/dev/null || true
+    oc delete tokenratelimitpolicy --all -n llm --timeout=30s 2>/dev/null || true
+
+    echo "Waiting for gateway to settle..."
+    sleep 15
+
+    echo "✅ Subscription resources cleaned up"
 }
 
 run_token_verification() {
@@ -439,11 +438,21 @@ deploy_maas_platform
 print_header "Deploying Models"  
 deploy_models
 
-print_header "Deploying Subscription CRs"
-deploy_subscription_crs
-
 print_header "Setting up variables for tests"
 setup_vars_for_tests
+
+# Subscription tests run as cluster admin (not an SA) because premium model
+# tests require the user to be in the premium-user OpenShift group.
+if [[ "${SKIP_SUBSCRIPTION_TESTS}" != "true" ]]; then
+    print_header "Deploying Subscription CRs"
+    deploy_subscription_crs
+
+    print_header "Running Subscription Controller Tests (as cluster admin)"
+    run_subscription_tests
+
+    print_header "Cleaning up Subscription Resources"
+    cleanup_subscription_resources
+fi
 
 # Setup all users first (while logged in as admin)
 print_header "Setting up test users"
@@ -463,9 +472,7 @@ print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
 run_token_verification
 
-sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
-run_subscription_tests
 
 # Test edit user  
 print_header "Running Maas e2e Tests as edit user"

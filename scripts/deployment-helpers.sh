@@ -603,25 +603,16 @@ find_project_root() {
 }
 
 # set_maas_api_image
-#   Sets the MaaS API container image in kustomization using MAAS_API_IMAGE env var.
-#   If MAAS_API_IMAGE is not set, does nothing (uses default from kustomization.yaml).
+#   Sets the MaaS API container image in base kustomization using MAAS_API_IMAGE env var.
+#   If MAAS_API_IMAGE is not set, does nothing.
 #   Creates a backup that must be restored by calling cleanup_maas_api_image.
-#   Idempotent: safe to call multiple times, only sets image on first call.
 #
 # Environment:
 #   MAAS_API_IMAGE - Container image to use (e.g., quay.io/opendatahub/maas-api:pr-123)
-#
-# Usage:
-#   trap cleanup_maas_api_image EXIT INT TERM  # Set trap FIRST
-#   set_maas_api_image                          # Then set image
-#   # ... do deployment ...
 set_maas_api_image() {
-  # Skip if MAAS_API_IMAGE is not set
   if [ -z "${MAAS_API_IMAGE:-}" ]; then
     return 0
   fi
-
-  # Idempotent: skip if already set
   if [ -n "${_MAAS_API_IMAGE_SET:-}" ]; then
     return 0
   fi
@@ -632,18 +623,15 @@ set_maas_api_image() {
     return 1
   }
 
-  # Exported so cleanup_maas_api_image can access them
   export _MAAS_API_KUSTOMIZATION="$project_root/deployment/base/maas-api/core/kustomization.yaml"
   export _MAAS_API_BACKUP="${_MAAS_API_KUSTOMIZATION}.backup"
   export _MAAS_API_IMAGE_SET=1
 
   echo "   Setting MaaS API image: ${MAAS_API_IMAGE}"
-  
   cp "$_MAAS_API_KUSTOMIZATION" "$_MAAS_API_BACKUP" || {
     echo "Error: failed to create backup of kustomization.yaml" >&2
     return 1
   }
-  
   (cd "$(dirname "$_MAAS_API_KUSTOMIZATION")" && kustomize edit set image "maas-api=${MAAS_API_IMAGE}") || {
     echo "Error: failed to set image in kustomization.yaml" >&2
     mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
@@ -657,6 +645,44 @@ set_maas_api_image() {
 cleanup_maas_api_image() {
   if [ -n "${_MAAS_API_BACKUP:-}" ] && [ -f "$_MAAS_API_BACKUP" ]; then
     mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
+  fi
+}
+
+# set_overlay_namespace overlay_dir namespace
+#   Sets the namespace in the overlay's kustomization.yaml before build.
+#   Creates a backup that must be restored by calling cleanup_overlay_namespace.
+#
+# Arguments:
+#   overlay_dir - Path to overlay directory (e.g. deployment/overlays/tls-backend)
+#   namespace   - Namespace to set (e.g. opendatahub)
+set_overlay_namespace() {
+  local overlay_dir="${1?overlay_dir is required}"
+  local namespace="${2?namespace is required}"
+
+  local kustomization="$overlay_dir/kustomization.yaml"
+  if [ ! -f "$kustomization" ]; then
+    echo "Error: overlay kustomization not found: $kustomization" >&2
+    return 1
+  fi
+
+  export _OVERLAY_KUSTOMIZATION="$kustomization"
+  export _OVERLAY_BACKUP="${_OVERLAY_KUSTOMIZATION}.backup"
+
+  cp "$_OVERLAY_KUSTOMIZATION" "$_OVERLAY_BACKUP" || {
+    echo "Error: failed to backup overlay kustomization" >&2
+    return 1
+  }
+  (cd "$overlay_dir" && kustomize edit set namespace "$namespace") || {
+    mv -f "$_OVERLAY_BACKUP" "$_OVERLAY_KUSTOMIZATION" 2>/dev/null || true
+    return 1
+  }
+}
+
+# cleanup_overlay_namespace
+#   Restores the overlay kustomization.yaml from backup.
+cleanup_overlay_namespace() {
+  if [ -n "${_OVERLAY_BACKUP:-}" ] && [ -f "$_OVERLAY_BACKUP" ]; then
+    mv -f "$_OVERLAY_BACKUP" "$_OVERLAY_KUSTOMIZATION" 2>/dev/null || true
   fi
 }
 

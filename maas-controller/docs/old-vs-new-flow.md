@@ -149,13 +149,11 @@ A user can have a subscription but no access → **403**.
 
 To move from old flow to new flow on an existing cluster:
 
-1. Install the maas-controller: `./scripts/install-maas-controller.sh`
-   - This also applies the `gateway-default-deny` TokenRateLimitPolicy
-2. Disable the old gateway-auth-policy: `./hack/disable-gateway-auth-policy.sh`
-   - This points it at a non-existing gateway so it no longer applies
-3. For each model:
+1. Deploy the full stack (including maas-controller): `./scripts/deploy.sh`
+   - Or install just the controller: `kubectl apply -k maas-controller/config/default`
+2. For each model:
    - Create a `MaaSModel` CR referencing the LLMInferenceService
    - Create a `MaaSAuthPolicy` CR with the allowed groups
    - Create a `MaaSSubscription` CR with the token rate limits
-4. The old `gateway-token-rate-limits` and `tier-to-group-mapping` ConfigMap can be removed
-5. The MaaS API is still needed for token minting and model listing (unchanged)
+3. The old `gateway-token-rate-limits` and `tier-to-group-mapping` ConfigMap can be removed
+4. The MaaS API is still needed for token minting and model listing (unchanged)

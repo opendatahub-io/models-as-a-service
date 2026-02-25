@@ -22,6 +22,7 @@
 # ADVANCED OPTIONS (PR Testing):
 #   --operator-catalog <image>    Custom operator catalog image
 #   --operator-image <image>      Custom operator image (patches CSV)
+#   --maas-api-image <image>      Custom MaaS API container image
 #   --channel <channel>           Operator channel override
 #
 # ENVIRONMENT VARIABLES:
@@ -75,12 +76,12 @@ OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
 NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
-ENABLE_SUBSCRIPTIONS="${ENABLE_SUBSCRIPTIONS:-false}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
+MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -108,9 +109,6 @@ OPTIONS:
       Enable TLS backend for Authorino and MaaS API (default: enabled)
       Configures HTTPS tier lookup URL
 
-  --enable-subscriptions
-      Install the MaaS subscription controller (per-model auth + rate limiting)
-      Runs alongside existing tier-based flow. Does not replace it.
   --disable-tls-backend
       Disable TLS backend for Authorino and MaaS API
       Uses HTTP tier lookup URL instead
@@ -136,6 +134,10 @@ ADVANCED OPTIONS (PR Testing):
   --operator-image <image>
       Custom operator image (patches CSV after install)
       Example: quay.io/opendatahub/opendatahub-operator:pr-456
+
+  --maas-api-image <image>
+      Custom MaaS API container image (PR testing)
+      Example: quay.io/opendatahub/maas-api:pr-456
 
   --channel <channel>
       Operator channel override
@@ -208,10 +210,6 @@ parse_arguments() {
         ENABLE_TLS_BACKEND="false"
         shift
         ;;
-      --enable-subscriptions)
-        ENABLE_SUBSCRIPTIONS="true"
-        shift
-        ;;
       --namespace)
         require_flag_value "$1" "${2:-}"
         NAMESPACE="$2"
@@ -235,6 +233,11 @@ parse_arguments() {
       --operator-image)
         require_flag_value "$1" "${2:-}"
         OPERATOR_IMAGE="$2"
+        shift 2
+        ;;
+      --maas-api-image)
+        require_flag_value "$1" "${2:-}"
+        MAAS_API_IMAGE="$2"
         shift 2
         ;;
       --channel)
@@ -341,9 +344,9 @@ validate_configuration() {
 
   # Determine namespace based on deployment mode
   if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
-    # Kustomize mode: use provided namespace or default to maas-api
+    # Kustomize mode: use provided namespace or default to opendatahub
     if [[ -z "$NAMESPACE" ]]; then
-      NAMESPACE="maas-api"
+      NAMESPACE="opendatahub"
     fi
     log_debug "Using namespace for kustomize mode: $NAMESPACE"
   else
@@ -386,8 +389,8 @@ main() {
   log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
-  if [[ "$ENABLE_SUBSCRIPTIONS" == "true" ]]; then
-    log_info "  Subscriptions: ENABLED (per-model auth + rate limiting)"
+  if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
+    log_info "  MaaS API image: $MAAS_API_IMAGE"
   fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -405,45 +408,50 @@ main() {
       ;;
   esac
 
-  # Install subscription controller if enabled (additive, doesn't replace tier-based flow)
-  if [[ "$ENABLE_SUBSCRIPTIONS" == "true" ]]; then
-    log_info ""
-    log_info "Installing MaaS Subscription Controller..."
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local controller_dir="$script_dir/../maas-controller"
+  # Install subscription controller (always deployed)
+  # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script.
+  log_info ""
+  log_info "MaaS Subscription Controller..."
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local project_root="$script_dir/.."
+  local controller_dir="$project_root/maas-controller"
+  local config_dir="$controller_dir/config/default"
 
-    if [[ ! -d "$controller_dir" ]]; then
-      log_warn "maas-controller directory not found at $controller_dir — skipping subscription controller"
-    else
+  if [[ ! -d "$controller_dir" ]]; then
+    log_error "maas-controller directory not found at $controller_dir — subscription controller required"
+    return 1
+  else
+    if [[ "$DEPLOYMENT_MODE" != "kustomize" ]]; then
       log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
-      "$controller_dir/scripts/install-maas-controller.sh" "$NAMESPACE"
-
-      log_info "  Waiting for maas-controller to be ready..."
-      if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
-        log_error "maas-controller deployment not ready — skipping gateway-auth-policy disable to avoid inconsistent state"
+      if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
+        log_error "Namespace $NAMESPACE does not exist. Create it first (e.g. via ODH operator)."
         return 1
       fi
-
-      log_info "  Disabling old gateway-auth-policy (replaced by per-route policies)..."
-      "$controller_dir/hack/disable-gateway-auth-policy.sh"
-
-      log_info "  Subscription controller installed."
-      log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
-
-      # Patch cluster audience if non-standard (HyperShift/ROSA) so controller-generated
-      # per-model AuthPolicies use the correct audience for TokenReview.
-      local cluster_aud
-      cluster_aud=$(get_cluster_audience 2>/dev/null || echo "")
-      if [[ -n "$cluster_aud" && "$cluster_aud" != "https://kubernetes.default.svc" ]]; then
-        log_info "  Patching maas-controller with cluster audience: $cluster_aud"
-        if kubectl set env deployment/maas-controller -n "$NAMESPACE" CLUSTER_AUDIENCE="$cluster_aud"; then
-          kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
-        else
-          log_warn "  Failed to patch maas-controller with cluster audience — per-model auth may fail"
-        fi
+      if [[ "$NAMESPACE" != "opendatahub" ]]; then
+        (cd "$project_root" && kustomize build maas-controller/config/default | \
+          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
+          log_error "Failed to apply maas-controller manifests"
+          return 1
+        }
+      else
+        kubectl apply -k "$config_dir" || {
+          log_error "Failed to apply maas-controller manifests"
+          return 1
+        }
       fi
+    else
+      log_info "  Controller deployed via kustomize overlay (maas-controller/config/default)"
     fi
+
+    log_info "  Waiting for maas-controller to be ready..."
+    if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
+      log_error "maas-controller deployment not ready"
+      return 1
+    fi
+
+    log_info "  Subscription controller ready."
+    log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
   fi
 
   log_info "==================================================="
@@ -503,26 +511,25 @@ deploy_via_kustomize() {
   # Install rate limiter component (RHCL or Kuadrant)
   install_policy_engine
 
-  # Set up MaaS API image if specified
-  trap cleanup_maas_api_image EXIT INT TERM
-  set_maas_api_image
+  local overlay="$project_root/deployment/overlays/http-backend"
+  if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
+    log_info "Using TLS backend overlay"
+    overlay="$project_root/deployment/overlays/tls-backend"
+  else
+    log_info "Using HTTP backend overlay"
+  fi
 
-  # Create namespace if it doesn't exist (kustomize mode uses maas-api namespace)
-  # This must be done before applying manifests that target this namespace
+  # Set namespace and image from script (overlay kustomization is restored on exit)
+  trap 'cleanup_maas_api_image; cleanup_overlay_namespace' EXIT INT TERM
+  set_maas_api_image
+  set_overlay_namespace "$overlay" "$NAMESPACE"
+
   if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
     log_info "Creating namespace: $NAMESPACE"
     kubectl create namespace "$NAMESPACE"
   fi
 
-  # Apply kustomize manifests
   log_info "Applying kustomize manifests..."
-
-  local overlay="$project_root/deployment/overlays/openshift"
-  if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
-    log_info "Using TLS backend overlay"
-    overlay="$project_root/deployment/overlays/tls-backend"
-  fi
-
   kubectl apply --server-side=true -f <(kustomize build "$overlay")
 
   # Configure TLS backend (if enabled)
@@ -595,6 +602,7 @@ install_optional_operators() {
 
   log_info "Optional operators installed"
 }
+
 
 #──────────────────────────────────────────────────────────────
 # RATE LIMITER INSTALLATION
@@ -1472,7 +1480,6 @@ configure_tls_backend() {
   kubectl rollout status deployment/authorino -n "$authorino_namespace" --timeout=120s 2>/dev/null || log_warn "Authorino rollout status check timed out"
 
   log_info "TLS backend configuration complete"
-  log_info "Tier lookup URL: https://maas-api.${maas_namespace}.svc.cluster.local:8443/v1/tiers/lookup"
 }
 
 #──────────────────────────────────────────────────────────────

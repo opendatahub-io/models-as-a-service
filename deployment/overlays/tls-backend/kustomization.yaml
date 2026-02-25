@@ -1,19 +1,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+namespace: opendatahub
+
 resources:
-  - ../../base/maas-api/overlays/tls  
+  - ../../base/maas-api/overlays/tls
+  - ../../../maas-controller/config/default
   - ../../base/policies
-
-patches:
-  # Set HTTPS URL for tier lookup
-  - target:
-      group: kuadrant.io
-      version: v1
-      kind: AuthPolicy
-      name: gateway-auth-policy
-    patch: |-
-      - op: replace
-        path: /spec/rules/metadata/matchedTier/http/url
-        value: https://maas-api.maas-api.svc.cluster.local:8443/v1/tiers/lookup
-

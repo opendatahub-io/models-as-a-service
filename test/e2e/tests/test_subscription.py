@@ -69,14 +69,16 @@ def _get_cluster_token():
 
 def _create_sa_token(sa_name, namespace=None, duration="10m"):
     namespace = namespace or _ns()
-    subprocess.run(["oc", "create", "sa", sa_name, "-n", namespace], capture_output=True, text=True)
+    sa_result = subprocess.run(["oc", "create", "sa", sa_name, "-n", namespace], capture_output=True, text=True)
+    if sa_result.returncode != 0 and "already exists" not in sa_result.stderr:
+        raise RuntimeError(f"Failed to create SA {sa_name}: {sa_result.stderr}")
     result = subprocess.run(
         ["oc", "create", "token", sa_name, "-n", namespace, f"--duration={duration}"],
         capture_output=True, text=True,
     )
     token = result.stdout.strip()
     if not token:
-        raise RuntimeError(f"Could not create token for SA {sa_name}")
+        raise RuntimeError(f"Could not create token for SA {sa_name}: {result.stderr}")
     return token
 
 
@@ -123,6 +125,39 @@ def _inference(token, path=None, extra_headers=None):
 
 def _wait_reconcile(seconds=None):
     time.sleep(seconds or RECONCILE_WAIT)
+
+
+def _poll_status(token, expected, path=None, extra_headers=None, timeout=None, poll_interval=2):
+    """Poll inference endpoint until expected HTTP status or timeout."""
+    timeout = timeout or max(RECONCILE_WAIT * 3, 30)
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        r = _inference(token, path=path, extra_headers=extra_headers)
+        if r.status_code == expected:
+            return r
+        last = r
+        time.sleep(poll_interval)
+    actual = last.status_code if last else "no response"
+    raise AssertionError(
+        f"Expected {expected} within {timeout}s, last status: {actual}"
+    )
+
+
+def _snapshot_cr(kind, name, namespace=None):
+    """Capture a CR for later restoration (strips runtime metadata)."""
+    cr = _get_cr(kind, name, namespace)
+    if not cr:
+        return None
+    meta = cr.get("metadata", {})
+    for key in ("resourceVersion", "uid", "creationTimestamp", "generation", "managedFields"):
+        meta.pop(key, None)
+    annotations = meta.get("annotations", {})
+    annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+    if not annotations:
+        meta.pop("annotations", None)
+    cr.pop("status", None)
+    return cr
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +228,8 @@ class TestSubscriptionEnforcement:
                     "subjects": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
                 },
             })
-            _wait_reconcile()
-            r = _inference(token, path=PREMIUM_MODEL_PATH)
-            assert r.status_code == 429, f"Expected 429, got {r.status_code}"
+            r = _poll_status(token, 429, path=PREMIUM_MODEL_PATH)
+            log.info(f"Auth pass, no subscription -> {r.status_code}")
         finally:
             _delete_cr("maasauthpolicy", "e2e-test-nosub-auth")
             _delete_sa(sa, namespace=ns)
@@ -222,7 +256,6 @@ class TestMultipleSubscriptionsPerModel:
         """Add a 2nd subscription for a different group. User only in the original
         group should still get 200 (not blocked by the 2nd sub's group check)."""
         ns = _ns()
-        sa = "e2e-test-onesub"
         try:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
@@ -233,13 +266,10 @@ class TestMultipleSubscriptionsPerModel:
                     "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
                 },
             })
-            _wait_reconcile()
 
-            # Admin is in system:authenticated (matches simulator-subscription) but NOT in nonexistent-group-xyz
             token = _get_cluster_token()
-            r = _inference(token)
+            r = _poll_status(token, 200)
             log.info(f"User in 1 of 2 subs -> {r.status_code}")
-            assert r.status_code == 200, f"Expected 200 (user matches one sub), got {r.status_code}"
         finally:
             _delete_cr("maassubscription", "e2e-extra-sub")
             _wait_reconcile()
@@ -258,19 +288,17 @@ class TestMultipleSubscriptionsPerModel:
                     "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 500, "window": "1m"}]}],
                 },
             })
-            _wait_reconcile()
-
             token = _create_sa_token(sa)
-            r = _inference(token, extra_headers={"x-maas-subscription": "e2e-premium-sub"})
+            r = _poll_status(token, 429, extra_headers={"x-maas-subscription": "e2e-premium-sub"})
             log.info(f"SA selects wrong sub -> {r.status_code}")
-            assert r.status_code == 429, f"Expected 429 (SA not in premium-user), got {r.status_code}"
         finally:
             _delete_cr("maassubscription", "e2e-premium-sub")
             _delete_sa(sa)
             _wait_reconcile()
 
     def test_multi_tier_auto_select_highest(self):
-        """With 2 tiers (500 and 100), user in both should auto-select the higher tier."""
+        """With 2 tiers for the same model, user in both should still get access.
+        (Verifies multiple overlapping subscriptions don't break routing.)"""
         ns = _ns()
         try:
             _apply_cr({
@@ -282,14 +310,12 @@ class TestMultipleSubscriptionsPerModel:
                     "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
                 },
             })
-            _wait_reconcile()
 
             token = _get_cluster_token()
-            r = _inference(token)
-            assert r.status_code == 200, f"Expected 200 with high-tier sub, got {r.status_code}"
+            r = _poll_status(token, 200, extra_headers={"x-maas-subscription": "e2e-high-tier"})
 
-            r2 = _inference(token, extra_headers={"x-maas-subscription": "e2e-high-tier"})
-            assert r2.status_code == 200, f"Expected 200 with explicit high-tier header, got {r2.status_code}"
+            r2 = _inference(token)
+            assert r2.status_code == 200, f"Expected 200 with auto-select, got {r2.status_code}"
         finally:
             _delete_cr("maassubscription", "e2e-high-tier")
             _wait_reconcile()
@@ -299,7 +325,8 @@ class TestMultipleAuthPoliciesPerModel:
     """Multiple auth policies for one model aggregate with OR logic."""
 
     def test_two_auth_policies_or_logic(self):
-        """Two auth policies for the same model: user matching either should get access."""
+        """Two auth policies for the premium model: SA matching the 2nd should get access,
+        and the original premium-user policy should still work for the admin."""
         ns = _ns()
         sa = "e2e-test-multiauth"
         try:
@@ -321,14 +348,11 @@ class TestMultipleAuthPoliciesPerModel:
                     "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
-            _wait_reconcile()
-
             token = _create_sa_token(sa)
-            r = _inference(token, path=PREMIUM_MODEL_PATH)
+            r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
             log.info(f"SA with 2nd auth policy -> premium: {r.status_code}")
-            assert r.status_code == 200, f"Expected 200 (SA auth policy added), got {r.status_code}"
 
-            # Original premium-user policy should still work
+            # Original premium-user policy should still work for the cluster admin
             admin_token = _get_cluster_token()
             r2 = _inference(admin_token, path=PREMIUM_MODEL_PATH)
             assert r2.status_code == 200, f"Expected 200 (admin via original policy), got {r2.status_code}"
@@ -339,7 +363,7 @@ class TestMultipleAuthPoliciesPerModel:
             _wait_reconcile()
 
     def test_delete_one_auth_policy_other_still_works(self):
-        """Delete one of two auth policies -> the remaining one still grants access."""
+        """Delete one of two auth policies for premium model -> remaining still works."""
         ns = _ns()
         try:
             _apply_cr({
@@ -354,12 +378,9 @@ class TestMultipleAuthPoliciesPerModel:
             _wait_reconcile()
 
             _delete_cr("maasauthpolicy", "e2e-extra-auth")
-            _wait_reconcile()
 
-            # Original premium-simulator-access should still work for admin (in premium-user)
             token = _get_cluster_token()
-            r = _inference(token, path=PREMIUM_MODEL_PATH)
-            assert r.status_code == 200, f"Expected 200 after deleting extra auth, got {r.status_code}"
+            r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
         finally:
             _delete_cr("maasauthpolicy", "e2e-extra-auth")
             _wait_reconcile()
@@ -384,59 +405,36 @@ class TestCascadeDeletion:
             _wait_reconcile()
 
             _delete_cr("maassubscription", "e2e-temp-sub")
-            _wait_reconcile()
 
-            # Original subscription should still work
             token = _get_cluster_token()
-            r = _inference(token)
-            assert r.status_code == 200, f"Expected 200 after deleting extra sub, got {r.status_code}"
+            r = _poll_status(token, 200)
         finally:
             _delete_cr("maassubscription", "e2e-temp-sub")
 
     def test_delete_last_subscription_falls_back_to_deny(self):
         """Delete all subscriptions for a model -> gateway default deny (429)."""
-        ns = _ns()
         token = _get_cluster_token()
+        original = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+        assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-            _wait_reconcile(12)
-
-            r = _inference(token)
+            r = _poll_status(token, 429, timeout=30)
             log.info(f"No subscriptions -> {r.status_code}")
-            assert r.status_code == 429, f"Expected 429 (no subs, gateway deny), got {r.status_code}"
         finally:
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSSubscription",
-                "metadata": {"name": SIMULATOR_SUBSCRIPTION, "namespace": ns},
-                "spec": {
-                    "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
-                },
-            })
+            _apply_cr(original)
             _wait_reconcile()
 
     def test_delete_last_auth_policy_falls_back_to_gateway_deny(self):
         """Delete the auth policy for a model -> gateway default auth (403)."""
-        ns = _ns()
         token = _get_cluster_token()
+        original = _snapshot_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
+        assert original, f"Pre-existing {SIMULATOR_ACCESS_POLICY} not found"
         try:
             _delete_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
-            _wait_reconcile(12)
-
-            r = _inference(token)
+            r = _poll_status(token, 403, timeout=30)
             log.info(f"No auth policy -> {r.status_code}")
-            assert r.status_code == 403, f"Expected 403 (no auth policy, gateway deny), got {r.status_code}"
         finally:
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSAuthPolicy",
-                "metadata": {"name": SIMULATOR_ACCESS_POLICY, "namespace": ns},
-                "spec": {
-                    "modelRefs": [MODEL_REF],
-                    "subjects": {"groups": [{"name": "system:authenticated"}]},
-                },
-            })
+            _apply_cr(original)
             _wait_reconcile()
 
 
@@ -474,11 +472,9 @@ class TestOrderingEdgeCases:
                     "subjects": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
                 },
             })
-            _wait_reconcile()
 
-            r2 = _inference(token, path=PREMIUM_MODEL_PATH)
+            r2 = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
             log.info(f"Sub + auth policy -> {r2.status_code}")
-            assert r2.status_code == 200, f"Expected 200 (both exist now), got {r2.status_code}"
         finally:
             _delete_cr("maassubscription", "e2e-ordering-sub")
             _delete_cr("maasauthpolicy", "e2e-ordering-auth")
