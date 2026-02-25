@@ -461,6 +461,12 @@ if [[ "${SKIP_SUBSCRIPTION_TESTS}" != "true" ]]; then
     cleanup_subscription_resources
 fi
 
+# TODO: The maas-api /v1/models catalog now discovers models via MaaSModel CRs,
+# which are deleted during subscription cleanup. Until the maas-api supports
+# model discovery without MaaSModel CRs (or gateway-default-deny is scoped to
+# model routes only), smoke tests need MODEL_NAME set explicitly.
+export MODEL_NAME="${MODEL_NAME:-facebook/opt-125m}"
+
 # Setup all users first (while logged in as admin)
 print_header "Setting up test users"
 setup_test_user "tester-admin-user" "cluster-admin"
