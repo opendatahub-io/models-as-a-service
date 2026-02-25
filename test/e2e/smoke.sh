@@ -100,24 +100,28 @@ export TOKEN
 # Log a masked preview of the token to the log (not the console)
 echo "[token] minted: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
 
-# 2) Get models, derive URL/ID if catalog returns them
-MODELS_JSON="$(curl -skS -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" || true)"
-MODEL_URL="$(echo "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.url // empty' 2>/dev/null || true)"
-MODEL_ID="$(echo  "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.id  // empty' 2>/dev/null || true)"
-
-# Fallbacks
-if [[ -z "${MODEL_ID}" || "${MODEL_ID}" == "null" ]]; then
-  if [[ -z "${MODEL_NAME:-}" ]]; then
-    echo "[smoke] ERROR: catalog did not return a model id and MODEL_NAME not set" | tee -a "${LOG}"
-    exit 2
-  fi
+# 2) Get models, derive URL/ID — respect pre-set MODEL_URL/MODEL_NAME env vars
+if [[ -n "${MODEL_URL:-}" && -n "${MODEL_NAME:-}" ]]; then
   MODEL_ID="${MODEL_NAME}"
-fi
+  echo "[smoke] Using pre-set MODEL_URL and MODEL_NAME (skipping catalog)" | tee -a "${LOG}"
+else
+  MODELS_JSON="$(curl -skS -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" || true)"
+  MODEL_URL="$(echo "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.url // empty' 2>/dev/null || true)"
+  MODEL_ID="$(echo  "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.id  // empty' 2>/dev/null || true)"
 
-if [[ -z "${MODEL_URL}" || "${MODEL_URL}" == "null" ]]; then
-  _base="${MAAS_API_BASE_URL%/maas-api}"
-  _base="${_base#https://}"; _base="${_base#http://}"
-  MODEL_URL="https://${_base}/llm/${MODEL_ID}"
+  if [[ -z "${MODEL_ID}" || "${MODEL_ID}" == "null" ]]; then
+    if [[ -z "${MODEL_NAME:-}" ]]; then
+      echo "[smoke] ERROR: catalog did not return a model id and MODEL_NAME not set" | tee -a "${LOG}"
+      exit 2
+    fi
+    MODEL_ID="${MODEL_NAME}"
+  fi
+
+  if [[ -z "${MODEL_URL}" || "${MODEL_URL}" == "null" ]]; then
+    _base="${MAAS_API_BASE_URL%/maas-api}"
+    _base="${_base#https://}"; _base="${_base#http://}"
+    MODEL_URL="https://${_base}/llm/${MODEL_ID}"
+  fi
 fi
 
 export MODEL_URL="${MODEL_URL%/}/v1"
