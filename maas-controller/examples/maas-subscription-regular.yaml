@@ -4,7 +4,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:
   name: simulator-subscription
-  namespace: opendatahub
+  namespace: models-as-a-service
 spec:
   owner:
     groups:

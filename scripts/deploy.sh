@@ -375,7 +375,7 @@ main() {
       log_warn "maas-controller directory not found at $controller_dir — skipping subscription controller"
     else
       log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
-      "$controller_dir/scripts/install-maas-controller.sh" "$NAMESPACE"
+      "$controller_dir/scripts/install-maas-controller.sh" --deploy-namespace "$NAMESPACE"
 
       log_info "  Waiting for maas-controller to be ready..."
       if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
