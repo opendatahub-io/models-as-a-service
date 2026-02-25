@@ -169,8 +169,8 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		}
 
 		audiences := []interface{}{fmt.Sprintf("%s-sa", r.gatewayName()), r.clusterAudience()}
-    
-    // Construct subscription selector URL using configured namespace
+
+		// Construct subscription selector URL using configured namespace
 		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/v1/subscriptions/select", r.MaaSAPINamespace)
 
 		rule := map[string]interface{}{
@@ -248,7 +248,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			rule["authorization"] = authRules
 		}
 
-		// Pass ALL user groups unfiltered in the response so TRLP predicates can
+		// Pass ALL user groups unfiltered in the response so TokenRateLimitPolicy predicates can
 		// match against subscription groups (which may differ from auth policy groups).
 		// Also inject subscription metadata from subscription-info for Limitador metrics.
 		rule["response"] = map[string]interface{}{
@@ -341,7 +341,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			return nil, fmt.Errorf("failed to set spec: %w", err)
 		}
 
-		// Create or update
+		// Create or update AuthPolicy
 		existing := &unstructured.Unstructured{}
 		existing.SetGroupVersionKind(authPolicy.GroupVersionKind())
 		err = r.Get(ctx, client.ObjectKeyFromObject(authPolicy), existing)
