@@ -9,8 +9,8 @@ The release flow moves code through four stages, each mapped to a branch and env
 | Body of Water | Branch | Repository | Purpose |
 |---|---|---|---|
 | **Stream** | `main` | `opendatahub-io/models-as-a-service` | Active development — all feature work lands here |
-| **Lake** | `stable` | `opendatahub-io/models-as-a-service` | ODH quality-gated — validated and ready for ODH consumption |
-| **RHOAI** | `rhoai` | `opendatahub-io/models-as-a-service` | Created from stable — source for downstream RHOAI builds |
+| **Lake** | `stable` | `opendatahub-io/models-as-a-service` | Created from main — source for [upstream ODH](https://github.com/opendatahub-io/opendatahub-operator/blob/cd1a94b265255a80a127939fef901f2d630f7bc6/get_all_manifests.sh) builds |
+|  | `rhoai` | `opendatahub-io/models-as-a-service` | Created from stable — source for downstream RHOAI builds |
 | **Ocean** | `main` | `red-hat-data-services/models-as-a-service` | DevOps-owned — production RHOAI deliverables |
 
 
