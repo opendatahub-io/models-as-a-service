@@ -25,6 +25,7 @@
 #   # Test with pipeline-built images
 #   OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
 #   MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
+#   MAAS_CONTROLLER_IMAGE=quay.io/maas/maas-controller:pr-42 \
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
@@ -36,6 +37,8 @@
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
+#   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/maas/maas-controller:latest)
+#                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   OPERATOR_CATALOG - Custom operator catalog image (default: latest from main)
 #                      Example: quay.io/opendatahub/opendatahub-operator-catalog:pr-456
 #   OPERATOR_IMAGE - Custom operator image (default: uses catalog default)
@@ -87,8 +90,9 @@ if [[ -z "${OPERATOR_CATALOG:-}" ]]; then
     fi
     # RHOAI: intentionally no default - uses redhat-operators from OCP marketplace
 fi
-export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}  # Optional: uses operator default if not set
-export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}  # Optional: uses catalog default if not set
+export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}           # Optional: uses operator default if not set
+export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}  # Optional: default quay.io/maas/maas-controller:latest
+export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}            # Optional: uses catalog default if not set
 
 # Compute namespaces based on operator type (matches deploy-rhoai-stable.sh behavior)
 # MaaS API is always deployed to the fixed application namespace, NOT the CI namespace
@@ -141,6 +145,9 @@ deploy_maas_platform() {
     echo "Using operator catalog: ${OPERATOR_CATALOG:-"(default)"}"
     if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
         echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
+    fi
+    if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
+        echo "Using custom MaaS controller image: ${MAAS_CONTROLLER_IMAGE}"
     fi
     if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         echo "Using custom operator image: ${OPERATOR_IMAGE}"

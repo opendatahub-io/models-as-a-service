@@ -26,9 +26,10 @@
 #   --channel <channel>           Operator channel override
 #
 # ENVIRONMENT VARIABLES:
-#   MAAS_API_IMAGE    Custom MaaS API container image
-#   OPERATOR_TYPE     Operator type (rhoai/odh)
-#   LOG_LEVEL         Logging verbosity (DEBUG, INFO, WARN, ERROR)
+#   MAAS_API_IMAGE            Custom MaaS API container image
+#   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+#   OPERATOR_TYPE             Operator type (rhoai/odh)
+#   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #
 # EXAMPLES:
 #   # Deploy ODH (default, uses kuadrant policy engine)
@@ -82,6 +83,7 @@ OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
+MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -139,13 +141,18 @@ ADVANCED OPTIONS (PR Testing):
       Custom MaaS API container image (PR testing)
       Example: quay.io/opendatahub/maas-api:pr-456
 
+  --maas-controller-image <image>
+      Custom MaaS controller container image (PR testing)
+      Example: quay.io/maas/maas-controller:pr-42
+
   --channel <channel>
       Operator channel override
       Default: fast-3 (ODH), fast-3.x (RHOAI)
 
 ENVIRONMENT VARIABLES:
-  MAAS_API_IMAGE        Custom MaaS API container image
-  OPERATOR_CATALOG      Custom operator catalog
+  MAAS_API_IMAGE            Custom MaaS API container image
+  MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+  OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE        Custom operator image
   OPERATOR_TYPE         Operator type (rhoai/odh)
   LOG_LEVEL             Logging verbosity (DEBUG, INFO, WARN, ERROR)
@@ -161,7 +168,8 @@ EXAMPLES:
   ./scripts/deploy.sh --deployment-mode kustomize
 
   # Test MaaS API PR #123
-  MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh --operator-type odh
+  MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \\
+    ./scripts/deploy.sh --operator-type odh
 
   # Test ODH operator PR #456 with manifests
   ./scripts/deploy.sh \\
@@ -238,6 +246,11 @@ parse_arguments() {
       --maas-api-image)
         require_flag_value "$1" "${2:-}"
         MAAS_API_IMAGE="$2"
+        shift 2
+        ;;
+      --maas-controller-image)
+        require_flag_value "$1" "${2:-}"
+        MAAS_CONTROLLER_IMAGE="$2"
         shift 2
         ;;
       --channel)
@@ -392,6 +405,9 @@ main() {
   if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
     log_info "  MaaS API image: $MAAS_API_IMAGE"
   fi
+  if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
+    log_info "  MaaS controller image: $MAAS_CONTROLLER_IMAGE"
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log_info "DRY RUN MODE - no changes will be applied"
@@ -428,18 +444,22 @@ main() {
         log_error "Namespace $NAMESPACE does not exist. Create it first (e.g. via ODH operator)."
         return 1
       fi
+      set_maas_controller_image
       if [[ "$NAMESPACE" != "opendatahub" ]]; then
         (cd "$project_root" && kustomize build maas-controller/config/default | \
           sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
+          cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
           return 1
         }
       else
         kubectl apply -k "$config_dir" || {
+          cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
           return 1
         }
       fi
+      cleanup_maas_controller_image
     else
       log_info "  Controller deployed via kustomize overlay (maas-controller/config/default)"
     fi

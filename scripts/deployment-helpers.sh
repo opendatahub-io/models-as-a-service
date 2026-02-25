@@ -648,6 +648,49 @@ cleanup_maas_api_image() {
   fi
 }
 
+# set_maas_controller_image
+#   Sets the MaaS controller container image in config/manager kustomization using MAAS_CONTROLLER_IMAGE env var.
+#   If MAAS_CONTROLLER_IMAGE is not set, does nothing.
+#   Creates a backup that must be restored by calling cleanup_maas_controller_image.
+#
+# Environment:
+#   MAAS_CONTROLLER_IMAGE - Container image to use (e.g., quay.io/maas/maas-controller:pr-42)
+set_maas_controller_image() {
+  if [ -z "${MAAS_CONTROLLER_IMAGE:-}" ]; then
+    return 0
+  fi
+  if [ -n "${_MAAS_CONTROLLER_IMAGE_SET:-}" ]; then
+    return 0
+  fi
+
+  local project_root
+  project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+  export _MAAS_CONTROLLER_KUSTOMIZATION="$project_root/maas-controller/config/manager/kustomization.yaml"
+  export _MAAS_CONTROLLER_BACKUP="${_MAAS_CONTROLLER_KUSTOMIZATION}.backup"
+  export _MAAS_CONTROLLER_IMAGE_SET=1
+
+  echo "   Setting MaaS controller image: ${MAAS_CONTROLLER_IMAGE}"
+  cp "$_MAAS_CONTROLLER_KUSTOMIZATION" "$_MAAS_CONTROLLER_BACKUP" || {
+    echo "Error: failed to create backup of controller kustomization.yaml" >&2
+    return 1
+  }
+  (cd "$(dirname "$_MAAS_CONTROLLER_KUSTOMIZATION")" && kustomize edit set image "quay.io/maas/maas-controller=${MAAS_CONTROLLER_IMAGE}") || {
+    echo "Error: failed to set image in controller kustomization.yaml" >&2
+    mv -f "$_MAAS_CONTROLLER_BACKUP" "$_MAAS_CONTROLLER_KUSTOMIZATION" 2>/dev/null || true
+    return 1
+  }
+}
+
+# cleanup_maas_controller_image
+#   Restores the original controller kustomization.yaml from backup.
+#   Safe to call even if set_maas_controller_image was not called or MAAS_CONTROLLER_IMAGE was not set.
+cleanup_maas_controller_image() {
+  if [ -n "${_MAAS_CONTROLLER_BACKUP:-}" ] && [ -f "$_MAAS_CONTROLLER_BACKUP" ]; then
+    mv -f "$_MAAS_CONTROLLER_BACKUP" "$_MAAS_CONTROLLER_KUSTOMIZATION" 2>/dev/null || true
+  fi
+}
+
 # set_overlay_namespace overlay_dir namespace
 #   Sets the namespace in the overlay's kustomization.yaml before build.
 #   Creates a backup that must be restored by calling cleanup_overlay_namespace.
