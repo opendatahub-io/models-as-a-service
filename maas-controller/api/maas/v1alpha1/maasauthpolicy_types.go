@@ -27,6 +27,7 @@ type MaaSAuthPolicySpec struct {
 	ModelRefs []string `json:"modelRefs"`
 
 	// Subjects defines who has access (OR logic - any match grants access)
+	// +kubebuilder:validation:XValidation:rule="size(self.groups) > 0 || size(self.users) > 0",message="at least one group or user must be specified in subjects"
 	Subjects SubjectSpec `json:"subjects"`
 
 	// MeteringMetadata contains billing and tracking information

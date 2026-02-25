@@ -25,6 +25,7 @@
 #   # Test with pipeline-built images
 #   OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
 #   MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
+#   MAAS_CONTROLLER_IMAGE=quay.io/maas/maas-controller:pr-42 \
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
@@ -36,6 +37,8 @@
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
+#   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/maas/maas-controller:latest)
+#                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   OPERATOR_CATALOG - Custom operator catalog image (default: latest from main)
 #                      Example: quay.io/opendatahub/opendatahub-operator-catalog:pr-456
 #   OPERATOR_IMAGE - Custom operator image (default: uses catalog default)
@@ -66,6 +69,7 @@ source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
+SKIP_SUBSCRIPTION_TESTS=${SKIP_SUBSCRIPTION_TESTS:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
@@ -86,8 +90,9 @@ if [[ -z "${OPERATOR_CATALOG:-}" ]]; then
     fi
     # RHOAI: intentionally no default - uses redhat-operators from OCP marketplace
 fi
-export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}  # Optional: uses operator default if not set
-export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}  # Optional: uses catalog default if not set
+export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}           # Optional: uses operator default if not set
+export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}  # Optional: default quay.io/maas/maas-controller:latest
+export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}            # Optional: uses catalog default if not set
 
 # Compute namespaces based on operator type (matches deploy-rhoai-stable.sh behavior)
 # MaaS API is always deployed to the fixed application namespace, NOT the CI namespace
@@ -140,6 +145,9 @@ deploy_maas_platform() {
     echo "Using operator catalog: ${OPERATOR_CATALOG:-"(default)"}"
     if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
         echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
+    fi
+    if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
+        echo "Using custom MaaS controller image: ${MAAS_CONTROLLER_IMAGE}"
     fi
     if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         echo "Using custom operator image: ${OPERATOR_IMAGE}"
@@ -196,7 +204,7 @@ deploy_maas_platform() {
 }
 
 deploy_models() {
-    echo "Deploying simulator Model"
+    echo "Deploying simulator models (regular + premium)"
     # Create llm namespace if it does not exist
     if ! kubectl get namespace llm >/dev/null 2>&1; then
         echo "Creating 'llm' namespace..."
@@ -207,22 +215,33 @@ deploy_models() {
     else
         echo "'llm' namespace already exists"
     fi
+
     if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator/ | kubectl apply -f -); then
         echo "❌ ERROR: Failed to deploy simulator model"
         exit 1
     fi
-    echo "✅ Simulator model deployed"
-    
-    echo "Waiting for model to be ready..."
+    echo "✅ Regular simulator deployed"
+
+    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator-premium/ | kubectl apply -f -); then
+        echo "❌ ERROR: Failed to deploy premium simulator model"
+        exit 1
+    fi
+    echo "✅ Premium simulator deployed"
+
+    echo "Waiting for models to be ready..."
     if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for model to be ready"
-        echo "=== LLMInferenceService YAML dump ==="
+        echo "❌ ERROR: Timed out waiting for regular simulator to be ready"
         oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
-        echo "=== Events in llm namespace ==="
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
     fi
-    echo "✅ Simulator Model deployed"
+    if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout=300s; then
+        echo "❌ ERROR: Timed out waiting for premium simulator to be ready"
+        oc get llminferenceservice/premium-simulated-simulated-premium -n llm -o yaml || true
+        oc get events -n llm --sort-by='.lastTimestamp' || true
+        exit 1
+    fi
+    echo "✅ Simulator models deployed"
 }
 
 validate_deployment() {
@@ -297,6 +316,89 @@ run_smoke_tests() {
     fi
 }
 
+deploy_subscription_crs() {
+    echo "Deploying MaaS subscription example CRs..."
+    if ! kubectl apply -k "$PROJECT_ROOT/maas-controller/examples/"; then
+        echo "❌ ERROR: Failed to deploy subscription CRs"
+        exit 1
+    fi
+
+    echo "Waiting for MaaSModels to be Ready..."
+    local retries=0
+    while [[ $retries -lt 30 ]]; do
+        local all_ready=true
+        while IFS= read -r phase; do
+            if [[ "$phase" != "Ready" ]]; then
+                all_ready=false
+                break
+            fi
+        done < <(oc get maasmodels -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        if $all_ready && [[ -n "$(oc get maasmodels -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
+            break
+        fi
+        retries=$((retries + 1))
+        sleep 5
+    done
+    if [[ $retries -ge 30 ]]; then
+        echo "⚠️  WARNING: MaaSModels did not all become Ready within timeout"
+    fi
+
+    echo "✅ Subscription CRs deployed"
+    oc get maasmodels,maasauthpolicies,maassubscriptions -n "$MAAS_NAMESPACE" 2>/dev/null || true
+}
+
+run_subscription_tests() {
+    echo "-- Subscription Controller Tests --"
+
+    export GATEWAY_HOST="${HOST}"
+    export MAAS_NAMESPACE
+
+    local test_dir="$PROJECT_ROOT/test/e2e"
+    local reports_dir="$test_dir/reports"
+    mkdir -p "$reports_dir"
+
+    if [[ -d "$test_dir/.venv" ]]; then
+        source "$test_dir/.venv/bin/activate"
+    fi
+
+    local user
+    user="$(oc whoami 2>/dev/null || echo 'unknown')"
+    local html="$reports_dir/subscription-${user}.html"
+    local xml="$reports_dir/subscription-${user}.xml"
+
+    if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
+        -q --maxfail=3 --disable-warnings \
+        --junitxml="$xml" \
+        --html="$html" --self-contained-html \
+        --capture=tee-sys --show-capture=all --log-level=INFO \
+        "$test_dir/tests/test_subscription.py"; then
+        echo "❌ ERROR: Subscription tests failed"
+        exit 1
+    fi
+
+    echo "✅ Subscription tests completed"
+    echo " - JUnit XML : ${xml}"
+    echo " - HTML      : ${html}"
+}
+
+cleanup_subscription_resources() {
+    echo "Cleaning up subscription resources so other tests are not affected..."
+
+    oc delete maasauthpolicies --all -n "$MAAS_NAMESPACE" --timeout=60s 2>/dev/null || true
+    oc delete maassubscriptions --all -n "$MAAS_NAMESPACE" --timeout=60s 2>/dev/null || true
+    oc delete maasmodels --all -n "$MAAS_NAMESPACE" --timeout=60s 2>/dev/null || true
+
+    oc delete authpolicy -n openshift-ingress -l app.kubernetes.io/managed-by=maas-controller --timeout=30s 2>/dev/null || true
+    oc delete tokenratelimitpolicy -n openshift-ingress -l app.kubernetes.io/managed-by=maas-controller --timeout=30s 2>/dev/null || true
+    oc delete authpolicy --all -n llm --timeout=30s 2>/dev/null || true
+    oc delete tokenratelimitpolicy --all -n llm --timeout=30s 2>/dev/null || true
+
+    echo "Waiting for gateway to settle..."
+    sleep 15
+
+    echo "✅ Subscription resources cleaned up"
+}
+
 run_token_verification() {
     echo "-- Token Metadata Verification --"
     
@@ -346,6 +448,25 @@ deploy_models
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
+# Subscription tests run as cluster admin (not an SA) because premium model
+# tests require the user to be in the premium-user OpenShift group.
+if [[ "${SKIP_SUBSCRIPTION_TESTS}" != "true" ]]; then
+    print_header "Deploying Subscription CRs"
+    deploy_subscription_crs
+
+    print_header "Running Subscription Controller Tests (as cluster admin)"
+    run_subscription_tests
+
+    print_header "Cleaning up Subscription Resources"
+    cleanup_subscription_resources
+fi
+
+# TODO: The maas-api /v1/models catalog now discovers models via MaaSModel CRs,
+# which are deleted during subscription cleanup. Until the maas-api supports
+# model discovery without MaaSModel CRs (or gateway-default-deny is scoped to
+# model routes only), smoke tests need MODEL_NAME set explicitly.
+export MODEL_NAME="${MODEL_NAME:-facebook/opt-125m}"
+
 # Setup all users first (while logged in as admin)
 print_header "Setting up test users"
 setup_test_user "tester-admin-user" "cluster-admin"
@@ -364,7 +485,6 @@ print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
 run_token_verification
 
-sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
 
 # Test edit user  

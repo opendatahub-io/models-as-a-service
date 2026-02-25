@@ -316,7 +316,15 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 					mergedAnnotations[k] = v
 				}
 				existing.SetAnnotations(mergedAnnotations)
-				existing.SetLabels(policy.GetLabels())
+
+				mergedLabels := existing.GetLabels()
+				if mergedLabels == nil {
+					mergedLabels = make(map[string]string)
+				}
+				for k, v := range policy.GetLabels() {
+					mergedLabels[k] = v
+				}
+				existing.SetLabels(mergedLabels)
 				if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
 					return fmt.Errorf("failed to update spec: %w", err)
 				}

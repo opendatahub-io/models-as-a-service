@@ -26,9 +26,10 @@
 #   --channel <channel>           Operator channel override
 #
 # ENVIRONMENT VARIABLES:
-#   MAAS_API_IMAGE    Custom MaaS API container image
-#   OPERATOR_TYPE     Operator type (rhoai/odh)
-#   LOG_LEVEL         Logging verbosity (DEBUG, INFO, WARN, ERROR)
+#   MAAS_API_IMAGE            Custom MaaS API container image
+#   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+#   OPERATOR_TYPE             Operator type (rhoai/odh)
+#   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #
 # EXAMPLES:
 #   # Deploy ODH (default, uses kuadrant policy engine)
@@ -82,6 +83,7 @@ OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
+MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -139,13 +141,18 @@ ADVANCED OPTIONS (PR Testing):
       Custom MaaS API container image (PR testing)
       Example: quay.io/opendatahub/maas-api:pr-456
 
+  --maas-controller-image <image>
+      Custom MaaS controller container image (PR testing)
+      Example: quay.io/maas/maas-controller:pr-42
+
   --channel <channel>
       Operator channel override
       Default: fast-3 (ODH), fast-3.x (RHOAI)
 
 ENVIRONMENT VARIABLES:
-  MAAS_API_IMAGE        Custom MaaS API container image
-  OPERATOR_CATALOG      Custom operator catalog
+  MAAS_API_IMAGE            Custom MaaS API container image
+  MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+  OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE        Custom operator image
   OPERATOR_TYPE         Operator type (rhoai/odh)
   LOG_LEVEL             Logging verbosity (DEBUG, INFO, WARN, ERROR)
@@ -161,7 +168,8 @@ EXAMPLES:
   ./scripts/deploy.sh --deployment-mode kustomize
 
   # Test MaaS API PR #123
-  MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh --operator-type odh
+  MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \\
+    ./scripts/deploy.sh --operator-type odh
 
   # Test ODH operator PR #456 with manifests
   ./scripts/deploy.sh \\
@@ -240,6 +248,11 @@ parse_arguments() {
         MAAS_API_IMAGE="$2"
         shift 2
         ;;
+      --maas-controller-image)
+        require_flag_value "$1" "${2:-}"
+        MAAS_CONTROLLER_IMAGE="$2"
+        shift 2
+        ;;
       --channel)
         require_flag_value "$1" "${2:-}"
         OPERATOR_CHANNEL="$2"
@@ -256,6 +269,47 @@ parse_arguments() {
         ;;
     esac
   done
+}
+
+#──────────────────────────────────────────────────────────────
+# PREREQUISITE CHECKS
+#──────────────────────────────────────────────────────────────
+
+check_required_tools() {
+  local missing=()
+  local required_kustomize="5.7.0"
+
+  command -v oc &>/dev/null || missing+=("oc (OpenShift CLI)")
+  command -v kubectl &>/dev/null || missing+=("kubectl")
+  command -v jq &>/dev/null || missing+=("jq")
+  if command -v kustomize &>/dev/null; then
+    local kustomize_version
+    kustomize_version=$(kustomize version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    # Fallback: extract version from Go binary metadata (works for dev builds)
+    if [[ -z "$kustomize_version" ]] && command -v go &>/dev/null; then
+      kustomize_version=$(go version -m "$(command -v kustomize)" 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | tr -d 'v')
+    fi
+    if [[ -z "$kustomize_version" ]]; then
+      log_warn "kustomize is a dev build with unverifiable version. Cannot guarantee compatibility with v$required_kustomize+."
+    elif [[ "$(printf '%s\n%s' "$required_kustomize" "$kustomize_version" | sort -V | head -1)" != "$required_kustomize" ]]; then
+      missing+=("kustomize (v$required_kustomize+ required, found ${kustomize_version})")
+    fi
+  else
+    missing+=("kustomize (v$required_kustomize+)")
+  fi
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    command -v gsed &>/dev/null || missing+=("gsed (GNU sed) for MacOS")
+  else
+    command -v sed &>/dev/null || missing+=("sed (GNU sed)")
+  fi
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    log_error "Missing or incompatible required tools:"
+    for tool in "${missing[@]}"; do
+      log_error "  - $tool"
+    done
+    return 1
+  fi
 }
 
 #──────────────────────────────────────────────────────────────
@@ -337,6 +391,7 @@ main() {
   log_info "==================================================="
 
   parse_arguments "$@"
+  check_required_tools
   validate_configuration
 
   log_info "Deployment configuration:"
@@ -349,6 +404,9 @@ main() {
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
   if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
     log_info "  MaaS API image: $MAAS_API_IMAGE"
+  fi
+  if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
+    log_info "  MaaS controller image: $MAAS_CONTROLLER_IMAGE"
   fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -386,18 +444,22 @@ main() {
         log_error "Namespace $NAMESPACE does not exist. Create it first (e.g. via ODH operator)."
         return 1
       fi
+      set_maas_controller_image
       if [[ "$NAMESPACE" != "opendatahub" ]]; then
         (cd "$project_root" && kustomize build maas-controller/config/default | \
           sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
+          cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
           return 1
         }
       else
         kubectl apply -k "$config_dir" || {
+          cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
           return 1
         }
       fi
+      cleanup_maas_controller_image
     else
       log_info "  Controller deployed via kustomize overlay (maas-controller/config/default)"
     fi
@@ -423,6 +485,9 @@ main() {
 
 deploy_via_operator() {
   log_info "Starting operator-based deployment..."
+
+  # Check for conflicting operators before modifying the cluster
+  check_conflicting_operators
 
   # Install optional operators
   install_optional_operators
@@ -747,6 +812,42 @@ EOF
 # PRIMARY OPERATOR INSTALLATION
 #──────────────────────────────────────────────────────────────
 
+check_conflicting_operators() {
+  log_info "Checking if there are any conflicting operators..."
+  local conflicting_operator
+  if [[ "$OPERATOR_TYPE" == "odh" ]]; then
+    conflicting_operator="rhods-operator"
+  else
+    conflicting_operator="opendatahub-operator"
+  fi
+  # Check all namespaces for a conflicting subscription
+  local conflict
+  conflict=$(oc get subscription.operators.coreos.com --all-namespaces --no-headers 2>/dev/null | grep -w "$conflicting_operator" | head -n1 || true)
+
+  if [[ -n "$conflict" ]]; then
+    local ns
+    ns=$(echo "$conflict" | awk '{print $1}')
+    if [[ -z "$ns" ]]; then
+      log_error "Conflicting operator '$conflicting_operator' detected but could not determine its namespace"
+      return 1
+    fi
+    log_error "Conflicting operator found: $conflicting_operator in namespace $ns. ODH and RHOAI operators cannot coexist (they manage the same CRDs)."
+    log_info "Remove the conflicting operator before proceeding (suggested steps):"
+    log_info "  1. Delete custom resources: oc delete datasciencecluster --all && oc delete dscinitializations --all"
+    log_info "  2. Delete subscription: oc delete subscription.operators.coreos.com $conflicting_operator -n $ns"
+    log_info "  3. Delete CSV: oc delete csv -n $ns -l operators.coreos.com/$conflicting_operator"
+    log_info "  4. Try uninstalling $conflicting_operator (can be done via a console as well) before attempting to run deploy.sh again."
+    log_info "  5. Sanity check: delete any lingering operator groups, old namespaces and projects."
+    log_error "Quit the execution of the script. You may try re-running again."
+    return 1
+  fi
+  log_info "No conflicting operators found. Proceeding to installing the primary operator."
+}
+
+#──────────────────────────────────────────────────────────────
+# PRIMARY OPERATOR INSTALLATION
+#──────────────────────────────────────────────────────────────
+
 install_primary_operator() {
   log_info "Installing primary operator: $OPERATOR_TYPE"
 
@@ -906,10 +1007,58 @@ EOF
 apply_dsc() {
   log_info "Applying DataScienceCluster with ModelsAsService..."
 
-  # Check if a DataScienceCluster already exists, skip creation if so
+  local data_dir="${SCRIPT_DIR}/data"
+
   if kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
-    log_info "DataScienceCluster already exists in the cluster. Skipping creation."
-    return 0
+    local existing_dsc
+    existing_dsc=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    # Extract all spec.components leaf paths and expected values from the manifest
+    # jq produces lines like: .spec.components.kserve.managementState=Managed
+    local dsc_manifest="${data_dir}/datasciencecluster.yaml"
+    local mismatches=()
+
+    local expected_fields
+    if ! expected_fields=$(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
+      # Recursively flatten .spec.components into dot-notation paths with values
+      def leaf_paths:
+        . as $in |
+        paths(scalars) | . as $p |
+        ($in | getpath($p)) as $v |
+        [($p | map(tostring) | join(".")), ($v | tostring)];
+      .spec.components | leaf_paths | ".\(.[0])=\(.[1])"
+    '); then
+      log_warn "Failed to parse DSC manifest at ${dsc_manifest}. Skipping validation, proceeding with existing DSC '$existing_dsc'."
+      return 0
+    fi
+
+    if [[ -z "$expected_fields" ]]; then
+      log_warn "DSC manifest at ${dsc_manifest} produced no fields. Skipping validation, proceeding with existing DSC '$existing_dsc'."
+      return 0
+    fi
+
+    while IFS='=' read -r field_path expected; do
+      local full_path=".spec.components${field_path}"
+      local actual
+      actual=$(kubectl get datasciencecluster "$existing_dsc" \
+        -o jsonpath="{${full_path}}" 2>/dev/null || echo "")
+      if [[ "$actual" != "$expected" ]]; then
+        mismatches+=("${full_path}: '${actual:-unset}' (expected '${expected}')")
+      fi
+    done <<< "$expected_fields"
+
+    if [[ ${#mismatches[@]} -eq 0 ]]; then
+      log_info "Existing DataScienceCluster '$existing_dsc' meets MaaS requirements, skipping creation"
+      return 0
+    fi
+
+    log_error "Existing DataScienceCluster '$existing_dsc' does not meet MaaS requirements:"
+    for mismatch in "${mismatches[@]}"; do
+      log_error "  $mismatch"
+    done
+
+    log_error "Fix the required fields in DSC deployment and try again..."
+    return 1
   fi
 
   # Apply DSC with modelsAsService - this is REQUIRED for MaaS deployment
@@ -918,7 +1067,6 @@ apply_dsc() {
   #
   # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
   #       Only ODH currently supports this feature
-  local data_dir="${SCRIPT_DIR}/data"
   kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
 }
 
@@ -1193,8 +1341,11 @@ patch_operator_csv() {
 #
 #   This function:
 #   1. Detects the cluster's OIDC audience from a service account token
-#   2. If non-standard, patches the AuthPolicy with the cluster-specific audience
+#   2. If non-standard, patches the maas-api AuthPolicy with the cluster-specific audience
 #   3. Annotates the AuthPolicy to prevent operator from reverting the patch
+#
+#   Note: maas-controller audience patching is handled separately in the subscription
+#   controller installation block (after the controller deployment exists).
 configure_cluster_audience() {
   log_info "Checking cluster OIDC audience..."
 
@@ -1276,6 +1427,7 @@ EOF
     log_warn "  WARNING: AuthPolicy audience may have been reverted to: ${actual_aud}"
     log_warn "  This may cause authentication failures on Hypershift/ROSA clusters"
   fi
+
 }
 
 #──────────────────────────────────────────────────────────────

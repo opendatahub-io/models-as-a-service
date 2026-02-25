@@ -95,6 +95,9 @@ spec:
                       type: string
                     type: array
                 type: object
+                x-kubernetes-validations:
+                - message: at least one group or user must be specified in subjects
+                  rule: size(self.groups) > 0 || size(self.users) > 0
             required:
             - modelRefs
             - subjects

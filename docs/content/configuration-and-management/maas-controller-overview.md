@@ -1,4 +1,4 @@
-# MaaS Controller — What It Is and How It Works
+# MaaS Controller Overview
 
 This document describes the **MaaS Controller**: what was built, how it fits into the Models-as-a-Service (MaaS) stack, and how the pieces work together. It is intended for presentations, onboarding, and technical deep-dives.
 
