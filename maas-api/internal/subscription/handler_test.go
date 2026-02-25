@@ -233,6 +233,80 @@ func TestHandler_SelectSubscription_InvalidRequest(t *testing.T) {
 	}
 }
 
+func TestHandler_SelectSubscription_UserWithoutGroups(t *testing.T) {
+	// Create a subscription that matches by username instead of groups
+	sub := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "maas.opendatahub.io/v1alpha1",
+			"kind":       "MaaSSubscription",
+			"metadata": map[string]any{
+				"name":      "user-specific-sub",
+				"namespace": "test-ns",
+			},
+			"spec": map[string]any{
+				"owner": map[string]any{
+					"users": []any{"specific-user"},
+				},
+				"priority": int64(10),
+				"modelRefs": []any{
+					map[string]any{
+						"name": "test-model",
+						"tokenRateLimits": []any{
+							map[string]any{
+								"limit": int64(1000),
+							},
+						},
+					},
+				},
+				"tokenMetadata": map[string]any{
+					"organizationId": "org-user",
+					"costCenter":     "cc-user",
+					"labels": map[string]any{
+						"env": "test",
+					},
+				},
+			},
+		},
+	}
+
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{sub}}
+	router := setupTestRouter(lister)
+
+	// Test with empty groups array but valid username
+	reqBody := subscription.SelectRequest{
+		Groups:   []string{}, // Empty groups
+		Username: "specific-user",
+	}
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBuffer(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+		return
+	}
+
+	var response subscription.SelectResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if response.Name != "user-specific-sub" {
+		t.Errorf("expected subscription %q, got %q", "user-specific-sub", response.Name)
+	}
+
+	if response.OrganizationID != "org-user" {
+		t.Errorf("expected orgID %q, got %q", "org-user", response.OrganizationID)
+	}
+}
+
 func TestHandler_SelectSubscription_SingleSubscriptionAutoSelect(t *testing.T) {
 	// Create a scenario where user only has access to one subscription
 	subscriptions := []*unstructured.Unstructured{

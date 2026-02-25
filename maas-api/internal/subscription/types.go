@@ -2,7 +2,7 @@ package subscription
 
 // SelectRequest contains the user information for subscription selection.
 type SelectRequest struct {
-	Groups                []string `binding:"required,min=1"     json:"groups"`   // User's group memberships
+	Groups                []string `json:"groups"`                                // User's group memberships (optional if username provided)
 	Username              string   `binding:"required"           json:"username"` // User's username
 	RequestedSubscription string   `json:"requestedSubscription"`                 // Optional explicit subscription name
 }
