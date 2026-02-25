@@ -197,6 +197,26 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			},
 		}
 
+		// Build authorization rules
+		authRules := make(map[string]interface{})
+
+		// Add subscription error check - deny if subscription selector returned an error
+		// Uses OPA Rego policy to check if error field exists in subscription-info metadata
+		// The policy allows requests only when the error field does not exist
+		// Custom denial message uses the error message from subscription selector
+		authRules["subscription-error-check"] = map[string]interface{}{
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]interface{}{
+				"rego": `allow { not object.get(input.auth.metadata["subscription-info"], "error", false) }`,
+			},
+			"when": []interface{}{
+				map[string]interface{}{
+					"selector": `has(auth.metadata["subscription-info"].error)`,
+				},
+			},
+		}
+
 		// Build aggregated authorization rule from ALL auth policies' subjects
 		if len(membershipConditions) > 0 {
 			var patterns []interface{}
@@ -205,12 +225,14 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			} else {
 				patterns = []interface{}{map[string]interface{}{"any": membershipConditions}}
 			}
-			rule["authorization"] = map[string]interface{}{
-				"require-group-membership": map[string]interface{}{
-					"metrics": false, "priority": int64(0),
-					"patternMatching": map[string]interface{}{"patterns": patterns},
-				},
+			authRules["require-group-membership"] = map[string]interface{}{
+				"metrics": false, "priority": int64(0),
+				"patternMatching": map[string]interface{}{"patterns": patterns},
 			}
+		}
+
+		if len(authRules) > 0 {
+			rule["authorization"] = authRules
 		}
 
 		// Pass ALL user groups unfiltered in the response so TRLP predicates can
@@ -240,9 +262,37 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 								"subscription_labels": map[string]interface{}{
 									"expression": `has(auth.metadata["subscription-info"].labels) ? auth.metadata["subscription-info"].labels : {}`,
 								},
+								// Error information (for debugging - only populated when selection fails)
+								"subscription_error": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ""`,
+								},
+								"subscription_error_message": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : ""`,
+								},
 							},
 						},
 						"metrics": true, "priority": int64(0),
+					},
+				},
+			},
+			// Custom denial responses that include subscription error details
+			"unauthenticated": map[string]interface{}{
+				"code": int64(401),
+				"message": map[string]interface{}{
+					"value": "Authentication required",
+				},
+			},
+			"unauthorized": map[string]interface{}{
+				"code": int64(403),
+				"body": map[string]interface{}{
+					"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied"`,
+				},
+				"headers": map[string]interface{}{
+					"x-ext-auth-reason": map[string]interface{}{
+						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
+					},
+					"content-type": map[string]interface{}{
+						"value": "text/plain",
 					},
 				},
 			},

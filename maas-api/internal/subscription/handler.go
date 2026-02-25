@@ -52,7 +52,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		h.logger.Warn("Invalid request body",
 			"error", err.Error(),
 		)
-		c.JSON(http.StatusBadRequest, ErrorResponse{
+		c.JSON(http.StatusOK, SelectResponse{
 			Error:   "bad_request",
 			Message: "invalid request body: " + err.Error(),
 		})
@@ -77,7 +77,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 				"username", req.Username,
 				"groups", req.Groups,
 			)
-			c.JSON(http.StatusNotFound, ErrorResponse{
+			c.JSON(http.StatusOK, SelectResponse{
 				Error:   "not_found",
 				Message: err.Error(),
 			})
@@ -88,7 +88,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 			h.logger.Debug("Requested subscription not found",
 				"subscription", req.RequestedSubscription,
 			)
-			c.JSON(http.StatusNotFound, ErrorResponse{
+			c.JSON(http.StatusOK, SelectResponse{
 				Error:   "not_found",
 				Message: err.Error(),
 			})
@@ -100,7 +100,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 				"username", req.Username,
 				"subscription", req.RequestedSubscription,
 			)
-			c.JSON(http.StatusForbidden, ErrorResponse{
+			c.JSON(http.StatusOK, SelectResponse{
 				Error:   "access_denied",
 				Message: err.Error(),
 			})
@@ -112,7 +112,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 				"username", req.Username,
 				"subscriptions", multipleSubsErr.Subscriptions,
 			)
-			c.JSON(http.StatusBadRequest, ErrorResponse{
+			c.JSON(http.StatusOK, SelectResponse{
 				Error:   "multiple_subscriptions",
 				Message: err.Error(),
 			})
@@ -124,7 +124,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 			"error", err.Error(),
 			"username", req.Username,
 		)
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
+		c.JSON(http.StatusOK, SelectResponse{
 			Error:   "internal_error",
 			Message: "failed to select subscription: " + err.Error(),
 		})

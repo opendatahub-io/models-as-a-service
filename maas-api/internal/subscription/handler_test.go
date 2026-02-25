@@ -184,8 +184,17 @@ func TestHandler_SelectSubscription_NotFound(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected status 404, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var response subscription.SelectResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if response.Error != "not_found" {
+		t.Errorf("expected error code 'not_found', got %q", response.Error)
 	}
 }
 
@@ -213,8 +222,17 @@ func TestHandler_SelectSubscription_AccessDenied(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Errorf("expected status 403, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var response subscription.SelectResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if response.Error != "access_denied" {
+		t.Errorf("expected error code 'access_denied', got %q", response.Error)
 	}
 }
 
@@ -228,8 +246,17 @@ func TestHandler_SelectSubscription_InvalidRequest(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status 400, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var response subscription.SelectResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if response.Error != "bad_request" {
+		t.Errorf("expected error code 'bad_request', got %q", response.Error)
 	}
 }
 
@@ -454,15 +481,15 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 		requestedSubscription string
 		expectedName          string
 		expectedOrgID         string
-		expectedCode          int
+		expectedError         string
 		description           string
 	}{
 		{
-			name:         "multiple subscriptions without explicit selection",
-			groups:       []string{"system:authenticated"},
-			username:     "alice",
-			expectedCode: http.StatusBadRequest,
-			description:  "User has access to both free and premium. Should return error requiring explicit selection.",
+			name:          "multiple subscriptions without explicit selection",
+			groups:        []string{"system:authenticated"},
+			username:      "alice",
+			expectedError: "multiple_subscriptions",
+			description:   "User has access to both free and premium. Should return error requiring explicit selection.",
 		},
 		{
 			name:                  "explicit selection with multiple available",
@@ -471,7 +498,6 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 			requestedSubscription: "free-tier",
 			expectedName:          "free-tier",
 			expectedOrgID:         "org-free",
-			expectedCode:          http.StatusOK,
 			description:           "User explicitly requests free tier despite premium being available. Should honor explicit selection.",
 		},
 		{
@@ -481,7 +507,6 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 			requestedSubscription: "premium-tier",
 			expectedName:          "premium-tier",
 			expectedOrgID:         "org-premium",
-			expectedCode:          http.StatusOK,
 			description:           "User explicitly requests premium tier. Should honor explicit selection.",
 		},
 	}
@@ -504,33 +529,28 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 
 			router.ServeHTTP(w, req)
 
-			if w.Code != tt.expectedCode {
-				t.Errorf("%s: expected status %d, got %d", tt.description, tt.expectedCode, w.Code)
+			if w.Code != http.StatusOK {
+				t.Errorf("%s: expected status 200, got %d", tt.description, w.Code)
 			}
 
-			if w.Code == http.StatusOK {
-				var response subscription.SelectResponse
-				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-					t.Fatalf("failed to unmarshal response: %v", err)
-				}
+			var response subscription.SelectResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatalf("failed to unmarshal response: %v", err)
+			}
 
+			if tt.expectedError != "" {
+				// Expecting an error response
+				if response.Error != tt.expectedError {
+					t.Errorf("%s: expected error code %q, got %q", tt.description, tt.expectedError, response.Error)
+				}
+			} else {
+				// Expecting a success response
 				if response.Name != tt.expectedName {
 					t.Errorf("%s: expected subscription %q, got %q", tt.description, tt.expectedName, response.Name)
 				}
 
 				if response.OrganizationID != tt.expectedOrgID {
 					t.Errorf("%s: expected orgID %q, got %q", tt.description, tt.expectedOrgID, response.OrganizationID)
-				}
-			}
-
-			if w.Code == http.StatusBadRequest {
-				var errResponse subscription.ErrorResponse
-				if err := json.Unmarshal(w.Body.Bytes(), &errResponse); err != nil {
-					t.Fatalf("failed to unmarshal error response: %v", err)
-				}
-
-				if errResponse.Error != "multiple_subscriptions" {
-					t.Errorf("expected error code 'multiple_subscriptions', got %q", errResponse.Error)
 				}
 			}
 		})
