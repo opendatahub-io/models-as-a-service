@@ -16,6 +16,8 @@ limitations under the License.
 
 package maas
 
+import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 // ManagedByODHOperator is used to denote if a resource/component should be reconciled - when missing or true, reconcile.
 const ManagedByODHOperator = "opendatahub.io/managed"
 
@@ -23,3 +25,10 @@ const ManagedByODHOperator = "opendatahub.io/managed"
 //
 // Deprecated: Exists to preserve backwards compatibility and should not be used.
 const ManagedByMaasODHOperator = "maas.opendatahub.io/managed"
+
+// isOptedOut reports whether obj has explicitly opted out of controller management.
+// An object is opted out when either the current or the deprecated managed annotation is set to "false".
+func isOptedOut(obj metav1.Object) bool {
+	annotations := obj.GetAnnotations()
+	return annotations[ManagedByODHOperator] == "false" || annotations[ManagedByMaasODHOperator] == "false"
+}

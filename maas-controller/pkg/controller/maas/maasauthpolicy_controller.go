@@ -349,7 +349,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		} else if err != nil {
 			return nil, fmt.Errorf("failed to get existing AuthPolicy: %w", err)
 		} else {
-			if existing.GetAnnotations()[ManagedByODHOperator] == "false" || existing.GetAnnotations()[ManagedByMaasODHOperator] == "false" {
+			if isOptedOut(existing) {
 				log.Info("AuthPolicy opted out, skipping", "name", authPolicyName)
 			} else {
 				mergedAnnotations := existing.GetAnnotations()
@@ -404,6 +404,10 @@ func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, lo
 	}
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
+		if isOptedOut(p) {
+			log.Info("AuthPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+			continue
+		}
 		log.Info("Deleting AuthPolicy", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete AuthPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
