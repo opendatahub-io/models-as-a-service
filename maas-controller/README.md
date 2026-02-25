@@ -44,6 +44,8 @@ Relationships are many-to-many: multiple MaaSAuthPolicies/MaaSSubscriptions can 
 
 **Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModel** CRs (in the API’s namespace). Each MaaSModel’s `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModel objects is the source of truth for “which models are available” in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
 
+**Watch namespace:** The controller only watches and reconciles **MaaSAuthPolicy** and **MaaSSubscription** in a single configurable namespace (default: `models-as-a-service`). Create these two CR types in that namespace. Set `--namespace` or the `MaaS_CONTROLLER_NAMESPACE` env var to use another namespace. The controller still watches **MaasModel** in all namespaces. HTTPRoutes, Gateways, and LLMInferenceServices may still live in other namespaces; the controller reaches them via refs.
+
 ### Model kinds and the provider pattern
 
 MaaSModel's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TRLP). These are registered in `pkg/controller/maas/providers.go`.
@@ -311,6 +313,7 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 ## Configuration
 
-- **Controller namespace**: Default is `opendatahub`. Override by passing a namespace to `maas-controller/scripts/install-maas-controller.sh`.
+- **Controller namespace** (where the controller pod runs): Default is `opendatahub`. Override by `maas-controller/scripts/install-maas-controller.sh --deploy-namespace <ns>`.
+- **Watch namespace** (where MaaSAuthPolicy, MaaSSubscription must live): Default is `models-as-a-service`. Override by `maas-controller/scripts/install-maas-controller.sh --watch-namespace <ns>`.
 - **Image**: Default is `quay.io/maas/maas-controller:latest`. Override in the deployment or via Kustomize.
 - **Gateway name**: The default deny policy targets `maas-default-gateway` in `openshift-ingress`. Edit `config/policies/gateway-default-deny.yaml` if your gateway has a different name.

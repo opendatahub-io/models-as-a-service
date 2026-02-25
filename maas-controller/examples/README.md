@@ -4,19 +4,19 @@ Example MaaS CRs for both **regular** and **premium** simulator LLMInferenceServ
 
 ## Contents
 
-| File | Description |
-|------|-------------|
-| **Models** | |
-| `maas-model.yaml` | Regular simulator (LLMIS `facebook-opt-125m-simulated` in `llm`). |
-| `maas-model-premium.yaml` | Premium simulator (LLMIS `premium-simulated-simulated-premium` in `llm`). |
-| **Regular (system:authenticated)** | |
-| `maas-auth-policy-regular.yaml` | Access for any authenticated user. |
-| `maas-subscription-regular.yaml` | Token limit 100/min for `system:authenticated`. |
-| **Premium (with subscription)** | |
-| `maas-auth-policy-premium.yaml` | Access for group `premium-user`. |
-| `maas-subscription-premium.yaml` | Token limit 1000/min for `premium-user`. |
-| **Premium (policy only, no subscription)** | |
-| `maas-auth-policy-premium-no-sub.yaml` | Access for group `premium-viewer` with **no** MaaSSubscription. These users pass auth but get no token quota and will receive 429 from the gateway default-deny policy. |
+| File | Namespace | Description |
+|------|-----------|-------------|
+| **Models** | | |
+| `maas-model.yaml` | llm | Regular simulator (LLMIS `facebook-opt-125m-simulated` in `llm`). |
+| `maas-model-premium.yaml` | llm | Premium simulator (LLMIS `premium-simulated-simulated-premium` in `llm`). |
+| **Regular (system:authenticated)** | | |
+| `maas-auth-policy-regular.yaml` | models-as-a-service | Access for any authenticated user. |
+| `maas-subscription-regular.yaml` | models-as-a-service | Token limit 100/min for `system:authenticated`. |
+| **Premium (with subscription)** | | |
+| `maas-auth-policy-premium.yaml` | models-as-a-service | Access for group `premium-user`. |
+| `maas-subscription-premium.yaml` | models-as-a-service | Token limit 1000/min for `premium-user`. |
+| **Premium (policy only, no subscription)** | | |
+| `maas-auth-policy-premium-no-sub.yaml` | models-as-a-service | Access for group `premium-viewer` with **no** MaaSSubscription. These users pass auth but get no token quota and will receive 429 from the gateway default-deny policy. |
 
 ## Layout summary
 

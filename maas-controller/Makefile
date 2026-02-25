@@ -59,7 +59,7 @@ uninstall:
 # buildah uses "bud" (build-using-dockerfile) instead of "build"
 BUILD_CMD := $(if $(filter buildah,$(CONTAINER_RUNTIME)),bud,build)
 image-build:
-	$(CONTAINER_RUNTIME) $(BUILD_CMD) -t $(FULL_IMAGE) -f Containerfile .
+	$(CONTAINER_RUNTIME) $(BUILD_CMD) -t $(FULL_IMAGE) --platform linux/amd64 -f Containerfile .
 	@echo "Built $(FULL_IMAGE) with $(CONTAINER_RUNTIME)"
 
 # Alias for image-build (backward compatibility)
