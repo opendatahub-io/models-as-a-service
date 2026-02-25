@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-logr/logr"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -45,6 +46,7 @@ func authPolicyTestRESTMapper() apimeta.RESTMapper {
 	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSAuthPolicy"}, ns)
 	m.Add(schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}, ns)
 	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"}, ns)
 	return m
 }
 
@@ -164,6 +166,79 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 					t.Errorf("spec.targetRef.name = %q: expected controller to overwrite sentinel value %q", targetRefName, "sentinel-route")
 				} else {
 					t.Errorf("spec.targetRef.name = %q: expected controller to preserve sentinel value %q (managed=false opt-out)", targetRefName, "sentinel-route")
+				}
+			}
+		})
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_DeleteAnnotation verifies that deleteModelAuthPolicy
+// respects the opt-out annotation: an AuthPolicy with opendatahub.io/managed=false or maas.opendatahub.io/managed=false must not be deleted.
+func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		authPolicyName = "maas-auth-" + modelName
+	)
+
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		wantDeleted bool
+	}{
+		{
+			name:        "annotation absent: controller deletes",
+			annotations: map[string]string{},
+			wantDeleted: true,
+		},
+		{
+			name:        "managed=false (new annotation): controller must not delete",
+			annotations: map[string]string{ManagedByODHOperator: "true"},
+			wantDeleted: true,
+		},
+		{
+			name:        "managed=false (new annotation): controller must not delete",
+			annotations: map[string]string{ManagedByODHOperator: "false"},
+			wantDeleted: false,
+		},
+		{
+			name:        "managed=false (legacy annotation): controller must not delete",
+			annotations: map[string]string{ManagedByMaasODHOperator: "true"},
+			wantDeleted: true,
+		},
+		{
+			name:        "managed=false (legacy annotation): controller must not delete",
+			annotations: map[string]string{ManagedByMaasODHOperator: "false"},
+			wantDeleted: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			existingAP := newPreexistingAuthPolicy(authPolicyName, namespace, modelName, tc.annotations)
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(authPolicyTestRESTMapper()).
+				WithObjects(existingAP).
+				Build()
+
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+			if err := r.deleteModelAuthPolicy(context.Background(), logr.Discard(), modelName); err != nil {
+				t.Fatalf("deleteModelAuthPolicy: unexpected error: %v", err)
+			}
+
+			got := &unstructured.Unstructured{}
+			got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+			err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got)
+
+			if tc.wantDeleted {
+				if !apierrors.IsNotFound(err) {
+					t.Errorf("expected AuthPolicy %q to be deleted, but it still exists", authPolicyName)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected AuthPolicy %q to survive deletion (managed=false opt-out), but got: %v", authPolicyName, err)
 				}
 			}
 		})
