@@ -22,6 +22,7 @@
 # ADVANCED OPTIONS (PR Testing):
 #   --operator-catalog <image>    Custom operator catalog image
 #   --operator-image <image>      Custom operator image (patches CSV)
+#   --maas-api-image <image>      Custom MaaS API container image
 #   --channel <channel>           Operator channel override
 #
 # ENVIRONMENT VARIABLES:
@@ -80,6 +81,7 @@ DRY_RUN="${DRY_RUN:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
+MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -132,6 +134,10 @@ ADVANCED OPTIONS (PR Testing):
   --operator-image <image>
       Custom operator image (patches CSV after install)
       Example: quay.io/opendatahub/opendatahub-operator:pr-456
+
+  --maas-api-image <image>
+      Custom MaaS API container image (PR testing)
+      Example: quay.io/opendatahub/maas-api:pr-456
 
   --channel <channel>
       Operator channel override
@@ -227,6 +233,11 @@ parse_arguments() {
       --operator-image)
         require_flag_value "$1" "${2:-}"
         OPERATOR_IMAGE="$2"
+        shift 2
+        ;;
+      --maas-api-image)
+        require_flag_value "$1" "${2:-}"
+        MAAS_API_IMAGE="$2"
         shift 2
         ;;
       --channel)
@@ -336,6 +347,9 @@ main() {
   log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
+  if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
+    log_info "  MaaS API image: $MAAS_API_IMAGE"
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log_info "DRY RUN MODE - no changes will be applied"
@@ -445,26 +459,25 @@ deploy_via_kustomize() {
   # Install rate limiter component (RHCL or Kuadrant)
   install_policy_engine
 
-  # Set up MaaS API image if specified
-  trap cleanup_maas_api_image EXIT INT TERM
-  set_maas_api_image
+  local overlay="$project_root/deployment/overlays/http-backend"
+  if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
+    log_info "Using TLS backend overlay"
+    overlay="$project_root/deployment/overlays/tls-backend"
+  else
+    log_info "Using HTTP backend overlay"
+  fi
 
-  # Create namespace if it doesn't exist (kustomize mode uses maas-api namespace)
-  # This must be done before applying manifests that target this namespace
+  # Set namespace and image from script (overlay kustomization is restored on exit)
+  trap 'cleanup_maas_api_image; cleanup_overlay_namespace' EXIT INT TERM
+  set_maas_api_image
+  set_overlay_namespace "$overlay" "$NAMESPACE"
+
   if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
     log_info "Creating namespace: $NAMESPACE"
     kubectl create namespace "$NAMESPACE"
   fi
 
-  # Apply kustomize manifests
   log_info "Applying kustomize manifests..."
-
-  local overlay="$project_root/deployment/overlays/openshift"
-  if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
-    log_info "Using TLS backend overlay"
-    overlay="$project_root/deployment/overlays/tls-backend"
-  fi
-
   kubectl apply --server-side=true -f <(kustomize build "$overlay")
 
   # Configure TLS backend (if enabled)
