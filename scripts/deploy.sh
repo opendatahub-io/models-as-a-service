@@ -500,30 +500,50 @@ deploy_via_kustomize() {
 #──────────────────────────────────────────────────────────────
 
 install_optional_operators() {
-  log_info "Installing optional operators (cert-manager and LWS in parallel)..."
+  log_info "Installing optional operators in parallel..."
 
   local data_dir="${SCRIPT_DIR}/data"
 
-  # Apply both subscriptions so OLM can process them in parallel
-  log_info "Applying cert-manager and LWS subscriptions..."
-  if ! kubectl apply -f "${data_dir}/cert-manager-subscription.yaml"; then
-    log_error "Failed to apply cert-manager subscription"
+  # Apply both subscriptions in parallel (they're independent)
+  log_info "Applying cert-manager and LeaderWorkerSet subscriptions..."
+  kubectl apply -f "${data_dir}/cert-manager-subscription.yaml" &
+  local cert_manager_pid=$!
+  kubectl apply -f "${data_dir}/lws-subscription.yaml" &
+  local lws_pid=$!
+
+  # Wait for both apply commands to complete and capture individual exit codes
+  local cert_manager_apply_rc=0
+  local lws_apply_rc=0
+  wait $cert_manager_pid || cert_manager_apply_rc=$?
+  wait $lws_pid || lws_apply_rc=$?
+
+  if [[ $cert_manager_apply_rc -ne 0 ]]; then
+    log_error "Failed to apply cert-manager subscription (exit code: $cert_manager_apply_rc)"
     return 1
   fi
-  if ! kubectl apply -f "${data_dir}/lws-subscription.yaml"; then
-    log_error "Failed to apply LWS subscription"
+  if [[ $lws_apply_rc -ne 0 ]]; then
+    log_error "Failed to apply LWS subscription (exit code: $lws_apply_rc)"
     return 1
   fi
 
-  # cert-manager MUST be ready before LWS (LWS depends on it per Red Hat docs)
-  log_info "Waiting for cert-manager operator..."
-  if ! waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator"; then
+  # Wait for both subscriptions to be installed (can run in parallel too)
+  log_info "Waiting for operators to be installed..."
+  waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
+  local cert_wait_pid=$!
+  waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
+  local lws_wait_pid=$!
+
+  # Wait for both to complete and capture individual exit codes
+  local cert_wait_rc=0
+  local lws_wait_rc=0
+  wait $cert_wait_pid || cert_wait_rc=$?
+  wait $lws_wait_pid || lws_wait_rc=$?
+
+  if [[ $cert_wait_rc -ne 0 ]]; then
     log_error "cert-manager operator installation failed"
     return 1
   fi
-
-  log_info "Waiting for LeaderWorkerSet operator..."
-  if ! waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set"; then
+  if [[ $lws_wait_rc -ne 0 ]]; then
     log_error "LWS operator installation failed"
     return 1
   fi
@@ -533,13 +553,11 @@ install_optional_operators() {
   # required to actually deploy the LWS API (controller-manager pods).
   # See: https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/ai_workloads/leader-worker-set-operator
   log_info "Activating LeaderWorkerSet API..."
-  if ! kubectl apply -f "${data_dir}/lws-operator-cr.yaml"; then
-    log_error "Failed to apply LeaderWorkerSetOperator CR"
-    return 1
-  fi
+  kubectl apply -f "${data_dir}/lws-operator-cr.yaml"
 
   log_info "Optional operators installed"
 }
+
 
 #──────────────────────────────────────────────────────────────
 # RATE LIMITER INSTALLATION
