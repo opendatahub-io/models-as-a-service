@@ -15,7 +15,7 @@ User Request
 Gateway (maas-default-gateway)
     │
     ├── Default deny AuthPolicy ──── 401/403 for unconfigured models
-    ├── Default deny TRLP ──────── 429 safety net (defense-in-depth)
+    ├── Default deny TokenRateLimitPolicy ──────── 429 safety net (defense-in-depth)
     │
     ▼
 HTTPRoute (per model)
@@ -46,7 +46,7 @@ Relationships are many-to-many: multiple MaaSAuthPolicies/MaaSSubscriptions can 
 
 ### Model kinds and the provider pattern
 
-MaaSModel's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TRLP). These are registered in `pkg/controller/maas/providers.go`.
+MaaSModel's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TokenRateLimitPolicy). These are registered in `pkg/controller/maas/providers.go`.
 
 | Kind (CRD value) | Behaviour |
 |------------------|-----------|
@@ -98,7 +98,7 @@ The controller watches these resources and re-reconciles automatically:
 
 **MaaSModel deleted:** The controller uses a finalizer to cascade-delete all generated AuthPolicies and TokenRateLimitPolicies for that model. The parent MaaSAuthPolicy and MaaSSubscription CRs remain intact. The underlying LLMInferenceService is not affected.
 
-**MaaSSubscription deleted:** The aggregated TRLP for the model is deleted, then rebuilt from the remaining subscriptions. If no subscriptions remain, the model falls back to the gateway defaults (401/403 from auth if no MaaSAuthPolicy, or 429 from TRLP safety net if auth passes).
+**MaaSSubscription deleted:** The aggregated TokenRateLimitPolicy for the model is deleted, then rebuilt from the remaining subscriptions. If no subscriptions remain, the model falls back to the gateway defaults (401/403 from auth if no MaaSAuthPolicy, or 429 from TokenRateLimitPolicy safety net if auth passes).
 
 **MaaSAuthPolicy deleted:** Same pattern — the aggregated AuthPolicy is rebuilt from remaining auth policies.
 
@@ -202,11 +202,13 @@ maas-controller/scripts/install-examples.sh
 This creates:
 
 **Regular tier**
+
 - `LLMInferenceService/facebook-opt-125m-simulated` in `llm` namespace
 - `MaaSModel/facebook-opt-125m-simulated` in `opendatahub`
 - `MaaSAuthPolicy/simulator-access` (group: `free-user`) and `MaaSSubscription/simulator-subscription` (100 tokens/min)
 
 **Premium tier**
+
 - `LLMInferenceService/premium-simulated-simulated-premium` in `llm` namespace
 - `MaaSModel/premium-simulated-simulated-premium` in `opendatahub`
 - `MaaSAuthPolicy/premium-simulator-access` (group: `premium-user`) and `MaaSSubscription/premium-simulator-subscription` (1000 tokens/min)
@@ -286,6 +288,7 @@ make -C maas-controller uninstall # remove everything
 
 **MaaS CRs stuck in `Failed` state:**
 The controller retries with exponential backoff. If the HTTPRoute doesn't exist yet (KServe still deploying), the CRs will auto-recover when it appears. If they stay stuck, check controller logs:
+
 ```bash
 kubectl logs deployment/maas-controller -n opendatahub --tail=20
 ```
