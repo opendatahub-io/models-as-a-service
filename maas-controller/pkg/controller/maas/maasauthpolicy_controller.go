@@ -330,8 +330,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		refs = append(refs, authPolicyRef{Name: authPolicyName, Namespace: httpRouteNS, Model: modelName})
 
 		spec := map[string]interface{}{
-			"targetRef": map[string]interface{}{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": httpRouteName},
-			"rules":     rule,
+			"targetRef": map[string]interface{}{
+				"group": "gateway.networking.k8s.io",
+				"kind":  "HTTPRoute",
+				"name":  httpRouteName,
+			},
+			"rules": rule,
 		}
 		if err := unstructured.SetNestedMap(authPolicy.Object, spec, "spec"); err != nil {
 			return nil, fmt.Errorf("failed to set spec: %w", err)
