@@ -355,6 +355,10 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 	}
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
+		if isManaged(p) {
+			log.Info("TRLP opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+			continue
+		}
 		log.Info("Deleting TRLP", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete TRLP %s/%s: %w", p.GetNamespace(), p.GetName(), err)
