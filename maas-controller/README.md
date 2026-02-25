@@ -30,7 +30,7 @@ HTTPRoute (per model)
 Model Endpoint (200 OK)
 ```
 
-Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway level by `gateway-default-auth` (AuthPolicy, returns 401/403). The `gateway-default-deny` (TRLP, returns 429) remains as a secondary safety net. Per-route policies created by the controller override both gateway defaults.
+Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway level by `gateway-default-auth` (AuthPolicy, returns 401/403). Per-route policies created by the controller override the gateway defaults.
 
 ### CRDs and what they generate
 
@@ -303,4 +303,4 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build maas-controller/config/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
 - **Image**: Default is `quay.io/maas/maas-controller:latest`. Override in the deployment or via Kustomize.
-- **Gateway name**: The default deny policy targets `maas-default-gateway` in `openshift-ingress`. Edit `config/policies/gateway-default-deny.yaml` if your gateway has a different name.
+- **Gateway name**: The default auth policy targets `maas-default-gateway` in `openshift-ingress`. Edit `config/policies/gateway-default-auth.yaml` if your gateway has a different name.

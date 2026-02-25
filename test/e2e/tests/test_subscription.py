@@ -411,20 +411,20 @@ class TestCascadeDeletion:
         finally:
             _delete_cr("maassubscription", "e2e-temp-sub")
 
-    def test_delete_last_subscription_falls_back_to_deny(self):
-        """Delete all subscriptions for a model -> gateway default deny (429)."""
+    def test_delete_last_subscription_allows_unrestricted(self):
+        """Delete all subscriptions for a model -> no rate limit, auth still passes (200)."""
         token = _get_cluster_token()
         original = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
         assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-            r = _poll_status(token, 429, timeout=30)
+            r = _poll_status(token, 200, timeout=30)
             log.info(f"No subscriptions -> {r.status_code}")
         finally:
             _apply_cr(original)
             _wait_reconcile()
 
-    def test_delete_last_auth_policy_falls_back_to_gateway_deny(self):
+    def test_delete_last_auth_policy_falls_back_to_gateway_auth(self):
         """Delete the auth policy for a model -> gateway default auth (403)."""
         token = _get_cluster_token()
         original = _snapshot_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)

@@ -75,9 +75,7 @@ User Request
     ▼
 Gateway (maas-default-gateway)
     │
-    ├── TokenRateLimitPolicy (gateway-default-deny) ─── targets Gateway (defaults)
-    │       └── defaults: 0 tokens/min (deny all unsubscribed traffic)
-    │       └── OVERRIDDEN by per-route policies below
+    ├── (per-route TRLPs override gateway defaults for subscribed models)
     │
     ▼
 HTTPRoute (per model, created by KServe)
@@ -105,7 +103,6 @@ Model Endpoint
 | MaaSSubscription | opendatahub | User/admin | Defines per-model token rate limits for owner groups |
 | AuthPolicy (generated) | llm | maas-controller | Per-model auth, one per (MaaSAuthPolicy, model) pair |
 | TokenRateLimitPolicy (generated) | llm | maas-controller | Per-model rate limits, one per (MaaSSubscription, model) pair |
-| TokenRateLimitPolicy `gateway-default-deny` | openshift-ingress | maas-controller install | Deny all by default (0 tokens) for models without a subscription |
 
 ### How admins configure it
 

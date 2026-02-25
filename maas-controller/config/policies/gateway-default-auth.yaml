@@ -14,7 +14,7 @@
 # IMPORTANT: Per-route AuthPolicies completely replace these defaults (atomic strategy).
 # This policy ensures unconfigured models are denied at the auth layer (401/403)
 # rather than the rate-limit layer (429), giving users correct HTTP semantics.
-# The gateway-default-deny TRLP remains as a secondary safety net.
+# Per-route TRLPs (created by the MaaSSubscription controller) handle rate limiting.
 apiVersion: kuadrant.io/v1
 kind: AuthPolicy
 metadata:
