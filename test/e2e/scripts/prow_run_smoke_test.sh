@@ -357,9 +357,13 @@ run_subscription_tests() {
     local reports_dir="$test_dir/reports"
     mkdir -p "$reports_dir"
 
-    if [[ -d "$test_dir/.venv" ]]; then
-        source "$test_dir/.venv/bin/activate"
+    if [[ ! -d "$test_dir/.venv" ]]; then
+        echo "Creating Python venv for subscription tests..."
+        python3 -m venv "$test_dir/.venv" --upgrade-deps
     fi
+    source "$test_dir/.venv/bin/activate"
+    python -m pip install --upgrade pip --quiet
+    python -m pip install -r "$test_dir/requirements.txt" --quiet
 
     local user
     user="$(oc whoami 2>/dev/null || echo 'unknown')"
