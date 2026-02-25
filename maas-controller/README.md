@@ -247,17 +247,31 @@ See [docs/samples/maas-system/README.md](../docs/samples/maas-system/README.md) 
 
 ## Opting out of controller management
 
-By default, the controller overwrites manual edits to generated AuthPolicies and TokenRateLimitPolicies. To prevent this for a specific policy, annotate it:
+By default, the controller owns generated AuthPolicies and TokenRateLimitPolicies: it overwrites manual edits on reconciliation and deletes them when the owning MaaS resource is removed. To opt a specific policy out of both behaviours, annotate it:
 
 ```bash
-kubectl annotate authpolicy <name> -n <namespace> maas.opendatahub.io/managed=false
+# AuthPolicy
+kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed=false
+
+# TokenRateLimitPolicy
+kubectl annotate tokenratelimitpolicy <name> -n <namespace> opendatahub.io/managed=false
 ```
 
 Remove the annotation to re-enable controller management:
 
 ```bash
-kubectl annotate authpolicy <name> -n <namespace> maas.opendatahub.io/managed-
+kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed-
+kubectl annotate tokenratelimitpolicy <name> -n <namespace> opendatahub.io/managed-
 ```
+
+> **Note:** The legacy annotation `maas.opendatahub.io/managed=false` is still honoured for backwards compatibility but is deprecated. Prefer `opendatahub.io/managed=false` for new annotations.
+
+> **Warning: orphaned resources.** An opted-out policy can become permanently orphaned (no longer reconciled and not deleted) in two situations:
+>
+> - **Last owner deleted.** When the last `MaaSAuthPolicy` or `MaaSSubscription` that references a model is deleted, the controller skips deletion of any opted-out generated policy for that model. The policy will persist until the `MaaSModel` itself is deleted.
+> - **Model reference removed.** When a model is removed from a `MaaSAuthPolicy.spec.modelRefs` or `MaaSSubscription.spec.modelRefs` (edit rather than deletion), the controller does not clean up the generated policy for that model regardless of the opt-out annotation.
+>
+> In both cases, manually delete the orphaned resource when it is no longer needed.
 
 ## Build and push image
 
