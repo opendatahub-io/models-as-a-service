@@ -5,9 +5,9 @@
 
 -- name: CreateAPIKey :exec
 INSERT INTO api_keys (
-    id, username, name, description, key_hash, status, created_at, expires_at
+    id, username, name, description, key_hash, user_groups, status, created_at, expires_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
 );
 
 -- name: GetAPIKeyByID :one
@@ -17,7 +17,7 @@ WHERE id = $1;
 
 -- name: GetAPIKeyByHash :one
 -- Critical path: called on every authenticated request via Authorino
-SELECT id, username, name, description, status, last_used_at
+SELECT id, username, name, description, user_groups, status, last_used_at
 FROM api_keys
 WHERE key_hash = $1;
 

@@ -17,7 +17,7 @@ type ApiKey struct {
 	Description *string            `json:"description"`
 	KeyHash     string             `json:"key_hash"`
 	Status      string             `json:"status"`
-	UserGroups  string             `json:"user_groups"`
+	UserGroups  []string           `json:"user_groups"`
 	CreatedAt   time.Time          `json:"created_at"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`

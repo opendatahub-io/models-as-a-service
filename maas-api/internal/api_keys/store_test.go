@@ -66,7 +66,7 @@ func TestAPIKeyOperations(t *testing.T) {
 	defer store.Close()
 
 	t.Run("AddKey", func(t *testing.T) {
-		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", `["system:authenticated","premium-user"]`, nil)
+		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", []string{"system:authenticated", "premium-user"}, nil)
 		require.NoError(t, err)
 
 		params := api_keys.PaginationParams{Limit: 10, Offset: 0}
@@ -102,7 +102,7 @@ func TestAPIKeyOperations(t *testing.T) {
 
 	t.Run("UpdateLastUsed", func(t *testing.T) {
 		// Add another key for this test
-		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", `["system:authenticated","free-user"]`, nil)
+		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", []string{"system:authenticated", "free-user"}, nil)
 		require.NoError(t, err)
 
 		err = store.UpdateLastUsed(ctx, "key-id-2")
@@ -127,7 +127,7 @@ func TestList(t *testing.T) {
 		keyID := fmt.Sprintf("key-%d", i)
 		keyHash := fmt.Sprintf("hash-%d", i)
 		name := fmt.Sprintf("Key %d", i)
-		err := store.AddKey(ctx, username, keyID, keyHash, name, "", `["system:authenticated"]`, nil)
+		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 

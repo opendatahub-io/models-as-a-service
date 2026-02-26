@@ -63,7 +63,7 @@ type PaginatedResult struct {
 	HasMore bool
 }
 
-// ListAPIKeysResponse is the HTTP response for GET /v2/api-keys.
+// ListAPIKeysResponse is the HTTP response for GET /v1/api-keys.
 type ListAPIKeysResponse struct {
 	Object  string           `json:"object"`   // Always "list"
 	Data    []ApiKeyMetadata `json:"data"`

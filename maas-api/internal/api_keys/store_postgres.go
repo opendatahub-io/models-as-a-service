@@ -6,12 +6,12 @@ package api_keys
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -34,38 +34,10 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 	}
 }
 
-// Add stores a legacy API key (for backward compatibility with K8s SA tokens).
-func (s *PostgresStore) Add(ctx context.Context, username string, apiKey *APIKey, userGroups string) error {
-	if apiKey.JTI == "" {
-		return ErrEmptyJTI
-	}
-	if apiKey.Name == "" {
-		return ErrEmptyName
-	}
-
-	var createdAt time.Time
-	if apiKey.IssuedAt > 0 {
-		createdAt = time.Unix(apiKey.IssuedAt, 0).UTC()
-	} else {
-		createdAt = time.Now().UTC()
-	}
-	expiresAt := time.Unix(apiKey.ExpiresAt, 0).UTC()
-
-	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, status, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, '', $5, 'active', $6, $7)
-	`
-	_, err := s.db.ExecContext(ctx, query, apiKey.JTI, username, apiKey.Name, apiKey.Description, userGroups, createdAt, expiresAt)
-	if err != nil {
-		return fmt.Errorf("failed to insert key: %w", err)
-	}
-	return nil
-}
-
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description, userGroups string, expiresAt *time.Time) error {
+func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -75,7 +47,7 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, na
 	if keyHash == "" {
 		return errors.New("key hash is required")
 	}
-	if userGroups == "" {
+	if len(userGroups) == 0 {
 		return errors.New("user groups are required")
 	}
 
@@ -83,7 +55,8 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, na
 		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, status, created_at, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
 	`
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, userGroups, time.Now().UTC(), expiresAt)
+	// Use pq.Array to handle PostgreSQL TEXT[] type
+	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), time.Now().UTC(), expiresAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
@@ -240,9 +213,11 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 
 	var k ApiKeyMetadata
 	var expiresAt, lastUsedAt sql.NullTime
-	var description, userGroups sql.NullString
+	var description sql.NullString
+	var userGroups []string
 
-	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, &userGroups, &k.Status, &expiresAt, &lastUsedAt); err != nil {
+	// Use pq.Array to scan PostgreSQL TEXT[] into []string
+	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Status, &expiresAt, &lastUsedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}
@@ -252,13 +227,9 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 	if description.Valid {
 		k.Description = description.String
 	}
-	if userGroups.Valid && userGroups.String != "" {
-		// Parse JSON array of groups
-		var groups []string
-		if err := json.Unmarshal([]byte(userGroups.String), &groups); err == nil {
-			k.OriginalUserGroups = groups
-		}
-	}
+	// user_groups is now directly scanned as []string - no JSON parsing needed
+	k.OriginalUserGroups = userGroups
+
 	if lastUsedAt.Valid {
 		k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
 	}

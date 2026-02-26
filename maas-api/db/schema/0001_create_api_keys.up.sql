@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     description TEXT,
     key_hash TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
-    user_groups TEXT NOT NULL, -- JSON array of user's groups at creation time
+    user_groups TEXT[] NOT NULL, -- PostgreSQL array of user's groups at creation time (immutable)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ,
     last_used_at TIMESTAMPTZ,
@@ -27,3 +27,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
 
 -- Index for finding stale keys (audit/cleanup queries)
 CREATE INDEX IF NOT EXISTS idx_api_keys_last_used ON api_keys(last_used_at) WHERE last_used_at IS NOT NULL;
+
+-- GIN index for efficient array queries (e.g., WHERE 'admin-users' = ANY(user_groups))
+CREATE INDEX IF NOT EXISTS idx_api_keys_user_groups ON api_keys USING GIN (user_groups);

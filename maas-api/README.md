@@ -169,35 +169,11 @@ TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token)
 ```
 
 > [!NOTE]
-> This is a self-service endpoint that issues ephemeral tokens. Openshift Identity (`$(oc whoami -t)`) is used as a refresh token.
+> ServiceAccount-based tokens have been removed. All authentication now uses API keys (`sk-oai-*` format) with hash-based storage.
 
-##### API Keys (Named Tokens)
+##### API Keys
 
-**V1 Legacy API Keys (ServiceAccount-backed):**
-
-To create a legacy named API key (ServiceAccount-backed, will be deprecated):
-
-```shell
-HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
-
-# Create a legacy named API key (ServiceAccount-backed)
-API_KEY_RESPONSE=$(curl -sSk \
-  -H "Authorization: Bearer $(oc whoami -t)" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{
-    "expiration": "720h",
-    "name": "my-application-key"
-  }' \
-  "${HOST}/maas-api/v1/api-keys")
-
-echo $API_KEY_RESPONSE | jq -r .
-TOKEN=$(echo $API_KEY_RESPONSE | jq -r .token)
-```
-
-**V2 API Keys (Hash-based, Recommended):**
-
-The V2 API uses hash-based API keys with OpenAI-compatible format (`sk-oai-*`). These keys support both permanent and expiring modes.
+The API uses hash-based API keys with OpenAI-compatible format (`sk-oai-*`). These keys support both permanent and expiring modes.
 
 ```shell
 HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
@@ -211,7 +187,7 @@ API_KEY_RESPONSE=$(curl -sSk \
     "name": "my-permanent-key",
     "description": "Production API key for my application"
   }' \
-  "${HOST}/maas-api/v2/api-keys")
+  "${HOST}/maas-api/v1/api-keys")
 
 echo $API_KEY_RESPONSE | jq -r .
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
@@ -226,7 +202,7 @@ API_KEY_RESPONSE=$(curl -sSk \
     "description": "90-day test key",
     "expiresIn": "90d"
   }' \
-  "${HOST}/maas-api/v2/api-keys")
+  "${HOST}/maas-api/v1/api-keys")
 
 echo $API_KEY_RESPONSE | jq -r .
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
@@ -237,35 +213,27 @@ API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 
 **Managing API Keys:**
 
-List, get, and delete operations use V2 endpoints and work for both V1 and V2 keys:
-
 ```shell
-# List all your API keys (both v1 and v2)
+# List all your API keys
 curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
-  "${HOST}/maas-api/v2/api-keys" | jq .
+  "${HOST}/maas-api/v1/api-keys" | jq .
 
 # Get specific API key by ID
 API_KEY_ID="<id-from-list>"
 curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
-  "${HOST}/maas-api/v2/api-keys/${API_KEY_ID}" | jq .
+  "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}" | jq .
 
 # Revoke specific API key
 curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -X DELETE \
-  "${HOST}/maas-api/v2/api-keys/${API_KEY_ID}"
-
-# Revoke all tokens (ephemeral and API keys)
-curl -sSk \
-  -H "Authorization: Bearer $(oc whoami -t)" \
-  -X DELETE \
-  "${HOST}/maas-api/v1/tokens"
+  "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}"
 ```
 
 > [!NOTE]
-> V2 API keys use hash-based storage (only SHA-256 hash stored, never plaintext). They are OpenAI-compatible (sk-oai-* format) and support optional expiration. V1 legacy keys are ServiceAccount-backed and will be deprecated in a future release. API keys are stored in the configured database (see [Storage Configuration](#storage-configuration)) with metadata including creation date, expiration date, and status.
+> API keys use hash-based storage (only SHA-256 hash stored, never plaintext). They are OpenAI-compatible (sk-oai-* format) and support optional expiration. API keys are stored in the configured database (see [Storage Configuration](#storage-configuration)) with metadata including creation date, expiration date, and status.
 
 ### Storage Configuration
 

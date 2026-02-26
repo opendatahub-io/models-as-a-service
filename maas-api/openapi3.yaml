@@ -296,9 +296,9 @@ paths:
         post:
             tags:
                 - api-keys
-            summary: Create a legacy ServiceAccount-backed API key
-            description: "LEGACY: Creates a ServiceAccount-backed API key (JWT format). This endpoint is maintained for backwards compatibility. New applications should use POST /v2/api-keys for hash-based keys. List/get/delete operations have moved to /v2/api-keys endpoints."
-            operationId: api-keys#create-legacy
+            summary: Create a hash-based API key
+            description: "Creates a hash-based API key (sk-oai-* format) with optional expiration. The plaintext key is shown only once at creation."
+            operationId: api-keys#create
             requestBody:
                 required: true
                 content:
@@ -327,7 +327,7 @@ paths:
                     description: Bad Request response.
                 "401":
                     description: Unauthorized response.
-    /v2/api-keys:
+    /v1/api-keys:
         post:
             tags:
                 - api-keys-v2
@@ -400,7 +400,7 @@ paths:
             tags:
                 - api-keys-v2
             summary: List API keys for the authenticated user with pagination
-            description: Returns a paginated list of all API key metadata (both v1 and v2 keys) for the current user with their creation dates, expiration dates, and status.
+            description: Returns a paginated list of all API key metadata for the current user with their creation dates, expiration dates, and status.
             operationId: api-keys-v2#list
             parameters:
                 - in: query
@@ -457,12 +457,12 @@ paths:
                                         error: "invalid offset parameter: must be non-negative"
                 "401":
                     description: Unauthorized response.
-    /v2/api-keys/{id}:
+    /v1/api-keys/{id}:
         get:
             tags:
                 - api-keys-v2
             summary: Get a specific API key by ID
-            description: Returns metadata for a single API key by its ID (works for both v1 and v2 keys).
+            description: Returns metadata for a single API key by its ID.
             operationId: api-keys-v2#get
             parameters:
                 - in: path

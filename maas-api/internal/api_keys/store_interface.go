@@ -21,15 +21,11 @@ const (
 )
 
 type MetadataStore interface {
-	// Add stores a legacy API key (ServiceAccount-based tokens)
-	// userGroups is a JSON array of user's groups (used for authorization)
-	Add(ctx context.Context, username string, apiKey *APIKey, userGroups string) error
-
 	// AddKey stores an API key with hash-only storage (no plaintext).
 	// Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
-	// userGroups is a JSON array of user's groups (used for authorization).
+	// userGroups is an array of user's groups (used for authorization).
 	// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-	AddKey(ctx context.Context, username string, keyID, keyHash, name, description, userGroups string, expiresAt *time.Time) error
+	AddKey(ctx context.Context, username string, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time) error
 
 	// List returns a paginated list of API keys with optional filtering.
 	// Pagination is mandatory - no unbounded queries allowed.

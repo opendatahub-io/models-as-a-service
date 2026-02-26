@@ -30,8 +30,6 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 |-----------------------|--------|----------------------------------------------|-------------------|-----------------------------|
 | `/health`             | GET    | Service health check                         | None              | Health status               |
 | `/v1/models`          | GET    | List available models (from MaaSModelRef CRs or LLMInferenceServices) | None              | OpenAI-compatible list      |
-| `/v1/tokens`          | POST   | Issue ephemeral short-lived token            | `{"expiration"}` | Token with expiration       |
-| `/v1/tokens`          | DELETE | Revoke all ephemeral tokens for user         | None              | Success confirmation        |
 | `/v1/api-keys`        | POST   | Create hash-based API key (sk-oai-*)         | `{"name", "description", "expiresIn"}` | API key (shown once) |
 | `/v1/api-keys`        | GET    | List all API keys for user                   | None              | Array of API key metadata   |
 | `/v1/api-keys/{id}`   | GET    | Get specific API key by ID                   | None              | API key metadata            |
@@ -73,7 +71,7 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 - **Target**: `maas-default-gateway` (Gateway)
 - **Authentication**:
   - Service Account tokens (JWT format: `eyJ...`) via `kubernetesTokenReview` (legacy)
-  - Hash-based API keys (OpenAI format: `sk-oai-...`) via HTTP callback to `/internal/v2/api-keys/validate`
+  - Hash-based API keys (OpenAI format: `sk-oai-...`) via HTTP callback to `/internal/v1/api-keys/validate`
 - **Metadata Enrichment**: Calls MaaS API `/v1/tiers/lookup` to determine user tier (cached for 300s)
 - **Authorization**:
   - API key validation (checks key is valid and not revoked)

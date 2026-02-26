@@ -2,7 +2,6 @@ package api_keys
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"slices"
 	"sync"
@@ -34,50 +33,10 @@ func NewMockStore() *MockStore {
 // Compile-time check that MockStore implements MetadataStore.
 var _ MetadataStore = (*MockStore)(nil)
 
-func (m *MockStore) Add(ctx context.Context, username string, apiKey *APIKey, userGroups string) error {
-	if apiKey.JTI == "" {
-		return ErrEmptyJTI
-	}
-	if apiKey.Name == "" {
-		return ErrEmptyName
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var createdAt time.Time
-	if apiKey.IssuedAt > 0 {
-		createdAt = time.Unix(apiKey.IssuedAt, 0).UTC()
-	} else {
-		createdAt = time.Now().UTC()
-	}
-
-	// Parse user groups from JSON
-	var groups []string
-	if userGroups != "" {
-		_ = json.Unmarshal([]byte(userGroups), &groups)
-	}
-
-	m.keys[apiKey.JTI] = &storedKey{
-		metadata: ApiKeyMetadata{
-			ID:                 apiKey.JTI,
-			Name:               apiKey.Name,
-			Description:        apiKey.Description,
-			OriginalUserGroups: groups,
-			Status:             TokenStatusActive,
-			CreationDate:       createdAt.Format(time.RFC3339),
-		},
-		username:  username,
-		expiresAt: time.Unix(apiKey.ExpiresAt, 0).UTC(),
-	}
-
-	return nil
-}
-
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description, userGroups string, expiresAt *time.Time) error {
+func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -93,18 +52,13 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, 
 		expiresAtTime = *expiresAt
 	}
 
-	// Parse user groups from JSON
-	var groups []string
-	if userGroups != "" {
-		_ = json.Unmarshal([]byte(userGroups), &groups)
-	}
-
+	// userGroups is already []string - no parsing needed
 	m.keys[keyID] = &storedKey{
 		metadata: ApiKeyMetadata{
 			ID:                 keyID,
 			Name:               name,
 			Description:        description,
-			OriginalUserGroups: groups,
+			OriginalUserGroups: userGroups,
 			Status:             TokenStatusActive,
 			CreationDate:       time.Now().UTC().Format(time.RFC3339),
 		},

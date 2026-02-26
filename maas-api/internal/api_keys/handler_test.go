@@ -43,7 +43,7 @@ func TestListAPIKeysPagination(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(nil, store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, logger.Development())
 	handler := NewHandler(logger.Development(), service)
 
 	// Create test user and keys
@@ -57,14 +57,14 @@ func TestListAPIKeysPagination(t *testing.T) {
 		keyID := fmt.Sprintf("key-%d", i)
 		keyHash := fmt.Sprintf("hash-%d", i)
 		name := fmt.Sprintf("Key %d", i)
-		err := store.AddKey(context.Background(), testUser.Username, keyID, keyHash, name, "", `["system:authenticated"]`, nil)
+		err := store.AddKey(context.Background(), testUser.Username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 
 	t.Run("DefaultPagination", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v2/api-keys", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys", nil)
 		c.Set("user", testUser)
 
 		handler.ListAPIKeys(c)
@@ -83,7 +83,7 @@ func TestListAPIKeysPagination(t *testing.T) {
 	t.Run("InvalidLimit", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v2/api-keys?limit=abc", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys?limit=abc", nil)
 		c.Set("user", testUser)
 
 		handler.ListAPIKeys(c)
@@ -101,7 +101,7 @@ func TestAdminCanViewAllKeys_RegularUserOnlyOwn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(nil, store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, logger.Development())
 	handler := NewHandler(logger.Development(), service)
 
 	ctx := context.Background()
@@ -113,7 +113,7 @@ func TestAdminCanViewAllKeys_RegularUserOnlyOwn(t *testing.T) {
 			keyID := fmt.Sprintf("%s-key-%d", username, i)
 			keyHash := fmt.Sprintf("%s-hash-%d", username, i)
 			name := fmt.Sprintf("%s Key %d", username, i)
-			err := store.AddKey(ctx, username, keyID, keyHash, name, "", `["system:authenticated"]`, nil)
+			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
 			require.NoError(t, err)
 		}
 	}
@@ -126,7 +126,7 @@ func TestAdminCanViewAllKeys_RegularUserOnlyOwn(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v2/api-keys", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys", nil)
 		c.Set("user", adminUser)
 
 		handler.ListAPIKeys(c)
@@ -146,7 +146,7 @@ func TestAdminCanViewAllKeys_RegularUserOnlyOwn(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v2/api-keys", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys", nil)
 		c.Set("user", regularUser)
 
 		handler.ListAPIKeys(c)
@@ -166,7 +166,7 @@ func TestAdminCanViewAllKeys_RegularUserOnlyOwn(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v2/api-keys?username=bob", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys?username=bob", nil)
 		c.Set("user", regularUser)
 
 		handler.ListAPIKeys(c)
@@ -179,7 +179,7 @@ func TestStatusFiltering(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(nil, store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, logger.Development())
 	handler := NewHandler(logger.Development(), service)
 
 	ctx := context.Background()
@@ -189,9 +189,9 @@ func TestStatusFiltering(t *testing.T) {
 	}
 
 	// Create active and revoked keys
-	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", `["system:authenticated"]`, nil)
+	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", `["system:authenticated"]`, nil)
+	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "revoked-key")
 	require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestStatusFiltering(t *testing.T) {
 	t.Run("FiltersByStatus", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v2/api-keys?status=active", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys?status=active", nil)
 		c.Set("user", testUser)
 
 		handler.ListAPIKeys(c)
@@ -215,7 +215,7 @@ func TestStatusFiltering(t *testing.T) {
 	t.Run("InvalidStatusReturnsError", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v2/api-keys?status=invalid", nil)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys?status=invalid", nil)
 		c.Set("user", testUser)
 
 		handler.ListAPIKeys(c)
@@ -228,7 +228,7 @@ func TestAdminCanCreateForOtherUser_RegularUserCannot(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(nil, store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, logger.Development())
 	handler := NewHandler(logger.Development(), service)
 
 	t.Run("AdminCreatesForOtherUser", func(t *testing.T) {
@@ -241,7 +241,7 @@ func TestAdminCanCreateForOtherUser_RegularUserCannot(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodPost, "/v2/api-keys", nil)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
 		c.Request.Header.Set("Content-Type", "application/json")
 		c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
 		c.Set("user", adminUser)
@@ -269,7 +269,7 @@ func TestAdminCanCreateForOtherUser_RegularUserCannot(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodPost, "/v2/api-keys", nil)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
 		c.Request.Header.Set("Content-Type", "application/json")
 		c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
 		c.Set("user", regularUser)

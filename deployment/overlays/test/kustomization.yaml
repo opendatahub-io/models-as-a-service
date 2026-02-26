@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: maas-api-test
+
+# Simple test deployment - just core MaaS API without gateway/auth
+namespace: opendatahub
+
+resources:
+  - ../../base/maas-api/core
+  - ../../base/maas-api/rbac
+  - ../../base/maas-api/resources
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/part-of: models-as-a-service
+      app.kubernetes.io/component: api
+      app.kubernetes.io/name: maas-api
+
+configMapGenerator:
+- name: maas-parameters
+  literals:
+  - maas-api-image=quay.io/opendatahub/maas-api:latest
+  options:
+    disableNameSuffixHash: true
+
+replacements:
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.maas-api-image
+  targets:
+  - select:
+      kind: Deployment
+      name: maas-api
+    fieldPaths:
+    - spec.template.spec.containers.[name=maas-api].image

@@ -107,67 +107,6 @@ func (h *Handler) parsePaginationParams(c *gin.Context) (PaginationParams, error
 	return params, nil
 }
 
-type CreateRequest struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Expiration  *token.Duration `json:"expiration"`
-}
-
-type Response struct {
-	Token       string `json:"token"`
-	Expiration  string `json:"expiration"`
-	ExpiresAt   int64  `json:"expiresAt"`
-	JTI         string `json:"jti"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}
-
-// CreateServiceAccountAPIKey creates a K8s ServiceAccount-based API key (legacy, will be removed in future).
-func (h *Handler) CreateServiceAccountAPIKey(c *gin.Context) {
-	var req CreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	if req.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "token name is required for api keys"})
-		return
-	}
-
-	if req.Expiration == nil {
-		req.Expiration = &token.Duration{Duration: time.Hour * 24 * 30} // Default to 30 days
-	}
-
-	user := h.getUserContext(c)
-	if user == nil {
-		return
-	}
-
-	expiration := req.Expiration.Duration
-	if err := token.ValidateExpiration(expiration, 10*time.Minute); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	tok, err := h.service.CreateServiceAccountAPIKey(c.Request.Context(), user, req.Name, req.Description, expiration)
-	if err != nil {
-		h.logger.Error("Failed to generate API key",
-			"error", err,
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate api key"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, Response{
-		Token:       tok.Token.Token,
-		Expiration:  tok.Expiration.String(),
-		ExpiresAt:   tok.ExpiresAt,
-		JTI:         tok.JTI,
-		Name:        tok.Name,
-		Description: tok.Description,
-	})
-}
 
 func (h *Handler) ListAPIKeys(c *gin.Context) {
 	user := h.getUserContext(c)
@@ -285,24 +224,6 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 	c.JSON(http.StatusOK, tok)
 }
 
-// RevokeAllTokens handles DELETE /v1/tokens.
-func (h *Handler) RevokeAllTokens(c *gin.Context) {
-	user := h.getUserContext(c)
-	if user == nil {
-		return
-	}
-
-	if err := h.service.RevokeAll(c.Request.Context(), user); err != nil {
-		h.logger.Error("Failed to revoke tokens",
-			"error", err,
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke tokens"})
-		return
-	}
-
-	h.logger.Debug("Successfully revoked tokens")
-	c.Status(http.StatusNoContent)
-}
 
 // CreateAPIKeyRequest is the request body for creating an API key.
 // Keys can be permanent (no expiresIn) or expiring (with expiresIn).
@@ -314,7 +235,7 @@ type CreateAPIKeyRequest struct {
 	Username    string          `json:"username,omitempty"`  // Optional - admin can create for other users
 }
 
-// CreateAPIKey handles POST /v2/api-keys
+// CreateAPIKey handles POST /v1/api-keys
 // Creates a new API key (sk-oai-* format) per Feature Refinement.
 // Keys can be permanent (no expiresIn) or expiring (with expiresIn).
 // Per "Keys Shown Only Once": key is returned ONCE at creation and never again.
@@ -371,7 +292,7 @@ type ValidateAPIKeyRequest struct {
 	Key string `binding:"required" json:"key"`
 }
 
-// ValidateAPIKeyHandler handles POST /internal/v2/api-keys/validate
+// ValidateAPIKeyHandler handles POST /internal/v1/api-keys/validate
 // This endpoint is called by Authorino via HTTP external auth callback
 // Per Feature Refinement "Gateway Integration (Inference Flow)".
 func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {

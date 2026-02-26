@@ -17,7 +17,6 @@ import (
 // ModelsHandler handles model-related endpoints.
 type ModelsHandler struct {
 	modelMgr             *models.Manager
-	tokenManager         *token.Manager
 	subscriptionSelector *subscription.Selector
 	logger               *logger.Logger
 	maasModelRefLister   models.MaaSModelRefLister
@@ -29,7 +28,6 @@ type ModelsHandler struct {
 func NewModelsHandler(
 	log *logger.Logger,
 	modelMgr *models.Manager,
-	tokenMgr *token.Manager,
 	subscriptionSelector *subscription.Selector,
 	maasModelRefLister models.MaaSModelRefLister,
 	maasModelNamespace string,
@@ -39,7 +37,6 @@ func NewModelsHandler(
 	}
 	return &ModelsHandler{
 		modelMgr:             modelMgr,
-		tokenManager:         tokenMgr,
 		subscriptionSelector: subscriptionSelector,
 		logger:               log,
 		maasModelRefLister:   maasModelRefLister,
