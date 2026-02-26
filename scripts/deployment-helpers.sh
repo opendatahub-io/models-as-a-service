@@ -854,8 +854,7 @@ wait_for_csv() {
 
   echo "⏳ Waiting for CSV ${csv_name} to succeed (timeout: ${timeout}s)..."
   while [ $SECONDS -lt $end_time ]; do
-    local phase
-    phase=$(kubectl get csv -n "$namespace" "$csv_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    local phase=$(kubectl get csv -n "$namespace" "$csv_name" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
     local elapsed=$((SECONDS - (end_time - timeout)))
 
     case "$phase" in
@@ -1253,23 +1252,23 @@ wait_authorino_ready() {
 # Python Virtual Environment Functions
 # ==========================================
 
-# setup_python_venv project_root [label]
-#   Creates (if needed), activates, and installs dependencies into a Python venv
-#   at <project_root>/test/e2e/.venv. Shared by smoke.sh and prow_run_smoke_test.sh
-#   so both use the same logic and venv path.
+# setup_python_venv venv_dir [label]
+#   Creates (if needed), activates, and installs dependencies into a Python venv.
+#   Shared by smoke.sh and prow_run_e2e_test.sh so both use the same logic.
 #
 # Arguments:
-#   project_root - Absolute path to the repository root
-#   label        - Optional log prefix (default: "venv")
+#   venv_dir - Absolute path to the virtual environment directory (e.g. test/e2e/.venv)
+#   label    - Optional log prefix (default: "venv")
 #
 # Side effects:
-#   - Creates .venv if it doesn't exist
+#   - Creates venv if it doesn't exist
 #   - Activates the virtual environment (caller must deactivate when done)
-#   - Installs pip + requirements.txt
+#   - Installs pip + requirements.txt from the venv's parent directory
 setup_python_venv() {
-  local project_root="${1:?project_root is required}"
+  local venv_dir="${1:?venv_dir is required}"
   local label="${2:-venv}"
-  local venv_dir="${project_root}/test/e2e/.venv"
+  local requirements_file
+  requirements_file="$(dirname "$venv_dir")/requirements.txt"
 
   if [[ ! -f "${venv_dir}/bin/activate" ]]; then
     echo "[$label] Creating virtual environment at ${venv_dir}"
@@ -1283,6 +1282,6 @@ setup_python_venv() {
 
   # Install dependencies
   python -m pip install --upgrade pip --quiet
-  python -m pip install -r "${project_root}/test/e2e/requirements.txt" --quiet
+  python -m pip install -r "${requirements_file}" --quiet
   echo "[$label] Virtual environment ready"
 }

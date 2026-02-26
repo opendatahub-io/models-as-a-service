@@ -17,17 +17,16 @@
 #      - View user (view role)
 #   5. Run token metadata verification (as admin user)
 #   6. Run smoke tests for each user
-#   7. Run observability tests once as admin (requires cluster-admin for
-#      Prometheus/port-forward access; running as edit/view is redundant)
+#   7. Run observability tests once as admin (as admin user)
 # 
 # USAGE:
-#   ./test/e2e/scripts/prow_run_smoke_test.sh
+#   ./test/e2e/scripts/prow_run_e2e_test.sh
 #
 # CI/CD PIPELINE USAGE:
 #   # Test with pipeline-built images
 #   OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
 #   MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
-#   ./test/e2e/scripts/prow_run_smoke_test.sh
+#   ./test/e2e/scripts/prow_run_e2e_test.sh
 #
 # ENVIRONMENT VARIABLES:
 #   SKIP_DEPLOY     - Skip platform deployment (default: false)
@@ -76,10 +75,6 @@ SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS
 SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
-# Track non-blocking test failures - script continues but exits with error at end.
-# run_observability_tests sets TESTS_FAILED=true (non-blocking) so all smoke runs still complete.
-# All other test functions (smoke tests, token verification, validation) exit 1 immediately.
-TESTS_FAILED=false
 
 # Operator configuration
 # OPERATOR_TYPE determines which operator and policy engine to use:
@@ -322,49 +317,18 @@ run_smoke_tests() {
     fi
 }
 
-# Observability tests are non-blocking: on failure we set TESTS_FAILED and continue
-# so all remaining smoke runs still complete. The script exits non-zero at the end
-# when TESTS_FAILED is set, mirroring smoke-test exit behavior.
-#
-# Observability runs once as admin (cluster-admin) — this validates the full
-# infrastructure: metrics endpoints, Prometheus scraping, labels, and types.
-# Running as edit/view is redundant: metrics pipelines don't depend on who queries them,
-# and port-forward access is an OpenShift RBAC concern, not an observability one.
+# Observability runs once as admin (as admin user) — validates metrics endpoints,
+# Prometheus scraping, labels, and types.
 run_observability_tests() {
     echo "-- Observability Testing --"
     
     if [ "$SKIP_OBSERVABILITY" = false ]; then
-        # Setup Python venv using shared helper from deployment-helpers.sh
-        setup_python_venv "$PROJECT_ROOT" "observability"
-        
-        # Set PYTHONPATH so "from tests.test_helper import …" resolves
-        export PYTHONPATH="${PROJECT_ROOT}/test/e2e:${PYTHONPATH:-}"
-        
-        echo "[observability] Running observability tests..."
-        local REPORTS_DIR="${PROJECT_ROOT}/test/e2e/reports"
-        mkdir -p "${REPORTS_DIR}"
-        
-        local USER
-        USER="$(oc whoami 2>/dev/null || echo 'unknown')"
-        USER="$(printf '%s' "$USER" | tr ':/@\\' '----' | sed 's/--*/-/g; s/^-//; s/-$//')"
-        USER="${USER:-unknown}"
-        local HTML="${REPORTS_DIR}/observability-${USER}.html"
-        local XML="${REPORTS_DIR}/observability-${USER}.xml"
-        
-        if pytest "${PROJECT_ROOT}/test/e2e/tests/test_observability.py" \
-            -v \
-            --tb=short \
-            "--junitxml=${XML}" \
-            --html="${HTML}" --self-contained-html \
-            2>&1; then
-            echo "✅ Observability tests completed successfully"
-        else
+        if ! (cd "$PROJECT_ROOT" && bash test/e2e/observability.sh); then
             echo "❌ ERROR: Observability tests failed"
-            echo "  Reports: ${HTML}"
-            TESTS_FAILED=true
+            exit 1
+        else
+            echo "✅ Observability tests completed successfully"
         fi
-        
-        deactivate 2>/dev/null || true
     else
         echo "⏭️  Skipping observability tests"
     fi
@@ -408,22 +372,11 @@ setup_test_user() {
     echo "✅ User setup completed: $username"
 }
 
-restore_oc_login() {
-    if [[ -n "${INITIAL_OC_TOKEN:-}" && -n "${INITIAL_OC_SERVER:-}" ]]; then
-        oc login --token "$INITIAL_OC_TOKEN" --server "$INITIAL_OC_SERVER" >/dev/null 2>&1 || true
-        echo "Restored oc login to initial user ($(oc whoami 2>/dev/null || echo 'unknown'))."
-    fi
-}
-
 # Main execution
-# Save initial user and set EXIT trap before any check that might exit, so we always restore on exit
 if ! oc whoami &>/dev/null; then
     echo "❌ ERROR: Not logged into OpenShift. Please run 'oc login' first"
     exit 1
 fi
-INITIAL_OC_TOKEN=$(oc whoami -t 2>/dev/null || true)
-INITIAL_OC_SERVER=$(oc whoami --show-server 2>/dev/null || true)
-trap restore_oc_login EXIT
 
 check_prerequisites
 
@@ -435,10 +388,10 @@ else
 
     print_header "Deploying Models"
     deploy_models
-
-    print_header "Installing Observability"
-    install_observability
 fi
+
+print_header "Installing Observability"
+install_observability
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
@@ -480,11 +433,4 @@ VIEW_TOKEN=$(oc create token tester-view-user -n default)
 oc login --token "$VIEW_TOKEN" --server "$K8S_CLUSTER_URL"
 run_smoke_tests
 
-if [[ "${TESTS_FAILED}" == "true" ]]; then
-    echo "❌ Some tests failed — see reports above for details"
-    restore_oc_login
-    exit 1
-fi
-
-restore_oc_login
 echo "🎉 Deployment completed successfully!"

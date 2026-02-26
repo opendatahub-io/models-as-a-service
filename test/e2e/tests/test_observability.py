@@ -346,7 +346,7 @@ class TestObservabilityResources:
 
     def test_telemetry_policy_exists(self, expected_metrics_config):
         """Verify TelemetryPolicy resource is deployed."""
-        cfg = expected_metrics_config["resources"]["telemetry_policy"]
+        cfg = expected_metrics_config["prerequisites"]["telemetry_policy"]
         name = cfg["name"]
         namespace = cfg["namespace"]
 
@@ -361,7 +361,7 @@ class TestObservabilityResources:
 
     def test_telemetry_policy_enforced(self, expected_metrics_config):
         """Verify TelemetryPolicy is enforced (not just deployed)."""
-        cfg = expected_metrics_config["resources"]["telemetry_policy"]
+        cfg = expected_metrics_config["prerequisites"]["telemetry_policy"]
         name = cfg["name"]
         namespace = cfg["namespace"]
         expected = cfg["expected_condition"]
@@ -381,7 +381,7 @@ class TestObservabilityResources:
 
     def test_istio_telemetry_exists(self, expected_metrics_config):
         """Verify Istio Telemetry resource is deployed for per-user latency tracking."""
-        cfg = expected_metrics_config["resources"]["istio_telemetry"]
+        cfg = expected_metrics_config["prerequisites"]["istio_telemetry"]
         name = cfg["name"]
         namespace = cfg["namespace"]
 
@@ -403,7 +403,7 @@ class TestObservabilityResources:
         Either mechanism is acceptable.
         Requires cluster-admin (observability tests run as admin only).
         """
-        cfg = expected_metrics_config["resources"]["limitador_servicemonitor"]
+        cfg = expected_metrics_config["prerequisites"]["limitador_servicemonitor"]
         name = cfg["name"]
         namespace = cfg["namespace"]
 
@@ -538,7 +538,7 @@ class TestLimitadorMetrics:
         """Verify authorized_calls metric is available."""
         metric_name = "authorized_calls"
         cfg = next(
-            (m for m in expected_metrics_config["limitador"]["token_metrics"] if m["name"] == metric_name),
+            (m for m in expected_metrics_config["limitador"]["metrics"] if m["name"] == metric_name),
             None
         )
         assert cfg, f"FAIL: Metric '{metric_name}' not found in configuration"
@@ -563,7 +563,7 @@ class TestLimitadorMetrics:
         """
         metric_name = "limited_calls"
         cfg = next(
-            (m for m in expected_metrics_config["limitador"]["token_metrics"] if m["name"] == metric_name),
+            (m for m in expected_metrics_config["limitador"]["metrics"] if m["name"] == metric_name),
             None
         )
         assert cfg, f"FAIL: Metric '{metric_name}' not found in configuration"
@@ -1634,10 +1634,9 @@ def _collect_all_metrics_with_type(config: dict) -> list[tuple[str, str, str]]:
     entries = []
 
     # Limitador metrics → user-workload Prometheus
-    for section in ("token_metrics", "health_metrics"):
-        for m in config.get("limitador", {}).get(section, []):
-            if "type" in m:
-                entries.append((m["name"], m["type"], "user-workload"))
+    for m in config.get("limitador", {}).get("metrics", []):
+        if "type" in m:
+            entries.append((m["name"], m["type"], "user-workload"))
 
     # Istio gateway metrics → platform Prometheus
     for m in config.get("latency_metrics", {}).get("istio_gateway", {}).get("metrics", []):

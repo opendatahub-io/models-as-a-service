@@ -295,7 +295,7 @@ export MAAS_GATEWAY_HOST="https://maas.apps.your-cluster.example.com"
 For comprehensive end-to-end testing including deployment, user setup, and smoke tests:
 
 ```bash
-./test/e2e/scripts/prow_run_smoke_test.sh
+./test/e2e/scripts/prow_run_e2e_test.sh
 ```
 
 This is the same script used in CI/CD pipelines. It supports testing custom images:
@@ -304,7 +304,7 @@ This is the same script used in CI/CD pipelines. It supports testing custom imag
 # Test PR-built images
 OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
 MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
-./test/e2e/scripts/prow_run_smoke_test.sh
+./test/e2e/scripts/prow_run_e2e_test.sh
 ```
 
 See [test/e2e/README.md](../test/e2e/README.md) for complete testing documentation and CI/CD pipeline usage examples.

@@ -74,7 +74,7 @@ This project follows a **Stream-Lake-Ocean** release model. Code flows from acti
 
 - Kustomize: `./scripts/ci/validate-manifests.sh` (from repo root; requires kustomize 5.7.x).
 - MaaS API: from `maas-api/`, run `make lint` and `make test`.
-- Full E2E (Prow-style): `./test/e2e/scripts/prow_run_smoke_test.sh` (from repo root; requires OpenShift cluster and cluster-admin).
+- Full E2E (Prow-style): `./test/e2e/scripts/prow_run_e2e_test.sh` (from repo root; requires OpenShift cluster and cluster-admin).
 
 ## Testing
 

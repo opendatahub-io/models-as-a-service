@@ -126,73 +126,9 @@ See the deployment scripts documentation at `scripts/README.md` for more informa
 !!! warning "Lazy metric population"
     Many metrics are **lazily registered** — they only appear after the first event triggers them. You **must generate traffic** (steps 4-6 above) before validating metrics. Dashboard panels will show "No Data" until traffic has been sent. This is normal Prometheus client behavior, not a configuration issue.
 
-Check that observability resources are deployed:
+To verify observability is enabled: generate traffic (steps 4-6), then query Prometheus for metrics such as `authorized_hits`, `authorized_calls`, or `vllm:e2e_request_latency_seconds`. If metrics appear, observability is working.
 
-```bash
-# TelemetryPolicy (adds user/tier/model labels to Limitador metrics)
-kubectl get telemetrypolicy -n openshift-ingress
-
-# Istio Telemetry (adds tier label to gateway latency)
-kubectl get telemetry latency-per-tier -n openshift-ingress
-
-# ServiceMonitors (configure Prometheus scraping)
-kubectl get servicemonitor -n kuadrant-system
-kubectl get servicemonitor -n llm
-```
-
-Verify Limitador metrics are available (after sending traffic):
-
-```bash
-# Port-forward to Limitador metrics endpoint
-kubectl port-forward -n kuadrant-system svc/limitador-limitador 8080:8080 &
-sleep 2
-
-# Check for usage metrics (require traffic to populate)
-curl -s http://localhost:8080/metrics | grep -E '^(authorized_hits|authorized_calls|limited_calls)'
-
-# Clean up
-kill %1
-```
-
-Verify vLLM metrics from model pods (after sending inference requests):
-
-```bash
-# Check metrics directly from the model pod
-MODEL_POD=$(kubectl get pods -n llm -l kserve.io/component=workload -o name | head -1)
-kubectl exec -n llm "$MODEL_POD" -- curl -sk https://localhost:8000/metrics | \
-  grep -E '^vllm:' | sed 's/{.*//' | sort -u
-```
-
-!!! note "curl availability"
-    The `kubectl exec ... curl` command assumes `curl` is available in the model container.
-    The simulator image includes `curl`, but production model images (e.g., stock vLLM) may not.
-    As an alternative, use `kubectl port-forward` with a local `curl`:
-
-    ```bash
-    kubectl port-forward -n llm "$MODEL_POD" 8000:8000 &
-    curl -sk https://localhost:8000/metrics | grep -E '^vllm:' | sed 's/{.*//' | sort -u
-    kill %1
-    ```
-
-!!! tip "Expected vLLM metrics after traffic"
-    After sending at least one inference request, you should see metrics including:
-    `vllm:e2e_request_latency_seconds`, `vllm:time_to_first_token_seconds`,
-    `vllm:inter_token_latency_seconds`, `vllm:request_prompt_tokens`,
-    `vllm:request_generation_tokens`, `vllm:num_requests_running`,
-    `vllm:kv_cache_usage_perc`, and `vllm:request_success_total`.
-    If these are missing, ensure traffic has been sent and the ServiceMonitor
-    `kserve-llm-models` exists in the `llm` namespace.
-
-Verify metrics are being scraped into Prometheus:
-
-```bash
-# Check Prometheus targets (requires cluster-admin for platform Prometheus)
-kubectl exec -n openshift-user-workload-monitoring prometheus-user-workload-0 \
-  -c prometheus -- curl -s http://localhost:9090/api/v1/targets | \
-  jq '.data.activeTargets[] | select(.labels.namespace=="kuadrant-system" or .labels.namespace=="llm") | {job: .labels.job, health: .health}'
-```
-
-For detailed observability configuration and metric reference, see [Observability](../advanced-administration/observability.md).
+For troubleshooting (resource checks, port-forward to endpoints, Prometheus targets), see [Observability](../advanced-administration/observability.md).
 
 ## Automated Validation
 
