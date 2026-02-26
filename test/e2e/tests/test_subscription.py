@@ -129,15 +129,25 @@ def _wait_reconcile(seconds=None):
 
 def _poll_status(token, expected, path=None, extra_headers=None, timeout=None, poll_interval=2):
     """Poll inference endpoint until expected HTTP status or timeout."""
-    timeout = timeout or max(RECONCILE_WAIT * 3, 30)
+    timeout = timeout or max(RECONCILE_WAIT * 3, 60)
     deadline = time.time() + timeout
     last = None
+    last_err = None
     while time.time() < deadline:
-        r = _inference(token, path=path, extra_headers=extra_headers)
-        if r.status_code == expected:
-            return r
-        last = r
+        try:
+            r = _inference(token, path=path, extra_headers=extra_headers)
+            last_err = None
+            if r.status_code == expected:
+                return r
+            last = r
+        except requests.RequestException as exc:
+            last_err = exc
+            log.debug(f"Transient request error while polling: {exc}")
         time.sleep(poll_interval)
+    if last_err:
+        raise AssertionError(
+            f"Expected {expected} within {timeout}s, last error: {last_err}"
+        )
     actual = last.status_code if last else "no response"
     raise AssertionError(
         f"Expected {expected} within {timeout}s, last status: {actual}"
@@ -168,11 +178,11 @@ class TestAuthEnforcement:
     """Tests that MaaSAuthPolicy correctly enforces access."""
 
     def test_authorized_user_gets_200(self):
-        """Admin user (in system:authenticated) should access the free model."""
+        """Admin user (in system:authenticated) should access the free model.
+        Polls because AuthPolicies may still be syncing with Authorino."""
         token = _get_cluster_token()
-        r = _inference(token)
+        r = _poll_status(token, 200, timeout=90)
         log.info(f"Authorized user -> {r.status_code}")
-        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
 
     def test_no_auth_gets_401(self):
         """Request without auth header should get 401."""
@@ -209,9 +219,10 @@ class TestSubscriptionEnforcement:
     """Tests that MaaSSubscription correctly enforces rate limits."""
 
     def test_subscribed_user_gets_200(self):
+        """Subscribed user should access the model. Polls for AuthPolicy enforcement."""
         token = _get_cluster_token()
-        r = _inference(token)
-        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
+        r = _poll_status(token, 200, timeout=90)
+        log.info(f"Subscribed user -> {r.status_code}")
 
     def test_auth_pass_no_subscription_gets_429(self):
         """SA granted auth but with no subscription should get 429."""

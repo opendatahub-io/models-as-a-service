@@ -21,6 +21,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
@@ -175,6 +176,9 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	tierMapper := tier.NewMapper(log, cluster.ConfigMapLister, cfg.Name, cfg.Namespace)
 	v1Routes.POST("/tiers/lookup", tier.NewHandler(tierMapper).TierLookup)
+
+	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister)
+	v1Routes.POST("/subscriptions/select", subscription.NewHandler(log, subscriptionSelector).SelectSubscription)
 
 	modelManager, err := models.NewManager(log)
 	if err != nil {

@@ -52,6 +52,7 @@ func main() {
 	var probeAddr string
 	var gatewayName string
 	var gatewayNamespace string
+	var maasAPINamespace string
 	var clusterAudience string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
@@ -60,6 +61,7 @@ func main() {
 		"Enable leader election for controller manager.")
 	flag.StringVar(&gatewayName, "gateway-name", "maas-default-gateway", "The name of the Gateway resource to use for model HTTPRoutes.")
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "The namespace of the Gateway resource.")
+	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "maas-api", "The namespace where maas-api service is deployed.")
 	flag.StringVar(&clusterAudience, "cluster-audience", "https://kubernetes.default.svc", "The OIDC audience of the cluster for TokenReview. HyperShift/ROSA clusters use a custom OIDC provider URL.")
 
 	opts := zap.Options{Development: false}
@@ -90,10 +92,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&maas.MaaSAuthPolicyReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		GatewayName:     gatewayName,
-		ClusterAudience: clusterAudience,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		MaaSAPINamespace: maasAPINamespace,
+    GatewayName:      gatewayName,
+		ClusterAudience:  clusterAudience,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
 		os.Exit(1)

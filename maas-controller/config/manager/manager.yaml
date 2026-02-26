@@ -29,12 +29,15 @@ spec:
           - --health-probe-bind-address=:8081
           - --gateway-name=$(GATEWAY_NAME)
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
+          - --maas-api-namespace=$(MAAS_API_NAMESPACE)
           - --cluster-audience=$(CLUSTER_AUDIENCE)
         env:
           - name: GATEWAY_NAME
             value: "maas-default-gateway"
           - name: GATEWAY_NAMESPACE
             value: "openshift-ingress"
+          - name: MAAS_API_NAMESPACE
+            value: "opendatahub"
           - name: CLUSTER_AUDIENCE
             value: "https://kubernetes.default.svc"
         image: quay.io/maas/maas-controller:latest

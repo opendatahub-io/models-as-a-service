@@ -53,7 +53,7 @@ type Config struct {
 	GatewayNamespace string
 
 	// Server configuration
-	Address string // Listen address (host:port)
+	Address string // Listen address for HTTPS (host:port)
 	Secure  bool   // Use HTTPS
 	TLS     TLSConfig
 
@@ -115,7 +115,7 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.GatewayName, "gateway-name", c.GatewayName, "Name of the Gateway that has MaaS capabilities")
 	fs.StringVar(&c.GatewayNamespace, "gateway-namespace", c.GatewayNamespace, "Namespace where MaaS-enabled Gateway is deployed")
 
-	fs.StringVar(&c.Address, "address", c.Address, "Listen address (default :8443 for secure, :8080 for insecure)")
+	fs.StringVar(&c.Address, "address", c.Address, "HTTPS listen address (default :8443)")
 	fs.BoolVar(&c.Secure, "secure", c.Secure, "Use HTTPS (default: false)")
 	c.TLS.bindFlags(fs)
 

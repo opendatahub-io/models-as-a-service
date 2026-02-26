@@ -269,6 +269,42 @@ deploy_models() {
         sleep 5
     done
     echo "✅ MaaS subscription CRs deployed"
+
+    wait_for_auth_policies_enforced
+}
+
+wait_for_auth_policies_enforced() {
+    local timeout=180
+    echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
+
+    local namespaces
+    namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
+    if [[ -z "$namespaces" ]]; then
+        echo "  No LLMInferenceService namespaces found, skipping AuthPolicy wait"
+        return 0
+    fi
+
+    local deadline=$((SECONDS + timeout))
+    while [[ $SECONDS -lt $deadline ]]; do
+        local all_enforced=true
+        local total=0
+        for ns in $namespaces; do
+            while IFS= read -r status; do
+                total=$((total + 1))
+                if [[ "$status" != "True" ]]; then
+                    all_enforced=false
+                fi
+            done < <(oc get authpolicies -n "$ns" -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Enforced")].status}{"\n"}{end}' 2>/dev/null)
+        done
+        if $all_enforced && [[ $total -gt 0 ]]; then
+            echo "✅ All AuthPolicies enforced ($total policies)"
+            return 0
+        fi
+        echo "  Waiting... ($total policies found, not all enforced yet)"
+        sleep 10
+    done
+    echo "⚠️  WARNING: AuthPolicies not all enforced after ${timeout}s, tests may fail"
+    oc get authpolicies -A -o wide 2>/dev/null || true
 }
 
 validate_deployment() {

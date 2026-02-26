@@ -24,9 +24,9 @@ rules:
   resources: ["tokenreviews"]
   verbs: ["create"]
 
-# MaaSModel CRs for the models endpoint (cached via informer)
+# MaaS CRs for the models endpoint and subscription selector (cached via informer)
 - apiGroups: ["maas.opendatahub.io"]
-  resources: ["maasmodels"]
+  resources: ["maasmodels", "maassubscriptions"]
   verbs: ["get", "list", "watch"]
 
 # HTTPRoutes (for future use, e.g. listing or resolving model routes)

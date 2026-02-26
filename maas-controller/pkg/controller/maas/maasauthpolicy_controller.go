@@ -43,6 +43,9 @@ import (
 type MaaSAuthPolicyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// MaaSAPINamespace is the namespace where maas-api service is deployed.
+	// Used to construct the subscription selector endpoint URL.
+	MaaSAPINamespace string
 
 	// GatewayName is the name of the Gateway used for model HTTPRoutes (configurable via flags).
 	GatewayName string
@@ -166,7 +169,40 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		}
 
 		audiences := []interface{}{fmt.Sprintf("%s-sa", r.gatewayName()), r.clusterAudience()}
+    
+    // Construct subscription selector URL using configured namespace
+		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/v1/subscriptions/select", r.MaaSAPINamespace)
+
 		rule := map[string]interface{}{
+			"metadata": map[string]interface{}{
+				// Call subscription selector endpoint to determine user's subscription
+				"subscription-info": map[string]interface{}{
+					"http": map[string]interface{}{
+						"url":         subscriptionSelectorURL,
+						"contentType": "application/json",
+						"method":      "POST",
+						"body": map[string]interface{}{
+							"expression": `{
+  "groups": auth.identity.user.groups,
+  "username": auth.identity.user.username,
+  "requestedSubscription": "x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""
+}`,
+						},
+					},
+					// Cache subscription selection results keyed by username, groups, and requested subscription.
+					// Key format: "username|groups-hash|requested-subscription" ensures different cache entries
+					// when the same user has different groups or requests different subscriptions.
+					// Groups are joined with commas to create a stable string representation.
+					"cache": map[string]interface{}{
+						"key": map[string]interface{}{
+							"selector": `auth.identity.user.username + "|" + auth.identity.user.groups.join(",") + "|" + ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`,
+						},
+						"ttl": int64(60),
+					},
+					"metrics":  false,
+					"priority": int64(0),
+				},
+			},
 			"authentication": map[string]interface{}{
 				"service-accounts": map[string]interface{}{
 					"cache": map[string]interface{}{
@@ -182,6 +218,28 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			},
 		}
 
+		// Build authorization rules
+		authRules := make(map[string]interface{})
+
+		// Add subscription error check - deny if subscription selector returned an error
+		// Uses OPA Rego policy to check if error field exists in subscription-info metadata
+		// The policy allows requests only when the error field does not exist
+		// Custom denial message uses the error message from subscription selector
+		authRules["subscription-error-check"] = map[string]interface{}{
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]interface{}{
+				"rego": `allow { not object.get(input.auth.metadata["subscription-info"], "error", false) }`,
+			},
+			"when": []interface{}{
+				map[string]interface{}{
+					"selector": `has(auth.metadata["subscription-info"].error)`,
+					"operator": "eq",
+					"value":    "true",
+				},
+			},
+		}
+
 		// Build aggregated authorization rule from ALL auth policies' subjects
 		if len(membershipConditions) > 0 {
 			var patterns []interface{}
@@ -190,16 +248,19 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			} else {
 				patterns = []interface{}{map[string]interface{}{"any": membershipConditions}}
 			}
-			rule["authorization"] = map[string]interface{}{
-				"require-group-membership": map[string]interface{}{
-					"metrics": false, "priority": int64(0),
-					"patternMatching": map[string]interface{}{"patterns": patterns},
-				},
+			authRules["require-group-membership"] = map[string]interface{}{
+				"metrics": false, "priority": int64(0),
+				"patternMatching": map[string]interface{}{"patterns": patterns},
 			}
+		}
+
+		if len(authRules) > 0 {
+			rule["authorization"] = authRules
 		}
 
 		// Pass ALL user groups unfiltered in the response so TRLP predicates can
 		// match against subscription groups (which may differ from auth policy groups).
+		// Also inject subscription metadata from subscription-info for Limitador metrics.
 		rule["response"] = map[string]interface{}{
 			"success": map[string]interface{}{
 				"filters": map[string]interface{}{
@@ -211,9 +272,50 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 								"userid": map[string]interface{}{
 									"selector": "auth.identity.userid",
 								},
+								// Subscription metadata from /v1/subscriptions/select endpoint
+								"selected_subscription": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
+								},
+								"organizationId": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"].organizationId) ? auth.metadata["subscription-info"].organizationId : ""`,
+								},
+								"costCenter": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"].costCenter) ? auth.metadata["subscription-info"].costCenter : ""`,
+								},
+								"subscription_labels": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"].labels) ? auth.metadata["subscription-info"].labels : {}`,
+								},
+								// Error information (for debugging - only populated when selection fails)
+								"subscription_error": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ""`,
+								},
+								"subscription_error_message": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : ""`,
+								},
 							},
 						},
 						"metrics": true, "priority": int64(0),
+					},
+				},
+			},
+			// Custom denial responses that include subscription error details
+			"unauthenticated": map[string]interface{}{
+				"code": int64(401),
+				"message": map[string]interface{}{
+					"value": "Authentication required",
+				},
+			},
+			"unauthorized": map[string]interface{}{
+				"code": int64(403),
+				"body": map[string]interface{}{
+					"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied"`,
+				},
+				"headers": map[string]interface{}{
+					"x-ext-auth-reason": map[string]interface{}{
+						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
+					},
+					"content-type": map[string]interface{}{
+						"value": "text/plain",
 					},
 				},
 			},

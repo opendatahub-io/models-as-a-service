@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
 
 type ClusterConfig struct {
@@ -27,6 +28,9 @@ type ClusterConfig struct {
 
 	// MaaSModelLister lists MaaSModel CRs from the informer cache for GET /v1/models.
 	MaaSModelLister models.MaaSModelLister
+
+	// MaaSSubscriptionLister lists MaaSSubscription CRs from the informer cache for subscription selection.
+	MaaSSubscriptionLister subscription.Lister
 
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})
@@ -49,6 +53,27 @@ func (m *maasModelLister) List(namespace string) ([]*unstructured.Unstructured, 
 			continue
 		}
 		if namespace != "" && u.GetNamespace() != namespace {
+			continue
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+// subscriptionLister implements subscription.Lister from a cache.GenericLister (informer-backed).
+type subscriptionLister struct {
+	lister cache.GenericLister
+}
+
+func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
+	objs, err := s.lister.List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*unstructured.Unstructured, 0, len(objs))
+	for _, o := range objs {
+		u, ok := o.(*unstructured.Unstructured)
+		if !ok {
 			continue
 		}
 		out = append(out, u)
@@ -85,6 +110,11 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 	maasInformer := maasDynamicFactory.ForResource(maasGVR)
 	maasModelListerVal := &maasModelLister{lister: maasInformer.Lister()}
 
+	// MaaSSubscription informer (cached); watches all namespaces for subscription selection.
+	subscriptionGVR := subscription.GVR()
+	subscriptionInformer := maasDynamicFactory.ForResource(subscriptionGVR)
+	maasSubscriptionListerVal := &subscriptionLister{lister: subscriptionInformer.Lister()}
+
 	return &ClusterConfig{
 		ClientSet: clientset,
 
@@ -92,13 +122,15 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 		NamespaceLister:      nsInformer.Lister(),
 		ServiceAccountLister: saInformer.Lister(),
 
-		MaaSModelLister: maasModelListerVal,
+		MaaSModelLister:        maasModelListerVal,
+		MaaSSubscriptionLister: maasSubscriptionListerVal,
 
 		informersSynced: []cache.InformerSynced{
 			cmInformer.Informer().HasSynced,
 			nsInformer.Informer().HasSynced,
 			saInformer.Informer().HasSynced,
 			maasInformer.Informer().HasSynced,
+			subscriptionInformer.Informer().HasSynced,
 		},
 		startFuncs: []func(<-chan struct{}){
 			coreFactory.Start,

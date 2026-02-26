@@ -1,0 +1,43 @@
+ARG GOLANG_VERSION=1.24
+
+ARG BUILDPLATFORM
+ARG TARGETPLATFORM
+
+FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset@sha256:799cc027d5ad58cdc156b65286eb6389993ec14c496cf748c09834b7251e78dc AS builder
+ARG CGO_ENABLED=0
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+USER root
+RUN CGO_ENABLED=${CGO_ENABLED} GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -a -trimpath -ldflags="-s -w" -o manager ./cmd/manager
+
+FROM --platform=$TARGETPLATFORM registry.access.redhat.com/ubi9/ubi-minimal@sha256:80f3902b6dcb47005a90e14140eef9080ccc1bb22df70ee16b27d5891524edb2
+
+WORKDIR /app
+
+COPY --from=builder /app/manager .
+
+# Make binary executable and fix permissions for OpenShift
+RUN chmod +x manager && \
+    chgrp -R 0 /app && \
+    chmod -R g=u /app
+
+# Use a non-root user (OpenShift will assign random UID)
+USER 1001
+
+ENTRYPOINT ["/app/manager"]
+
+LABEL com.redhat.component="odh-maas-controller-rhel9" \
+      name="rhoai/odh-maas-controller-rhel9" \
+      description="odh-maas-controller" \
+      summary="odh-maas-controller" \
+      maintainer="['managed-open-data-hub@redhat.com']" \
+      io.openshift.expose-services="" \
+      io.k8s.display-name="odh-maas-controller" \
+      io.k8s.description="odh-maas-controller" \
+      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf"
