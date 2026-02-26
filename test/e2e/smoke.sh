@@ -29,8 +29,7 @@ setup_python_venv() {
     
     # Create virtual environment if it doesn't exist
     if [[ ! -d "${VENV_DIR}" ]]; then
-        echo "[smoke] Creating virtual environment at ${VENV_DIR}"
-        # python3 -m venv "${VENV_DIR}" --upgrade-deps
+        echo "[smoke] Creating virtual environment at ${VENV_DIR}"    
         PYTHON_BIN="${PYTHON_BIN:-python3}"
         "${PYTHON_BIN}" -m venv "${VENV_DIR}" --upgrade-deps
     fi
