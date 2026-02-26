@@ -13,14 +13,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -58,7 +55,6 @@ type TestClients struct {
 
 // TestComponents holds common test components.
 type TestComponents struct {
-	Manager   *token.Manager
 	Clientset *k8sfake.Clientset
 }
 
@@ -104,16 +100,12 @@ func SetupTestServer(_ *testing.T, config TestServerConfig) (*gin.Engine, *TestC
 }
 
 // StubTokenProviderAPIs creates common test components for token tests.
-func StubTokenProviderAPIs(_ *testing.T, withTierConfig bool) (*token.Manager, *k8sfake.Clientset, func()) {
-	testLogger := logger.Development()
-
+func StubTokenProviderAPIs(_ *testing.T, withTierConfig bool) (*k8sfake.Clientset, func()) {
 	var objects []runtime.Object
-	var configMaps []*corev1.ConfigMap
 
 	if withTierConfig {
 		configMap := CreateTierConfigMap(TestNamespace)
 		objects = append(objects, configMap)
-		configMaps = append(configMaps, configMap)
 	}
 
 	fakeClient := k8sfake.NewClientset(objects...)
@@ -121,51 +113,26 @@ func StubTokenProviderAPIs(_ *testing.T, withTierConfig bool) (*token.Manager, *
 	// Stub ServiceAccount token creation for tests
 	StubServiceAccountTokenCreation(fakeClient)
 
-	informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
-	namespaceLister := informerFactory.Core().V1().Namespaces().Lister()
-	serviceAccountLister := informerFactory.Core().V1().ServiceAccounts().Lister()
-
-	tierMapper := tier.NewMapper(testLogger, NewConfigMapLister(configMaps...), TestTenant, TestNamespace)
-	manager := token.NewManager(
-		testLogger,
-		TestTenant,
-		tierMapper,
-		fakeClient,
-		namespaceLister,
-		serviceAccountLister,
-	)
-
 	cleanup := func() {}
 
-	return manager, fakeClient, cleanup
+	return fakeClient, cleanup
 }
 
 // SetupTestRouter creates a test router with token endpoints.
 // Returns the router and a cleanup function that must be called to close the store and remove the temp DB file.
-func SetupTestRouter(manager *token.Manager) (*gin.Engine, func() error) {
+func SetupTestRouter() (*gin.Engine, func() error) {
 	testLogger := logger.Development()
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
-	store := api_keys.NewMockStore()
-
-	// Create test config with optional expiration policy
-	testConfig := &config.Config{
-		APIKeyExpirationPolicy: "optional",
-	}
-
-	tokenHandler := token.NewHandler(testLogger, "test", manager)
-	apiKeyService := api_keys.NewService(manager, store, testConfig)
-	apiKeyHandler := api_keys.NewHandler(testLogger, apiKeyService)
+	tokenHandler := token.NewHandler(testLogger, "test")
 
 	protected := router.Group("/v1")
 	protected.Use(tokenHandler.ExtractUserInfo())
-	protected.POST("/tokens", tokenHandler.IssueToken)
-	protected.DELETE("/tokens", apiKeyHandler.RevokeAllTokens)
 
 	cleanup := func() error {
-		return store.Close()
+		return nil
 	}
 
 	return router, cleanup

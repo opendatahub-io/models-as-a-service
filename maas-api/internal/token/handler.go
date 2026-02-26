@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -16,19 +14,17 @@ import (
 )
 
 type Handler struct {
-	name    string
-	manager *Manager
-	logger  *logger.Logger
+	name   string
+	logger *logger.Logger
 }
 
-func NewHandler(log *logger.Logger, name string, manager *Manager) *Handler {
+func NewHandler(log *logger.Logger, name string) *Handler {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Handler{
-		name:    name,
-		manager: manager,
-		logger:  log,
+		name:   name,
+		logger: log,
 	}
 }
 
@@ -124,60 +120,4 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		c.Set("user", userContext)
 		c.Next()
 	}
-}
-
-// IssueToken handles POST /v1/tokens for issuing ephemeral tokens.
-func (h *Handler) IssueToken(c *gin.Context) {
-	var req Request
-	// BindJSON will still parse the request body, but we'll ignore the name field.
-	if err := c.ShouldBindJSON(&req); err != nil {
-		// Allow empty request body for default expiration
-		if !errors.Is(err, io.EOF) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-	}
-
-	if req.Expiration == nil {
-		req.Expiration = &Duration{time.Hour * 4}
-	}
-
-	userCtx, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "User context not found"})
-		return
-	}
-
-	user, ok := userCtx.(*UserContext)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user context type"})
-		return
-	}
-
-	expiration := req.Expiration.Duration
-	if err := ValidateExpiration(expiration, 10*time.Minute); err != nil {
-		response := gin.H{"error": err.Error()}
-		if expiration > 0 && expiration < 10*time.Minute {
-			response["provided_expiration"] = expiration.String()
-		}
-		c.JSON(http.StatusBadRequest, response)
-		return
-	}
-
-	// For ephemeral tokens, we explicitly pass an empty name.
-	token, err := h.manager.GenerateToken(c.Request.Context(), user, expiration)
-	if err != nil {
-		h.logger.Error("Failed to generate token",
-			"error", err,
-			"expiration", expiration.String(),
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
-		return
-	}
-
-	response := Response{
-		Token: token,
-	}
-
-	c.JSON(http.StatusCreated, response)
 }

@@ -3,7 +3,6 @@ package handlers
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go/v2/packages/pagination"
@@ -15,20 +14,18 @@ import (
 
 // ModelsHandler handles model-related endpoints.
 type ModelsHandler struct {
-	modelMgr     *models.Manager
-	tokenManager *token.Manager
-	logger       *logger.Logger
+	modelMgr *models.Manager
+	logger   *logger.Logger
 }
 
 // NewModelsHandler creates a new models handler.
-func NewModelsHandler(log *logger.Logger, modelMgr *models.Manager, tokenMgr *token.Manager) *ModelsHandler {
+func NewModelsHandler(log *logger.Logger, modelMgr *models.Manager) *ModelsHandler {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &ModelsHandler{
-		modelMgr:     modelMgr,
-		tokenManager: tokenMgr,
-		logger:       log,
+		modelMgr: modelMgr,
+		logger:   log,
 	}
 }
 
@@ -60,50 +57,9 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		return
 	}
 
-	// Check if the token has the correct audience for model authorization checks.
-	// If not, exchange it for a proper service account token.
-	saToken := bearerToken
-	if !h.tokenManager.HasValidAudience(bearerToken) {
-		userCtx, exists := c.Get("user")
-		if !exists {
-			h.logger.Error("User context not found for token exchange")
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": gin.H{
-					"message": "Internal server error",
-					"type":    "server_error",
-				}})
-			return
-		}
-
-		user, ok := userCtx.(*token.UserContext)
-		if !ok {
-			h.logger.Error("Invalid user context type")
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": gin.H{
-					"message": "Internal server error",
-					"type":    "server_error",
-				}})
-			return
-		}
-
-		exchangedToken, err := h.tokenManager.GenerateToken(c.Request.Context(), user, 10*time.Minute)
-		if err != nil {
-			h.logger.Error("Token exchange failed",
-				"error", err,
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": gin.H{
-					"message": "Failed to authorize request",
-					"type":    "server_error",
-				}})
-			return
-		}
-
-		h.logger.Debug("Exchanged token for SA token with correct audience")
-		saToken = exchangedToken.Token
-	}
-
-	modelList, err := h.modelMgr.ListAvailableLLMs(c.Request.Context(), saToken)
+	// Pass the API key directly to model discovery
+	// Authorization is handled at gateway level (Authorino)
+	modelList, err := h.modelMgr.ListAvailableLLMs(c.Request.Context(), bearerToken)
 	if err != nil {
 		claims, claimsErr := token.ExtractClaims(bearerToken)
 		if claimsErr != nil {

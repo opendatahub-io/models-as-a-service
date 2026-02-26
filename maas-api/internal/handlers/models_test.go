@@ -201,14 +201,14 @@ func TestListingModels(t *testing.T) {
 	)
 	require.NoError(t, errMgr)
 
-	// Create token manager for test - uses fixtures helper which sets up tier config
-	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	// Set up test fixtures
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
 	defer cleanup()
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr)
 
 	// Create token handler to extract user info middleware
-	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 
 	v1 := router.Group("/v1")
 	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)

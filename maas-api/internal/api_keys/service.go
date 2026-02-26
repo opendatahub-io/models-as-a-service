@@ -2,7 +2,6 @@ package api_keys
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,58 +10,32 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 type Service struct {
-	tokenManager *token.Manager
-	store        MetadataStore
-	logger       *logger.Logger
-	config       *config.Config
+	store  MetadataStore
+	logger *logger.Logger
+	config *config.Config
 }
 
-func NewService(tokenManager *token.Manager, store MetadataStore, cfg *config.Config) *Service {
+func NewService(store MetadataStore, cfg *config.Config) *Service {
 	return &Service{
-		tokenManager: tokenManager,
-		store:        store,
-		logger:       logger.Production(),
-		config:       cfg,
+		store:  store,
+		logger: logger.Production(),
+		config: cfg,
 	}
 }
 
 // NewServiceWithLogger creates a new service with a custom logger (for testing).
-func NewServiceWithLogger(tokenManager *token.Manager, store MetadataStore, cfg *config.Config, log *logger.Logger) *Service {
+func NewServiceWithLogger(store MetadataStore, cfg *config.Config, log *logger.Logger) *Service {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Service{
-		tokenManager: tokenManager,
-		store:        store,
-		logger:       log,
-		config:       cfg,
+		store:  store,
+		logger: log,
+		config: cfg,
 	}
-}
-
-// CreateServiceAccountAPIKey creates a K8s ServiceAccount-based API key (legacy, will be removed in future).
-// Note: ServiceAccount-based tokens are NOT stored in the database - they are validated via Kubernetes TokenReview API.
-func (s *Service) CreateServiceAccountAPIKey(ctx context.Context, user *token.UserContext, name string, description string, expiration time.Duration) (*APIKey, error) {
-	// Generate token
-	tok, err := s.tokenManager.GenerateToken(ctx, user, expiration)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate token: %w", err)
-	}
-
-	// Create APIKey with embedded Token and metadata
-	apiKey := &APIKey{
-		Token:       *tok,
-		Name:        name,
-		Description: description,
-	}
-
-	// Legacy SA tokens are NOT stored in database
-	// Authorization is handled by Kubernetes TokenReview API, not database lookup
-
-	return apiKey, nil
 }
 
 // CreateAPIKeyResponse is returned when creating an API key.
@@ -109,15 +82,10 @@ func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups 
 	// Generate unique ID for this key
 	keyID := uuid.New().String()
 
-	// Marshal user groups for storage (used for authorization)
-	groupsJSON, err := json.Marshal(userGroups)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal user groups: %w", err)
-	}
-
 	// Store in database (hash only, plaintext NEVER stored)
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
-	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, string(groupsJSON), expiresAt); err != nil {
+	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
+	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, expiresAt); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
@@ -148,22 +116,6 @@ func (s *Service) List(ctx context.Context, username string, params PaginationPa
 
 func (s *Service) GetAPIKey(ctx context.Context, id string) (*ApiKeyMetadata, error) {
 	return s.store.Get(ctx, id)
-}
-
-// RevokeAll invalidates all tokens for the user (ephemeral and persistent).
-// It recreates the Service Account (invalidating all tokens) and marks API key metadata as expired.
-func (s *Service) RevokeAll(ctx context.Context, user *token.UserContext) error {
-	// Revoke in K8s (recreate SA) - this invalidates all tokens
-	if err := s.tokenManager.RevokeTokens(ctx, user); err != nil {
-		return fmt.Errorf("failed to revoke tokens in k8s: %w", err)
-	}
-
-	// Mark API key metadata as expired (preserves history)
-	if err := s.store.InvalidateAll(ctx, user.Username); err != nil {
-		return fmt.Errorf("tokens revoked but failed to mark metadata as expired: %w", err)
-	}
-
-	return nil
 }
 
 // ValidateAPIKey validates an API key by hash lookup (called by Authorino HTTP callback)

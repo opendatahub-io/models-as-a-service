@@ -11,27 +11,19 @@ spec:
     name: maas-default-gateway
   rules:
     metadata:
-      # API Key Validation (for V2 sk-oai-* keys)
+      # API Key Validation
       apiKeyValidation:
         priority: 0
-        when:
-          - selector: request.headers.authorization
-            operator: matches
-            value: "^Bearer sk-oai-.*"
         http:
-          url: https://maas-api.opendatahub.svc.cluster.local:8443/internal/v2/api-keys/validate
+          url: https://maas-api.opendatahub.svc.cluster.local:8443/internal/v1/api-keys/validate
           contentType: application/json
           method: POST
           body:
             expression: '{"key": request.headers.authorization.replace("Bearer ", "")}'
 
-      # Tier lookup for V2 API keys
-      matchedTier-v2:
+      # Tier lookup
+      matchedTier:
         priority: 0
-        when:
-          - selector: request.headers.authorization
-            operator: matches
-            value: "^Bearer sk-oai-.*"
         http:
           url: https://maas-api.opendatahub.svc.cluster.local:8443/v1/tiers/lookup
           contentType: application/json
@@ -43,76 +35,27 @@ spec:
             selector: auth.metadata.apiKeyValidation.username
           ttl: 300
 
-      # Tier lookup for Service Account tokens (JWT and SHA256 formats)
-      matchedTier-sa:
-        when:
-          - selector: request.headers.authorization
-            operator: matches
-            value: "^Bearer (eyJ|sha256~).*"
-        http:
-          url: https://maas-api.opendatahub.svc.cluster.local:8443/v1/tiers/lookup
-          contentType: application/json
-          method: POST
-          body:
-            expression: '{"groups": auth.identity.user.groups}'
-        cache:
-          key:
-            selector: auth.identity.user.username
-          ttl: 300
-
     authentication:
-      # V2 API Keys - plain auth, real validation in authorization
-      api-keys:
-        when:
-          - selector: request.headers.authorization
-            operator: matches
-            value: "^Bearer sk-oai-.*"
+      # API Keys - plain auth, real validation in metadata layer
+      authentication:
         plain:
           selector: request.headers.authorization
 
-      # Service Account Tokens (JWT and SHA256 formats)
-      service-accounts:
-        when:
-          - selector: request.headers.authorization
-            operator: matches
-            value: "^Bearer (eyJ|sha256~).*"
-        kubernetesTokenReview:
-          audiences:
-            - https://kubernetes.default.svc
-            - maas-default-gateway-sa
-        defaults:
-          userid:
-            expression: |
-              auth.identity.user.username.contains(":serviceaccount:") ?
-                auth.identity.user.username.split(":")[3] :
-                auth.identity.user.username
-        cache:
-          key:
-            selector: context.request.http.headers.authorization.@case:lower
-          ttl: 600
-
     authorization:
-      # Validate V2 API key is valid
+      # Validate API key is valid
       api-key-valid:
         priority: 0
-        when:
-          - selector: request.headers.authorization
-            operator: matches
-            value: "^Bearer sk-oai-.*"
         patternMatching:
           patterns:
             - selector: auth.metadata.apiKeyValidation.valid
               operator: eq
               value: "true"
 
-      # Tier-based access control for V2 keys
-      tier-access-v2:
+      # Tier-based access control
+      tier-access:
         priority: 0
         when:
-          - selector: request.headers.authorization
-            operator: matches
-            value: "^Bearer sk-oai-.*"
-          # Exclude API management paths
+          # Only apply to inference paths (exclude API management)
           - selector: request.path
             operator: matches
             value: "^/(?!v1/|maas-api/)[^/]+/[^/]+(/.*)?$"
@@ -137,87 +80,30 @@ spec:
             verb:
               value: post
 
-      # Tier-based access control for SA tokens (JWT and SHA256 formats)
-      tier-access-sa:
-        when:
-          - selector: request.headers.authorization
-            operator: matches
-            value: "^Bearer (eyJ|sha256~).*"
-          # Exclude API management paths
-          - selector: request.path
-            operator: matches
-            value: "^/(?!v1/|maas-api/)[^/]+/[^/]+(/.*)?$"
-        cache:
-          key:
-            selector: auth.identity.user.username
-          ttl: 60
-        kubernetesSubjectAccessReview:
-          user:
-            selector: auth.identity.user.username
-          authorizationGroups:
-            selector: auth.identity.user.groups
-          resourceAttributes:
-            group:
-              value: serving.kserve.io
-            resource:
-              value: llminferenceservices
-            namespace:
-              expression: request.path.split("/")[1]
-            name:
-              expression: request.path.split("/")[2]
-            verb:
-              value: post
-
     response:
       success:
         headers:
-          # Username - use has() to check which auth method
+          # Username from API key validation
           X-MaaS-Username:
             plain:
-              expression: |
-                has(auth.metadata.apiKeyValidation) && has(auth.metadata.apiKeyValidation.username) ?
-                  auth.metadata.apiKeyValidation.username :
-                  auth.identity.user.username
+              selector: auth.metadata.apiKeyValidation.username
 
-          # Groups - manually construct JSON array string
+          # Groups - construct JSON array string
           X-MaaS-Group:
             plain:
-              expression: |
-                has(auth.metadata.apiKeyValidation) && has(auth.metadata.apiKeyValidation.groups) ?
-                  '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' :
-                  '["' + auth.identity.user.groups.join('","') + '"]'
+              expression: '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'
 
-          # Key ID (only when available)
+          # Key ID
           X-MaaS-Key-Id:
-            when:
-              - selector: auth.metadata.apiKeyValidation.keyId
-                operator: neq
-                value: ""
             plain:
               selector: auth.metadata.apiKeyValidation.keyId
 
         filters:
-          v2-identity:
+          identity:
             priority: 0
-            when:
-              - selector: request.headers.authorization
-                operator: matches
-                value: "^Bearer sk-oai-.*"
             json:
               properties:
                 userid:
                   selector: auth.metadata.apiKeyValidation.userId
                 tier:
-                  selector: auth.metadata.matchedTier-v2.tier
-
-          sa-identity:
-            when:
-              - selector: request.headers.authorization
-                operator: matches
-                value: "^Bearer (eyJ|sha256~).*"
-            json:
-              properties:
-                userid:
-                  selector: auth.identity.userid
-                tier:
-                  selector: auth.metadata.matchedTier-sa.tier
+                  selector: auth.metadata.matchedTier.tier

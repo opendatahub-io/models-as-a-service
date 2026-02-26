@@ -158,44 +158,25 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 		log.Fatal("Failed to create model manager", "error", err)
 	}
 
-	tokenManager := token.NewManager(
-		log,
-		cfg.Name,
-		tierMapper,
-		cluster.ClientSet,
-		cluster.NamespaceLister,
-		cluster.ServiceAccountLister,
-	)
-	tokenHandler := token.NewHandler(log, cfg.Name, tokenManager)
+	tokenHandler := token.NewHandler(log, cfg.Name)
 
-	modelsHandler := handlers.NewModelsHandler(log, modelManager, tokenManager)
+	modelsHandler := handlers.NewModelsHandler(log, modelManager)
 
-	apiKeyService := api_keys.NewServiceWithLogger(tokenManager, store, cfg, log)
+	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, log)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 
-	tokenRoutes := v1Routes.Group("/tokens", tokenHandler.ExtractUserInfo())
-	tokenRoutes.POST("", tokenHandler.IssueToken)
-	tokenRoutes.DELETE("", apiKeyHandler.RevokeAllTokens)
-
-	// V1 API routes - ONLY legacy ServiceAccount-backed key creation
+	// API Key routes - Complete CRUD for hash-based key architecture
 	apiKeyRoutes := v1Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
-	apiKeyRoutes.POST("", apiKeyHandler.CreateServiceAccountAPIKey) // ServiceAccount-backed keys (legacy, will be removed in future)
-	// No GET, GET/:id, or DELETE/:id routes - they return 404 (moved to v2)
-
-	// V2 API routes - Complete CRUD for hash-based key architecture
-	v2Routes := router.Group("/v2")
-	v2ApiKeyRoutes := v2Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
-	v2ApiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)       // Create hash-based key
-	v2ApiKeyRoutes.GET("", apiKeyHandler.ListAPIKeys)         // List all keys
-	v2ApiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)       // Get specific key
-	v2ApiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey) // Revoke specific key
+	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)       // Create hash-based key
+	apiKeyRoutes.GET("", apiKeyHandler.ListAPIKeys)         // List all keys
+	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)       // Get specific key
+	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey) // Revoke specific key
 
 	// Internal routes for Authorino HTTP callback (no auth required - called by Authorino)
-	internalRoutes := router.Group("/internal/v2")
+	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
-	// No /internal/v1 routes - they return 404 (moved to v2)
 
 	return nil
 }
