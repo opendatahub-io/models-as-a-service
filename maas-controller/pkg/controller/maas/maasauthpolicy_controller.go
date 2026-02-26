@@ -221,22 +221,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		// Build authorization rules
 		authRules := make(map[string]interface{})
 
-		// Add subscription error check - deny if subscription selector returned an error
-		// Uses OPA Rego policy to check if error field exists in subscription-info metadata
-		// The policy allows requests only when the error field does not exist
-		// Custom denial message uses the error message from subscription selector
+		// Check for subscription selection errors and deny if present
 		authRules["subscription-error-check"] = map[string]interface{}{
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]interface{}{
 				"rego": `allow { not object.get(input.auth.metadata["subscription-info"], "error", false) }`,
-			},
-			"when": []interface{}{
-				map[string]interface{}{
-					"selector": `has(auth.metadata["subscription-info"].error)`,
-					"operator": "eq",
-					"value":    "true",
-				},
 			},
 		}
 
