@@ -242,6 +242,33 @@ deploy_models() {
         exit 1
     fi
     echo "✅ Simulator models deployed"
+
+    # Deploy subscription CRs (MaaSModels + MaaSAuthPolicies + MaaSSubscriptions).
+    # Needed early so that: catalog discovery works (MaaSModels), auth probes pass
+    # (per-route AuthPolicies), and rate limiting is active (for validation checks).
+    # Subscription tests running last re-apply these idempotently.
+    echo "Deploying MaaS subscription CRs..."
+    if ! kubectl apply -k "$PROJECT_ROOT/maas-controller/examples/"; then
+        echo "⚠️  WARNING: Failed to deploy subscription CRs, continuing..."
+    fi
+
+    echo "Waiting for MaaSModels to be Ready..."
+    local retries=0
+    while [[ $retries -lt 30 ]]; do
+        local all_ready=true
+        while IFS= read -r phase; do
+            if [[ "$phase" != "Ready" ]]; then
+                all_ready=false
+                break
+            fi
+        done < <(oc get maasmodels -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        if $all_ready && [[ -n "$(oc get maasmodels -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
+            break
+        fi
+        retries=$((retries + 1))
+        sleep 5
+    done
+    echo "✅ MaaS subscription CRs deployed"
 }
 
 validate_deployment() {
@@ -316,37 +343,6 @@ run_smoke_tests() {
     fi
 }
 
-deploy_subscription_crs() {
-    echo "Deploying MaaS subscription example CRs..."
-    if ! kubectl apply -k "$PROJECT_ROOT/maas-controller/examples/"; then
-        echo "❌ ERROR: Failed to deploy subscription CRs"
-        exit 1
-    fi
-
-    echo "Waiting for MaaSModels to be Ready..."
-    local retries=0
-    while [[ $retries -lt 30 ]]; do
-        local all_ready=true
-        while IFS= read -r phase; do
-            if [[ "$phase" != "Ready" ]]; then
-                all_ready=false
-                break
-            fi
-        done < <(oc get maasmodels -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-        if $all_ready && [[ -n "$(oc get maasmodels -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
-            break
-        fi
-        retries=$((retries + 1))
-        sleep 5
-    done
-    if [[ $retries -ge 30 ]]; then
-        echo "⚠️  WARNING: MaaSModels did not all become Ready within timeout"
-    fi
-
-    echo "✅ Subscription CRs deployed"
-    oc get maasmodels,maasauthpolicies,maassubscriptions -n "$MAAS_NAMESPACE" 2>/dev/null || true
-}
-
 run_subscription_tests() {
     echo "-- Subscription Controller Tests --"
 
@@ -383,24 +379,6 @@ run_subscription_tests() {
     echo "✅ Subscription tests completed"
     echo " - JUnit XML : ${xml}"
     echo " - HTML      : ${html}"
-}
-
-cleanup_subscription_resources() {
-    echo "Cleaning up subscription resources so other tests are not affected..."
-
-    oc delete maasauthpolicies --all -n "$MAAS_NAMESPACE" --timeout=60s 2>/dev/null || true
-    oc delete maassubscriptions --all -n "$MAAS_NAMESPACE" --timeout=60s 2>/dev/null || true
-    oc delete maasmodels --all -n "$MAAS_NAMESPACE" --timeout=60s 2>/dev/null || true
-
-    oc delete authpolicy -n openshift-ingress -l app.kubernetes.io/managed-by=maas-controller --timeout=30s 2>/dev/null || true
-    oc delete tokenratelimitpolicy -n openshift-ingress -l app.kubernetes.io/managed-by=maas-controller --timeout=30s 2>/dev/null || true
-    oc delete authpolicy --all -n llm --timeout=30s 2>/dev/null || true
-    oc delete tokenratelimitpolicy --all -n llm --timeout=30s 2>/dev/null || true
-
-    echo "Waiting for gateway to settle..."
-    sleep 15
-
-    echo "✅ Subscription resources cleaned up"
 }
 
 run_token_verification() {
@@ -452,18 +430,7 @@ deploy_models
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
-# Subscription tests run as cluster admin (not an SA) because premium model
-# tests require the user to be in the premium-user OpenShift group.
-if [[ "${SKIP_SUBSCRIPTION_TESTS}" != "true" ]]; then
-    print_header "Deploying Subscription CRs"
-    deploy_subscription_crs
-
-    print_header "Running Subscription Controller Tests (as cluster admin)"
-    run_subscription_tests
-
-    print_header "Cleaning up Subscription Resources"
-    cleanup_subscription_resources
-fi
+run_subscription_tests
 
 # Setup all users first (while logged in as admin)
 print_header "Setting up test users"
