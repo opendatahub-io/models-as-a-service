@@ -72,4 +72,4 @@ Exit code is non-zero if any tests fail.
 
 **How the test flow is validated:** The script is not unit-tested. The flow is exercised by running `prow_run_e2e_test.sh` manually or in CI (e.g. Prow); a successful run validates the flow.
 
-Observability runs once as admin (cluster-admin). The test makes a chat request (`make_test_request`) to generate metrics, then validates all component endpoints, Prometheus scraping, labels, and metric types. Edit and view users only run smoke tests — the metrics pipeline doesn't depend on who queries it, and port-forward/Prometheus access is an OpenShift RBAC concern, not an observability one.
+Observability runs once as admin (cluster-admin). The test makes a chat request (`make_test_request`) to generate metrics, then validates all component endpoints, Prometheus scraping, labels, and metric types. The metrics pipeline doesn't depend on who queries it; port-forward/Prometheus access is an OpenShift RBAC concern, not an observability one.

@@ -292,7 +292,7 @@ export MAAS_GATEWAY_HOST="https://maas.apps.your-cluster.example.com"
 
 ### End-to-End Testing
 
-For comprehensive end-to-end testing including deployment, user setup, and smoke tests:
+For comprehensive end-to-end testing including deployment, user setup, smoke and observability tests:
 
 ```bash
 ./test/e2e/scripts/prow_run_e2e_test.sh
