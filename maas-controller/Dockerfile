@@ -19,16 +19,13 @@ RUN CGO_ENABLED=${CGO_ENABLED} GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd6
 
 FROM --platform=$TARGETPLATFORM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
-WORKDIR /app
+WORKDIR /
 
 COPY --from=builder /app/manager .
 
-# Make binary executable and fix permissions for OpenShift
-RUN chmod +x manager && \
-    chgrp -R 0 /app && \
-    chmod -R g=u /app
+RUN chmod +x /manager
 
 # Use a non-root user (OpenShift will assign random UID)
 USER 1001
 
-ENTRYPOINT ["/app/manager"]
+ENTRYPOINT ["/manager"]

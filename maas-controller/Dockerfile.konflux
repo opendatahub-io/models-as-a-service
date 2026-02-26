@@ -18,19 +18,16 @@ RUN CGO_ENABLED=${CGO_ENABLED} GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd6
 
 FROM --platform=$TARGETPLATFORM registry.access.redhat.com/ubi9/ubi-minimal@sha256:80f3902b6dcb47005a90e14140eef9080ccc1bb22df70ee16b27d5891524edb2
 
-WORKDIR /app
+WORKDIR /
 
 COPY --from=builder /app/manager .
 
-# Make binary executable and fix permissions for OpenShift
-RUN chmod +x manager && \
-    chgrp -R 0 /app && \
-    chmod -R g=u /app
+RUN chmod +x /manager
 
 # Use a non-root user (OpenShift will assign random UID)
 USER 1001
 
-ENTRYPOINT ["/app/manager"]
+ENTRYPOINT ["/manager"]
 
 LABEL com.redhat.component="odh-maas-controller-rhel9" \
       name="rhoai/odh-maas-controller-rhel9" \
