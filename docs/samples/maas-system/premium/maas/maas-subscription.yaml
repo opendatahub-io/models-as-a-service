@@ -1,6 +1,3 @@
-# MaaSSubscription for the premium simulator: token rate limit for premium-user.
-# Paired with maas-auth-policy-premium.yaml.
-# Replace "premium-user" with a group from your identity provider (TokenReview).
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:

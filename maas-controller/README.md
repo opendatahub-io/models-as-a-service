@@ -241,7 +241,7 @@ curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 ```
 
-See [examples/README.md](examples/README.md) for more details.
+See [docs/samples/maas-system/README.md](../docs/samples/maas-system/README.md) for more details.
 
 ## Opting out of controller management
 

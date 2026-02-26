@@ -1,5 +1,3 @@
-# MaaSModel for the premium-tier simulator.
-# LLMIS from docs/samples/models/simulator-premium (name: premium-simulated-simulated-premium in namespace llm).
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModel
 metadata:

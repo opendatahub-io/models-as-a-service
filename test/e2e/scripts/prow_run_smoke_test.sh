@@ -9,9 +9,9 @@
 #
 # WHAT IT DOES:
 #   1. Install cert-manager and LeaderWorkerSet (LWS) operators (required for KServe)
-#   2. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
-#   3. Deploy MaaS platform via kustomize (Kuadrant, MaaS API, maas-controller)
-#   4. Deploy simulator model for testing
+#   2. Deploy MaaS platform via kustomize (RHCL, gateway, MaaS API, maas-controller)
+#   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
+#   4. Deploy MaaS system (free + premium: LLMIS + MaaSModel + MaaSAuthPolicy + MaaSSubscription)
 #   5. Validate deployment functionality
 #   6. Create test users with different permission levels:
 #      - Admin user (cluster-admin role)
@@ -183,7 +183,7 @@ deploy_maas_platform() {
 }
 
 deploy_models() {
-    echo "Deploying simulator models (regular + premium)"
+    echo "Deploying MaaS system (free + premium: LLMIS + MaaSModel + MaaSAuthPolicy + MaaSSubscription)"
     # Create llm namespace if it does not exist
     if ! kubectl get namespace llm >/dev/null 2>&1; then
         echo "Creating 'llm' namespace..."
@@ -195,21 +195,16 @@ deploy_models() {
         echo "'llm' namespace already exists"
     fi
 
-    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator/ | kubectl apply -f -); then
-        echo "❌ ERROR: Failed to deploy simulator model"
+    # Deploy all at once so dependencies resolve correctly
+    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/maas-system/ | kubectl apply -f -); then
+        echo "❌ ERROR: Failed to deploy MaaS system"
         exit 1
     fi
-    echo "✅ Regular simulator deployed"
-
-    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator-premium/ | kubectl apply -f -); then
-        echo "❌ ERROR: Failed to deploy premium simulator model"
-        exit 1
-    fi
-    echo "✅ Premium simulator deployed"
+    echo "✅ MaaS system deployed (free + premium tiers)"
 
     echo "Waiting for models to be ready..."
     if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for regular simulator to be ready"
+        echo "❌ ERROR: Timed out waiting for free simulator to be ready"
         oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
@@ -220,21 +215,13 @@ deploy_models() {
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
     fi
-    echo "✅ Simulator models deployed"
-
-    # Deploy subscription CRs (MaaSModels + MaaSAuthPolicies + MaaSSubscriptions).
-    # Needed early so that: catalog discovery works (MaaSModels), auth probes pass
-    # (per-route AuthPolicies), and rate limiting is active (for validation checks).
-    # Subscription tests running last re-apply these idempotently.
-    echo "Deploying MaaS subscription CRs..."
-    if ! kubectl apply -k "$PROJECT_ROOT/maas-controller/examples/"; then
-        echo "⚠️  WARNING: Failed to deploy subscription CRs, continuing..."
-    fi
+    echo "✅ Simulator models ready"
 
     echo "Waiting for MaaSModels to be Ready..."
     local retries=0
+    local all_ready=false
     while [[ $retries -lt 30 ]]; do
-        local all_ready=true
+        all_ready=true
         while IFS= read -r phase; do
             if [[ "$phase" != "Ready" ]]; then
                 all_ready=false
@@ -247,7 +234,36 @@ deploy_models() {
         retries=$((retries + 1))
         sleep 5
     done
-    echo "✅ MaaS subscription CRs deployed"
+
+    if ! $all_ready; then
+        # TODO: Remove this workaround once maas-controller reconcile logic is correct.
+        # Controller can get stuck in a bad state forever; bouncing may unstick it.
+        echo "  MaaSModels not ready after ${retries} retries, bouncing maas-controller..."
+        kubectl rollout restart deployment/maas-controller -n "$MAAS_NAMESPACE" 2>/dev/null || true
+        kubectl rollout status deployment/maas-controller -n "$MAAS_NAMESPACE" --timeout=120s 2>/dev/null || true
+        echo "  Retrying MaaSModels wait..."
+        retries=0
+        while [[ $retries -lt 30 ]]; do
+            all_ready=true
+            while IFS= read -r phase; do
+                if [[ "$phase" != "Ready" ]]; then
+                    all_ready=false
+                    break
+                fi
+            done < <(oc get maasmodels -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+            if $all_ready && [[ -n "$(oc get maasmodels -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
+                break
+            fi
+            retries=$((retries + 1))
+            sleep 5
+        done
+    fi
+
+    if $all_ready; then
+        echo "✅ MaaSModels ready"
+    else
+        echo "⚠️  WARNING: MaaSModels still not ready after bounce, continuing anyway"
+    fi
 
     wait_for_auth_policies_enforced
 }

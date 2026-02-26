@@ -114,27 +114,29 @@ if kubectl get namespace opendatahub &>/dev/null; then
     done
 fi
 
-# 9. Delete kuadrant-system namespace (if installed by ODH)
-echo "9. Deleting kuadrant-system namespace..."
-kubectl delete ns kuadrant-system --ignore-not-found --timeout=60s 2>/dev/null || true
+# 9. Delete policy engine namespaces (Kuadrant or RHCL)
+for policy_ns in kuadrant-system rh-connectivity-link; do
+  echo "9. Deleting $policy_ns namespace (if installed)..."
+  kubectl delete ns "$policy_ns" --ignore-not-found --timeout=60s 2>/dev/null || true
 
-# 9b. Force-remove kuadrant-system if stuck terminating
-if kubectl get namespace kuadrant-system &>/dev/null; then
-    echo "   kuadrant-system stuck terminating, removing finalizers..."
-    for name in $(kubectl get authorinos.operator.authorino.kuadrant.io -n kuadrant-system --no-headers 2>/dev/null | awk '{print $1}'); do
-        kubectl patch authorinos.operator.authorino.kuadrant.io "$name" -n kuadrant-system --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+  # Force-remove if stuck terminating
+  if kubectl get namespace "$policy_ns" &>/dev/null; then
+    echo "   $policy_ns stuck terminating, removing finalizers..."
+    for name in $(kubectl get authorinos.operator.authorino.kuadrant.io -n "$policy_ns" --no-headers 2>/dev/null | awk '{print $1}'); do
+      kubectl patch authorinos.operator.authorino.kuadrant.io "$name" -n "$policy_ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
     done
-    for name in $(kubectl get kuadrants.kuadrant.io -n kuadrant-system --no-headers 2>/dev/null | awk '{print $1}'); do
-        kubectl patch kuadrants.kuadrant.io "$name" -n kuadrant-system --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+    for name in $(kubectl get kuadrants.kuadrant.io -n "$policy_ns" --no-headers 2>/dev/null | awk '{print $1}'); do
+      kubectl patch kuadrants.kuadrant.io "$name" -n "$policy_ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
     done
-    for name in $(kubectl get limitadors.limitador.kuadrant.io -n kuadrant-system --no-headers 2>/dev/null | awk '{print $1}'); do
-        kubectl patch limitadors.limitador.kuadrant.io "$name" -n kuadrant-system --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+    for name in $(kubectl get limitadors.limitador.kuadrant.io -n "$policy_ns" --no-headers 2>/dev/null | awk '{print $1}'); do
+      kubectl patch limitadors.limitador.kuadrant.io "$name" -n "$policy_ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
     done
-    if kubectl get namespace kuadrant-system &>/dev/null && command -v jq &>/dev/null; then
-        kubectl get namespace kuadrant-system -o json | jq '.spec.finalizers = []' | \
-            kubectl replace --raw "/api/v1/namespaces/kuadrant-system/finalize" -f -
+    if kubectl get namespace "$policy_ns" &>/dev/null && command -v jq &>/dev/null; then
+      kubectl get namespace "$policy_ns" -o json | jq '.spec.finalizers = []' | \
+        kubectl replace --raw "/api/v1/namespaces/$policy_ns/finalize" -f -
     fi
-fi
+  fi
+done
 
 # 10. Delete llm namespace and model resources
 echo "10. Deleting LLM models and namespace..."
@@ -197,4 +199,4 @@ echo ""
 echo "Verify cleanup with:"
 echo "  kubectl get subscription -A | grep -i odh"
 echo "  kubectl get csv -A | grep -i odh"
-echo "  kubectl get ns | grep -E 'odh|opendatahub|kuadrant|llm'"
+echo "  kubectl get ns | grep -E 'odh|opendatahub|kuadrant|rh-connectivity-link|llm'"

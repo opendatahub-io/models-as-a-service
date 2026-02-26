@@ -49,7 +49,7 @@ The two simulator models can be distinguished by:
   - Standard: `facebook-opt-125m-simulated`
   - Premium: `premium-simulated-simulated-premium`
 
-Tier-based access is configured via MaaSAuthPolicy and MaaSSubscription (see maas-controller/examples/), not via LLMInferenceService annotations.
+Tier-based access is configured via MaaSAuthPolicy and MaaSSubscription (see [docs/samples/maas-system/](../maas-system/)), not via LLMInferenceService annotations.
 
 ### Verifying Deployment
 
