@@ -654,7 +654,7 @@ cleanup_maas_api_image() {
 #   Creates a backup that must be restored by calling cleanup_maas_controller_image.
 #
 # Environment:
-#   MAAS_CONTROLLER_IMAGE - Container image to use (e.g., quay.io/maas/maas-controller:pr-42)
+#   MAAS_CONTROLLER_IMAGE - Container image to use (e.g., quay.io/opendatahub/maas-controller:pr-42)
 set_maas_controller_image() {
   if [ -z "${MAAS_CONTROLLER_IMAGE:-}" ]; then
     return 0
@@ -675,7 +675,7 @@ set_maas_controller_image() {
     echo "Error: failed to create backup of controller kustomization.yaml" >&2
     return 1
   }
-  (cd "$(dirname "$_MAAS_CONTROLLER_KUSTOMIZATION")" && kustomize edit set image "quay.io/maas/maas-controller=${MAAS_CONTROLLER_IMAGE}") || {
+  (cd "$(dirname "$_MAAS_CONTROLLER_KUSTOMIZATION")" && kustomize edit set image "maas-controller=${MAAS_CONTROLLER_IMAGE}") || {
     echo "Error: failed to set image in controller kustomization.yaml" >&2
     mv -f "$_MAAS_CONTROLLER_BACKUP" "$_MAAS_CONTROLLER_KUSTOMIZATION" 2>/dev/null || true
     return 1

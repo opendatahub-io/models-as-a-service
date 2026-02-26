@@ -9,16 +9,16 @@
 #
 # WHAT IT DOES:
 #   1. Install cert-manager and LeaderWorkerSet (LWS) operators (required for KServe)
-#   2. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe + ModelsAsService)
-#   3. Deploy MaaS platform via ODH operator (Kuadrant, MaaS API, maas-controller)
+#   2. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
+#   3. Deploy MaaS platform via kustomize (Kuadrant, MaaS API, maas-controller)
 #   4. Deploy simulator model for testing
 #   5. Validate deployment functionality
 #   6. Create test users with different permission levels:
 #      - Admin user (cluster-admin role)
 #      - Edit user (edit role)
 #      - View user (view role)
-#   6. Run token metadata verification (as admin user)
-#   7. Run smoke tests for each user
+#   7. Run token metadata verification (as admin user)
+#   8. Run smoke tests for each user
 # 
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
@@ -38,7 +38,7 @@
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
-#   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/maas/maas-controller:latest)
+#   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/opendatahub/maas-controller:latest)
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects both deploy.sh (via --disable-tls-backend) and smoke.sh

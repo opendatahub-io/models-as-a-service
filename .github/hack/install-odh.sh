@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install OpenDataHub (ODH) operator and apply DataScienceCluster with ModelsAsService.
+# Install OpenDataHub (ODH) operator and apply DataScienceCluster (KServe).
+# MaaS is deployed separately via deploy.sh --deployment-mode kustomize.
 #
 # Prerequisites: cert-manager and LWS operators (run install-cert-manager-and-lws.sh first).
 #
