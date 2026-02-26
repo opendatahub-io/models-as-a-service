@@ -256,7 +256,7 @@ type SubscriptionNotFoundError struct {
 }
 
 func (e *SubscriptionNotFoundError) Error() string {
-	return fmt.Sprintf("subscription %q not found", e.Subscription)
+	return "requested subscription not found"
 }
 
 // AccessDeniedError indicates user doesn't have access to requested subscription.
@@ -265,7 +265,7 @@ type AccessDeniedError struct {
 }
 
 func (e *AccessDeniedError) Error() string {
-	return fmt.Sprintf("access denied to subscription %q", e.Subscription)
+	return "access denied to requested subscription"
 }
 
 // MultipleSubscriptionsError indicates user has access to multiple subscriptions and must explicitly select one.
@@ -274,5 +274,5 @@ type MultipleSubscriptionsError struct {
 }
 
 func (e *MultipleSubscriptionsError) Error() string {
-	return fmt.Sprintf("user has access to multiple subscriptions [%s], must specify subscription using X-MaaS-Subscription header", strings.Join(e.Subscriptions, ", "))
+	return "user has access to multiple subscriptions, must specify subscription using X-MaaS-Subscription header"
 }
