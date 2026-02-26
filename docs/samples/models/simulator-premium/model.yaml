@@ -2,8 +2,6 @@ apiVersion: serving.kserve.io/v1alpha1
 kind: LLMInferenceService
 metadata:
   name: simulated-premium
-  annotations:
-    security.opendatahub.io/enable-auth: "false"
 spec:
   model:
     uri: hf://facebook/opt-125m

@@ -3,8 +3,6 @@ kind: LLMInferenceService
 metadata:
   name: ibm-granite-2b-gpu
   namespace: llm
-  annotations:
-    security.opendatahub.io/enable-auth: "false"
 spec:
   model:
     uri: hf://ibm-granite/granite-3.1-2b-instruct

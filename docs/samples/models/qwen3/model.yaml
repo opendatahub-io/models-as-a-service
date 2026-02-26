@@ -3,8 +3,6 @@ kind: LLMInferenceService
 metadata:
   name: single-node-no-scheduler-nvidia-gpu
   namespace: llm
-  annotations:
-    security.opendatahub.io/enable-auth: "false"
 spec:
   model:
     uri: hf://Qwen/Qwen3-0.6B
