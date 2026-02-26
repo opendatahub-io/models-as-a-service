@@ -3,7 +3,7 @@ kind: LLMInferenceService
 metadata:
   name: single-node-no-scheduler-cpu
   annotations:
-    alpha.maas.opendatahub.io/tiers: '[]'
+    security.opendatahub.io/enable-auth: "false"
 spec:
   model:
     uri: hf://facebook/opt-125m

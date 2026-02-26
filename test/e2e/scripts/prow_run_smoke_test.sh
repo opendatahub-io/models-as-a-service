@@ -8,15 +8,17 @@
 # platform on OpenShift with multi-user testing capabilities.
 #
 # WHAT IT DOES:
-#   1. Deploy MaaS platform on OpenShift
-#   2. Deploy simulator model for testing
-#   3. Validate deployment functionality
-#   4. Create test users with different permission levels:
+#   1. Install cert-manager and LeaderWorkerSet (LWS) operators (required for KServe)
+#   2. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe + ModelsAsService)
+#   3. Deploy MaaS platform via ODH operator (Kuadrant, MaaS API, maas-controller)
+#   4. Deploy simulator model for testing
+#   5. Validate deployment functionality
+#   6. Create test users with different permission levels:
 #      - Admin user (cluster-admin role)
-#      - Edit user (edit role) 
+#      - Edit user (edit role)
 #      - View user (view role)
-#   5. Run token metadata verification (as admin user)
-#   6. Run smoke tests for each user
+#   6. Run token metadata verification (as admin user)
+#   7. Run smoke tests for each user
 # 
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
@@ -25,13 +27,12 @@
 #   # Test with pipeline-built images
 #   OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
 #   MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
-#   MAAS_CONTROLLER_IMAGE=quay.io/maas/maas-controller:pr-42 \
+#   MAAS_CONTROLLER_IMAGE=quay.io/opendatahub/maas-controller:pr-42 \
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
-#   OPERATOR_TYPE   - Operator to deploy: "odh" or "rhoai" (default: odh)
-#                     odh   → uses Kuadrant (upstream), Authorino in kuadrant-system
-#                     rhoai → uses RHCL (downstream), Authorino in rh-connectivity-link
+#   OPERATOR_CATALOG - ODH catalog image (default: quay.io/opendatahub/opendatahub-operator-catalog:latest)
+#   OPERATOR_IMAGE   - Custom ODH operator image for CSV patch (optional)
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
@@ -39,10 +40,6 @@
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/maas/maas-controller:latest)
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
-#   OPERATOR_CATALOG - Custom operator catalog image (default: latest from main)
-#                      Example: quay.io/opendatahub/opendatahub-operator-catalog:pr-456
-#   OPERATOR_IMAGE - Custom operator image (default: uses catalog default)
-#                    Example: quay.io/opendatahub/opendatahub-operator:pr-456
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects both deploy.sh (via --disable-tls-backend) and smoke.sh
 # =============================================================================
@@ -73,39 +70,13 @@ SKIP_SUBSCRIPTION_TESTS=${SKIP_SUBSCRIPTION_TESTS:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
-# Operator configuration
-# OPERATOR_TYPE determines which operator and policy engine to use:
-#   odh   → Kuadrant (upstream) → kuadrant-system
-#   rhoai → RHCL (downstream)   → rh-connectivity-link
-OPERATOR_TYPE=${OPERATOR_TYPE:-odh}
-
-# Image configuration (for CI/CD pipelines)
-# OPERATOR_CATALOG: For ODH, defaults to snapshot catalog (required for v2 API / MaaS support)
-#                   For RHOAI, no default (uses redhat-operators from OCP marketplace)
-if [[ -z "${OPERATOR_CATALOG:-}" ]]; then
-    if [[ "$OPERATOR_TYPE" == "odh" ]]; then
-        # ODH requires v3+ for DataScienceCluster v2 API (MaaS support)
-        # community-operators only has v2.x which doesn't have v2 API
-        OPERATOR_CATALOG="quay.io/opendatahub/opendatahub-operator-catalog:latest"
-    fi
-    # RHOAI: intentionally no default - uses redhat-operators from OCP marketplace
-fi
-export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}           # Optional: uses operator default if not set
-export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}  # Optional: default quay.io/maas/maas-controller:latest
-export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}            # Optional: uses catalog default if not set
-
-# Compute namespaces based on operator type (matches deploy-rhoai-stable.sh behavior)
-# MaaS API is always deployed to the fixed application namespace, NOT the CI namespace
-case "${OPERATOR_TYPE}" in
-    rhoai)
-        AUTHORINO_NAMESPACE="rh-connectivity-link"
-        MAAS_NAMESPACE="redhat-ods-applications"
-        ;;
-    *)
-        AUTHORINO_NAMESPACE="kuadrant-system"
-        MAAS_NAMESPACE="opendatahub"
-        ;;
-esac
+# ODH operator deployment
+export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
+export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
+export OPERATOR_CATALOG=${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}
+export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
+AUTHORINO_NAMESPACE="kuadrant-system"
+MAAS_NAMESPACE="opendatahub"
 
 print_header() {
     echo ""
@@ -140,50 +111,58 @@ check_prerequisites() {
 }
 
 deploy_maas_platform() {
-    echo "Deploying MaaS platform on OpenShift..."
-    echo "Using operator type: ${OPERATOR_TYPE}"
-    echo "Using operator catalog: ${OPERATOR_CATALOG:-"(default)"}"
+    echo "Deploying MaaS platform via ODH operator..."
     if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
         echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
     fi
     if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
         echo "Using custom MaaS controller image: ${MAAS_CONTROLLER_IMAGE}"
     fi
+    if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
+        echo "Using ODH catalog: ${OPERATOR_CATALOG}"
+    fi
     if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
-        echo "Using custom operator image: ${OPERATOR_IMAGE}"
+        echo "Using custom ODH operator image: ${OPERATOR_IMAGE}"
     fi
 
-    # Build deploy.sh command with optional parameters
-    # NOTE: Do NOT hardcode --channel here! deploy.sh sets per-operator defaults:
-    #   - ODH: fast-3 (for v3+ with MaaS support)
-    #   - RHOAI: fast-3.x (for v3.x with MaaS support)
-    # Hardcoding --channel fast breaks RHOAI (installs 2.x without modelsAsService)
+    # 1. Install cert-manager and LeaderWorkerSet (required for KServe/LLMInferenceService)
+    echo "Installing cert-manager and LeaderWorkerSet operators..."
+    if ! bash "$PROJECT_ROOT/.github/hack/install-cert-manager-and-lws.sh"; then
+        echo "❌ ERROR: cert-manager/LWS installation failed"
+        exit 1
+    fi
+
+    # 2. Install ODH operator with DataScienceCluster (KServe + ModelsAsService)
+    echo "Installing OpenDataHub operator..."
+    if ! bash "$PROJECT_ROOT/.github/hack/install-odh.sh"; then
+        echo "❌ ERROR: ODH installation failed"
+        exit 1
+    fi
+
+    # 3. Deploy MaaS via operator (Kuadrant, gateway, maas-api, maas-controller, policies)
+    # Note: ODH/catalog already installed by install-odh.sh; deploy.sh will skip duplicate installs
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
-        --operator-type "${OPERATOR_TYPE}"
+        --deployment-mode kustomize
+        --operator-catalog "${OPERATOR_CATALOG}"
     )
-
-    # Add optional operator catalog if specified (otherwise uses default catalog)
-    if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
-        deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
-    fi
-
-    # Add optional operator image if specified
     if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         deploy_cmd+=(--operator-image "${OPERATOR_IMAGE}")
+    fi
+    if [[ "$INSECURE_HTTP" == "true" ]]; then
+        deploy_cmd+=(--disable-tls-backend)
     fi
 
     if ! "${deploy_cmd[@]}"; then
         echo "❌ ERROR: MaaS platform deployment failed"
         exit 1
     fi
-    # Wait for DataScienceCluster's KServe and ModelsAsService to be ready
-    # Using 300s timeout to fit within Prow's 15m job limit
+
+    # Wait for DataScienceCluster (install-odh already waited; deploy may have updated)
     if ! wait_datasciencecluster_ready "default-dsc" 300; then
-        echo "❌ ERROR: DataScienceCluster components did not become ready"
-        exit 1
+        echo "⚠️  WARNING: DataScienceCluster readiness check had issues, continuing anyway"
     fi
-    
+
     # Wait for Authorino to be ready and auth service cluster to be healthy
     # TODO(https://issues.redhat.com/browse/RHOAIENG-48760): Remove SKIP_AUTH_CHECK
     # once the operator creates the gateway→Authorino TLS EnvoyFilter at Gateway/AuthPolicy creation
@@ -199,7 +178,7 @@ deploy_maas_platform() {
             echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
         fi
     fi
-    
+
     echo "✅ MaaS platform deployment completed"
 }
 

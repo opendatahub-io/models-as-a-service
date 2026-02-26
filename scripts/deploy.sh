@@ -944,7 +944,7 @@ apply_custom_resources() {
   if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
     webhook_namespace="redhat-ods-operator"
   else
-    webhook_namespace="opendatahub-operator-system"
+    webhook_namespace="opendatahub"
   fi
 
   local webhook_deployment
