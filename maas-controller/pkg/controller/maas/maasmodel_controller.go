@@ -263,7 +263,9 @@ func (r *MaaSModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.mapHTTPRouteToMaaSModels,
 		)).
 		// Watch LLMInferenceServices so we re-reconcile when the backend becomes ready
-		// (or transitions away from ready).
+		// (or transitions away from ready). No predicate: the reconciler reads
+		// LLMInferenceService status (Ready condition, addresses), so status updates
+		// must not be filtered out.
 		Watches(&kservev1alpha1.LLMInferenceService{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapLLMISvcToMaaSModels,
 		)).
