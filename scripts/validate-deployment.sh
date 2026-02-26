@@ -631,6 +631,24 @@ else
     # Test rate limiting
     if [ -n "$TOKEN" ] && [ -n "$MODEL_NAME" ] && [ -n "$MODEL_CHAT_ENDPOINT" ]; then
         print_check "Rate limiting"
+
+        # Log current user tier and attempt to fetch the configured rate limit from the cluster
+        if [ -n "$TIER" ]; then
+            print_info "Current user tier: $TIER"
+            # Query the TokenRateLimitPolicy to show the configured limit for this tier
+            TIER_LIMIT=$(kubectl get tokenratelimitpolicy gateway-token-rate-limits -n openshift-ingress \
+                -o jsonpath="{.spec.limits.${TIER}-user-tokens.rates[0].limit}" 2>/dev/null || echo "")
+            TIER_WINDOW=$(kubectl get tokenratelimitpolicy gateway-token-rate-limits -n openshift-ingress \
+                -o jsonpath="{.spec.limits.${TIER}-user-tokens.rates[0].window}" 2>/dev/null || echo "")
+            if [ -n "$TIER_LIMIT" ] && [ -n "$TIER_WINDOW" ]; then
+                print_info "Configured rate limit for $TIER tier: $TIER_LIMIT tokens per $TIER_WINDOW"
+            else
+                print_info "Could not read rate limit for $TIER tier from TokenRateLimitPolicy"
+            fi
+        else
+            print_info "User tier: unknown (could not extract from token)"
+        fi
+
         print_info "Sending $RATE_LIMIT_TEST_COUNT rapid requests to test rate limiting..."
         
         # Use the same request payload for rate limiting tests
@@ -660,16 +678,28 @@ else
             fi
         done
         
+        # Determine if the user tier has high rate limits (enterprise/premium users)
+        # For high-tier users, all requests succeeding is expected and not a failure
+        HIGH_TIER=false
+        if [ -n "$TIER" ]; then
+            case "$TIER" in
+                enterprise|premium)
+                    HIGH_TIER=true
+                    ;;
+            esac
+        fi
+
         # Rate Limiting Validation Logic:
-        # ┌─────────────────────────────────────────────────────────────────────────────────┐
-        # │ Condition                              │ Result                                 │
-        # ├─────────────────────────────────────────────────────────────────────────────────┤
-        # │ 429s received AND no failures          │ ✅ PASS - Rate limiting working        │
-        # │ 429s received BUT some failures        │ ❌ FAIL - Partial success, instability │
-        # │ All 200s, no 429s, no failures         │ ❌ FAIL - Rate limiting not enforced   │
-        # │ Some 200s, some failures, no 429s      │ ❌ FAIL - Inconclusive                 │
-        # │ All requests failed                    │ ❌ FAIL - Complete failure             │
-        # └─────────────────────────────────────────────────────────────────────────────────┘
+        # ┌──────────────────────────────────────────────────────────────────────────────────────────┐
+        # │ Condition                              │ Result                                          │
+        # ├──────────────────────────────────────────────────────────────────────────────────────────┤
+        # │ 429s received AND no failures          │ ✅ PASS - Rate limiting working                 │
+        # │ 429s received BUT some failures        │ ❌ FAIL - Partial success, instability          │
+        # │ All 200s, no 429s (high-tier user)     │ ✅ PASS - Expected for high rate limit tiers    │
+        # │ All 200s, no 429s (free/standard user) │ ❌ FAIL - Rate limiting not enforced            │
+        # │ Some 200s, some failures, no 429s      │ ❌ FAIL - Inconclusive                          │
+        # │ All requests failed                    │ ❌ FAIL - Complete failure                      │
+        # └──────────────────────────────────────────────────────────────────────────────────────────┘
         if [ "$RATE_LIMITED_COUNT" -gt 0 ]; then
             if [ "$FAILED_COUNT" -gt 0 ]; then
                 print_fail "Rate limiting partially working but errors observed" \
@@ -679,7 +709,12 @@ else
                 print_success "Rate limiting is working ($SUCCESS_COUNT successful, $RATE_LIMITED_COUNT rate limited)"
             fi
         elif [ "$SUCCESS_COUNT" -gt 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
-            print_fail "Rate limiting not enforced" "All $SUCCESS_COUNT requests succeeded without rate limiting" "Check TokenRateLimitPolicy and Limitador configuration"
+            if [ "$HIGH_TIER" = true ]; then
+                print_success "All $SUCCESS_COUNT requests succeeded (expected for $TIER tier with higher rate limits)"
+                print_info "To verify rate limiting for $TIER tier, re-run with more requests: --rate-limit-requests 100"
+            else
+                print_fail "Rate limiting not enforced" "All $SUCCESS_COUNT requests succeeded without rate limiting" "Check TokenRateLimitPolicy and Limitador configuration"
+            fi
         elif [ "$SUCCESS_COUNT" -gt 0 ]; then
             print_fail "Rate limiting test inconclusive" "$SUCCESS_COUNT succeeded, $FAILED_COUNT failed (auth may still be stabilizing)" "Check TokenRateLimitPolicy and auth service health"
         else

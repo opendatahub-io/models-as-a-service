@@ -234,6 +234,8 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			"when": []interface{}{
 				map[string]interface{}{
 					"selector": `has(auth.metadata["subscription-info"].error)`,
+					"operator": "eq",
+					"value":    "true",
 				},
 			},
 		}
