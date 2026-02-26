@@ -160,7 +160,7 @@ class TestSmoke:
         )
 
         headers = {"Authorization": f"Bearer {maas_token}", "Content-Type": "application/json"}
-        payload = {"model": model_id, "prompt": "Say hello in one word.", "max_tokens": 16}
+        payload = {"model": model_id, "prompt": "Say hello in one word.", "max_tokens": 25}
 
         r = request_session_http.post(endpoint_url, headers=headers, json=payload, timeout=30)
         print(f"[legacy] POST /completions -> {r.status_code}")

@@ -1,28 +1,19 @@
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
-import re
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
 from kubernetes.dynamic import DynamicClient
-from ocp_resources.endpoints import Endpoints
-from ocp_resources.group import Group
 from ocp_resources.ingress_config_openshift_io import Ingress as IngressConfig
 from ocp_resources.llm_inference_service import LLMInferenceService
 from ocp_resources.resource import ResourceEditor
 from requests import Response
-from timeout_sampler import TimeoutSampler
-from timeout_sampler import TimeoutExpiredError
-
-from .resources.rate_limit_policy import RateLimitPolicy
 from .resources.token_rate_limit_policy import TokenRateLimitPolicy
 
 LOGGER = logging.getLogger(__name__)
@@ -82,28 +73,6 @@ def env_str(env_name: str, default_value: Optional[str] = None) -> Optional[str]
 
 def normalize_url(raw_url: str) -> str:
     return raw_url.rstrip("/")
-
-
-def wait_for_condition(
-    description: str,
-    condition_callable: Callable[[], Any],
-    timeout_seconds: int = 600,
-    sleep_seconds: int = 10,
-) -> Any:
-    last_value: Any = None
-    try:
-        for last_value in TimeoutSampler(
-            wait_timeout=timeout_seconds,
-            sleep=sleep_seconds,
-            func=condition_callable,
-        ):
-            if last_value:
-                return last_value
-    except TimeoutExpiredError as exc:
-        raise AssertionError(
-            f"Timed out waiting for condition: {description}. Last value: {last_value!r}"
-        ) from exc
-
 
 def is_openshift_cluster(admin_client: DynamicClient) -> bool:
     try:
@@ -189,22 +158,13 @@ def any_parent_condition_true(resource_dict: dict, condition_type: str) -> bool:
     return False
 
 
-def endpoints_have_ready_addresses(admin_client: DynamicClient, namespace: str, name: str) -> bool:
-    endpoints = Endpoints(client=admin_client, name=name, namespace=namespace, ensure_exists=True)
-    subsets = endpoints.instance.subsets
-    if not subsets:
-        return False
-    return any(subset.addresses for subset in subsets)
-
-
 def collect_infrastructure_diagnostics(admin_client: DynamicClient, maas_env: MaasEnv) -> Dict[str, Any]:
     diagnostics: Dict[str, Any] = {
         "maas_api_namespace": maas_env.maas_api_namespace,
         "gateway": f"{maas_env.gateway_namespace}/{maas_env.gateway_name}",
         "httproute": f"{maas_env.maas_api_namespace}/{maas_env.maas_api_route_name}",
         "authpolicy": f"{maas_env.authpolicy_namespace}/{maas_env.authpolicy_name}",
-        "tokenratelimitpolicy": f"{maas_env.tokenratelimitpolicy_namespace}/{maas_env.tokenratelimitpolicy_name}",
-        "request_ratelimitpolicy": f"{maas_env.request_ratelimitpolicy_namespace}/{maas_env.request_ratelimitpolicy_name}",
+        "tokenratelimitpolicy": f"{maas_env.tokenratelimitpolicy_namespace}/{maas_env.tokenratelimitpolicy_name}",    
         "pods": {},
         "gateway_status": {},
         "httproute_status": {},
@@ -256,26 +216,7 @@ def collect_infrastructure_diagnostics(admin_client: DynamicClient, maas_env: Ma
     except Exception as exc:
         diagnostics["policies_status"]["TokenRateLimitPolicyError"] = repr(exc)
 
-    try:
-        request_policy_resource = admin_client.resources.get(api_version="kuadrant.io/v1", kind="RateLimitPolicy")
-        request_policy_obj = request_policy_resource.get(
-            name=maas_env.request_ratelimitpolicy_name,
-            namespace=maas_env.request_ratelimitpolicy_namespace,
-        )
-        request_policy_dict = request_policy_obj.to_dict()
-        diagnostics["policies_status"]["RateLimitPolicyAccepted"] = get_condition_status(request_policy_dict, "Accepted")
-        diagnostics["policies_status"]["RateLimitPolicyEnforced"] = get_condition_status(request_policy_dict, "Enforced")
-    except Exception as exc:
-        diagnostics["policies_status"]["RateLimitPolicyError"] = repr(exc)
-
     return diagnostics
-
-
-def format_diagnostics_for_log(diagnostics: Dict[str, Any]) -> str:
-    try:
-        return json.dumps(diagnostics, indent=2, sort_keys=True)
-    except Exception:
-        return str(diagnostics)
 
 
 def safe_json(response: Response) -> Dict[str, Any]:
@@ -405,57 +346,6 @@ def verify_inference_chat_completions(
 
     return response
 
-
-def verify_unauth_rejected(
-    http_session: requests.Session,
-    endpoint_url: str,
-    model_id: str,
-    *,
-    request_payload_template: Optional[Dict[str, Any]] = None,
-    max_tokens: int = 50,
-) -> Response:
-    headers = {"Content-Type": "application/json"}
-
-    if request_payload_template:
-        payload_copy = json.loads(json.dumps(request_payload_template))
-        payload_text = json.dumps(payload_copy)
-        payload_text = payload_text.replace("${MODEL_NAME}", model_id).replace("${MODEL_ID}", model_id)
-        payload = json.loads(payload_text)
-    else:
-        payload = {"model": model_id, "messages": [{"role": "user", "content": "Hello"}], "max_tokens": max_tokens}
-
-    response = http_session.post(url=endpoint_url, headers=headers, json=payload, timeout=30)
-    assert response.status_code in (401, 403), (
-        f"Expected 401/403 without MaaS token, got {response.status_code}. Body: {response.text[:200]}"
-    )
-    return response
-
-
-def b64url_decode(encoded_str: str) -> bytes:
-    padding = "=" * (-len(encoded_str) % 4)
-    padded = (encoded_str + padding).encode("utf-8")
-    return base64.urlsafe_b64decode(padded)
-
-
-def decode_jwt_payload(jwt_token: str) -> Dict[str, Any]:
-    parts = jwt_token.split(".")
-    if len(parts) < 2:
-        raise AssertionError("Invalid JWT token format")
-    payload_bytes = b64url_decode(parts[1])
-    decoded = payload_bytes.decode("utf-8")
-    payload = json.loads(decoded)
-    if not isinstance(payload, dict):
-        raise AssertionError("JWT payload is not a JSON object")
-    return payload
-
-
-def extract_tier_from_subject(subject: str) -> Optional[str]:
-    match_obj = re.search(r"tier-([^:]+):", subject)
-    if not match_obj:
-        return None
-    return match_obj.group(1)
-
-
 def maas_token_ratelimitpolicy_limits() -> Dict[str, Any]:
     return {
         "enterprise-user-tokens": {
@@ -474,49 +364,6 @@ def maas_token_ratelimitpolicy_limits() -> Dict[str, Any]:
             "when": [{"predicate": 'auth.identity.tier == "premium"'}],
         },
     }
-
-
-def maas_request_ratelimitpolicy_limits() -> Dict[str, Any]:
-    return {
-        "enterprise": {
-            "counters": [{"expression": "auth.identity.userid"}],
-            "rates": [{"limit": 50, "window": "2m"}],
-            "when": [{"predicate": 'auth.identity.tier == "enterprise"'}],
-        },
-        "free": {
-            "counters": [{"expression": "auth.identity.userid"}],
-            "rates": [{"limit": 5, "window": "1m"}],
-            "when": [{"predicate": 'auth.identity.tier == "free"'}],
-        },
-        "premium": {
-            "counters": [{"expression": "auth.identity.userid"}],
-            "rates": [{"limit": 8, "window": "1m"}],
-            "when": [{"predicate": 'auth.identity.tier == "premium"'}],
-        },
-    }
-
-
-@contextmanager
-def patched_gateway_rate_limits(
-    *,
-    admin_client: DynamicClient,
-    namespace: str,
-    token_policy_name: str,
-    request_policy_name: str,
-) -> Generator[None, None, None]:
-    token_policy = TokenRateLimitPolicy(client=admin_client, name=token_policy_name, namespace=namespace, ensure_exists=True)
-    request_policy = RateLimitPolicy(client=admin_client, name=request_policy_name, namespace=namespace, ensure_exists=True)
-
-    LOGGER.info(f"Patching TokenRateLimitPolicy {namespace}/{token_policy_name} spec.limits")
-    with ResourceEditor(patches={token_policy: {"spec": {"limits": maas_token_ratelimitpolicy_limits()}}}):
-        token_policy.wait_for_condition(condition="Enforced", status="True", timeout=60)
-
-        LOGGER.info(f"Patching RateLimitPolicy {namespace}/{request_policy_name} spec.limits")
-        with ResourceEditor(patches={request_policy: {"spec": {"limits": maas_request_ratelimitpolicy_limits()}}}):
-            request_policy.wait_for_condition(condition="Enforced", status="True", timeout=60)
-            yield
-
-    LOGGER.info("Restored original Kuadrant policy specs")
 
 
 def get_total_tokens(response: Response, *, fail_if_missing: bool = False) -> Optional[int]:
@@ -539,17 +386,6 @@ def get_total_tokens(response: Response, *, fail_if_missing: bool = False) -> Op
     if fail_if_missing:
         raise AssertionError("Token usage not found in header or JSON body")
     return None
-
-
-@contextmanager
-def create_openshift_group(
-    admin_client: DynamicClient,
-    group_name: str,
-    users: Optional[List[str]] = None,
-) -> Generator[Group, None, None]:
-    with Group(client=admin_client, name=group_name, users=users or [], wait_for_resource=True) as group:
-        LOGGER.info(f"Created Group {group_name} with users {users or []}")
-        yield group
 
 @dataclass
 class TestSummaryRow:

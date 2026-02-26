@@ -4,7 +4,7 @@ pytest-metadata>=3.1,<4
 requests>=2.32,<3
 
 
-# Wrapper itself (pin below 11 because 11.x needs Python >=3.10)
+# Wrapper itself (11.x+ requires Python >=3.10; pin <13 to avoid future breaking changes)
 openshift-python-wrapper>=11,<13
 
 # Logging + helpers

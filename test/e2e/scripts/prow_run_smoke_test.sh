@@ -46,23 +46,6 @@
 
 set -euo pipefail
 
-# Ensures Python 3.12 is available for smoke tests and sets PYTHON_BIN accordingly.
-ensure_python_312() {
-  echo "[prow] Ensuring Python 3.12 is available for smoke tests..."
-
-  if command -v python3.12 >/dev/null 2>&1; then
-    python3.12 --version
-    export PYTHON_BIN=python3.12
-    return 0
-  fi
-
-  echo "❌ [prow] python3.12 not found in test image."
-  echo "   This job runs as non-root, so installing via dnf/yum at runtime is not supported."
-  echo "   Fix: bake python3.12 into build_root image in openshift/release."
-  echo "   Current python: $(python3 --version 2>/dev/null || echo 'missing')"
-  exit 1
-}
-
 # Find project root before sourcing helpers (helpers need to be sourced from correct path)
 _find_project_root_bootstrap() {
   local start_dir="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -355,7 +338,6 @@ setup_test_user() {
 # Main execution
 print_header "Deploying Maas on OpenShift"
 check_prerequisites
-ensure_python_312
 deploy_maas_platform
 
 print_header "Deploying Models"  
