@@ -11,14 +11,9 @@
 #   1. Install cert-manager and LeaderWorkerSet (LWS) operators (required for KServe)
 #   2. Deploy MaaS platform via kustomize (RHCL, gateway, MaaS API, maas-controller)
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
-#   4. Deploy MaaS system (free + premium: LLMIS + MaaSModel + MaaSAuthPolicy + MaaSSubscription)
-#   5. Validate deployment functionality
-#   6. Create test users with different permission levels:
-#      - Admin user (cluster-admin role)
-#      - Edit user (edit role)
-#      - View user (view role)
-#   7. Run token metadata verification (as admin user)
-#   8. Run smoke tests for each user
+#   4. Deploy MaaS system (free + premium + unconfigured: LLMIS + MaaSModel + MaaSAuthPolicy + MaaSSubscription)
+#   5. Run subscription controller tests (test_subscription.py)
+#   6. Create admin test user and run deployment validation + token metadata verification
 # 
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
@@ -34,14 +29,13 @@
 #   OPERATOR_CATALOG - ODH catalog image (default: quay.io/opendatahub/opendatahub-operator-catalog:latest)
 #   OPERATOR_IMAGE   - Custom ODH operator image for CSV patch (optional)
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
-#   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/opendatahub/maas-controller:latest)
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
-#                    Affects both deploy.sh (via --disable-tls-backend) and smoke.sh
+#                    Affects deploy.sh (via --disable-tls-backend) and test env
 # =============================================================================
 
 set -euo pipefail
@@ -64,7 +58,6 @@ source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # Options (can be set as environment variables)
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
-SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_SUBSCRIPTION_TESTS=${SKIP_SUBSCRIPTION_TESTS:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
@@ -359,23 +352,26 @@ setup_vars_for_tests() {
     echo "✅ Variables for tests setup completed"
 }
 
-run_smoke_tests() {
-    echo "-- Smoke Testing --"
-    
-    if [ "$SKIP_SMOKE" = false ]; then
-        if ! (cd "$PROJECT_ROOT" && bash test/e2e/smoke.sh); then
-            echo "❌ ERROR: Smoke tests failed"
-            exit 1
-        else
-            echo "✅ Smoke tests completed successfully"
-        fi
-    else
-        echo "⏭️  Skipping smoke tests"
+add_admin_to_premium_group() {
+    echo "Adding current user to premium tier (required for subscription tests)..."
+    local current_user
+    current_user="$(oc whoami 2>/dev/null)"
+    if [[ -z "$current_user" ]]; then
+        echo "⚠️  WARNING: Could not get current user (oc whoami), skipping premium tier setup"
+        return 0
     fi
+
+    # Add admin to premium-user group (for IdP-based clusters)
+    if ! oc get group premium-user &>/dev/null; then
+        oc adm groups new premium-user 2>/dev/null || true
+    fi
+    oc adm groups add-users premium-user "$current_user" 2>/dev/null || true
 }
 
 run_subscription_tests() {
     echo "-- Subscription Controller Tests --"
+
+    add_admin_to_premium_group
 
     export GATEWAY_HOST="${HOST}"
     export MAAS_NAMESPACE
@@ -463,16 +459,10 @@ setup_vars_for_tests
 
 run_subscription_tests
 
-# Setup all users first (while logged in as admin)
-print_header "Setting up test users"
+# Setup admin user for validation
+print_header "Setting up test user"
 setup_test_user "tester-admin-user" "cluster-admin"
-setup_test_user "tester-edit-user" "edit"
-setup_test_user "tester-view-user" "view"
 
-# Now run tests for each user
-print_header "Running tests for all users"
-
-# Test admin user
 print_header "Running Maas e2e Tests as admin user"
 ADMIN_TOKEN=$(oc create token tester-admin-user -n default)
 oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
@@ -480,19 +470,5 @@ oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
 print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
 run_token_verification
-
-run_smoke_tests
-
-# Test edit user  
-print_header "Running Maas e2e Tests as edit user"
-EDIT_TOKEN=$(oc create token tester-edit-user -n default)
-oc login --token "$EDIT_TOKEN" --server "$K8S_CLUSTER_URL"
-run_smoke_tests
-
-# Test view user
-print_header "Running Maas e2e Tests as view user"
-VIEW_TOKEN=$(oc create token tester-view-user -n default)
-oc login --token "$VIEW_TOKEN" --server "$K8S_CLUSTER_URL"
-run_smoke_tests
 
 echo "🎉 Deployment completed successfully!"

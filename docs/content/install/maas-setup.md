@@ -19,43 +19,17 @@ The tools you will need:
 
 ## Install Gateway AuthPolicy
 
-Install the authentication policy for the Gateway. This policy applies to model inference traffic
-and integrates with the MaaS API for tier-based access control:
+The maas-controller deploys gateway-level AuthPolicy and TokenRateLimitPolicy from
+`maas-controller/config/policies`. When using the ODH overlay or deploy script, these
+are applied automatically. For manual install:
 
 ```shell
-# For RHOAI installations (MaaS API in redhat-ods-applications namespace)
 kubectl apply --server-side=true \
-  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/auth-policies?ref=main" | \
-       sed "s/maas-api\.maas-api\.svc/maas-api.redhat-ods-applications.svc/g")
-
-# For ODH installations (MaaS API in opendatahub namespace)
-kubectl apply --server-side=true \
-  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/auth-policies?ref=main" | \
-       sed "s/maas-api\.maas-api\.svc/maas-api.opendatahub.svc/g")
+  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/maas-controller/config/policies?ref=main")
 ```
 
 !!! note "Custom Token Review Audience"
     If you encounter `401 Unauthorized` errors when obtaining tokens, your cluster may use a custom token review audience. See [Troubleshooting - 401 Errors](validation.md#common-issues) for detection and resolution steps.
-
-## Install Usage Policies
-
-Install rate limiting policies (TokenRateLimitPolicy and RateLimitPolicy):
-
-```shell
-export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-
-kubectl apply --server-side=true \
-  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/policies/usage-policies?ref=main" | \
-       envsubst '$CLUSTER_DOMAIN')
-```
-
-These policies define:
-
-* **TokenRateLimitPolicy** - Rate limits based on token consumption per tier
-* **RateLimitPolicy** - Request rate limits per tier
-
-See [Tier Management](../configuration-and-management/tier-overview.md) for more details on
-configuring usage policies and tiers.
 
 ## Next steps
 

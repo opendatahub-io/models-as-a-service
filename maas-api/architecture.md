@@ -531,7 +531,7 @@ openshift-ingress/
 ├── Gateway: openshift-ai-inference
 ├── AuthPolicy: gateway-auth-policy
 ├── RateLimitPolicy: gateway-rate-limits
-├── TokenRateLimitPolicy: gateway-token-rate-limits
+├── TokenRateLimitPolicy (gateway-level)
 └── TelemetryPolicy: user-group
 
 maas-api/

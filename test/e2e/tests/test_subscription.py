@@ -19,6 +19,8 @@ Environment variables (all optional, with defaults):
   - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
   - E2E_MODEL_REF: Model ref for CRs (default: facebook-opt-125m-simulated)
   - E2E_PREMIUM_MODEL_REF: Premium model ref for CRs (default: premium-simulated-simulated-premium)
+  - E2E_UNCONFIGURED_MODEL_REF: Unconfigured model ref (default: e2e-unconfigured-facebook-opt-125m-simulated)
+  - E2E_UNCONFIGURED_MODEL_PATH: Path to unconfigured model (default: /llm/e2e-unconfigured-facebook-opt-125m-simulated)
   - E2E_SIMULATOR_SUBSCRIPTION: Simulator subscription name (default: simulator-subscription)
   - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
   - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 429 test (default: nonexistent-sub)
@@ -42,6 +44,8 @@ PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simu
 MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
+UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
+UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
 INVALID_SUBSCRIPTION = os.environ.get("E2E_INVALID_SUBSCRIPTION", "nonexistent-sub")
@@ -340,22 +344,23 @@ class TestMultipleAuthPoliciesPerModel:
         and the original premium-user policy should still work for the admin."""
         ns = _ns()
         sa = "e2e-test-multiauth"
+        sa_user = f"system:serviceaccount:{ns}:{sa}"
         try:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSAuthPolicy",
-                "metadata": {"name": "e2e-sa-auth", "namespace": ns},
+                "metadata": {"name": "e2e-premium-sa-auth", "namespace": ns},
                 "spec": {
                     "modelRefs": [PREMIUM_MODEL_REF],
-                    "subjects": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
+                    "subjects": {"users": [sa_user], "groups": []},
                 },
             })
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-sa-sub", "namespace": ns},
+                "metadata": {"name": "e2e-premium-sa-sub", "namespace": ns},
                 "spec": {
-                    "owner": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
+                    "owner": {"users": [sa_user], "groups": []},
                     "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
@@ -368,8 +373,8 @@ class TestMultipleAuthPoliciesPerModel:
             r2 = _inference(admin_token, path=PREMIUM_MODEL_PATH)
             assert r2.status_code == 200, f"Expected 200 (admin via original policy), got {r2.status_code}"
         finally:
-            _delete_cr("maassubscription", "e2e-sa-sub")
-            _delete_cr("maasauthpolicy", "e2e-sa-auth")
+            _delete_cr("maassubscription", "e2e-premium-sa-sub")
+            _delete_cr("maasauthpolicy", "e2e-premium-sa-auth")
             _delete_sa(sa)
             _wait_reconcile()
 
@@ -435,18 +440,12 @@ class TestCascadeDeletion:
             _apply_cr(original)
             _wait_reconcile()
 
-    def test_delete_last_auth_policy_falls_back_to_gateway_auth(self):
-        """Delete the auth policy for a model -> gateway default auth (403)."""
+    def test_unconfigured_model_denied_by_gateway_auth(self):
+        """New model with no MaaSAuthPolicy/MaaSSubscription -> gateway default auth denies (403)."""
         token = _get_cluster_token()
-        original = _snapshot_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
-        assert original, f"Pre-existing {SIMULATOR_ACCESS_POLICY} not found"
-        try:
-            _delete_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
-            r = _poll_status(token, 403, timeout=30)
-            log.info(f"No auth policy -> {r.status_code}")
-        finally:
-            _apply_cr(original)
-            _wait_reconcile()
+        r = _inference(token, path=UNCONFIGURED_MODEL_PATH)
+        log.info(f"Unconfigured model (no auth policy) -> {r.status_code}")
+        assert r.status_code == 403, f"Expected 403 (gateway default deny), got {r.status_code}"
 
 
 class TestOrderingEdgeCases:

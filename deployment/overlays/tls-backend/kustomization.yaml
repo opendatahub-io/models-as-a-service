@@ -4,4 +4,3 @@ kind: Kustomization
 resources:
   - ../../base/maas-api/overlays/tls
   - ../../../maas-controller/config/default
-  - ../../base/policies

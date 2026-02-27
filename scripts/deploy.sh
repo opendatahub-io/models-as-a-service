@@ -564,6 +564,14 @@ deploy_via_kustomize() {
   log_info "Applying kustomize manifests..."
   kubectl apply --server-side=true -f <(kustomize build "$overlay")
 
+  # Apply gateway policies separately so they stay in openshift-ingress (overlay
+  # namespace would otherwise overwrite them to $NAMESPACE)
+  local policies_dir="$project_root/maas-controller/config/policies"
+  if [[ -d "$policies_dir" ]]; then
+    log_info "Applying gateway policies (openshift-ingress)..."
+    kubectl apply --server-side=true -f <(kustomize build "$policies_dir")
+  fi
+
   # Configure TLS backend (if enabled)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
     configure_tls_backend
@@ -1255,47 +1263,6 @@ apply_kuadrant_cr() {
   fi
   
   log_info "Kuadrant setup complete"
-
-  # Deploy usage policies (TokenRateLimitPolicy)
-  deploy_usage_policies
-}
-
-# deploy_usage_policies
-#   Deploys rate limiting and token limiting policies for the gateway.
-#   These policies enable tier-based usage limits for API consumers.
-deploy_usage_policies() {
-  log_info "Deploying usage policies (TokenRateLimitPolicy)..."
-
-  local project_root
-  project_root="$(find_project_root)" || {
-    log_warn "Could not find project root, skipping usage policies deployment"
-    return 0
-  }
-
-  local policies_dir="$project_root/deployment/base/policies/usage-policies"
-  if [[ ! -d "$policies_dir" ]]; then
-    log_warn "Usage policies directory not found at $policies_dir, skipping"
-    return 0
-  fi
-
-  # Capture kubectl output to temp file (piping to while loop loses the exit status)
-  local temp_output
-  temp_output=$(mktemp)
-
-  local kubectl_exit=0
-  if ! kustomize build "$policies_dir" | kubectl apply --server-side=true -f - > "$temp_output" 2>&1; then
-    kubectl_exit=1
-  fi
-
-  # Log all output lines
-  while read -r line; do log_debug "$line"; done < "$temp_output"
-  rm -f "$temp_output"
-
-  if [[ $kubectl_exit -eq 0 ]]; then
-    log_info "Usage policies deployed successfully"
-  else
-    log_warn "Failed to deploy usage policies (non-fatal, rate limiting may not work)"
-  fi
 }
 
 patch_operator_csv() {
