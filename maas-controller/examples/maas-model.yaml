@@ -5,7 +5,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModel
 metadata:
   name: facebook-opt-125m-simulated
-  namespace: opendatahub
+  namespace: llm
 spec:
   modelRef:
     kind: LLMInferenceService

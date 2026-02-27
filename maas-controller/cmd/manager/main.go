@@ -24,6 +24,8 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -52,6 +54,7 @@ func main() {
 	var probeAddr string
 	var gatewayName string
 	var gatewayNamespace string
+	var watchNamespace string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -59,6 +62,7 @@ func main() {
 		"Enable leader election for controller manager.")
 	flag.StringVar(&gatewayName, "gateway-name", "maas-default-gateway", "The name of the Gateway resource to use for model HTTPRoutes.")
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "The namespace of the Gateway resource.")
+	flag.StringVar(&watchNamespace, "watch-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -66,8 +70,17 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
+	setupLog.Info("watching MaaS CRs in namespace", "namespace", watchNamespace)
+	cacheOpts := cache.Options{
+		ByObject: map[client.Object]cache.ByObject{
+			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: map[string]cache.Config{watchNamespace: {}}},
+			&maasv1alpha1.MaaSSubscription{}: {Namespaces: map[string]cache.Config{watchNamespace: {}}},
+		},
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
+		Cache:                  cacheOpts,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
