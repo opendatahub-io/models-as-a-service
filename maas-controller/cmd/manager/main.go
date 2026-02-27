@@ -82,13 +82,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&maas.MaaSModelReconciler{
+	if err := (&maas.MaaSModelRefReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		GatewayName:      gatewayName,
 		GatewayNamespace: gatewayNamespace,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "MaaSModel")
+		setupLog.Error(err, "unable to create controller", "controller", "MaaSModelRef")
 		os.Exit(1)
 	}
 	if err := (&maas.MaaSAuthPolicyReconciler{

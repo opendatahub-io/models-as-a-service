@@ -70,7 +70,7 @@ T+15s: RBAC fully propagated to API server
 
 **Description**:
 
-- The **GET /v1/models** endpoint lists models from MaaSModel CRs and **filters by access**: it probes each model’s `/v1/models` endpoint with the client’s **Authorization** header (passed through as-is). Only models that return 2xx or 405 are included.
+- The **GET /v1/models** endpoint lists models from MaaSModelRef CRs and **filters by access**: it probes each model’s `/v1/models` endpoint with the client’s **Authorization** header (passed through as-is). Only models that return 2xx or 405 are included.
 - So after tier removal, a model that the client can no longer access should **not** appear in their list (the probe will get 401/403 and the model is excluded).
 - If there is a short delay between the tier change and the gateway enforcing it, a client might still see a model briefly until their next list call, or see it disappear on the next call.
 

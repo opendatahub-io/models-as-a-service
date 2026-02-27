@@ -11,7 +11,7 @@
 #   1. Install cert-manager and LeaderWorkerSet (LWS) operators (required for KServe)
 #   2. Deploy MaaS platform via kustomize (RHCL, gateway, MaaS API, maas-controller)
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
-#   4. Deploy MaaS system (free + premium + unconfigured: LLMIS + MaaSModel + MaaSAuthPolicy + MaaSSubscription)
+#   4. Deploy MaaS system (free + premium + unconfigured: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
 #   5. Run subscription controller tests (test_subscription.py)
 #   6. Create admin test user and run deployment validation + token metadata verification
 # 
@@ -176,7 +176,7 @@ deploy_maas_platform() {
 }
 
 deploy_models() {
-    echo "Deploying MaaS system (free + premium: LLMIS + MaaSModel + MaaSAuthPolicy + MaaSSubscription)"
+    echo "Deploying MaaS system (free + premium: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)"
     # Create llm namespace if it does not exist
     if ! kubectl get namespace llm >/dev/null 2>&1; then
         echo "Creating 'llm' namespace..."
@@ -214,7 +214,7 @@ deploy_models() {
     fi
     echo "✅ Simulator models ready"
 
-    echo "Waiting for MaaSModels to be Ready..."
+    echo "Waiting for MaaSModelRefs to be Ready..."
     local retries=0
     local all_ready=false
     while [[ $retries -lt 30 ]]; do
@@ -224,8 +224,8 @@ deploy_models() {
                 all_ready=false
                 break
             fi
-        done < <(oc get maasmodels -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-        if $all_ready && [[ -n "$(oc get maasmodels -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
+        done < <(oc get maasmodelrefs -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        if $all_ready && [[ -n "$(oc get maasmodelrefs -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
             break
         fi
         retries=$((retries + 1))
@@ -235,10 +235,10 @@ deploy_models() {
     if ! $all_ready; then
         # TODO: Remove this workaround once maas-controller reconcile logic is correct.
         # Controller can get stuck in a bad state forever; bouncing may unstick it.
-        echo "  MaaSModels not ready after ${retries} retries, bouncing maas-controller..."
+        echo "  MaaSModelRefs not ready after ${retries} retries, bouncing maas-controller..."
         kubectl rollout restart deployment/maas-controller -n "$MAAS_NAMESPACE" 2>/dev/null || true
         kubectl rollout status deployment/maas-controller -n "$MAAS_NAMESPACE" --timeout=120s 2>/dev/null || true
-        echo "  Retrying MaaSModels wait..."
+        echo "  Retrying MaaSModelRefs wait..."
         retries=0
         while [[ $retries -lt 30 ]]; do
             all_ready=true
@@ -247,8 +247,8 @@ deploy_models() {
                     all_ready=false
                     break
                 fi
-            done < <(oc get maasmodels -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-            if $all_ready && [[ -n "$(oc get maasmodels -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
+            done < <(oc get maasmodelrefs -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+            if $all_ready && [[ -n "$(oc get maasmodelrefs -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
                 break
             fi
             retries=$((retries + 1))
@@ -257,9 +257,9 @@ deploy_models() {
     fi
 
     if $all_ready; then
-        echo "✅ MaaSModels ready"
+        echo "✅ MaaSModelRefs ready"
     else
-        echo "⚠️  WARNING: MaaSModels still not ready after bounce, continuing anyway"
+        echo "⚠️  WARNING: MaaSModelRefs still not ready after bounce, continuing anyway"
     fi
 
     wait_for_auth_policies_enforced

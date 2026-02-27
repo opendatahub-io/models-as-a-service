@@ -32,28 +32,28 @@ import (
 // ErrKindNotImplemented indicates the model kind is recognized but not implemented (e.g. ExternalModel stub).
 var ErrKindNotImplemented = errors.New("model kind not implemented")
 
-// RouteResolver returns the HTTPRoute name and namespace for a MaaSModel.
+// RouteResolver returns the HTTPRoute name and namespace for a MaaSModelRef.
 // Used by findHTTPRouteForModel and by AuthPolicy/Subscription controllers to attach policies.
 type RouteResolver interface {
-	HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModel) (routeName, routeNamespace string, err error)
+	HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error)
 }
 
-// BackendHandler encapsulates kind-specific behavior for a MaaSModel.
-// The MaaSModel reconciler calls these in order; it does not switch on kind.
+// BackendHandler encapsulates kind-specific behavior for a MaaSModelRef.
+// The MaaSModelRef reconciler calls these in order; it does not switch on kind.
 type BackendHandler interface {
 	// ReconcileRoute creates or updates the HTTPRoute for this model, or validates it exists (e.g. llmisvc).
-	ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error
+	ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error
 	// Status returns the endpoint URL and whether the model is ready (phase Ready).
-	Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (endpoint string, ready bool, err error)
+	Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error)
 	// GetModelEndpoint returns the endpoint URL for the model. Kind-specific: e.g. llmisvc uses gateway/HTTPRoute
 	// hostname + path; ExternalModel (when implemented) would use its own logic and need not follow the same path assumptions.
-	GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (string, error)
-	// CleanupOnDelete is called when the MaaSModel is deleted (e.g. delete HTTPRoute for ExternalModel).
-	CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error
+	GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error)
+	// CleanupOnDelete is called when the MaaSModelRef is deleted (e.g. delete HTTPRoute for ExternalModel).
+	CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error
 }
 
 // backendHandlerFactory creates a BackendHandler that uses the given reconciler for client/scheme and shared helpers.
-type backendHandlerFactory func(*MaaSModelReconciler) BackendHandler
+type backendHandlerFactory func(*MaaSModelRefReconciler) BackendHandler
 
 // routeResolverFactory creates a RouteResolver. RouteResolvers are stateless and only need a client.Reader at call time,
 // so we pass the reader in HTTPRouteForModel; the factory can return a stateless resolver per kind.
@@ -65,10 +65,10 @@ var (
 )
 
 func init() {
-	// CRD enum is LLMInferenceService;ExternalModel (see api/maas/v1alpha1/maasmodel_types.go). Register both.
-	backendHandlerFactories["LLMInferenceService"] = func(r *MaaSModelReconciler) BackendHandler { return &llmisvcHandler{r} }
-	backendHandlerFactories["llmisvc"] = func(r *MaaSModelReconciler) BackendHandler { return &llmisvcHandler{r} } // alias for backwards compatibility
-	backendHandlerFactories["ExternalModel"] = func(r *MaaSModelReconciler) BackendHandler { return &externalModelHandler{r} }
+	// CRD enum is LLMInferenceService;ExternalModel (see api/maas/v1alpha1/maasmodelref_types.go). Register both.
+	backendHandlerFactories["LLMInferenceService"] = func(r *MaaSModelRefReconciler) BackendHandler { return &llmisvcHandler{r} }
+	backendHandlerFactories["llmisvc"] = func(r *MaaSModelRefReconciler) BackendHandler { return &llmisvcHandler{r} } // alias for backwards compatibility
+	backendHandlerFactories["ExternalModel"] = func(r *MaaSModelRefReconciler) BackendHandler { return &externalModelHandler{r} }
 
 	routeResolverFactories["LLMInferenceService"] = func() RouteResolver { return &llmisvcRouteResolver{} }
 	routeResolverFactories["llmisvc"] = func() RouteResolver { return &llmisvcRouteResolver{} }
@@ -76,7 +76,7 @@ func init() {
 }
 
 // GetBackendHandler returns the BackendHandler for the given kind, or nil if unknown.
-func GetBackendHandler(kind string, r *MaaSModelReconciler) BackendHandler {
+func GetBackendHandler(kind string, r *MaaSModelRefReconciler) BackendHandler {
 	f := backendHandlerFactories[kind]
 	if f == nil {
 		return nil
@@ -93,18 +93,18 @@ func GetRouteResolver(kind string) RouteResolver {
 	return f()
 }
 
-// ErrModelNotFound is returned when a MaaSModel cannot be found by name (e.g. in findHTTPRouteForModel).
-var ErrModelNotFound = errors.New("MaaSModel not found")
+// ErrModelNotFound is returned when a MaaSModelRef cannot be found by name (e.g. in findHTTPRouteForModel).
+var ErrModelNotFound = errors.New("MaaSModelRef not found")
 
-// findHTTPRouteForModel finds the MaaSModel by name, uses the kind's RouteResolver to get HTTPRoute name/namespace,
+// findHTTPRouteForModel finds the MaaSModelRef by name, uses the kind's RouteResolver to get HTTPRoute name/namespace,
 // and verifies the HTTPRoute exists. Returns (httpRouteName, httpRouteNamespace, error).
 func findHTTPRouteForModel(ctx context.Context, c client.Reader, defaultNS, modelName string) (string, string, error) {
-	maasModelList := &maasv1alpha1.MaaSModelList{}
+	maasModelList := &maasv1alpha1.MaaSModelRefList{}
 	if err := c.List(ctx, maasModelList); err != nil {
-		return "", "", fmt.Errorf("failed to list MaaSModels: %w", err)
+		return "", "", fmt.Errorf("failed to list MaaSModelRefs: %w", err)
 	}
 
-	var maasModel *maasv1alpha1.MaaSModel
+	var maasModel *maasv1alpha1.MaaSModelRef
 	for i := range maasModelList.Items {
 		if maasModelList.Items[i].Name != modelName {
 			continue

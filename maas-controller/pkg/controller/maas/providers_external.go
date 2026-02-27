@@ -29,7 +29,7 @@ import (
 // Until the logic below is implemented, ReconcileRoute and Status return ErrKindNotImplemented,
 // which causes the controller to set status Phase=Failed and Condition Reason=Unsupported.
 type externalModelHandler struct {
-	r *MaaSModelReconciler
+	r *MaaSModelRefReconciler
 }
 
 // ReconcileRoute validates the user-supplied HTTPRoute for an external model and populates status.
@@ -42,7 +42,7 @@ type externalModelHandler struct {
 //  3. Populate model.Status with HTTPRouteName, HTTPRouteNamespace, HTTPRouteGatewayName,
 //     HTTPRouteGatewayNamespace, and HTTPRouteHostnames so Status() and discovery can derive the endpoint.
 //  4. Return nil on success; the controller will then call Status().
-func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
+func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	return fmt.Errorf("%w: ExternalModel", ErrKindNotImplemented)
 }
 
@@ -59,22 +59,22 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 //     probe, you can return (endpoint, true, nil) once the HTTPRoute is in place.
 //  4. Return (endpoint, ready, nil). The controller will set model.Status.Endpoint and Phase
 //     (Ready or Pending) from this.
-func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (endpoint string, ready bool, err error) {
+func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error) {
 	return "", false, fmt.Errorf("%w: ExternalModel", ErrKindNotImplemented)
 }
 
 // GetModelEndpoint returns the endpoint URL for ExternalModel. When implemented, use your own logic
 // (e.g. spec.endpoint or from your HTTPRoute); do not assume the same gateway hostname + path as llmisvc.
-func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (string, error) {
+func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
 	return "", fmt.Errorf("%w: ExternalModel", ErrKindNotImplemented)
 }
 
-// CleanupOnDelete is called when the MaaSModel is deleted.
+// CleanupOnDelete is called when the MaaSModelRef is deleted.
 //
 // Current behaviour: no-op.
 //
 // ExternalModel: the HTTPRoute is user-supplied, so the controller does not delete it. No implementation needed.
-func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
+func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	return nil
 }
 
@@ -84,7 +84,7 @@ func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Log
 // This default assumes a convention of "maas-model-<model.Name>" in model.Namespace until the API supports an explicit route ref.
 type externalModelRouteResolver struct{}
 
-func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModel) (routeName, routeNamespace string, err error) {
+func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error) {
 	routeName = fmt.Sprintf("maas-model-%s", model.Name)
 	routeNamespace = model.Namespace
 	return routeName, routeNamespace, nil
