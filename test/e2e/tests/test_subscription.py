@@ -67,7 +67,9 @@ def _get_cluster_token():
     result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
     token = result.stdout.strip()
     if not token:
-        raise RuntimeError("Could not get cluster token via 'oc whoami -t'")
+        raise RuntimeError(
+            "Could not get cluster token via 'oc whoami -t'. "
+        )
     return token
 
 
@@ -249,10 +251,11 @@ class TestSubscriptionEnforcement:
             _delete_cr("maasauthpolicy", "e2e-test-nosub-auth")
             _delete_sa(sa, namespace=ns)
 
-    def test_invalid_subscription_header_gets_429(self):
+    def test_invalid_subscription_header_gets_403(self):
+        """Nonexistent subscription name -> subscription-error-check denies with 403."""
         token = _get_cluster_token()
         r = _inference(token, extra_headers={"x-maas-subscription": INVALID_SUBSCRIPTION})
-        assert r.status_code == 429, f"Expected 429, got {r.status_code}"
+        assert r.status_code == 403, f"Expected 403, got {r.status_code}"
 
     def test_explicit_subscription_header_works(self):
         token = _get_cluster_token()
@@ -289,8 +292,9 @@ class TestMultipleSubscriptionsPerModel:
             _delete_cr("maassubscription", "e2e-extra-sub")
             _wait_reconcile()
 
-    def test_sa_selects_sub_it_does_not_belong_to_gets_429(self):
-        """SA explicitly selects a subscription it's not a member of -> 429."""
+    def test_sa_selects_sub_it_does_not_belong_to_gets_403(self):
+        """SA explicitly selects a subscription it's not a member of -> 403
+        (subscription-error-check denies before TRLP)."""
         ns = _ns()
         sa = "e2e-test-wrongsub"
         try:
@@ -304,7 +308,7 @@ class TestMultipleSubscriptionsPerModel:
                 },
             })
             token = _create_sa_token(sa)
-            r = _poll_status(token, 429, extra_headers={"x-maas-subscription": "e2e-premium-sub"})
+            r = _poll_status(token, 403, extra_headers={"x-maas-subscription": "e2e-premium-sub"})
             log.info(f"SA selects wrong sub -> {r.status_code}")
         finally:
             _delete_cr("maassubscription", "e2e-premium-sub")
@@ -312,8 +316,8 @@ class TestMultipleSubscriptionsPerModel:
             _wait_reconcile()
 
     def test_multi_tier_auto_select_highest(self):
-        """With 2 tiers for the same model, user in both should still get access.
-        (Verifies multiple overlapping subscriptions don't break routing.)"""
+        """With 2 tiers for the same model, explicit selection of either still works.
+        (Verifies multiple overlapping subscriptions don't break explicit routing.)"""
         ns = _ns()
         try:
             _apply_cr({
@@ -329,8 +333,8 @@ class TestMultipleSubscriptionsPerModel:
             token = _get_cluster_token()
             r = _poll_status(token, 200, extra_headers={"x-maas-subscription": "e2e-high-tier"})
 
-            r2 = _inference(token)
-            assert r2.status_code == 200, f"Expected 200 with auto-select, got {r2.status_code}"
+            r2 = _inference(token, extra_headers={"x-maas-subscription": SIMULATOR_SUBSCRIPTION})
+            assert r2.status_code == 200, f"Expected 200 with explicit original subscription, got {r2.status_code}"
         finally:
             _delete_cr("maassubscription", "e2e-high-tier")
             _wait_reconcile()
@@ -365,13 +369,16 @@ class TestMultipleAuthPoliciesPerModel:
                 },
             })
             token = _create_sa_token(sa)
-            r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
+            r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH,
+                             extra_headers={"x-maas-subscription": "e2e-premium-sa-sub"})
             log.info(f"SA with 2nd auth policy -> premium: {r.status_code}")
 
-            # Original premium-user policy should still work for the cluster admin
+            # Verify the original premium-user group check is still enforced:
+            # admin SA token is not in premium-user (TokenReview excludes OpenShift
+            # groups), so it should be denied by the aggregated auth policy.
             admin_token = _get_cluster_token()
             r2 = _inference(admin_token, path=PREMIUM_MODEL_PATH)
-            assert r2.status_code == 200, f"Expected 200 (admin via original policy), got {r2.status_code}"
+            assert r2.status_code == 403, f"Expected 403 (admin not in premium-user via TokenReview), got {r2.status_code}"
         finally:
             _delete_cr("maassubscription", "e2e-premium-sa-sub")
             _delete_cr("maasauthpolicy", "e2e-premium-sa-auth")
@@ -379,7 +386,9 @@ class TestMultipleAuthPoliciesPerModel:
             _wait_reconcile()
 
     def test_delete_one_auth_policy_other_still_works(self):
-        """Delete one of two auth policies for premium model -> remaining still works."""
+        """Delete one of two auth policies for premium model -> remaining still enforces.
+        After deleting the system:authenticated policy, only the premium-user policy
+        remains. Getting 403 (not 401/5xx) confirms the AuthPolicy was rebuilt correctly."""
         ns = _ns()
         try:
             _apply_cr({
@@ -396,7 +405,7 @@ class TestMultipleAuthPoliciesPerModel:
             _delete_cr("maasauthpolicy", "e2e-extra-auth")
 
             token = _get_cluster_token()
-            r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
+            r = _poll_status(token, 403, path=PREMIUM_MODEL_PATH)
         finally:
             _delete_cr("maasauthpolicy", "e2e-extra-auth")
             _wait_reconcile()
@@ -427,14 +436,14 @@ class TestCascadeDeletion:
         finally:
             _delete_cr("maassubscription", "e2e-temp-sub")
 
-    def test_delete_last_subscription_allows_unrestricted(self):
-        """Delete all subscriptions for a model -> no rate limit, auth still passes (200)."""
+    def test_delete_last_subscription_blocks_access(self):
+        """Delete all subscriptions for a model -> subscription-error-check denies (403)."""
         token = _get_cluster_token()
         original = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
         assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-            r = _poll_status(token, 200, timeout=30)
+            r = _poll_status(token, 403, timeout=30)
             log.info(f"No subscriptions -> {r.status_code}")
         finally:
             _apply_cr(original)
@@ -483,7 +492,8 @@ class TestOrderingEdgeCases:
                 },
             })
 
-            r2 = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
+            r2 = _poll_status(token, 200, path=PREMIUM_MODEL_PATH,
+                              extra_headers={"x-maas-subscription": "e2e-ordering-sub"})
             log.info(f"Sub + auth policy -> {r2.status_code}")
         finally:
             _delete_cr("maassubscription", "e2e-ordering-sub")

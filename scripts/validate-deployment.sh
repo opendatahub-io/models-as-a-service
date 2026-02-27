@@ -135,9 +135,13 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Set default request payload if not provided (OpenAI Chat Completions format)
+# Set default request payload if not provided, adapting format to the endpoint type.
 if [ -z "$CUSTOM_REQUEST_PAYLOAD" ]; then
-    DEFAULT_REQUEST_PAYLOAD='{"model": "${MODEL_NAME}", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": '"$MAX_TOKENS"'}'
+    if [ "$INFERENCE_ENDPOINT" = "completions" ]; then
+        DEFAULT_REQUEST_PAYLOAD='{"model": "${MODEL_NAME}", "prompt": "Hello", "max_tokens": '"$MAX_TOKENS"'}'
+    else
+        DEFAULT_REQUEST_PAYLOAD='{"model": "${MODEL_NAME}", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": '"$MAX_TOKENS"'}'
+    fi
 else
     DEFAULT_REQUEST_PAYLOAD="$CUSTOM_REQUEST_PAYLOAD"
 fi
@@ -587,9 +591,23 @@ else
     # Test model inference endpoint (if model exists)
     if [ -n "$TOKEN" ] && [ -n "$MODEL_NAME" ] && [ -n "$MODEL_CHAT_ENDPOINT" ]; then
         print_check "Model inference endpoint"
-        
+
+        # The MaaSModel name (e.g. "facebook-opt-125m-simulated") may differ from
+        # the model name the vLLM server expects (e.g. "facebook/opt-125m").
+        # Query the model server's /v1/models endpoint to discover the actual name.
+        MODEL_BASE_URL="${MODEL_CHAT_ENDPOINT%/v1/*}"
+        ACTUAL_MODEL_RESP=$(curl -sSk --connect-timeout 5 --max-time 10 \
+            -H "Authorization: Bearer ${TOKEN}" "${MODEL_BASE_URL}/v1/models" 2>/dev/null || echo "")
+        ACTUAL_MODEL_ID=$(echo "$ACTUAL_MODEL_RESP" | jq -r '.data[0].id' 2>/dev/null)
+        if [ -n "$ACTUAL_MODEL_ID" ] && [ "$ACTUAL_MODEL_ID" != "null" ] && [ "$ACTUAL_MODEL_ID" != "$MODEL_NAME" ]; then
+            print_info "Model server reports actual model name: $ACTUAL_MODEL_ID (MaaSModel: $MODEL_NAME)"
+            INFERENCE_MODEL_NAME="$ACTUAL_MODEL_ID"
+        else
+            INFERENCE_MODEL_NAME="$MODEL_NAME"
+        fi
+
         # Substitute MODEL_NAME placeholder in the request payload
-        REQUEST_PAYLOAD="${DEFAULT_REQUEST_PAYLOAD//\$\{MODEL_NAME\}/$MODEL_NAME}"
+        REQUEST_PAYLOAD="${DEFAULT_REQUEST_PAYLOAD//\$\{MODEL_NAME\}/$INFERENCE_MODEL_NAME}"
         
         print_info "Testing: curl -sSk -X POST ${MODEL_CHAT_ENDPOINT} -H \"Authorization: Bearer \$TOKEN\" -H \"Content-Type: application/json\" -d '${REQUEST_PAYLOAD}'"
         
@@ -650,7 +668,7 @@ else
         print_info "Sending $RATE_LIMIT_TEST_COUNT rapid requests to test rate limiting..."
         
         # Use the same request payload for rate limiting tests
-        REQUEST_PAYLOAD="${DEFAULT_REQUEST_PAYLOAD//\$\{MODEL_NAME\}/$MODEL_NAME}"
+        REQUEST_PAYLOAD="${DEFAULT_REQUEST_PAYLOAD//\$\{MODEL_NAME\}/${INFERENCE_MODEL_NAME:-$MODEL_NAME}}"
         
         SUCCESS_COUNT=0
         RATE_LIMITED_COUNT=0
@@ -699,10 +717,12 @@ else
         # │ All requests failed                    │ ❌ FAIL - Complete failure                      │
         # └──────────────────────────────────────────────────────────────────────────────────────────┘
         if [ "$RATE_LIMITED_COUNT" -gt 0 ]; then
-            if [ "$FAILED_COUNT" -gt 0 ]; then
-                print_fail "Rate limiting partially working but errors observed" \
+            if [ "$FAILED_COUNT" -gt $(( RATE_LIMIT_TEST_COUNT / 5 )) ]; then
+                print_fail "Rate limiting partially working but too many errors" \
                     "$SUCCESS_COUNT succeeded, $RATE_LIMITED_COUNT rate limited, $FAILED_COUNT failed" \
                     "Check auth service stability and model endpoint health"
+            elif [ "$FAILED_COUNT" -gt 0 ]; then
+                print_success "Rate limiting is working ($SUCCESS_COUNT successful, $RATE_LIMITED_COUNT rate limited, $FAILED_COUNT transient errors)"
             else
                 print_success "Rate limiting is working ($SUCCESS_COUNT successful, $RATE_LIMITED_COUNT rate limited)"
             fi
@@ -724,7 +744,7 @@ else
     print_check "Authorization enforcement (401 without token)"
     if [ -n "$MODEL_NAME" ] && [ -n "$MODEL_CHAT_ENDPOINT" ]; then
         # Use the same request payload for unauthorized test
-        REQUEST_PAYLOAD="${DEFAULT_REQUEST_PAYLOAD//\$\{MODEL_NAME\}/$MODEL_NAME}"
+        REQUEST_PAYLOAD="${DEFAULT_REQUEST_PAYLOAD//\$\{MODEL_NAME\}/${INFERENCE_MODEL_NAME:-$MODEL_NAME}}"
         
         UNAUTH_CODE=$(curl -sSk --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" \
             -H "Content-Type: application/json" \

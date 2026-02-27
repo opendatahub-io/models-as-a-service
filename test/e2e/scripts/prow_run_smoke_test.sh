@@ -304,10 +304,11 @@ validate_deployment() {
     echo "Using namespace: $MAAS_NAMESPACE"
     
     if [ "$SKIP_VALIDATION" = false ]; then
-        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE"; then
+        # Simulators expose the /v1/completions endpoint (not /v1/chat/completions)
+        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE" --endpoint completions; then
             echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
             sleep 30
-            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE"; then
+            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE" --endpoint completions; then
                 echo "❌ ERROR: Deployment validation failed after retry"
                 exit 1
             fi
@@ -365,7 +366,10 @@ add_admin_to_premium_group() {
         return 0
     fi
 
-    # Add admin to premium-user group (for IdP-based clusters)
+    # Add admin to premium-user group (for IdP-based clusters).
+    # NOTE: OpenShift groups are only included in Kubernetes TokenReview for
+    # OAuth/HTPasswd user tokens, NOT for service account tokens. Premium model
+    # tests that rely on this group membership will only work with real user tokens.
     if ! oc get group premium-user &>/dev/null; then
         oc adm groups new premium-user 2>/dev/null || true
     fi
@@ -461,15 +465,15 @@ deploy_models
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
-run_subscription_tests
-
-# Setup admin user for validation
+# Login with a token-based session before running tests.
+# system:admin uses X.509 cert auth so 'oc whoami -t' returns nothing;
+# subscription tests need a bearer token they can extract and send to the gateway.
 print_header "Setting up test user"
 setup_test_user "tester-admin-user" "cluster-admin"
-
-print_header "Running Maas e2e Tests as admin user"
 ADMIN_TOKEN=$(oc create token tester-admin-user -n default)
 oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
+
+run_subscription_tests
 
 print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
