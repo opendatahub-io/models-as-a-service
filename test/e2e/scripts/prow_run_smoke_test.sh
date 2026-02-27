@@ -356,26 +356,44 @@ setup_vars_for_tests() {
     echo "✅ Variables for tests setup completed"
 }
 
-add_admin_to_premium_group() {
-    echo "Adding current user to premium tier (required for subscription tests)..."
-    local current_user
-    current_user="$(oc whoami 2>/dev/null)"
-    if [[ -z "$current_user" ]]; then
-        echo "⚠️  WARNING: Could not get current user (oc whoami), skipping premium tier setup"
-        return 0
+# Premium test token: use premium-service-account when oc whoami -t doesn't work (e.g. Prow).
+# TODO: Consolidate token strategies — consider always using SA for consistency across local/Prow.
+# TODO: Consider moving SA/namespace constants to a shared config or env defaults.
+PREMIUM_USERS_NS="premium-users-namespace"
+PREMIUM_SA="premium-service-account"
+
+setup_premium_test_token() {
+    echo "Setting up premium test token (SA-based, works when oc whoami -t is unavailable)..."
+    # Create namespace and SA
+    if ! kubectl get namespace "$PREMIUM_USERS_NS" &>/dev/null; then
+        echo "Creating namespace: $PREMIUM_USERS_NS"
+        kubectl create namespace "$PREMIUM_USERS_NS"
+    fi
+    if ! kubectl get sa "$PREMIUM_SA" -n "$PREMIUM_USERS_NS" &>/dev/null; then
+        echo "Creating service account: $PREMIUM_SA"
+        kubectl create sa "$PREMIUM_SA" -n "$PREMIUM_USERS_NS"
     fi
 
-    # Add admin to premium-user group (for IdP-based clusters)
-    if ! oc get group premium-user &>/dev/null; then
-        oc adm groups new premium-user 2>/dev/null || true
-    fi
-    oc adm groups add-users premium-user "$current_user" 2>/dev/null || true
+    # Add system:serviceaccounts:<ns> to premium auth/subscription so this SA gets premium access.
+    # TODO: Extract patch logic into a helper; consider patching all MaaSAuthPolicy/MaaSSubscription
+    #       that reference premium-user in a single loop.
+    local sa_group="system:serviceaccounts:${PREMIUM_USERS_NS}"
+    echo "Patching MaaSAuthPolicy premium-simulator-access to include $sa_group..."
+    oc patch maasauthpolicy premium-simulator-access -n "$MAAS_NAMESPACE" --type=merge -p="{\"spec\": {\"subjects\": {\"groups\": [{\"name\": \"premium-user\"}, {\"name\": \"$sa_group\"}]}}}"
+
+    echo "Patching MaaSSubscription premium-simulator-subscription to include $sa_group..."
+    oc patch maassubscription premium-simulator-subscription -n "$MAAS_NAMESPACE" --type=merge -p="{\"spec\": {\"owner\": {\"groups\": [{\"name\": \"premium-user\"}, {\"name\": \"$sa_group\"}]}}}"
+
+    export E2E_TEST_TOKEN_SA_NAMESPACE="$PREMIUM_USERS_NS"
+    export E2E_TEST_TOKEN_SA_NAME="$PREMIUM_SA"
+    # TODO: Add brief reconcile wait if controller is slow to pick up patches.
+    echo "✅ Premium test token setup complete (E2E_TEST_TOKEN_SA_* exported)"
 }
 
 run_subscription_tests() {
     echo "-- Subscription Controller Tests --"
 
-    add_admin_to_premium_group
+    setup_premium_test_token
 
     export GATEWAY_HOST="${HOST}"
     export MAAS_NAMESPACE
