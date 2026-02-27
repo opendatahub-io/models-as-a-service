@@ -103,10 +103,14 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 		}
 		g.Go(func() error {
 			if discovered := m.fetchModelsWithRetry(ctx, authHeader, meta); discovered != nil {
+				// Use model names from the backend's /v1/models response instead of MaaSModel metadata.name
+				converted := discoveredToModels(discovered, model)
 				mu.Lock()
-				out = append(out, model)
+				out = append(out, converted...)
 				mu.Unlock()
-				m.logger.Debug("FilterModelsByAccess: access granted", "model", model.ID, "endpoint", modelsEndpoint)
+				for _, c := range converted {
+					m.logger.Debug("FilterModelsByAccess: access granted", "model", c.ID, "endpoint", modelsEndpoint)
+				}
 			} else {
 				m.logger.Debug("FilterModelsByAccess: access denied or unreachable", "model", model.ID, "endpoint", modelsEndpoint)
 			}
@@ -123,6 +127,42 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 // by making a call": same gateway/auth path as inference. fetchModels does GET meta.Endpoint
 // with the given Authorization header; 2xx or 405 → include (authGranted), 401/403/404 → exclude (authDenied),
 // 5xx/other → retry (authRetry).
+
+// discoveredToModels converts backend /v1/models response to our Model type, using the backend's
+// model names (id) and preserving URL, Ready, Kind from the original MaaSModel-derived model.
+// If the backend returns no models, falls back to the original model (MaaSModel metadata.name).
+func discoveredToModels(discovered []openai.Model, original Model) []Model {
+	if len(discovered) == 0 {
+		return []Model{original}
+	}
+	out := make([]Model, 0, len(discovered))
+	for _, d := range discovered {
+		if d.ID == "" {
+			continue
+		}
+		ownedBy := d.OwnedBy
+		if ownedBy == "" {
+			ownedBy = original.OwnedBy
+		}
+		created := d.Created
+		if created == 0 {
+			created = original.Created
+		}
+		out = append(out, Model{
+			Model: openai.Model{
+				ID:      d.ID,
+				Object:  "model",
+				Created: created,
+				OwnedBy: ownedBy,
+			},
+			Kind:    original.Kind,
+			URL:     original.URL,
+			Ready:   original.Ready,
+			Details: original.Details,
+		})
+	}
+	return out
+}
 
 // modelMetadata holds the data needed to probe a model endpoint and to enrich the response when applicable.
 type modelMetadata struct {

@@ -96,7 +96,6 @@ def _create_sa_token(sa_name, namespace=None, duration="10m"):
         capture_output=True, text=True,
     )
     token = result.stdout.strip()
-    token = ""
     if not token:
         raise RuntimeError(f"Could not create token for SA {sa_name}: {result.stderr}")
     return token
