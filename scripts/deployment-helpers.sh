@@ -1247,3 +1247,41 @@ wait_authorino_ready() {
   echo "  WARNING: Auth request verification timed out, continuing anyway"
   return 0
 }
+
+# ==========================================
+# Python Virtual Environment Functions
+# ==========================================
+
+# setup_python_venv venv_dir [label]
+#   Creates (if needed), activates, and installs dependencies into a Python venv.
+#   Shared by smoke.sh and prow_run_e2e_test.sh so both use the same logic.
+#
+# Arguments:
+#   venv_dir - Absolute path to the virtual environment directory (e.g. test/e2e/.venv)
+#   label    - Optional log prefix (default: "venv")
+#
+# Side effects:
+#   - Creates venv if it doesn't exist
+#   - Activates the virtual environment (caller must deactivate when done)
+#   - Installs pip + requirements.txt from the venv's parent directory
+setup_python_venv() {
+  local venv_dir="${1:?venv_dir is required}"
+  local label="${2:-venv}"
+  local requirements_file
+  requirements_file="$(dirname "$venv_dir")/requirements.txt"
+
+  if [[ ! -f "${venv_dir}/bin/activate" ]]; then
+    echo "[$label] Creating virtual environment at ${venv_dir}"
+    rm -rf "${venv_dir}"  # Clean up any corrupt/incomplete venv
+    python3 -m venv "${venv_dir}" --upgrade-deps
+  fi
+
+  # Activate virtual environment
+  # shellcheck disable=SC1091
+  source "${venv_dir}/bin/activate"
+
+  # Install dependencies
+  python -m pip install --upgrade pip --quiet
+  python -m pip install -r "${requirements_file}" --quiet
+  echo "[$label] Virtual environment ready"
+}

@@ -17,23 +17,27 @@
 #      - View user (view role)
 #   5. Run token metadata verification (as admin user)
 #   6. Run smoke tests for each user
+#   7. Run observability tests once as admin (as admin user)
 # 
 # USAGE:
-#   ./test/e2e/scripts/prow_run_smoke_test.sh
+#   ./test/e2e/scripts/prow_run_e2e_test.sh
 #
 # CI/CD PIPELINE USAGE:
 #   # Test with pipeline-built images
 #   OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
 #   MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
-#   ./test/e2e/scripts/prow_run_smoke_test.sh
+#   ./test/e2e/scripts/prow_run_e2e_test.sh
 #
 # ENVIRONMENT VARIABLES:
+#   SKIP_DEPLOY     - Skip platform deployment (default: false)
 #   OPERATOR_TYPE   - Operator to deploy: "odh" or "rhoai" (default: odh)
 #                     odh   → uses Kuadrant (upstream), Authorino in kuadrant-system
 #                     rhoai → uses RHCL (downstream), Authorino in rh-connectivity-link
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
+#   SKIP_AUTH_CHECK - Skip Authorino auth readiness check (default: true, temporary workaround)
+#   SKIP_OBSERVABILITY - Skip observability tests (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   OPERATOR_CATALOG - Custom operator catalog image (default: latest from main)
@@ -63,11 +67,14 @@ PROJECT_ROOT="$(_find_project_root_bootstrap)"
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # Options (can be set as environment variables)
+SKIP_DEPLOY=${SKIP_DEPLOY:-false}
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
+SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
+
 
 # Operator configuration
 # OPERATOR_TYPE determines which operator and policy engine to use:
@@ -195,6 +202,19 @@ deploy_maas_platform() {
     echo "✅ MaaS platform deployment completed"
 }
 
+install_observability() {
+    if [[ "${SKIP_OBSERVABILITY}" == "true" ]]; then
+        echo "⏭️  Skipping observability installation (SKIP_OBSERVABILITY=true)"
+        return 0
+    fi
+    echo "Installing observability components..."
+    if ! "$PROJECT_ROOT/scripts/install-observability.sh"; then
+        echo "❌ ERROR: Failed to deploy observability components"
+        exit 1
+    fi
+    echo "✅ Observability installation completed"
+}
+
 deploy_models() {
     echo "Deploying simulator Model"
     # Create llm namespace if it does not exist
@@ -297,6 +317,23 @@ run_smoke_tests() {
     fi
 }
 
+# Observability runs once as admin (as admin user) — validates metrics endpoints,
+# Prometheus scraping, labels, and types.
+run_observability_tests() {
+    echo "-- Observability Testing --"
+    
+    if [ "$SKIP_OBSERVABILITY" = false ]; then
+        if ! (cd "$PROJECT_ROOT" && bash test/e2e/observability.sh); then
+            echo "❌ ERROR: Observability tests failed"
+            exit 1
+        else
+            echo "✅ Observability tests completed successfully"
+        fi
+    else
+        echo "⏭️  Skipping observability tests"
+    fi
+}
+
 run_token_verification() {
     echo "-- Token Metadata Verification --"
     
@@ -336,12 +373,25 @@ setup_test_user() {
 }
 
 # Main execution
-print_header "Deploying Maas on OpenShift"
-check_prerequisites
-deploy_maas_platform
+if ! oc whoami &>/dev/null; then
+    echo "❌ ERROR: Not logged into OpenShift. Please run 'oc login' first"
+    exit 1
+fi
 
-print_header "Deploying Models"  
-deploy_models
+check_prerequisites
+
+if [[ "${SKIP_DEPLOY}" == "true" ]]; then
+    echo "⏭️  Skipping deployment (SKIP_DEPLOY=true) — using existing platform"
+else
+    print_header "Deploying Maas on OpenShift"
+    deploy_maas_platform
+
+    print_header "Deploying Models"
+    deploy_models
+fi
+
+print_header "Installing Observability"
+install_observability
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
@@ -367,13 +417,17 @@ run_token_verification
 sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
 
-# Test edit user  
+# Run observability tests once as admin (full infrastructure validation)
+print_header "Running Observability Tests as admin"
+run_observability_tests
+
+# Test edit user (smoke only)
 print_header "Running Maas e2e Tests as edit user"
 EDIT_TOKEN=$(oc create token tester-edit-user -n default)
 oc login --token "$EDIT_TOKEN" --server "$K8S_CLUSTER_URL"
 run_smoke_tests
 
-# Test view user
+# Test view user (smoke only)
 print_header "Running Maas e2e Tests as view user"
 VIEW_TOKEN=$(oc create token tester-view-user -n default)
 oc login --token "$VIEW_TOKEN" --server "$K8S_CLUSTER_URL"

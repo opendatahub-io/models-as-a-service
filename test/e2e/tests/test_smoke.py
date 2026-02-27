@@ -1,7 +1,7 @@
 import logging
 import json
 import requests
-from test_helper import chat, completions
+from tests.test_helper import chat, completions
 
 log = logging.getLogger(__name__)
 

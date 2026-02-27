@@ -61,6 +61,7 @@ When using the full deployment script, this is applied automatically:
 
 **Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/components/observability/monitors/` if your deployment includes that component.
 
+
 ## Metrics Collection
 
 ### Limitador Metrics
@@ -248,12 +249,12 @@ To enable persistent metric counts, refer to the detailed guide:
 
 **[Configuring Redis storage for rate limiting](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/configure-redis_connectivity-link)**
 
-This Red Hat documentation provides:
+This documentation covers:
 
-- Step-by-step Redis configuration for OpenShift
+- Redis and Redis-cached storage backends
 - Secret management for Redis credentials
-- Limitador custom resource updates
-- Production-ready setup instructions
+- Limitador custom resource configuration
+- Production-ready setup options
 
 For local development and testing, you can also use our [Limitador Persistence](limitador-persistence.md) guide which includes a basic Redis setup script that works with any Kubernetes cluster.
 
@@ -374,11 +375,17 @@ To import into Grafana:
 !!! note "Total tokens only (input/output split not yet available)"
     Token consumption is reported as **total tokens** (prompt + completion) per request. The pipeline reads `usage.total_tokens` from the model response via Kuadrant's TokenRateLimitPolicy. Separate input-token (`prompt_tokens`) and output-token (`completion_tokens`) counters are **not yet available** at the gateway level; this would require upstream changes in the Kuadrant wasm-shim to send separate `hits_addend` values for each token type. Chargeback and usage tracking per user, per subscription (tier), and per model are supported using `authorized_hits`.
 
-### Latency Metrics
+### Gateway Traffic Metrics
 
 | Metric | Description | Labels |
 |--------|-------------|--------|
+| `istio_requests_total` | Total gateway requests (used for error rate tracking: 4xx, 5xx, 401) | `response_code`, `destination_service_name` |
 | `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name`, `tier` |
+
+### Model Latency Metrics
+
+| Metric | Description | Labels |
+|--------|-------------|--------|
 | `vllm:e2e_request_latency_seconds` | Model inference latency | `model_name` |
 
 #### Per-Tier Latency Tracking
@@ -486,8 +493,16 @@ The Grafana datasource uses a ServiceAccount token to authenticate with Promethe
 
 **To rotate the token:**
 
-    # Delete the existing datasource and create a new one (or rotate the token per your Grafana setup).
-    # To re-deploy only MaaS dashboard definitions: ./scripts/install-grafana-dashboards.sh
+    ```bash
+    # 1. Generate a new ServiceAccount token (30-day default)
+    oc create token grafana-sa -n <grafana-namespace> --duration=720h
+
+    # 2. Update the Grafana datasource with the new token
+    #    (delete and recreate, or update via Grafana UI/API per your setup)
+
+    # 3. Re-deploy MaaS dashboard definitions (optional, if dashboards need updating)
+    ./scripts/install-grafana-dashboards.sh
+    ```
 
 !!! tip "Production Recommendation"
     For production deployments, consider automating token rotation using a CronJob or external secrets operator to avoid dashboard outages.

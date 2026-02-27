@@ -2,34 +2,15 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$DIR/../.." && pwd)"
 export PYTHONPATH="${DIR}:${PYTHONPATH:-}"
 
-# Python virtual environment setup
-VENV_DIR="${DIR}/.venv"
-
-setup_python_venv() {
-    echo "[smoke] Setting up Python virtual environment..."
-    
-    # Create virtual environment if it doesn't exist
-    if [[ ! -d "${VENV_DIR}" ]]; then
-        echo "[smoke] Creating virtual environment at ${VENV_DIR}"
-        python3 -m venv "${VENV_DIR}" --upgrade-deps
-    fi
-    
-    # Activate virtual environment
-    echo "[smoke] Activating virtual environment"
-    source "${VENV_DIR}/bin/activate"
-    
-    # Upgrade pip and install requirements
-    echo "[smoke] Installing Python dependencies"
-    python -m pip install --upgrade pip --quiet
-    python -m pip install -r "${DIR}/requirements.txt" --quiet
-    
-    echo "[smoke] Virtual environment setup complete"
-}
+# Source shared helper functions (setup_python_venv, etc.)
+source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # Setup and activate virtual environment
-setup_python_venv
+VENV_DIR="${DIR}/.venv"
+setup_python_venv "$VENV_DIR" "smoke"
 
 # Inputs via env or auto-discovery
 HOST="${HOST:-}"
@@ -90,6 +71,7 @@ TOKEN_RESPONSE="$(curl -skS \
   "${MAAS_API_BASE_URL}/v1/tokens" || true)"
 
 TOKEN="$(echo "${TOKEN_RESPONSE}" | jq -r .token 2>/dev/null || true)"
+
 if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
   echo "[smoke] ERROR: could not mint MaaS token" | tee -a "${LOG}"
   echo "${TOKEN_RESPONSE}" | tee -a "${LOG}"
