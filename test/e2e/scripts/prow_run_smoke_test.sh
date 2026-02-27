@@ -477,8 +477,6 @@ deploy_models
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
-run_subscription_tests
-
 # Setup admin user for validation
 print_header "Setting up test user"
 setup_test_user "tester-admin-user" "cluster-admin"
@@ -486,6 +484,8 @@ setup_test_user "tester-admin-user" "cluster-admin"
 print_header "Running Maas e2e Tests as admin user"
 ADMIN_TOKEN=$(oc create token tester-admin-user -n default)
 oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
+
+run_subscription_tests
 
 print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
