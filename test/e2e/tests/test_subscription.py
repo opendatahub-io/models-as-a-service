@@ -327,7 +327,6 @@ class TestMultipleSubscriptionsPerModel:
             _wait_reconcile()
 
 
-
     def test_multi_tier_auto_select_highest(self):
         """With 2 tiers for the same model, user in both should still get access.
         (Verifies multiple overlapping subscriptions don't break routing.)"""

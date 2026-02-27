@@ -91,12 +91,12 @@ wait_for_crd "datascienceclusters.datasciencecluster.opendatahub.io" 180 || {
 
 # 5. Wait for webhook
 echo "5. Waiting for operator webhook..."
-wait_for_resource "deployment" "opendatahub-operator-controller-manager" "opendatahub" 120 || {
+wait_for_resource "deployment" "opendatahub-operator-controller-manager" "$NAMESPACE" 120 || {
   log_warn "Webhook deployment not found after 120s, proceeding anyway..."
 }
-if kubectl get deployment opendatahub-operator-controller-manager -n opendatahub &>/dev/null; then
+if kubectl get deployment opendatahub-operator-controller-manager -n "$NAMESPACE" &>/dev/null; then
   kubectl wait --for=condition=Available --timeout=120s \
-    deployment/opendatahub-operator-controller-manager -n opendatahub 2>/dev/null || {
+    deployment/opendatahub-operator-controller-manager -n "$NAMESPACE" 2>/dev/null || {
     log_warn "Webhook deployment not fully ready, proceeding anyway..."
   }
 fi

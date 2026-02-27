@@ -69,7 +69,7 @@ export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 AUTHORINO_NAMESPACE="kuadrant-system"
-MAAS_NAMESPACE="opendatahub"
+MAAS_NAMESPACE="${NAMESPACE:-opendatahub}"
 
 print_header() {
     echo ""
@@ -189,7 +189,11 @@ deploy_models() {
     fi
 
     # Deploy all at once so dependencies resolve correctly
-    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/maas-system/ | kubectl apply -f -); then
+    # Sample kustomizations hardcode namespace: opendatahub; override to $MAAS_NAMESPACE
+    # so CRs land in the correct namespace (CI sets NAMESPACE to a dynamic value).
+    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/maas-system/ | \
+            sed "s/namespace: opendatahub/namespace: $MAAS_NAMESPACE/g" | \
+            kubectl apply -f -); then
         echo "❌ ERROR: Failed to deploy MaaS system"
         exit 1
     fi
