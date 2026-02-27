@@ -20,7 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// MaaSModelSpec defines the desired state of MaaSModel
+// MaaSModelSpec defines the desired state of MaaSModelRef
 type MaaSModelSpec struct {
 	// ModelRef references the actual model endpoint
 	ModelRef ModelReference `json:"modelRef"`
@@ -36,12 +36,12 @@ type ModelReference struct {
 	Name string `json:"name"`
 
 	// Namespace is the namespace of the model resource
-	// If not specified, defaults to the same namespace as MaaSModel
+	// If not specified, defaults to the same namespace as MaaSModelRef
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// MaaSModelStatus defines the observed state of MaaSModel
+// MaaSModelStatus defines the observed state of MaaSModelRef
 type MaaSModelStatus struct {
 	// Phase represents the current phase of the model
 	// +kubebuilder:validation:Enum=Pending;Ready;Unhealthy;Failed
@@ -84,8 +84,8 @@ type MaaSModelStatus struct {
 //+kubebuilder:printcolumn:name="Gateway",type="string",JSONPath=".status.httpRouteGatewayName"
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
-// MaaSModel is the Schema for the maasmodels API
-type MaaSModel struct {
+// MaaSModelRef is the Schema for the maasmodelrefs API
+type MaaSModelRef struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
@@ -95,13 +95,13 @@ type MaaSModel struct {
 
 //+kubebuilder:object:root=true
 
-// MaaSModelList contains a list of MaaSModel
-type MaaSModelList struct {
+// MaaSModelRefList contains a list of MaaSModelRef
+type MaaSModelRefList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []MaaSModel `json:"items"`
+	Items           []MaaSModelRef `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&MaaSModel{}, &MaaSModelList{})
+	SchemeBuilder.Register(&MaaSModelRef{}, &MaaSModelRefList{})
 }

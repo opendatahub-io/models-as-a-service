@@ -8,7 +8,7 @@ This document describes the **MaaS Controller**: what was built, how it fits int
 
 The **MaaS Controller** is a Kubernetes controller that provides a **subscription-style control plane** for Models-as-a-Service. It lets platform operators define:
 
-- **Which models** are exposed through MaaS (via **MaaSModel**).
+- **Which models** are exposed through MaaS (via **MaaSModelRef**).
 - **Who can access** those models (via **MaaSAuthPolicy**).
 - **Per-user/per-group token rate limits** for those models (via **MaaSSubscription**).
 
@@ -21,13 +21,13 @@ The controller does not run inference. It **reconciles** your high-level MaaS CR
 ```mermaid
 flowchart TB
     subgraph Operator["Platform operator"]
-        MaaSModel["MaaSModel"]
+        MaaSModelRef["MaaSModelRef"]
         MaaSAuthPolicy["MaaSAuthPolicy"]
         MaaSSubscription["MaaSSubscription"]
     end
 
     subgraph Controller["maas-controller"]
-        ModelReconciler["MaaSModel\nReconciler"]
+        ModelReconciler["MaaSModelRef\nReconciler"]
         AuthReconciler["MaaSAuthPolicy\nReconciler"]
         SubReconciler["MaaSSubscription\nReconciler"]
     end
@@ -42,7 +42,7 @@ flowchart TB
         LLMIS["LLMInferenceService\n(KServe)"]
     end
 
-    MaaSModel --> ModelReconciler
+    MaaSModelRef --> ModelReconciler
     MaaSAuthPolicy --> AuthReconciler
     MaaSSubscription --> SubReconciler
 
@@ -57,7 +57,7 @@ flowchart TB
 
 **Summary:** You declare intent with MaaS CRs; the controller turns that into Gateway/Kuadrant resources that attach to the same HTTPRoute and backend (e.g. KServe LLMInferenceService).
 
-The **MaaS API** GET /v1/models endpoint uses MaaSModel CRs as its primary source: it lists them in the API namespace, then **validates access** by probing each model’s `/v1/models` endpoint with the client’s **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModel objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is. (Once minting is in place, this may be revisited.)
+The **MaaS API** GET /v1/models endpoint uses MaaSModelRef CRs as its primary source: it lists them in the API namespace, then **validates access** by probing each model’s `/v1/models` endpoint with the client’s **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is. (Once minting is in place, this may be revisited.)
 
 ---
 
@@ -111,7 +111,7 @@ So: **AuthPolicy** turns the user-groups array into a **comma-separated string**
 ```mermaid
 flowchart LR
     subgraph MaaS["MaaS CRs (your intent)"]
-        MM["MaaSModel\n(model ref)"]
+        MM["MaaSModelRef\n(model ref)"]
         MAP["MaaSAuthPolicy\n(modelRefs + subjects)"]
         MS["MaaSSubscription\n(owner + modelRefs + limits)"]
     end
@@ -131,7 +131,7 @@ flowchart LR
 
 | Your resource   | Controller creates / uses                                      |
 |-----------------|-----------------------------------------------------------------|
-| **MaaSModel**   | **HTTPRoute** (or validates KServe-created route for llmisvc)  |
+| **MaaSModelRef**   | **HTTPRoute** (or validates KServe-created route for llmisvc)  |
 | **MaaSAuthPolicy** | One **AuthPolicy** per referenced model; targets that model’s HTTPRoute |
 | **MaaSSubscription** | One **TokenRateLimitPolicy** per referenced model; targets that model’s HTTPRoute |
 
@@ -146,12 +146,12 @@ flowchart TB
     subgraph Cluster["Kubernetes cluster"]
         subgraph maas_controller["maas-controller (Deployment)"]
             Manager["Controller Manager"]
-            ModelReconciler["MaaSModel\nReconciler"]
+            ModelReconciler["MaaSModelRef\nReconciler"]
             AuthReconciler["MaaSAuthPolicy\nReconciler"]
             SubReconciler["MaaSSubscription\nReconciler"]
         end
 
-        CRDs["CRDs: MaaSModel,\nMaaSAuthPolicy,\nMaaSSubscription"]
+        CRDs["CRDs: MaaSModelRef,\nMaaSAuthPolicy,\nMaaSSubscription"]
         RBAC["RBAC: ClusterRole,\nServiceAccount, etc."]
     end
 
@@ -176,18 +176,18 @@ flowchart TB
 
 ```mermaid
 erDiagram
-    MaaSModel ||--o{ HTTPRoute : "creates or validates"
-    MaaSModel }o--|| LLMInferenceService : "references (llmisvc)"
+    MaaSModelRef ||--o{ HTTPRoute : "creates or validates"
+    MaaSModelRef }o--|| LLMInferenceService : "references (llmisvc)"
     MaaSAuthPolicy ||--o{ AuthPolicy : "one per model"
-    MaaSAuthPolicy }o--o{ MaaSModel : "modelRefs"
+    MaaSAuthPolicy }o--o{ MaaSModelRef : "modelRefs"
     MaaSSubscription ||--o{ TokenRateLimitPolicy : "one per model"
-    MaaSSubscription }o--o{ MaaSModel : "modelRefs"
+    MaaSSubscription }o--o{ MaaSModelRef : "modelRefs"
     AuthPolicy }o--|| HTTPRoute : "targetRef"
     TokenRateLimitPolicy }o--|| HTTPRoute : "targetRef"
     HTTPRoute }o--|| Gateway : "parentRef"
 ```
 
-- **MaaSModel**: `spec.modelRef` = llmisvc or ExternalModel (name, namespace).
+- **MaaSModelRef**: `spec.modelRef` = llmisvc or ExternalModel (name, namespace).
 - **MaaSAuthPolicy**: `spec.modelRefs` (list of model names), `spec.subjects` (groups, users).
 - **MaaSSubscription**: `spec.owner` (groups, users), `spec.modelRefs` (model name + token rate limits per model).
 
@@ -214,7 +214,7 @@ flowchart LR
 ```
 
 - **Namespace**: Controller and default MaaS CRs live in **opendatahub** (configurable).
-- **Install**: `./scripts/deploy.sh` installs the full stack including the controller. Optionally run `./scripts/install-examples.sh` for sample MaaSModel, MaaSAuthPolicy, and MaaSSubscription.
+- **Install**: `./scripts/deploy.sh` installs the full stack including the controller. Optionally run `./scripts/install-examples.sh` for sample MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription.
 
 ---
 
@@ -235,7 +235,7 @@ The Kuadrant AuthPolicy validates this token via **Kubernetes TokenReview** and 
 
 | Topic | Summary |
 |-------|---------|
-| **What** | MaaS Controller = control plane that reconciles MaaSModel, MaaSAuthPolicy, and MaaSSubscription into Gateway API and Kuadrant resources. |
+| **What** | MaaS Controller = control plane that reconciles MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription into Gateway API and Kuadrant resources. |
 | **Where** | Single controller in `maas-controller`; CRs and generated resources can live in opendatahub or other namespaces. |
 | **How** | Three reconcilers watch MaaS CRs (and related resources); each creates/updates HTTPRoutes, AuthPolicies, or TokenRateLimitPolicies. |
 | **Identity bridge** | AuthPolicy exposes all user groups as a comma-separated `groups_str`; TokenRateLimitPolicy uses `groups_str.split(",").exists(...)` for subscription matching (the “string trick”). |

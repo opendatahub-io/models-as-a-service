@@ -1,6 +1,6 @@
 # MaaS System Samples
 
-Bundled samples that deploy LLMInferenceService + MaaSModel + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly. LLMInferenceServices reference the existing [models/simulator](../models/simulator) and [models/simulator-premium](../models/simulator-premium) samples.
+Bundled samples that deploy LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly. LLMInferenceServices reference the existing [models/simulator](../models/simulator) and [models/simulator-premium](../models/simulator-premium) samples.
 
 ## Tiers
 

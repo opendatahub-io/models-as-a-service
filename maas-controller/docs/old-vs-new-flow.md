@@ -98,7 +98,7 @@ Model Endpoint
 
 | Resource | Namespace | Created by | Purpose |
 |----------|-----------|------------|---------|
-| MaaSModel | opendatahub | User/admin | Registers a model with MaaS |
+| MaaSModelRef | opendatahub | User/admin | Registers a model with MaaS |
 | MaaSAuthPolicy | opendatahub | User/admin | Defines who (groups) can access which models |
 | MaaSSubscription | opendatahub | User/admin | Defines per-model token rate limits for owner groups |
 | AuthPolicy (generated) | llm | maas-controller | Per-model auth, one per (MaaSAuthPolicy, model) pair |
@@ -106,7 +106,7 @@ Model Endpoint
 
 ### How admins configure it
 
-1. **Register a model**: Create a `MaaSModel` CR pointing to the LLMInferenceService
+1. **Register a model**: Create a `MaaSModelRef` CR pointing to the LLMInferenceService
 2. **Grant access**: Create a `MaaSAuthPolicy` CR listing model refs and allowed groups
 3. **Set rate limits**: Create a `MaaSSubscription` CR with per-model token limits and owner groups
 4. **Done**: The maas-controller generates all Kuadrant policies automatically
@@ -149,7 +149,7 @@ To move from old flow to new flow on an existing cluster:
 1. Deploy the full stack (including maas-controller): `./scripts/deploy.sh`
    - Or install just the controller: `kubectl apply -k maas-controller/config/default`
 2. For each model:
-   - Create a `MaaSModel` CR referencing the LLMInferenceService
+   - Create a `MaaSModelRef` CR referencing the LLMInferenceService
    - Create a `MaaSAuthPolicy` CR with the allowed groups
    - Create a `MaaSSubscription` CR with the token rate limits
 3. The old `gateway-token-rate-limits` and `tier-to-group-mapping` ConfigMap can be removed

@@ -482,7 +482,7 @@ main() {
     fi
 
     log_info "  Subscription controller ready."
-    log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
+    log_info "  Create MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
   fi
 
   log_info "==================================================="

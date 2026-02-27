@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: maasmodels.maas.opendatahub.io
+  name: maasmodelrefs.maas.opendatahub.io
 spec:
   group: maas.opendatahub.io
   names:
-    kind: MaaSModel
-    listKind: MaaSModelList
-    plural: maasmodels
-    singular: maasmodel
+    kind: MaaSModelRef
+    listKind: MaaSModelRefList
+    plural: maasmodelrefs
+    singular: maasmodelref
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -33,7 +33,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: MaaSModel is the Schema for the maasmodels API
+        description: MaaSModelRef is the Schema for the maasmodelrefs API
         properties:
           apiVersion:
             description: |-
@@ -53,7 +53,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: MaaSModelSpec defines the desired state of MaaSModel
+            description: MaaSModelSpec defines the desired state of MaaSModelRef
             properties:
               modelRef:
                 description: ModelRef references the actual model endpoint
@@ -70,7 +70,7 @@ spec:
                   namespace:
                     description: |-
                       Namespace is the namespace of the model resource
-                      If not specified, defaults to the same namespace as MaaSModel
+                      If not specified, defaults to the same namespace as MaaSModelRef
                     type: string
                 required:
                 - kind
@@ -80,7 +80,7 @@ spec:
             - modelRef
             type: object
           status:
-            description: MaaSModelStatus defines the observed state of MaaSModel
+            description: MaaSModelStatus defines the observed state of MaaSModelRef
             properties:
               conditions:
                 description: Conditions represent the latest available observations

@@ -38,7 +38,7 @@ const (
 	maxDiscoveryConcurrency = 10
 )
 
-// Manager runs access validation (probe model endpoints) for models listed from MaaSModel.
+// Manager runs access validation (probe model endpoints) for models listed from MaaSModelRef.
 type Manager struct {
 	logger     *logger.Logger
 	httpClient *http.Client
@@ -126,7 +126,7 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 
 // modelMetadata holds the data needed to probe a model endpoint and to enrich the response when applicable.
 type modelMetadata struct {
-	Kind        string    // model ref kind, e.g. "llmisvc" (from MaaSModel spec.modelRef.kind)
+	Kind        string    // model ref kind, e.g. "llmisvc" (from MaaSModelRef spec.modelRef.kind)
 	ServiceName string    // for logging and error messages
 	ModelName   string    // model id for 405 fallback response
 	Endpoint    string    // full URL to GET (e.g. base + /v1/models)

@@ -195,7 +195,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	)
 	tokenHandler := token.NewHandler(log, cfg.Name, tokenManager)
 
-	modelsHandler := handlers.NewModelsHandler(log, modelManager, tokenManager, cluster.MaaSModelLister, cfg.Namespace)
+	modelsHandler := handlers.NewModelsHandler(log, modelManager, tokenManager, cluster.MaaSModelRefLister, cfg.Namespace)
 
 	apiKeyService := api_keys.NewService(tokenManager, store)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService)
