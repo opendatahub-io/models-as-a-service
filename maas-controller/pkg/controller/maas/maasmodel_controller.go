@@ -22,6 +22,7 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
+	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -261,6 +262,13 @@ func (r *MaaSModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSModels,
 		)).
+		// Watch LLMInferenceServices so we re-reconcile when the backend becomes ready
+		// (or transitions away from ready). No predicate: the reconciler reads
+		// LLMInferenceService status (Ready condition, addresses), so status updates
+		// must not be filtered out.
+		Watches(&kservev1alpha1.LLMInferenceService{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapLLMISvcToMaaSModels,
+		)).
 		Complete(r)
 }
 
@@ -282,6 +290,39 @@ func (r *MaaSModelReconciler) mapHTTPRouteToMaaSModels(ctx context.Context, obj 
 			ns = m.Namespace
 		}
 		if ns == route.Namespace {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
+			})
+		}
+	}
+	return requests
+}
+
+// mapLLMISvcToMaaSModels returns reconcile requests for all MaaSModels that
+// reference the given LLMInferenceService by name and namespace.
+func (r *MaaSModelReconciler) mapLLMISvcToMaaSModels(ctx context.Context, obj client.Object) []reconcile.Request {
+	llmisvc, ok := obj.(*kservev1alpha1.LLMInferenceService)
+	if !ok {
+		return nil
+	}
+	var models maasv1alpha1.MaaSModelList
+	if err := r.List(ctx, &models); err != nil {
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, m := range models.Items {
+		kind := m.Spec.ModelRef.Kind
+		if kind != "LLMInferenceService" {
+			continue
+		}
+		if m.Spec.ModelRef.Name != llmisvc.Name {
+			continue
+		}
+		refNS := m.Spec.ModelRef.Namespace
+		if refNS == "" {
+			refNS = m.Namespace
+		}
+		if refNS == llmisvc.Namespace {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
 			})
