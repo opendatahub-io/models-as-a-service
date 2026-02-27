@@ -82,17 +82,21 @@ fi
 USER="$(oc whoami)"
 echo "[smoke] Performing smoke test for user: ${USER}"
 
-# 1) Mint a MaaS token using your cluster token
+# 1) Get OC token directly (no more /v1/tokens minting endpoint)
 mkdir -p "${DIR}/reports"
 LOG="${DIR}/reports/smoke-${USER}.log"
 : > "${LOG}"
 
-# TODO: Use a Minted Token once the new token is implemented @ishita
-TOKEN="$(oc whoami -t)"
+TOKEN="$(oc whoami -t || true)"
+if [[ -z "${TOKEN}" ]]; then
+  echo "[smoke] ERROR: could not get OC token via 'oc whoami -t'" | tee -a "${LOG}"
+  echo "[smoke] Make sure you are logged into OpenShift" | tee -a "${LOG}"
+  exit 1
+fi
 export TOKEN
 
 # Log a masked preview of the token to the log (not the console)
-echo "[token] minted: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
+echo "[token] using OC token: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
 
 # 2) Get models, derive URL/ID if catalog returns them (retry for transient empty cache)
 MODEL_ID=""
