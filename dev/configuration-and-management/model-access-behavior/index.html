@@ -997,6 +997,62 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../model-listing-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Listing Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maas-model-kinds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaSModel Kinds (future)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -1018,10 +1074,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_5" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_7" checked>
         
           
-          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="">
             
   
   
@@ -1039,8 +1095,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_4_5">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1241,10 +1297,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#3-model-list-visibility-vs-access-mismatch" class="md-nav__link">
+  <a href="#3-model-list-visibility-vs-access" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Model List Visibility vs. Access Mismatch
+        3. Model List Visibility vs. Access
       
     </span>
   </a>
@@ -1358,10 +1414,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_6" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_8" >
         
           
-          <label class="md-nav__link" for="__nav_4_6" id="__nav_4_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_8" id="__nav_4_8_label" tabindex="">
             
   
   
@@ -1379,8 +1435,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_6">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1673,10 +1729,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#3-model-list-visibility-vs-access-mismatch" class="md-nav__link">
+  <a href="#3-model-list-visibility-vs-access" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3. Model List Visibility vs. Access Mismatch
+        3. Model List Visibility vs. Access
       
     </span>
   </a>
@@ -1821,27 +1877,14 @@
 <li>Monitor ODH Controller logs to confirm RBAC updates are complete</li>
 <li>Use <code>kubectl get rolebinding -n &lt;model-namespace&gt;</code> to verify RoleBinding removal</li>
 </ul>
-<h4 id="3-model-list-visibility-vs-access-mismatch">3. Model List Visibility vs. Access Mismatch</h4>
+<h4 id="3-model-list-visibility-vs-access">3. Model List Visibility vs. Access</h4>
 <p><strong>Description</strong>:</p>
 <ul>
-<li>The <code>/v1/models</code> endpoint lists all models that are part of the MaaS instance (via gateway references)</li>
-<li>The endpoint does not filter models by tier access permissions</li>
-<li>Users may see models in the list that they can no longer access after tier removal</li>
-<li>Attempts to use these models will fail with <code>403 Forbidden</code> or <code>401 Unauthorized</code></li>
+<li>The <strong>GET /v1/models</strong> endpoint lists models from MaaSModel CRs and <strong>filters by access</strong>: it probes each model’s <code>/v1/models</code> endpoint with the client’s <strong>Authorization</strong> header (passed through as-is). Only models that return 2xx or 405 are included.</li>
+<li>So after tier removal, a model that the client can no longer access should <strong>not</strong> appear in their list (the probe will get 401/403 and the model is excluded).</li>
+<li>If there is a short delay between the tier change and the gateway enforcing it, a client might still see a model briefly until their next list call, or see it disappear on the next call.</li>
 </ul>
-<p><strong>Example</strong>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// GET /v1/models returns:</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="p">{</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;model-a&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ready&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">},</span><span class="w">  </span><span class="c1">// Still accessible</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p">{</span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;model-b&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;ready&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span><span class="w">   </span><span class="c1">// No longer accessible after tier removal</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="p">}</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1">// POST to model-b fails with 403</span>
-</code></pre></div>
-<p><strong>Workaround</strong>:</p>
-<p>This behavior will be resolved in a future release where the model list is filtered by tier permissions (see <a href="https://github.com/opendatahub-io/models-as-a-service/pull/294">PR #294</a>). In the meantime, clients should expect potential <code>403 Forbidden</code> errors if attempting to access models that appear in the list but are not permitted.</p>
+<p><strong>Note</strong>: See <a href="../model-listing-flow/">Model listing flow</a> for the full flow. Token exchange is not performed; the same Authorization header the client sends is used for the probe.</p>
 <h4 id="4-token-validity-vs-model-access-expected-behavior">4. Token Validity vs. Model Access (Expected Behavior)</h4>
 <p>Tokens are per-user (Service Account), not per-model. Token validity and model access are independent—this is by design.</p>
 <p><strong>Description</strong>:</p>
@@ -1852,13 +1895,13 @@
 <li>Users do not need to request new tokens; their existing tokens simply have access to fewer models</li>
 </ul>
 <p><strong>Example</strong>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>1. User receives token at T+0 (valid for 1 hour)
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>2. User has access to models A, B, C (via RBAC)
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>3. Model B removed from tier at T+30min (RBAC updated)
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>4. Token still valid, but model access changes:
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>   - Model A: ✅ Accessible (RBAC allows)
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>   - Model B: ❌ No longer accessible (RBAC denies)
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>   - Model C: ✅ Accessible (RBAC allows)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>1. User receives token at T+0 (valid for 1 hour)
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>2. User has access to models A, B, C (via RBAC)
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>3. Model B removed from tier at T+30min (RBAC updated)
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>4. Token still valid, but model access changes:
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>   - Model A: ✅ Accessible (RBAC allows)
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>   - Model B: ❌ No longer accessible (RBAC denies)
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>   - Model C: ✅ Accessible (RBAC allows)
 </code></pre></div>
 <p><strong>User Communication</strong>:</p>
 <ul>
@@ -1875,8 +1918,8 @@
 <ul>
 <li>Monitor active requests before making changes:</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Check for active connections (example)</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>kubectl<span class="w"> </span>top<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>&lt;model-namespace&gt;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Check for active connections (example)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>kubectl<span class="w"> </span>top<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>&lt;model-namespace&gt;
 </code></pre></div>
 <ul>
 <li>Use maintenance windows for tier access changes</li>
@@ -1898,7 +1941,7 @@
 </li>
 <li>
 <p>Verify RoleBinding removal:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>rolebinding<span class="w"> </span>-n<span class="w"> </span>&lt;model-namespace&gt;<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>&lt;tier-name&gt;
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>rolebinding<span class="w"> </span>-n<span class="w"> </span>&lt;model-namespace&gt;<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>&lt;tier-name&gt;
 </code></pre></div>
 </li>
 <li>
@@ -1923,7 +1966,6 @@
 <p>The following improvements are planned for future releases:</p>
 <ol>
 <li><strong>Graceful Shutdown</strong>: Implement request draining before access revocation</li>
-<li><strong>Model List Filtering</strong>: Filter <code>/v1/models</code> by tier permissions</li>
 <li><strong>Real-time Notifications</strong>: Notify users when tier access changes</li>
 <li><strong>Audit Logging</strong>: Enhanced logging for tier access changes</li>
 </ol>
@@ -1955,7 +1997,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="January 14, 2026 03:47:47 UTC">January 14, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 27, 2026 17:58:09 UTC">February 27, 2026</span>
   </span>
 
     

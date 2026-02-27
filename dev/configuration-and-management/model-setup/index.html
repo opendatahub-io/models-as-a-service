@@ -14,7 +14,7 @@
         <link rel="prev" href="../tls-configuration/">
       
       
-        <link rel="next" href="../group-membership-known-issues/">
+        <link rel="next" href="../model-listing-flow/">
       
       
         
@@ -1032,6 +1032,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#how-the-model-list-is-built" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the model list is built
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#gateway-architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1257,6 +1268,62 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../model-listing-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Listing Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maas-model-kinds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaSModel Kinds (future)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
     
     
     
@@ -1276,10 +1343,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_7" >
         
           
-          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="">
             
   
   
@@ -1297,8 +1364,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_5">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1425,10 +1492,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_6" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_8" >
         
           
-          <label class="md-nav__link" for="__nav_4_6" id="__nav_4_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_8" id="__nav_4_8_label" tabindex="">
             
   
   
@@ -1446,8 +1513,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_6">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1670,6 +1737,17 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-the-model-list-is-built" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the model list is built
+      
+    </span>
+  </a>
+  
+</li>
       
         <li class="md-nav__item">
   <a href="#gateway-architecture" class="md-nav__link">
@@ -1903,7 +1981,14 @@
 
 
 <h1 id="model-setup-guide">Model Setup Guide</h1>
-<p>This guide explains how to configure <code>LLMInferenceService</code> resources to be picked up by the MaaS platform for authentication, rate limiting, and token-based consumption tracking.</p>
+<p>This guide explains how to configure models so they appear in the MaaS platform and are subject to authentication, rate limiting, and token-based consumption tracking.</p>
+<h2 id="how-the-model-list-is-built">How the model list is built</h2>
+<p>The <strong>GET /v1/models</strong> endpoint (and thus "which models are available") can be built in two ways:</p>
+<ol>
+<li><strong>MaaSModel (recommended when using the MaaS controller)</strong><br />
+   When the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS controller</a> is installed, you register models by creating <strong>MaaSModel</strong> CRs that reference an LLMInferenceService. The controller reconciles each MaaSModel and sets <code>status.endpoint</code> and <code>status.phase</code>. The MaaS API lists these MaaSModel CRs and returns them as the model list. Access and quotas are controlled by <strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong>. See <a href="../model-listing-flow/">Model listing flow</a> for details.</li>
+</ol>
+<p>Model listing is from MaaSModel CRs (cached via informer). The sections below focus on <strong>LLMInferenceService</strong> configuration (gateway reference, tier annotation) for use as the backend referenced by MaaSModel.</p>
 <h2 id="gateway-architecture">Gateway Architecture</h2>
 <p>The MaaS platform uses a <strong>segregated gateway approach</strong>, where models explicitly opt-in to MaaS capabilities by referencing the <code>maas-default-gateway</code>. This provides flexibility and isolation between different model deployment scenarios.</p>
 <pre class="mermaid"><code>%%{init: {'theme':'base', 'themeVariables': { 'fontSize':'16px', 'fontFamily':'system-ui, -apple-system, sans-serif', 'edgeLabelBackground':'transparent', 'labelBackground':'transparent', 'tertiaryColor':'transparent'}}}%%
@@ -2156,7 +2241,7 @@ graph TB
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="January 14, 2026 03:47:47 UTC">January 14, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 27, 2026 17:58:09 UTC">February 27, 2026</span>
   </span>
 
     

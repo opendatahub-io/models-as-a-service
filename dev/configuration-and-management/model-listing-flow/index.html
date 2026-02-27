@@ -8,29 +8,31 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-listing-flow/">
       
       
+        <link rel="prev" href="../model-setup/">
       
-        <link rel="next" href="quickstart/">
+      
+        <link rel="next" href="../maas-model-kinds/">
       
       
         
       
       
-      <link rel="icon" href="assets/favicon.ico">
+      <link rel="icon" href="../../assets/favicon.ico">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.3">
     
     
       
-        <title>ODH Models-as-a-Service Documentation</title>
+        <title>Model Listing Flow - ODH Models-as-a-Service Documentation</title>
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -49,7 +51,7 @@
       
     
     
-    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -74,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#maas-platform-documentation" class="md-skip">
+        <a href="#model-listing-flow" class="md-skip">
           Skip to content
         </a>
       
@@ -92,9 +94,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="." title="ODH Models-as-a-Service Documentation" class="md-header__button md-logo" aria-label="ODH Models-as-a-Service Documentation" data-md-component="logo">
+    <a href="../.." title="ODH Models-as-a-Service Documentation" class="md-header__button md-logo" aria-label="ODH Models-as-a-Service Documentation" data-md-component="logo">
       
-  <img src="assets/favicon.ico" alt="logo">
+  <img src="../../assets/favicon.ico" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -111,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Home
+              Model Listing Flow
             
           </span>
         </div>
@@ -227,11 +229,9 @@
   
   
   
-    
   
-  
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="." class="md-tabs__link">
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -250,7 +250,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="quickstart/" class="md-tabs__link">
+      <a href="../../quickstart/" class="md-tabs__link">
         
   
   
@@ -269,7 +269,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="architecture/" class="md-tabs__link">
+      <a href="../../architecture/" class="md-tabs__link">
         
   
   
@@ -286,6 +286,8 @@
   
   
   
+    
+  
   
     
     
@@ -293,11 +295,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="install/prerequisites/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../install/prerequisites/" class="md-tabs__link">
           
   
   
@@ -320,7 +324,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="user-guide/self-service-model-access/" class="md-tabs__link">
+        <a href="../../user-guide/self-service-model-access/" class="md-tabs__link">
           
   
   
@@ -354,9 +358,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="." title="ODH Models-as-a-Service Documentation" class="md-nav__button md-logo" aria-label="ODH Models-as-a-Service Documentation" data-md-component="logo">
+    <a href="../.." title="ODH Models-as-a-Service Documentation" class="md-nav__button md-logo" aria-label="ODH Models-as-a-Service Documentation" data-md-component="logo">
       
-  <img src="assets/favicon.ico" alt="logo">
+  <img src="../../assets/favicon.ico" alt="logo">
 
     </a>
     ODH Models-as-a-Service Documentation
@@ -380,37 +384,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Home
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="." class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -426,76 +403,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#documentation-overview" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        📚 Documentation Overview
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="📚 Documentation Overview">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#getting-started" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        🚀 Getting Started
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#configuration-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ⚙️ Configuration &amp; Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#advanced-administration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        🔧 Advanced Administration
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -507,7 +414,7 @@
   
   
     <li class="md-nav__item">
-      <a href="quickstart/" class="md-nav__link">
+      <a href="../../quickstart/" class="md-nav__link">
         
   
   
@@ -534,7 +441,7 @@
   
   
     <li class="md-nav__item">
-      <a href="architecture/" class="md-nav__link">
+      <a href="../../architecture/" class="md-nav__link">
         
   
   
@@ -558,28 +465,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
-        
-          
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   
@@ -597,7 +507,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -621,10 +531,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -633,7 +546,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
         
           
-          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
             
   
   
@@ -669,7 +582,7 @@
   
   
     <li class="md-nav__item">
-      <a href="install/prerequisites/" class="md-nav__link">
+      <a href="../../install/prerequisites/" class="md-nav__link">
         
   
   
@@ -697,7 +610,7 @@
   
   
     <li class="md-nav__item">
-      <a href="install/platform-setup/" class="md-nav__link">
+      <a href="../../install/platform-setup/" class="md-nav__link">
         
   
   
@@ -739,10 +652,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -751,7 +667,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
         
           
-          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
             
   
   
@@ -787,7 +703,7 @@
   
   
     <li class="md-nav__item">
-      <a href="install/maas-setup/" class="md-nav__link">
+      <a href="../../install/maas-setup/" class="md-nav__link">
         
   
   
@@ -815,7 +731,7 @@
   
   
     <li class="md-nav__item">
-      <a href="install/validation/" class="md-nav__link">
+      <a href="../../install/validation/" class="md-nav__link">
         
   
   
@@ -857,10 +773,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -869,7 +788,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_3" >
         
           
-          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
             
   
   
@@ -905,7 +824,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/tier-overview/" class="md-nav__link">
+      <a href="../tier-overview/" class="md-nav__link">
         
   
   
@@ -933,7 +852,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/tier-configuration/" class="md-nav__link">
+      <a href="../tier-configuration/" class="md-nav__link">
         
   
   
@@ -961,7 +880,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/tier-concepts/" class="md-nav__link">
+      <a href="../tier-concepts/" class="md-nav__link">
         
   
   
@@ -989,7 +908,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/token-management/" class="md-nav__link">
+      <a href="../token-management/" class="md-nav__link">
         
   
   
@@ -1017,7 +936,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/tls-configuration/" class="md-nav__link">
+      <a href="../tls-configuration/" class="md-nav__link">
         
   
   
@@ -1053,7 +972,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/model-setup/" class="md-nav__link">
+      <a href="../model-setup/" class="md-nav__link">
         
   
   
@@ -1078,10 +997,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="configuration-and-management/model-listing-flow/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Listing Flow
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1097,6 +1043,87 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maasmodel-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaaSModel flow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MaaSModel flow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#benefits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Benefits
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#registering-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registering models
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1109,7 +1136,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/maas-model-kinds/" class="md-nav__link">
+      <a href="../maas-model-kinds/" class="md-nav__link">
         
   
   
@@ -1143,10 +1170,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -1155,7 +1185,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_7" >
         
           
-          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="">
             
   
   
@@ -1191,7 +1221,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/group-membership-known-issues/" class="md-nav__link">
+      <a href="../group-membership-known-issues/" class="md-nav__link">
         
   
   
@@ -1219,7 +1249,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/tier-modification-known-issues/" class="md-nav__link">
+      <a href="../tier-modification-known-issues/" class="md-nav__link">
         
   
   
@@ -1247,7 +1277,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration-and-management/model-access-behavior/" class="md-nav__link">
+      <a href="../model-access-behavior/" class="md-nav__link">
         
   
   
@@ -1289,10 +1319,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -1301,7 +1334,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_8" >
         
           
-          <label class="md-nav__link" for="__nav_4_8" id="__nav_4_8_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_8" id="__nav_4_8_label" tabindex="">
             
   
   
@@ -1337,7 +1370,7 @@
   
   
     <li class="md-nav__item">
-      <a href="advanced-administration/observability/" class="md-nav__link">
+      <a href="../../advanced-administration/observability/" class="md-nav__link">
         
   
   
@@ -1365,7 +1398,7 @@
   
   
     <li class="md-nav__item">
-      <a href="advanced-administration/limitador-persistence/" class="md-nav__link">
+      <a href="../../advanced-administration/limitador-persistence/" class="md-nav__link">
         
   
   
@@ -1393,7 +1426,7 @@
   
   
     <li class="md-nav__item">
-      <a href="advanced-administration/storage-configuration/" class="md-nav__link">
+      <a href="../../advanced-administration/storage-configuration/" class="md-nav__link">
         
   
   
@@ -1490,7 +1523,7 @@
   
   
     <li class="md-nav__item">
-      <a href="user-guide/self-service-model-access/" class="md-nav__link">
+      <a href="../../user-guide/self-service-model-access/" class="md-nav__link">
         
   
   
@@ -1545,44 +1578,33 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#documentation-overview" class="md-nav__link">
+  <a href="#overview" class="md-nav__link">
     <span class="md-ellipsis">
       
-        📚 Documentation Overview
+        Overview
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="📚 Documentation Overview">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maasmodel-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaaSModel flow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MaaSModel flow">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#getting-started" class="md-nav__link">
+  <a href="#benefits" class="md-nav__link">
     <span class="md-ellipsis">
       
-        🚀 Getting Started
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#configuration-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ⚙️ Configuration &amp; Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#advanced-administration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        🔧 Advanced Administration
+        Benefits
       
     </span>
   </a>
@@ -1591,6 +1613,28 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#registering-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registering models
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related documentation
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1614,25 +1658,96 @@
   
 
 
-<h1 id="maas-platform-documentation">MaaS Platform Documentation</h1>
-<p>Welcome to the Models-as-a-Service (MaaS) Platform documentation.</p>
-<p>The MaaS Platform enhances the model serving capabilities of <a href="https://github.com/opendatahub-io">Open Data Hub</a> by adding a management layer for self-service access control, rate limiting, and tier-based subscriptions.</p>
-<p>Use this platform to streamline the deployment of your models, monitor usage, and effectively manage costs.</p>
-<h2 id="documentation-overview">📚 Documentation Overview</h2>
-<h3 id="getting-started">🚀 Getting Started</h3>
+<h1 id="model-listing-flow">Model listing flow</h1>
+<p>This document describes how the <strong>GET /v1/models</strong> endpoint discovers and returns the list of available models.</p>
+<p>The list is <strong>based on MaaSModel</strong> custom resources: the API returns models that are registered as MaaSModels in its configured namespace.</p>
+<h2 id="overview">Overview</h2>
+<p>When a client calls <strong>GET /v1/models</strong> with an <strong>Authorization</strong> header, the MaaS API returns an OpenAI-compatible list of models.</p>
+<p>Each entry includes an <code>id</code>, <strong><code>url</code></strong> (the model’s endpoint), a <code>ready</code> flag, and related metadata. The list is built from <strong>MaaSModel</strong> CRs. The API then validates access by probing each model’s endpoint with the same Authorization header; only models the client can access are included in the response.</p>
+<div class="admonition note">
+<p class="admonition-title">Model endpoints and routing</p>
+<p>The returned value includes a <strong>URL</strong> per model; clients use that URL to call the model (e.g. for chat or completions).</p>
+<p>Currently each model is served on a <strong>different endpoint</strong>. <strong>Body Based Routing</strong> is being evaluated to provide a more unified OpenAI API feel (single endpoint with model selection in the request body).</p>
+</div>
+<h2 id="maasmodel-flow">MaaSModel flow</h2>
+<p>When the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS controller</a> is installed and the API is configured with a MaaSModel lister and namespace, the flow is:</p>
+<ol>
+<li>
+<p>The MaaS API lists all <strong>MaaSModel</strong> custom resources in its configured namespace (e.g. <code>opendatahub</code>). It reads them from an <strong>in-memory cache</strong> in the maas-api component (maintained by a Kubernetes informer), so it does not call the Kubernetes API on every request.</p>
+</li>
+<li>
+<p>For each MaaSModel, it reads <strong>id</strong> (<code>metadata.name</code>), <strong>url</strong> (<code>status.endpoint</code>), <strong>ready</strong> (<code>status.phase == "Ready"</code>), and related metadata. The controller has populated <code>status.endpoint</code> and <code>status.phase</code> from the underlying LLMInferenceService (for llmisvc) or HTTPRoute/Gateway.</p>
+</li>
+<li>
+<p><strong>Access validation</strong>: The API probes each model’s <code>/v1/models</code> endpoint with the <strong>exact Authorization header</strong> the client sent (passed through as-is). Only models that return <strong>2xx</strong>, <strong>3xx</strong> or <strong>405</strong> are included in the response. This ensures the list only shows models the client is authorized to use.</p>
+</li>
+<li>
+<p>The filtered list is returned to the client.</p>
+</li>
+</ol>
+<pre class="mermaid"><code>sequenceDiagram
+    participant Client
+    participant MaaS API
+    participant K8s as Kubernetes API
+    participant Model as Model endpoint
+
+    Client-&gt;&gt;MaaS API: GET /v1/models (Authorization header)
+    MaaS API-&gt;&gt;K8s: List MaaSModel CRs
+    K8s--&gt;&gt;MaaS API: MaaSModel list
+    loop For each model
+        MaaS API-&gt;&gt;Model: GET endpoint with same Authorization header
+        Model--&gt;&gt;MaaS API: include or exclude by response
+    end
+    MaaS API-&gt;&gt;MaaS API: Map to OpenAI-style entries
+    MaaS API--&gt;&gt;Client: JSON data array of models</code></pre>
+<h3 id="benefits">Benefits</h3>
 <ul>
-<li><strong><a href="quickstart/">QuickStart Guide</a></strong> - Complete platform deployment instructions</li>
-<li><strong><a href="architecture/">Architecture</a></strong> - Overview of the MaaS Platform architecture</li>
+<li>
+<p><strong>List is based on MaaSModels</strong>: Only models registered as a MaaSModel appear. The controller reconciles each MaaSModel and sets its endpoint and phase; access and quotas are controlled by MaaSAuthPolicy and MaaSSubscription.</p>
+</li>
+<li>
+<p><strong>Access-filtered</strong>: The API probes each model with the client’s Authorization header (passed through as-is), so the returned list only includes models the client can actually use.</p>
+</li>
+<li>
+<p><strong>Consistent with gateway</strong>: The same model names and routes are used for inference; the list matches what the gateway will accept for that client.</p>
+</li>
 </ul>
-<h3 id="configuration-management">⚙️ Configuration &amp; Management</h3>
+<p>If the API is not configured with a MaaSModel lister and namespace, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.</p>
+<p>For how to add new MaaSModel <strong>kinds</strong> (backend types) in the future, see <a href="../maas-model-kinds/">MaaSModel kinds (future)</a>.</p>
+<h2 id="registering-models">Registering models</h2>
+<p>To have models appear via the <strong>MaaSModel</strong> flow:</p>
+<ol>
+<li>
+<p>Install the <strong>MaaS controller</strong> (CRDs, controller deployment, and optionally the default-deny policy). See <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">maas-controller README</a>.</p>
+</li>
+<li>
+<p>Ensure the underlying <strong>LLMInferenceService</strong> exists and (if applicable) has an HTTPRoute created by KServe.</p>
+</li>
+<li>
+<p>Create a <strong>MaaSModel</strong> for each model you want to expose, referencing the LLMIS:</p>
+</li>
+</ol>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModel</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-model-name</span><span class="w">   </span><span class="c1"># This becomes the model &quot;id&quot; in GET /v1/models</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">opendatahub</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llmisvc</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-llm-isvc-name</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm</span>
+</code></pre></div>
+<ol>
+<li>The controller reconciles the MaaSModel and sets <code>status.endpoint</code> and <code>status.phase</code>. The MaaS API (in the same namespace) will then include this model in GET /v1/models when it lists MaaSModel CRs.</li>
+</ol>
+<p>You can use the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/maas-system">maas-system samples</a> as a template; the install script deploys LLMInferenceService + MaaSModel + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly.</p>
+<hr />
+<h2 id="related-documentation">Related documentation</h2>
 <ul>
-<li><strong><a href="configuration-and-management/tier-overview/">Tier Management</a></strong> - Configuring subscription tiers and access control</li>
-<li><strong><a href="configuration-and-management/model-setup/">Model Setup</a></strong> - Setting up models for MaaS</li>
-<li><strong><a href="user-guide/self-service-model-access/">Self-Service Model Access</a></strong> - Managing model access and policies</li>
-</ul>
-<h3 id="advanced-administration">🔧 Advanced Administration</h3>
-<ul>
-<li><strong><a href="advanced-administration/observability/">Observability</a></strong> - Monitoring, metrics, and dashboards</li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS Controller README</a> — install and MaaSModel/MaaSAuthPolicy/MaaSSubscription</li>
+<li><a href="../model-setup/">Model setup</a> — configuring LLMInferenceServices (gateway reference, tier annotation) as backends for MaaSModel</li>
+<li><a href="../../architecture/">Architecture</a> — overall MaaS architecture</li>
 </ul>
 
 
@@ -1656,7 +1771,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="December 15, 2025 10:20:14 UTC">December 15, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 27, 2026 17:58:09 UTC">February 27, 2026</span>
   </span>
 
     
@@ -1666,7 +1781,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 8, 2025 19:39:28 UTC">October 8, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 27, 2026 17:58:09 UTC">February 27, 2026</span>
   </span>
 
     
@@ -1721,10 +1836,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.share", "content.code.copy", "content.code.annotate", "search.suggest", "search.boost", "navigation.instant"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.share", "content.code.copy", "content.code.annotate", "search.suggest", "search.boost", "navigation.instant"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

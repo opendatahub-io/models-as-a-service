@@ -1207,6 +1207,62 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../model-listing-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Listing Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maas-model-kinds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaSModel Kinds (future)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
     
     
     
@@ -1226,10 +1282,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_7" >
         
           
-          <label class="md-nav__link" for="__nav_4_5" id="__nav_4_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_7" id="__nav_4_7_label" tabindex="">
             
   
   
@@ -1247,8 +1303,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_5">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_7">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1375,10 +1431,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_6" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_8" >
         
           
-          <label class="md-nav__link" for="__nav_4_6" id="__nav_4_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_8" id="__nav_4_8_label" tabindex="">
             
   
   
@@ -1396,8 +1452,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_6">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_8">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1880,26 +1936,21 @@ purpose-built identity in the form of a Kubernetes Service Account.</p>
     Gateway--&gt;&gt;User: Response</code></pre>
 <hr />
 <h2 id="model-discovery">Model Discovery</h2>
-<p>The <code>/v1/models</code> endpoint allows you to discover which models you're authorized to access. This endpoint works with any valid authentication token - you don't need to create an API key first.</p>
+<p>The <code>/v1/models</code> endpoint allows you to discover which models you're authorized to access. This endpoint works with any valid authentication token — you don't need to create an API key first.</p>
 <h3 id="how-it-works">How It Works</h3>
-<p>When you call <code>/v1/models</code>, the system checks your authorization against each model's endpoint. If your token doesn't have the correct audience for these internal checks, the API automatically exchanges it for a short-lived service account token.</p>
+<p>When you call <strong>GET /v1/models</strong> with an <strong>Authorization</strong> header, the API passes that header <strong>as-is</strong> to each model's <code>/v1/models</code> endpoint to validate access. Only models that return 2xx or 405 are included in the list. No token exchange or modification is performed; the same header you send is used for the probe.</p>
 <pre class="mermaid"><code>flowchart LR
-    A[Your Token] --&gt; B{Has correct&lt;br/&gt;audience?}
-    B --&gt;|Yes| D[Use as-is]
-    B --&gt;|No| C[Auto-exchange]
-    C --&gt; D
-    D --&gt; E[Check model&lt;br/&gt;authorization]
-    E --&gt; F[Return&lt;br/&gt;authorized models]</code></pre>
+    A[Your Request\nAuthorization header] --&gt; B[List MaaSModels]
+    B --&gt; C[Probe each model endpoint\nwith same header]
+    C --&gt; D[Return only models\nthat allow access]</code></pre>
 <p>This means you can:</p>
 <ol>
-<li><strong>Authenticate with OpenShift or OIDC</strong> - use your existing identity</li>
-<li><strong>Call <code>/v1/models</code> immediately</strong> - see available models without creating an API key first</li>
+<li><strong>Authenticate with OpenShift or OIDC</strong> — use your existing identity and the same token you would use for inference.</li>
+<li><strong>Call <code>/v1/models</code> immediately</strong> — see only the models you can access, without creating an API key first.</li>
 </ol>
 <div class="admonition info">
-<p class="admonition-title">Security Note</p>
-<p>The token exchange is an internal implementation detail. Authentication is still fully handled by Authorino - 
-the API only peeks at the token's audience claim to decide if exchange is needed. Your identity always comes 
-from Authorino's validated headers, not from parsing the token.</p>
+<p class="admonition-title">Future: Token minting</p>
+<p>Once MaaS API token minting is in place, the implementation may be revisited (e.g. minting a short-lived token for gateway auth when the client's token has a different audience). For now, the Authorization header is always passed through as-is.</p>
 </div>
 <hr />
 <h2 id="practical-usage">Practical Usage</h2>
@@ -1960,13 +2011,13 @@ are in the correct user group, which should be mapped to your desired tier in th
 <p>A: Yes. Your token grants you access based on your tier's RBAC permissions. If your tier is authorized to use multiple models, a single token will work for all of them.</p>
 <hr />
 <p><strong>Q: What's the difference between my OpenShift token and an API key?</strong></p>
-<p>A: Your <strong>OpenShift token</strong> is your identity token from authentication (e.g. OpenShift or OIDC). It proves who you are but may not have the correct audience for model access. An <strong>API key</strong> (issued via <code>/v1/tokens</code>) is a service account token with the correct audience and permissions for accessing models. You can use either to list models, but only API keys work for model inference.</p>
+<p>A: Your <strong>OpenShift token</strong> is your identity token from authentication (e.g. OpenShift or OIDC). An <strong>API key</strong> (issued via <code>/v1/tokens</code>) is a service account token with the correct audience and permissions for accessing models. For <strong>GET /v1/models</strong>, the API passes your Authorization header as-is to each model endpoint to determine which models to include; you can use your OpenShift token or an API key. For inference, use a token that your gateway accepts (e.g. OpenShift token or API key as configured).</p>
 <hr />
 <p><strong>Q: Do I need an API key to list available models?</strong></p>
-<p>A: No. You can call <code>/v1/models</code> with your OpenShift/OIDC token directly. The API automatically handles token exchange if needed. This lets you discover available models before deciding which API keys to create.</p>
+<p>A: No. Call <strong>GET /v1/models</strong> with your OpenShift/OIDC token (or any token your gateway accepts) in the Authorization header. The API uses that same header to probe each model endpoint and returns only models you can access.</p>
 <hr />
 <p><strong>Q: What is "token audience" and why does it matter?</strong></p>
-<p>A: Token audience identifies the intended recipient of a token. Model endpoints expect tokens with a specific audience (<code>{tenant}-sa</code>). OpenShift/OIDC tokens have different audiences, so the API exchanges them internally when needed for authorization checks.</p>
+<p>A: Token audience identifies the intended recipient of a token. Some gateways expect tokens with a specific audience. For <strong>GET /v1/models</strong>, the API does not modify or exchange your token; it forwards your Authorization header as-is. Once token minting is in place, audience handling may be revisited.</p>
 <hr />
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
@@ -1995,7 +2046,7 @@ are in the correct user group, which should be mapped to your desired tier in th
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="January 16, 2026 21:20:36 UTC">January 16, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 27, 2026 17:58:09 UTC">February 27, 2026</span>
   </span>
 
     
