@@ -63,7 +63,7 @@ To configure Limitador to use Redis for persistent storage, you need to:
 
 For detailed, official instructions on production Redis setup, refer to the Red Hat documentation:
 
-- [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/configure-redis_connectivity-link)
+- [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp)
 
 ---
 
@@ -151,4 +151,4 @@ The script will:
 
 ## Related Documentation
 
-- [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/configure-redis_connectivity-link) - Official Red Hat documentation for production Redis setup
+- [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp) - Official Red Hat documentation for production Redis setup
