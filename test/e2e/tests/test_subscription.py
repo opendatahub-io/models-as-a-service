@@ -68,16 +68,25 @@ def _gateway_url():
     scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
     return f"{scheme}://{host}"
 
-# TODO: Move to helpers.sh and come up witha better way of creating a preimum token
 def _get_cluster_token():
-    # TODO: Consider always using SA for consistency; remove oc whoami -t fallback.
     sa_ns = os.environ.get("E2E_TEST_TOKEN_SA_NAMESPACE")
     sa_name = os.environ.get("E2E_TEST_TOKEN_SA_NAME")
-    return _create_sa_token(sa_name, namespace=sa_ns)
+    if sa_ns and sa_name:
+        return _create_sa_token(sa_name, namespace=sa_ns)
+    result = subprocess.run(["oc", "whoami"], capture_output=True, text=True)
+    user = result.stdout.strip() if result.returncode == 0 else "unknown"
+    print(f"Cluster token user: {user}")
+    token_result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
+    token = token_result.stdout.strip() if token_result.returncode == 0 else ""
+    if not token:
+        raise RuntimeError("Could not get cluster token via `oc whoami -t`; run with oc login first")
+    return token
 
 
 def _create_sa_token(sa_name, namespace=None, duration="10m"):
     namespace = namespace or _ns()
+    user = f"system:serviceaccount:{namespace}:{sa_name}"
+    print(f"Cluster token user: {user}")
     sa_result = subprocess.run(["oc", "create", "sa", sa_name, "-n", namespace], capture_output=True, text=True)
     if sa_result.returncode != 0 and "already exists" not in sa_result.stderr:
         raise RuntimeError(f"Failed to create SA {sa_name}: {sa_result.stderr}")
@@ -218,11 +227,10 @@ class TestAuthEnforcement:
 
     def test_authorized_user_gets_200(self):
         """Admin user (in system:authenticated) should access the free model.
-        TODO: fix for Prow (401 vs expected 200). Works locally."""
-        pytest.skip("TODO: fix for Prow")
-        # token = _get_cluster_token()
-        # r = _poll_status(token, 200, timeout=90)
-        # log.info(f"Authorized user -> {r.status_code}")
+        Polls because AuthPolicies may still be syncing with Authorino."""
+        token = _get_cluster_token()
+        r = _poll_status(token, 200, timeout=90)
+        log.info(f"Authorized user -> {r.status_code}")
 
     def test_no_auth_gets_401(self):
         """Request without auth header should get 401."""
@@ -244,29 +252,25 @@ class TestAuthEnforcement:
         assert r.status_code == 401, f"Expected 401, got {r.status_code}"
 
     def test_wrong_group_gets_403(self):
-        """SA not in premium-user group should get 403 on premium model.
-        TODO: fix for Prow (401 vs expected 403). Works locally."""
-        pytest.skip("TODO: fix for Prow")
-        # sa = "e2e-test-wrong-group"
-        # try:
-        #     token = _create_sa_token(sa)
-        #     r = _inference(token, path=PREMIUM_MODEL_PATH)
-        #     log.info(f"Wrong group -> premium model: {r.status_code}")
-        #     assert r.status_code == 403, f"Expected 403, got {r.status_code}"
-        # finally:
-        #     _delete_sa(sa)
+        """SA not in premium-user group should get 403 on premium model."""
+        sa = "e2e-test-wrong-group"
+        try:
+            token = _create_sa_token(sa)
+            r = _inference(token, path=PREMIUM_MODEL_PATH)
+            log.info(f"Wrong group -> premium model: {r.status_code}")
+            assert r.status_code == 403, f"Expected 403, got {r.status_code}"
+        finally:
+            _delete_sa(sa)
 
 
 class TestSubscriptionEnforcement:
     """Tests that MaaSSubscription correctly enforces rate limits."""
 
     def test_subscribed_user_gets_200(self):
-        """Subscribed user should access the model. Polls for AuthPolicy enforcement.
-        TODO: fix for Prow (401 vs expected 200). Works locally."""
-        pytest.skip("TODO: fix for Prow")
-        # token = _get_cluster_token()
-        # r = _poll_status(token, 200, timeout=90)
-        # log.info(f"Subscribed user -> {r.status_code}")
+        """Subscribed user should access the model. Polls for AuthPolicy enforcement."""
+        token = _get_cluster_token()
+        r = _poll_status(token, 200, timeout=90)
+        log.info(f"Subscribed user -> {r.status_code}")
 
     def test_auth_pass_no_subscription_gets_429(self):
         """SA granted auth but with no subscription should get 429."""
