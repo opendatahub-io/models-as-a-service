@@ -76,29 +76,21 @@ fi
 USER="$(oc whoami)"
 echo "[smoke] Performing smoke test for user: ${USER}"
 
-# 1) Mint a MaaS token using your cluster token
+# 1) Get OC token directly (no more /v1/tokens minting endpoint)
 mkdir -p "${DIR}/reports"
 LOG="${DIR}/reports/smoke-${USER}.log"
 : > "${LOG}"
 
-FREE_OC_TOKEN="$(oc whoami -t || true)"
-TOKEN_RESPONSE="$(curl -skS \
-  -H "Authorization: Bearer ${FREE_OC_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"expiration":"10m"}' \
-  "${MAAS_API_BASE_URL}/v1/tokens" || true)"
-
-TOKEN="$(echo "${TOKEN_RESPONSE}" | jq -r .token 2>/dev/null || true)"
-if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
-  echo "[smoke] ERROR: could not mint MaaS token" | tee -a "${LOG}"
-  echo "${TOKEN_RESPONSE}" | tee -a "${LOG}"
+TOKEN="$(oc whoami -t || true)"
+if [[ -z "${TOKEN}" ]]; then
+  echo "[smoke] ERROR: could not get OC token via 'oc whoami -t'" | tee -a "${LOG}"
+  echo "[smoke] Make sure you are logged into OpenShift" | tee -a "${LOG}"
   exit 1
 fi
 export TOKEN
 
 # Log a masked preview of the token to the log (not the console)
-echo "[token] minted: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
+echo "[token] using OC token: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
 
 # 2) Get models, derive URL/ID if catalog returns them
 MODELS_JSON="$(curl -skS -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" || true)"
