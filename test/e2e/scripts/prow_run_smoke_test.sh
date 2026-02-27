@@ -374,15 +374,13 @@ setup_premium_test_token() {
         kubectl create sa "$PREMIUM_SA" -n "$PREMIUM_USERS_NS"
     fi
 
-    # Add system:serviceaccounts:<ns> to premium auth/subscription so this SA gets premium access.
-    # TODO: Extract patch logic into a helper; consider patching all MaaSAuthPolicy/MaaSSubscription
-    #       that reference premium-user in a single loop.
-    local sa_group="system:serviceaccounts:${PREMIUM_USERS_NS}"
-    echo "Patching MaaSAuthPolicy premium-simulator-access to include $sa_group..."
-    oc patch maasauthpolicy premium-simulator-access -n "$MAAS_NAMESPACE" --type=merge -p="{\"spec\": {\"subjects\": {\"groups\": [{\"name\": \"premium-user\"}, {\"name\": \"$sa_group\"}]}}}"
+    # Add premium SA as user (not group) so it gets premium access.
+    local sa_user="system:serviceaccount:${PREMIUM_USERS_NS}:${PREMIUM_SA}"
+    echo "Patching MaaSAuthPolicy premium-simulator-access to include $sa_user..."
+    oc patch maasauthpolicy premium-simulator-access -n "$MAAS_NAMESPACE" --type=merge -p="{\"spec\": {\"subjects\": {\"groups\": [{\"name\": \"premium-user\"}], \"users\": [\"$sa_user\"]}}}"
 
-    echo "Patching MaaSSubscription premium-simulator-subscription to include $sa_group..."
-    oc patch maassubscription premium-simulator-subscription -n "$MAAS_NAMESPACE" --type=merge -p="{\"spec\": {\"owner\": {\"groups\": [{\"name\": \"premium-user\"}, {\"name\": \"$sa_group\"}]}}}"
+    echo "Patching MaaSSubscription premium-simulator-subscription to include $sa_user..."
+    oc patch maassubscription premium-simulator-subscription -n "$MAAS_NAMESPACE" --type=merge -p="{\"spec\": {\"owner\": {\"groups\": [{\"name\": \"premium-user\"}], \"users\": [\"$sa_user\"]}}}"
 
     export E2E_TEST_TOKEN_SA_NAMESPACE="$PREMIUM_USERS_NS"
     export E2E_TEST_TOKEN_SA_NAME="$PREMIUM_SA"
