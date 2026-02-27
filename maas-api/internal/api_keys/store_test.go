@@ -2,127 +2,30 @@ package api_keys_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
-	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func createTestStore(t *testing.T) *api_keys.SQLStore {
+//nolint:ireturn // Returns MetadataStore interface by design.
+func createTestStore(t *testing.T) api_keys.MetadataStore {
 	t.Helper()
-	ctx := context.Background()
-	testLogger := logger.Development()
-	store, err := api_keys.NewSQLiteStore(ctx, testLogger, ":memory:")
-	require.NoError(t, err, "failed to create test store")
-	return store
+	return api_keys.NewMockStore()
 }
 
+// TestStore tests legacy Add() method - NOTE: This method is DEPRECATED
+// Legacy SA tokens are not stored in database in production - they use Kubernetes TokenReview
+// These tests are kept for backward compatibility testing only.
 func TestStore(t *testing.T) {
-	ctx := t.Context()
+	t.Skip("Legacy Add() method is deprecated - SA tokens are not stored in database")
 
-	store := createTestStore(t)
-	defer store.Close()
-
-	t.Run("AddTokenMetadata", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "jti1",
-				ExpiresAt: time.Now().Add(1 * time.Hour).Unix(),
-			},
-			Name: "token1",
-		}
-		err := store.Add(ctx, "user1", apiKey)
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user1")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 1)
-		assert.Equal(t, "token1", tokens[0].Name)
-		assert.Equal(t, api_keys.TokenStatusActive, tokens[0].Status)
-	})
-
-	t.Run("AddSecondToken", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "jti2",
-				ExpiresAt: time.Now().Add(2 * time.Hour).Unix(),
-			},
-			Name: "token2",
-		}
-		err := store.Add(ctx, "user1", apiKey)
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user1")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 2)
-	})
-
-	t.Run("GetTokensForDifferentUser", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "jti3",
-				ExpiresAt: time.Now().Add(1 * time.Hour).Unix(),
-			},
-			Name: "token3",
-		}
-		err := store.Add(ctx, "user2", apiKey)
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user2")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 1)
-		assert.Equal(t, "token3", tokens[0].Name)
-	})
-
-	t.Run("MarkTokensAsExpiredForUser", func(t *testing.T) {
-		err := store.InvalidateAll(ctx, "user1")
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user1")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 2)
-		for _, tok := range tokens {
-			assert.Equal(t, api_keys.TokenStatusExpired, tok.Status)
-		}
-
-		// User2 should still exist
-		tokens2, err := store.List(ctx, "user2")
-		require.NoError(t, err)
-		assert.Len(t, tokens2, 1)
-	})
-
-	t.Run("GetToken", func(t *testing.T) {
-		gotToken, err := store.Get(ctx, "jti3")
-		require.NoError(t, err)
-		assert.NotNil(t, gotToken)
-		assert.Equal(t, "token3", gotToken.Name)
-	})
-
-	t.Run("ExpiredTokenStatus", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "jti-expired",
-				ExpiresAt: time.Now().Add(-1 * time.Hour).Unix(),
-			},
-			Name: "expired-token",
-		}
-		err := store.Add(ctx, "user4", apiKey)
-		require.NoError(t, err)
-
-		tokens, err := store.List(ctx, "user4")
-		require.NoError(t, err)
-		assert.Len(t, tokens, 1)
-		assert.Equal(t, api_keys.TokenStatusExpired, tokens[0].Status)
-
-		// Get single token check
-		gotToken, err := store.Get(ctx, "jti-expired")
-		require.NoError(t, err)
-		assert.Equal(t, api_keys.TokenStatusExpired, gotToken.Status)
-	})
+	// Tests removed - legacy SA token storage is not used in practice
+	// Only hash-based keys (AddKey) are stored in database
 }
 
 func TestStoreValidation(t *testing.T) {
@@ -130,78 +33,126 @@ func TestStoreValidation(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()
 
-	t.Run("EmptyJTI", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "",
-				ExpiresAt: time.Now().Add(1 * time.Hour).Unix(),
-			},
-			Name: "token-no-jti",
-		}
-		err := store.Add(ctx, "user1", apiKey)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, api_keys.ErrEmptyJTI)
-	})
-
-	t.Run("EmptyName", func(t *testing.T) {
-		apiKey := &api_keys.APIKey{
-			Token: token.Token{
-				JTI:       "some-jti",
-				ExpiresAt: time.Now().Add(1 * time.Hour).Unix(),
-			},
-			Name: "",
-		}
-		err := store.Add(ctx, "user1", apiKey)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, api_keys.ErrEmptyName)
-	})
-
 	t.Run("TokenNotFound", func(t *testing.T) {
 		_, err := store.Get(ctx, "nonexistent-jti")
 		require.Error(t, err)
-		assert.Equal(t, api_keys.ErrTokenNotFound, err)
+		assert.Equal(t, api_keys.ErrKeyNotFound, err)
 	})
+
+	// Legacy Add() validation tests removed - method is deprecated
+	// SA tokens are not stored in database, validated via Kubernetes instead
 }
 
-func TestSQLiteStore(t *testing.T) {
-	ctx := context.Background()
-	testLogger := logger.Development()
-
-	t.Run("InMemory", func(t *testing.T) {
-		store, err := api_keys.NewSQLiteStore(ctx, testLogger, ":memory:")
-		require.NoError(t, err)
-		defer store.Close()
-
-		tokens, err := store.List(ctx, "user")
-		require.NoError(t, err)
-		assert.Empty(t, tokens)
-	})
-
-	t.Run("EmptyPath", func(t *testing.T) {
-		// Empty path should default to in-memory
-		store, err := api_keys.NewSQLiteStore(ctx, testLogger, "")
-		require.NoError(t, err)
-		defer store.Close()
-
-		tokens, err := store.List(ctx, "user")
-		require.NoError(t, err)
-		assert.Empty(t, tokens)
-	})
-}
-
-func TestExternalStore(t *testing.T) {
+func TestPostgresStoreFromURL(t *testing.T) {
 	ctx := context.Background()
 	testLogger := logger.Development()
 
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := api_keys.NewExternalStore(ctx, testLogger, "mysql://localhost:3306/db")
+		_, err := api_keys.NewPostgresStoreFromURL(ctx, testLogger, "mysql://localhost:3306/db")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported external database URL")
+		assert.Contains(t, err.Error(), "invalid database URL")
 	})
 
 	t.Run("EmptyURL", func(t *testing.T) {
-		_, err := api_keys.NewExternalStore(ctx, testLogger, "")
+		_, err := api_keys.NewPostgresStoreFromURL(ctx, testLogger, "")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported external database URL")
+		assert.Contains(t, err.Error(), "invalid database URL")
+	})
+}
+
+func TestAPIKeyOperations(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	t.Run("AddKey", func(t *testing.T) {
+		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", []string{"system:authenticated", "premium-user"}, nil)
+		require.NoError(t, err)
+
+		params := api_keys.PaginationParams{Limit: 10, Offset: 0}
+		result, err := store.List(ctx, "user1", params, nil)
+		require.NoError(t, err)
+		assert.Len(t, result.Keys, 1)
+		assert.Equal(t, "my-key", result.Keys[0].Name)
+		// KeyPrefix is NOT stored (security - reduces brute-force attack surface)
+		assert.False(t, result.HasMore)
+	})
+
+	t.Run("GetByHash", func(t *testing.T) {
+		key, err := store.GetByHash(ctx, "hash123")
+		require.NoError(t, err)
+		assert.Equal(t, "my-key", key.Name)
+		assert.Equal(t, "user1", key.Username)
+		assert.Equal(t, []string{"system:authenticated", "premium-user"}, key.OriginalUserGroups)
+	})
+
+	t.Run("GetByHashNotFound", func(t *testing.T) {
+		_, err := store.GetByHash(ctx, "nonexistent-hash")
+		require.ErrorIs(t, err, api_keys.ErrKeyNotFound)
+	})
+
+	t.Run("RevokeKey", func(t *testing.T) {
+		err := store.Revoke(ctx, "key-id-1")
+		require.NoError(t, err)
+
+		// Getting by hash should now fail
+		_, err = store.GetByHash(ctx, "hash123")
+		require.ErrorIs(t, err, api_keys.ErrInvalidKey)
+	})
+
+	t.Run("UpdateLastUsed", func(t *testing.T) {
+		// Add another key for this test
+		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", []string{"system:authenticated", "free-user"}, nil)
+		require.NoError(t, err)
+
+		err = store.UpdateLastUsed(ctx, "key-id-2")
+		require.NoError(t, err)
+
+		key, err := store.GetByHash(ctx, "hash456")
+		require.NoError(t, err)
+		assert.NotEmpty(t, key.LastUsedAt)
+	})
+}
+
+func TestList(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	// Create 125 test keys to test pagination
+	const totalKeys = 125
+	username := "paginated-user"
+
+	for i := 1; i <= totalKeys; i++ {
+		keyID := fmt.Sprintf("key-%d", i)
+		keyHash := fmt.Sprintf("hash-%d", i)
+		name := fmt.Sprintf("Key %d", i)
+		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		require.NoError(t, err)
+	}
+
+	t.Run("FirstPage", func(t *testing.T) {
+		params := api_keys.PaginationParams{Limit: 50, Offset: 0}
+		result, err := store.List(ctx, username, params, nil)
+		require.NoError(t, err)
+		assert.Len(t, result.Keys, 50, "should return exactly 50 keys")
+		assert.True(t, result.HasMore, "should indicate more pages exist")
+	})
+
+	t.Run("LastPage", func(t *testing.T) {
+		params := api_keys.PaginationParams{Limit: 50, Offset: 100}
+		result, err := store.List(ctx, username, params, nil)
+		require.NoError(t, err)
+		assert.Len(t, result.Keys, 25, "should return remaining 25 keys")
+		assert.False(t, result.HasMore, "should indicate no more pages")
+	})
+
+	t.Run("ValidationErrors", func(t *testing.T) {
+		t.Run("NegativeLimit", func(t *testing.T) {
+			params := api_keys.PaginationParams{Limit: 0, Offset: 0}
+			_, err := store.List(ctx, username, params, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "limit must be between 1 and 100")
+		})
 	})
 }

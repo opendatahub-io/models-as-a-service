@@ -169,29 +169,51 @@ TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token)
 ```
 
 > [!NOTE]
-> This is a self-service endpoint that issues ephemeral tokens. Openshift Identity (`$(oc whoami -t)`) is used as a refresh token.
+> ServiceAccount-based tokens have been removed. All authentication now uses API keys (`sk-oai-*` format) with hash-based storage.
 
-##### API Keys (Named Tokens)
+##### API Keys
 
-To create a named API key that can be tracked and managed:
+The API uses hash-based API keys with OpenAI-compatible format (`sk-oai-*`). These keys support both permanent and expiring modes.
 
 ```shell
 HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
 
-# Create a named API key
+# Create a permanent API key (no expiration)
 API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{
-    "expiration": "720h",
-    "name": "my-application-key"
+    "name": "my-permanent-key",
+    "description": "Production API key for my application"
   }' \
   "${HOST}/maas-api/v1/api-keys")
 
 echo $API_KEY_RESPONSE | jq -r .
-TOKEN=$(echo $API_KEY_RESPONSE | jq -r .token)
+API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 
+# Create an expiring API key (90 days)
+API_KEY_RESPONSE=$(curl -sSk \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{
+    "name": "my-expiring-key",
+    "description": "90-day test key",
+    "expiresIn": "90d"
+  }' \
+  "${HOST}/maas-api/v1/api-keys")
+
+echo $API_KEY_RESPONSE | jq -r .
+API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
+```
+
+> [!IMPORTANT]
+> The plaintext API key is shown ONLY ONCE at creation time. Store it securely - it cannot be retrieved again.
+
+**Managing API Keys:**
+
+```shell
 # List all your API keys
 curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
@@ -203,15 +225,15 @@ curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}" | jq .
 
-# Revoke all tokens (ephemeral and API keys)
+# Revoke specific API key
 curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -X DELETE \
-  "${HOST}/maas-api/v1/tokens"
+  "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}"
 ```
 
 > [!NOTE]
-> API keys are stored in the configured database (see [Storage Configuration](#storage-configuration)) with metadata including creation date, expiration date, and status. They can be listed and inspected individually. To revoke tokens, use `DELETE /v1/tokens` which revokes all tokens (ephemeral and API keys) by recreating the Service Account and marking API key metadata as expired.
+> API keys use hash-based storage (only SHA-256 hash stored, never plaintext). They are OpenAI-compatible (sk-oai-* format) and support optional expiration. API keys are stored in the configured database (see [Storage Configuration](#storage-configuration)) with metadata including creation date, expiration date, and status.
 
 ### Storage Configuration
 

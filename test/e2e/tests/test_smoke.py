@@ -24,25 +24,18 @@ def test_healthz_or_404(maas_api_base_url: str):
     # If both fail:
     assert False, "Neither /health nor /healthz responded as expected"
 
-def test_mint_token(maas_api_base_url: str):
+def test_tokens_endpoint_removed(maas_api_base_url: str):
     """
-    Security: /v1/tokens exists and is protected.
-    We call WITHOUT auth and expect 401/403.
-    If 200 (rare), verify a 'token' is present.
+    Verify /v1/tokens endpoint has been removed (replaced by API key system).
+    Expect 404 since the endpoint no longer exists.
     """
     url = f"{maas_api_base_url}/v1/tokens"
     r = requests.post(url, json={"expiration": "1m"}, timeout=20, verify=False)
     msg = f"[token] POST {url} (no auth) -> {r.status_code}"
     log.info(msg); print(msg)
 
-    if r.status_code == 200:
-        body = (r.json() or {})
-        tok = body.get("token")
-        head, tail = (tok or "")[:12], (tok or "")[-8:]
-        print(f"[token] minted len={len(tok) if tok else 0} head={head}…tail={tail}")
-        assert tok, "200 from token endpoint but no 'token' field"
-    else:
-        assert r.status_code in (401, 403), f"unexpected {r.status_code}: {r.text[:400]}"
+    assert r.status_code == 404, f"Expected 404 (endpoint removed), got {r.status_code}: {r.text[:400]}"
+    print("[token] Confirmed /v1/tokens endpoint has been removed (404)")
 
 def test_models_catalog(model_catalog: dict):
     """
@@ -55,21 +48,23 @@ def test_models_catalog(model_catalog: dict):
     print(f"[models] first: {_pp(first)}")
     assert "id" in first and "ready" in first
 
-def test_chat_completions_gateway_alive(model_v1: str, headers: dict, model_name: str):
+def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict, model_name: str):
     """
     Gateway: /chat/completions reachable for the deployed model URL.
+    Uses API key for authentication (required for inference after JWT removal).
     Allowed: 200 (backend answers) or 404 (path present but not wired here).
     """
-    r = chat("Say 'hello' in one word.", model_v1, headers, model_name=model_name)
+    r = chat("Say 'hello' in one word.", model_v1, api_key_headers, model_name=model_name)
     msg = f"[chat] POST /chat/completions -> {r.status_code}"
     log.info(msg); print(msg)
     assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
 
-def test_legacy_completions_optionally(model_v1: str, headers: dict, model_name: str):
+def test_legacy_completions_optionally(model_v1: str, api_key_headers: dict, model_name: str):
     """
     Compatibility: /completions (legacy). 200 or 404 both OK.
+    Uses API key for authentication (required for inference after JWT removal).
     """
-    r = completions("Say hello in one word.", model_v1, headers, model_name=model_name)
+    r = completions("Say hello in one word.", model_v1, api_key_headers, model_name=model_name)
     msg = f"[legacy] POST /completions -> {r.status_code}"
     log.info(msg); print(msg)
     assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
