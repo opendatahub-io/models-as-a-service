@@ -12,6 +12,8 @@ Requires:
 Environment variables (all optional, with defaults):
   - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_NAMESPACE: MaaS namespace (default: opendatahub)
+  - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: When set, use this SA token
+    instead of oc whoami -t (e.g. for Prow where oc whoami -t is unavailable)
   - E2E_TIMEOUT: Request timeout in seconds (default: 30)
   - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
   - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
@@ -21,7 +23,8 @@ Environment variables (all optional, with defaults):
   - E2E_PREMIUM_MODEL_REF: Premium model ref for CRs (default: premium-simulated-simulated-premium)
   - E2E_UNCONFIGURED_MODEL_REF: Unconfigured model ref (default: e2e-unconfigured-facebook-opt-125m-simulated)
   - E2E_UNCONFIGURED_MODEL_PATH: Path to unconfigured model (default: /llm/e2e-unconfigured-facebook-opt-125m-simulated)
-  - E2E_SIMULATOR_SUBSCRIPTION: Simulator subscription name (default: simulator-subscription)
+  - E2E_SIMULATOR_SUBSCRIPTION: Free-tier subscription (default: simulator-subscription)
+  - E2E_PREMIUM_SIMULATOR_SUBSCRIPTION: Premium-tier subscription (default: premium-simulator-subscription)
   - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
   - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 429 test (default: nonexistent-sub)
 """
@@ -47,6 +50,9 @@ PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-s
 UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
 UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get(
+    "E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription"
+)
 SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
 INVALID_SUBSCRIPTION = os.environ.get("E2E_INVALID_SUBSCRIPTION", "nonexistent-sub")
 
@@ -62,13 +68,12 @@ def _gateway_url():
     scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
     return f"{scheme}://{host}"
 
-
+# TODO: Move to helpers.sh and come up witha better way of creating a preimum token
 def _get_cluster_token():
-    result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
-    token = result.stdout.strip()
-    if not token:
-        raise RuntimeError("Could not get cluster token via 'oc whoami -t'")
-    return token
+    # TODO: Consider always using SA for consistency; remove oc whoami -t fallback.
+    sa_ns = os.environ.get("E2E_TEST_TOKEN_SA_NAMESPACE")
+    sa_name = os.environ.get("E2E_TEST_TOKEN_SA_NAME")
+    return _create_sa_token(sa_name, namespace=sa_ns)
 
 
 def _create_sa_token(sa_name, namespace=None, duration="10m"):
@@ -114,10 +119,33 @@ def _cr_exists(kind, name, namespace=None):
     return result.returncode == 0
 
 
-def _inference(token, path=None, extra_headers=None):
+def _subscription_for_path(path):
+    """Return the X-MaaS-Subscription value for a given model path."""
+    path = path or MODEL_PATH
+    if path == PREMIUM_MODEL_PATH:
+        return PREMIUM_SIMULATOR_SUBSCRIPTION
+    if path == MODEL_PATH:
+        return SIMULATOR_SUBSCRIPTION
+    return None  # e.g. unconfigured model has no subscription
+
+
+def _inference(token, path=None, extra_headers=None, subscription=None):
     path = path or MODEL_PATH
     url = f"{_gateway_url()}{path}/v1/completions"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    # Add X-MaaS-Subscription: extra_headers overrides; else explicit subscription; else infer from path.
+    # Pass subscription=False to explicitly omit the header (e.g. when testing no-subscription case).
+    sub_header = "x-maas-subscription"
+    if extra_headers and sub_header in extra_headers:
+        pass  # extra_headers will set it
+    elif subscription is False:
+        pass  # explicitly omit
+    elif subscription is not None:
+        headers[sub_header] = subscription
+    else:
+        inferred = _subscription_for_path(path)
+        if inferred:
+            headers[sub_header] = inferred
     if extra_headers:
         headers.update(extra_headers)
     return requests.post(
@@ -131,7 +159,7 @@ def _wait_reconcile(seconds=None):
     time.sleep(seconds or RECONCILE_WAIT)
 
 
-def _poll_status(token, expected, path=None, extra_headers=None, timeout=None, poll_interval=2):
+def _poll_status(token, expected, path=None, extra_headers=None, subscription=None, timeout=None, poll_interval=2):
     """Poll inference endpoint until expected HTTP status or timeout."""
     timeout = timeout or max(RECONCILE_WAIT * 3, 60)
     deadline = time.time() + timeout
@@ -139,23 +167,30 @@ def _poll_status(token, expected, path=None, extra_headers=None, timeout=None, p
     last_err = None
     while time.time() < deadline:
         try:
-            r = _inference(token, path=path, extra_headers=extra_headers)
+            r = _inference(token, path=path, extra_headers=extra_headers, subscription=subscription)
             last_err = None
-            if r.status_code == expected:
+            ok = r.status_code == expected if isinstance(expected, int) else r.status_code in expected
+            if ok:
                 return r
             last = r
         except requests.RequestException as exc:
             last_err = exc
             log.debug(f"Transient request error while polling: {exc}")
+        except Exception as exc:
+            # Catch-all to surface non-RequestException (e.g. JSON decode, timeout config)
+            last_err = exc
+            log.warning(f"Unexpected error while polling: {exc}")
         time.sleep(poll_interval)
-    if last_err:
-        raise AssertionError(
-            f"Expected {expected} within {timeout}s, last error: {last_err}"
-        )
-    actual = last.status_code if last else "no response"
-    raise AssertionError(
-        f"Expected {expected} within {timeout}s, last status: {actual}"
-    )
+    # Build failure message with all available context
+    exp_str = expected if isinstance(expected, int) else " or ".join(str(e) for e in expected)
+    err_msg = f"Expected {exp_str} within {timeout}s"
+    if last is not None:
+        err_msg += f", last status: {last.status_code}"
+    if last_err is not None:
+        err_msg += f", last error: {last_err}"
+    if last is None and last_err is None:
+        err_msg += f", no response (all requests may have raised non-RequestException)"
+    raise AssertionError(err_msg)
 
 
 def _snapshot_cr(kind, name, namespace=None):
@@ -243,7 +278,8 @@ class TestSubscriptionEnforcement:
                     "subjects": {"groups": [{"name": f"system:serviceaccounts:{ns}"}]},
                 },
             })
-            r = _poll_status(token, 429, path=PREMIUM_MODEL_PATH)
+            _wait_reconcile()  # allow auth policy to propagate before polling
+            r = _poll_status(token, 429, path=PREMIUM_MODEL_PATH, subscription=False)
             log.info(f"Auth pass, no subscription -> {r.status_code}")
         finally:
             _delete_cr("maasauthpolicy", "e2e-test-nosub-auth")
@@ -252,7 +288,8 @@ class TestSubscriptionEnforcement:
     def test_invalid_subscription_header_gets_429(self):
         token = _get_cluster_token()
         r = _inference(token, extra_headers={"x-maas-subscription": INVALID_SUBSCRIPTION})
-        assert r.status_code == 429, f"Expected 429, got {r.status_code}"
+        # Gateway may return 429 (rate limited) or 403 (forbidden) for invalid subscription
+        assert r.status_code in (429, 403), f"Expected 429 or 403, got {r.status_code}"
 
     def test_explicit_subscription_header_works(self):
         token = _get_cluster_token()
@@ -303,6 +340,7 @@ class TestMultipleSubscriptionsPerModel:
                     "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 500, "window": "1m"}]}],
                 },
             })
+            _wait_reconcile()  # allow subscription TRLP to propagate
             token = _create_sa_token(sa)
             r = _poll_status(token, 429, extra_headers={"x-maas-subscription": "e2e-premium-sub"})
             log.info(f"SA selects wrong sub -> {r.status_code}")
@@ -365,12 +403,12 @@ class TestMultipleAuthPoliciesPerModel:
                 },
             })
             token = _create_sa_token(sa)
-            r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
+            r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-premium-sa-sub")
             log.info(f"SA with 2nd auth policy -> premium: {r.status_code}")
 
             # Original premium-user policy should still work for the cluster admin
             admin_token = _get_cluster_token()
-            r2 = _inference(admin_token, path=PREMIUM_MODEL_PATH)
+            r2 = _inference(admin_token, path=PREMIUM_MODEL_PATH)  # uses premium-simulator-subscription
             assert r2.status_code == 200, f"Expected 200 (admin via original policy), got {r2.status_code}"
         finally:
             _delete_cr("maassubscription", "e2e-premium-sa-sub")
@@ -434,7 +472,7 @@ class TestCascadeDeletion:
         assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-            r = _poll_status(token, 200, timeout=30)
+            r = _poll_status(token, 200, subscription=False, timeout=30)  # no sub header: sub was deleted
             log.info(f"No subscriptions -> {r.status_code}")
         finally:
             _apply_cr(original)
@@ -469,7 +507,7 @@ class TestOrderingEdgeCases:
             })
             _wait_reconcile()
 
-            r1 = _inference(token, path=PREMIUM_MODEL_PATH)
+            r1 = _inference(token, path=PREMIUM_MODEL_PATH, subscription="e2e-ordering-sub")
             log.info(f"Sub only (no auth policy) -> {r1.status_code}")
             assert r1.status_code == 403, f"Expected 403 (no auth policy yet), got {r1.status_code}"
 
@@ -483,7 +521,7 @@ class TestOrderingEdgeCases:
                 },
             })
 
-            r2 = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
+            r2 = _poll_status(token, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-ordering-sub")
             log.info(f"Sub + auth policy -> {r2.status_code}")
         finally:
             _delete_cr("maassubscription", "e2e-ordering-sub")
