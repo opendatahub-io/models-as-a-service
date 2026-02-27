@@ -106,7 +106,11 @@ echo "6. Applying DSCInitialization..."
 if kubectl get dscinitializations default-dsci &>/dev/null; then
   echo "   DSCInitialization already exists, skipping"
 else
-  kubectl apply -f - <<EOF
+  # The operator's conversion webhook service may not exist yet even though the
+  # operator deployment is Available. Retry to ride out the race condition.
+  dsci_applied=false
+  for attempt in $(seq 1 12); do
+    if kubectl apply -f - <<EOF 2>/dev/null
 apiVersion: dscinitialization.opendatahub.io/v1
 kind: DSCInitialization
 metadata:
@@ -120,6 +124,17 @@ spec:
   trustedCABundle:
     managementState: Managed
 EOF
+    then
+      dsci_applied=true
+      break
+    fi
+    echo "   Waiting for conversion webhook to be ready (attempt $attempt/12)..."
+    sleep 10
+  done
+  if [[ "$dsci_applied" != "true" ]]; then
+    log_error "Failed to apply DSCInitialization after 12 attempts (webhook service may not be available)"
+    exit 1
+  fi
 fi
 
 # 7. Apply DataScienceCluster (modelsAsService Unmanaged - MaaS deployed separately)
