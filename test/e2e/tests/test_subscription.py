@@ -78,7 +78,6 @@ def _get_cluster_token():
     print(f"Cluster token user: {user}")
     token_result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
     token = token_result.stdout.strip() if token_result.returncode == 0 else ""
-    print(f"Cluster token: {token}")
     if not token:
         raise RuntimeError("Could not get cluster token via `oc whoami -t`; run with oc login first")
     return token
