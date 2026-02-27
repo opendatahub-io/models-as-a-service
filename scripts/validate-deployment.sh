@@ -393,7 +393,7 @@ fi
 print_check "TokenRateLimitPolicy"
 RATELIMIT_COUNT=$(kubectl get tokenratelimitpolicy -A --no-headers 2>/dev/null | wc -l || echo "0")
 if [ "$RATELIMIT_COUNT" -gt 0 ]; then
-    RATELIMIT_STATUS=$(kubectl get tokenratelimitpolicy -n openshift-ingress gateway-token-rate-limits -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
+    RATELIMIT_STATUS=$(kubectl get tokenratelimitpolicy -n openshift-ingress -o jsonpath='{.items[0].status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
     if [ "$RATELIMIT_STATUS" = "True" ]; then
         print_success "TokenRateLimitPolicy is configured and accepted"
     else
@@ -636,10 +636,8 @@ else
         if [ -n "$TIER" ]; then
             print_info "Current user tier: $TIER"
             # Query the TokenRateLimitPolicy to show the configured limit for this tier
-            TIER_LIMIT=$(kubectl get tokenratelimitpolicy gateway-token-rate-limits -n openshift-ingress \
-                -o jsonpath="{.spec.limits.${TIER}-user-tokens.rates[0].limit}" 2>/dev/null || echo "")
-            TIER_WINDOW=$(kubectl get tokenratelimitpolicy gateway-token-rate-limits -n openshift-ingress \
-                -o jsonpath="{.spec.limits.${TIER}-user-tokens.rates[0].window}" 2>/dev/null || echo "")
+            TIER_LIMIT=$(kubectl get tokenratelimitpolicy -n openshift-ingress -o jsonpath="{.items[0].spec.limits.${TIER}-user-tokens.rates[0].limit}" 2>/dev/null || echo "")
+            TIER_WINDOW=$(kubectl get tokenratelimitpolicy -n openshift-ingress -o jsonpath="{.items[0].spec.limits.${TIER}-user-tokens.rates[0].window}" 2>/dev/null || echo "")
             if [ -n "$TIER_LIMIT" ] && [ -n "$TIER_WINDOW" ]; then
                 print_info "Configured rate limit for $TIER tier: $TIER_LIMIT tokens per $TIER_WINDOW"
             else

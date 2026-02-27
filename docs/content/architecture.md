@@ -165,7 +165,7 @@ graph TB
     subgraph "Policy Components"
         AuthPolicy[**AuthPolicy**<br/>gateway-auth-policy]
         RateLimitPolicy[**RateLimitPolicy**<br/>gateway-rate-limits]
-        TokenRateLimitPolicy[**TokenRateLimitPolicy**<br/>gateway-token-rate-limits]
+        TokenRateLimitPolicy[**TokenRateLimitPolicy**<br/>gateway-level]
     end
     
     subgraph "Model Access Control"
@@ -218,7 +218,7 @@ graph TB
 
 1. **User Request**: A user makes an inference request to the Gateway API with a valid token.
 2. **Service Account Authentication**: Authorino validates service account tokens using gateway-auth-policy
-3. **Rate Limiting**: Limitador enforces usage quotas per tier/user using gateway-rate-limits and gateway-token-rate-limits
+3. **Rate Limiting**: Limitador enforces usage quotas per tier/user using gateway and per-route policies
 4. **Model Access Control**: RBAC checks if service account has POST access to the specific LLMInferenceService
 5. **Request Forwarding**: Only requests with proper model access are forwarded to RHOAI
 6. **Metrics Collection**: Limitador sends usage data to Prometheus for observability dashboards

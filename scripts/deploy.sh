@@ -22,12 +22,14 @@
 # ADVANCED OPTIONS (PR Testing):
 #   --operator-catalog <image>    Custom operator catalog image
 #   --operator-image <image>      Custom operator image (patches CSV)
+#   --maas-api-image <image>      Custom MaaS API container image
 #   --channel <channel>           Operator channel override
 #
 # ENVIRONMENT VARIABLES:
-#   MAAS_API_IMAGE    Custom MaaS API container image
-#   OPERATOR_TYPE     Operator type (rhoai/odh)
-#   LOG_LEVEL         Logging verbosity (DEBUG, INFO, WARN, ERROR)
+#   MAAS_API_IMAGE            Custom MaaS API container image
+#   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+#   OPERATOR_TYPE             Operator type (rhoai/odh)
+#   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #
 # EXAMPLES:
 #   # Deploy ODH (default, uses kuadrant policy engine)
@@ -80,6 +82,8 @@ DRY_RUN="${DRY_RUN:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
+MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
+MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -133,13 +137,22 @@ ADVANCED OPTIONS (PR Testing):
       Custom operator image (patches CSV after install)
       Example: quay.io/opendatahub/opendatahub-operator:pr-456
 
+  --maas-api-image <image>
+      Custom MaaS API container image (PR testing)
+      Example: quay.io/opendatahub/maas-api:pr-456
+
+  --maas-controller-image <image>
+      Custom MaaS controller container image (PR testing)
+      Example: quay.io/maas/maas-controller:pr-42
+
   --channel <channel>
       Operator channel override
       Default: fast-3 (ODH), fast-3.x (RHOAI)
 
 ENVIRONMENT VARIABLES:
-  MAAS_API_IMAGE        Custom MaaS API container image
-  OPERATOR_CATALOG      Custom operator catalog
+  MAAS_API_IMAGE            Custom MaaS API container image
+  MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+  OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE        Custom operator image
   OPERATOR_TYPE         Operator type (rhoai/odh)
   LOG_LEVEL             Logging verbosity (DEBUG, INFO, WARN, ERROR)
@@ -155,7 +168,8 @@ EXAMPLES:
   ./scripts/deploy.sh --deployment-mode kustomize
 
   # Test MaaS API PR #123
-  MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh --operator-type odh
+  MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \\
+    ./scripts/deploy.sh --operator-type odh
 
   # Test ODH operator PR #456 with manifests
   ./scripts/deploy.sh \\
@@ -227,6 +241,16 @@ parse_arguments() {
       --operator-image)
         require_flag_value "$1" "${2:-}"
         OPERATOR_IMAGE="$2"
+        shift 2
+        ;;
+      --maas-api-image)
+        require_flag_value "$1" "${2:-}"
+        MAAS_API_IMAGE="$2"
+        shift 2
+        ;;
+      --maas-controller-image)
+        require_flag_value "$1" "${2:-}"
+        MAAS_CONTROLLER_IMAGE="$2"
         shift 2
         ;;
       --channel)
@@ -333,9 +357,9 @@ validate_configuration() {
 
   # Determine namespace based on deployment mode
   if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
-    # Kustomize mode: use provided namespace or default to maas-api
+    # Kustomize mode: use provided namespace or default to opendatahub
     if [[ -z "$NAMESPACE" ]]; then
-      NAMESPACE="maas-api"
+      NAMESPACE="opendatahub"
     fi
     log_debug "Using namespace for kustomize mode: $NAMESPACE"
   else
@@ -378,6 +402,12 @@ main() {
   log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
+  if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
+    log_info "  MaaS API image: $MAAS_API_IMAGE"
+  fi
+  if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
+    log_info "  MaaS controller image: $MAAS_CONTROLLER_IMAGE"
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log_info "DRY RUN MODE - no changes will be applied"
@@ -393,6 +423,67 @@ main() {
       deploy_via_kustomize
       ;;
   esac
+
+  # TODO: Move to kustomize overlay once deployment structure is finalized.
+  # NetworkPolicy to allow Authorino (Kuadrant) to reach MaaS API for AuthPolicy evaluation.
+  if [[ "$POLICY_ENGINE" == "kuadrant" ]]; then
+    local data_dir="${SCRIPT_DIR}/data"
+    if [[ -f "${data_dir}/maas-authorino-networkpolicy.yaml" ]]; then
+      log_info "Applying maas-authorino-allow NetworkPolicy..."
+      kubectl apply -f "${data_dir}/maas-authorino-networkpolicy.yaml" -n "$NAMESPACE" 2>/dev/null || \
+        log_warn "Failed to apply maas-authorino-allow NetworkPolicy (may already exist)"
+    fi
+  fi
+
+  # Install subscription controller (always deployed)
+  # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script.
+  log_info ""
+  log_info "MaaS Subscription Controller..."
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local project_root="$script_dir/.."
+  local controller_dir="$project_root/maas-controller"
+  local config_dir="$controller_dir/config/default"
+
+  if [[ ! -d "$controller_dir" ]]; then
+    log_error "maas-controller directory not found at $controller_dir — subscription controller required"
+    return 1
+  else
+    if [[ "$DEPLOYMENT_MODE" != "kustomize" ]]; then
+      log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
+      if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
+        log_error "Namespace $NAMESPACE does not exist. Create it first (e.g. via ODH operator)."
+        return 1
+      fi
+      set_maas_controller_image
+      if [[ "$NAMESPACE" != "opendatahub" ]]; then
+        (cd "$project_root" && kustomize build maas-controller/config/default | \
+          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
+          cleanup_maas_controller_image
+          log_error "Failed to apply maas-controller manifests"
+          return 1
+        }
+      else
+        kubectl apply -k "$config_dir" || {
+          cleanup_maas_controller_image
+          log_error "Failed to apply maas-controller manifests"
+          return 1
+        }
+      fi
+      cleanup_maas_controller_image
+    else
+      log_info "  Controller deployed via kustomize overlay (maas-controller/config/default)"
+    fi
+
+    log_info "  Waiting for maas-controller to be ready..."
+    if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
+      log_error "maas-controller deployment not ready"
+      return 1
+    fi
+
+    log_info "  Subscription controller ready."
+    log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
+  fi
 
   log_info "==================================================="
   log_info "  Deployment completed successfully!"
@@ -451,27 +542,35 @@ deploy_via_kustomize() {
   # Install rate limiter component (RHCL or Kuadrant)
   install_policy_engine
 
-  # Set up MaaS API image if specified
-  trap cleanup_maas_api_image EXIT INT TERM
-  set_maas_api_image
+  local overlay="$project_root/deployment/overlays/http-backend"
+  if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
+    log_info "Using TLS backend overlay"
+    overlay="$project_root/deployment/overlays/tls-backend"
+  else
+    log_info "Using HTTP backend overlay"
+  fi
 
-  # Create namespace if it doesn't exist (kustomize mode uses maas-api namespace)
-  # This must be done before applying manifests that target this namespace
+  # Set namespace and image from script (overlay kustomization is restored on exit)
+  trap 'cleanup_maas_api_image; cleanup_maas_controller_image; cleanup_overlay_namespace' EXIT INT TERM
+  set_maas_api_image
+  set_maas_controller_image
+  set_overlay_namespace "$overlay" "$NAMESPACE"
+
   if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
     log_info "Creating namespace: $NAMESPACE"
     kubectl create namespace "$NAMESPACE"
   fi
 
-  # Apply kustomize manifests
   log_info "Applying kustomize manifests..."
-
-  local overlay="$project_root/deployment/overlays/openshift"
-  if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
-    log_info "Using TLS backend overlay"
-    overlay="$project_root/deployment/overlays/tls-backend"
-  fi
-
   kubectl apply --server-side=true -f <(kustomize build "$overlay")
+
+  # Apply gateway policies separately so they stay in openshift-ingress (overlay
+  # namespace would otherwise overwrite them to $NAMESPACE)
+  local policies_dir="$project_root/maas-controller/config/policies"
+  if [[ -d "$policies_dir" ]]; then
+    log_info "Applying gateway policies (openshift-ingress)..."
+    kubectl apply --server-side=true -f <(kustomize build "$policies_dir")
+  fi
 
   # Configure TLS backend (if enabled)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
@@ -543,6 +642,7 @@ install_optional_operators() {
 
   log_info "Optional operators installed"
 }
+
 
 #──────────────────────────────────────────────────────────────
 # RATE LIMITER INSTALLATION
@@ -864,7 +964,7 @@ apply_custom_resources() {
   if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
     webhook_namespace="redhat-ods-operator"
   else
-    webhook_namespace="opendatahub-operator-system"
+    webhook_namespace="opendatahub"
   fi
 
   local webhook_deployment
@@ -1163,47 +1263,6 @@ apply_kuadrant_cr() {
   fi
   
   log_info "Kuadrant setup complete"
-
-  # Deploy usage policies (TokenRateLimitPolicy)
-  deploy_usage_policies
-}
-
-# deploy_usage_policies
-#   Deploys rate limiting and token limiting policies for the gateway.
-#   These policies enable tier-based usage limits for API consumers.
-deploy_usage_policies() {
-  log_info "Deploying usage policies (TokenRateLimitPolicy)..."
-
-  local project_root
-  project_root="$(find_project_root)" || {
-    log_warn "Could not find project root, skipping usage policies deployment"
-    return 0
-  }
-
-  local policies_dir="$project_root/deployment/base/policies/usage-policies"
-  if [[ ! -d "$policies_dir" ]]; then
-    log_warn "Usage policies directory not found at $policies_dir, skipping"
-    return 0
-  fi
-
-  # Capture kubectl output to temp file (piping to while loop loses the exit status)
-  local temp_output
-  temp_output=$(mktemp)
-
-  local kubectl_exit=0
-  if ! kustomize build "$policies_dir" | kubectl apply --server-side=true -f - > "$temp_output" 2>&1; then
-    kubectl_exit=1
-  fi
-
-  # Log all output lines
-  while read -r line; do log_debug "$line"; done < "$temp_output"
-  rm -f "$temp_output"
-
-  if [[ $kubectl_exit -eq 0 ]]; then
-    log_info "Usage policies deployed successfully"
-  else
-    log_warn "Failed to deploy usage policies (non-fatal, rate limiting may not work)"
-  fi
 }
 
 patch_operator_csv() {
@@ -1261,8 +1320,11 @@ patch_operator_csv() {
 #
 #   This function:
 #   1. Detects the cluster's OIDC audience from a service account token
-#   2. If non-standard, patches the AuthPolicy with the cluster-specific audience
+#   2. If non-standard, patches the maas-api AuthPolicy with the cluster-specific audience
 #   3. Annotates the AuthPolicy to prevent operator from reverting the patch
+#
+#   Note: maas-controller audience patching is handled separately in the subscription
+#   controller installation block (after the controller deployment exists).
 configure_cluster_audience() {
   log_info "Checking cluster OIDC audience..."
 
@@ -1344,6 +1406,7 @@ EOF
     log_warn "  WARNING: AuthPolicy audience may have been reverted to: ${actual_aud}"
     log_warn "  This may cause authentication failures on Hypershift/ROSA clusters"
   fi
+
 }
 
 #──────────────────────────────────────────────────────────────
@@ -1416,7 +1479,6 @@ configure_tls_backend() {
   kubectl rollout status deployment/authorino -n "$authorino_namespace" --timeout=120s 2>/dev/null || log_warn "Authorino rollout status check timed out"
 
   log_info "TLS backend configuration complete"
-  log_info "Tier lookup URL: https://maas-api.${maas_namespace}.svc.cluster.local:8443/v1/tiers/lookup"
 }
 
 #──────────────────────────────────────────────────────────────
