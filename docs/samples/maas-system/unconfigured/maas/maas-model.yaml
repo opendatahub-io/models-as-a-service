@@ -1,7 +1,7 @@
-# MaaSModel with NO MaaSAuthPolicy or MaaSSubscription.
+# MaaSModelRef with NO MaaSAuthPolicy or MaaSSubscription.
 # Used by e2e tests to validate gateway default auth denies access (403).
 apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSModel
+kind: MaaSModelRef
 metadata:
   name: e2e-unconfigured-facebook-opt-125m-simulated
   namespace: opendatahub

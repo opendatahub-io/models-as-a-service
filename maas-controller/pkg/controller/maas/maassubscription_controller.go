@@ -49,7 +49,7 @@ type MaaSSubscriptionReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/finalizers,verbs=update
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodels,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
@@ -433,9 +433,9 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSSubscriptions,
 		)).
-		// Watch MaaSModels so we re-reconcile when a model is created or deleted.
-		Watches(&maasv1alpha1.MaaSModel{}, handler.EnqueueRequestsFromMapFunc(
-			r.mapMaaSModelToMaaSSubscriptions,
+		// Watch MaaSModelRefs so we re-reconcile when a model is created or deleted.
+		Watches(&maasv1alpha1.MaaSModelRef{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapMaaSModelRefToMaaSSubscriptions,
 		)).
 		// Watch generated TokenRateLimitPolicies so manual edits get overwritten by the controller.
 		Watches(generatedTRLP, handler.EnqueueRequestsFromMapFunc(
@@ -465,10 +465,10 @@ func (r *MaaSSubscriptionReconciler) mapGeneratedTRLPToParent(ctx context.Contex
 	}}
 }
 
-// mapMaaSModelToMaaSSubscriptions returns reconcile requests for all MaaSSubscriptions
-// that reference the given MaaSModel.
-func (r *MaaSSubscriptionReconciler) mapMaaSModelToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {
-	model, ok := obj.(*maasv1alpha1.MaaSModel)
+// mapMaaSModelRefToMaaSSubscriptions returns reconcile requests for all MaaSSubscriptions
+// that reference the given MaaSModelRef.
+func (r *MaaSSubscriptionReconciler) mapMaaSModelRefToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {
+	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
 	if !ok {
 		return nil
 	}
@@ -497,8 +497,8 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 	if !ok {
 		return nil
 	}
-	// Find MaaSModels in this namespace
-	var models maasv1alpha1.MaaSModelList
+	// Find MaaSModelRefs in this namespace
+	var models maasv1alpha1.MaaSModelRefList
 	if err := r.List(ctx, &models); err != nil {
 		return nil
 	}

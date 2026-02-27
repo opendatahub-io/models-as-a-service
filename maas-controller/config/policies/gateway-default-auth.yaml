@@ -2,7 +2,7 @@
 # Scoped to model inference paths only — does NOT affect non-model routes
 # like /maas-api/ or /v1/models (the MaaS API management endpoints).
 #
-# The path scoping (when predicate) is managed dynamically by the MaaSModel
+# The path scoping (when predicate) is managed dynamically by the MaaSModelRef
 # controller, which derives path prefixes from the actual HTTPRoute namespaces
 # (e.g. /llm/, /production/). Do NOT hardcode a path prefix here.
 #

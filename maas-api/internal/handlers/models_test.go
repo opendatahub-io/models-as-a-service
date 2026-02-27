@@ -29,16 +29,16 @@ import (
 const (
 	maasModelGVRGroup    = "maas.opendatahub.io"
 	maasModelGVRVersion  = "v1alpha1"
-	maasModelGVRResource = "maasmodels"
+	maasModelGVRResource = "maasmodelrefs"
 )
 
-// maasModelUnstructured returns an unstructured MaaSModel for testing (name, namespace, endpoint URL, ready).
+// maasModelUnstructured returns an unstructured MaaSModelRef for testing (name, namespace, endpoint URL, ready).
 func maasModelUnstructured(name, namespace, endpoint string, ready bool) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   maasModelGVRGroup,
 		Version: maasModelGVRVersion,
-		Kind:    "MaaSModel",
+		Kind:    "MaaSModelRef",
 	})
 	u.SetName(name)
 	u.SetNamespace(namespace)
@@ -51,10 +51,10 @@ func maasModelUnstructured(name, namespace, endpoint string, ready bool) *unstru
 	return u
 }
 
-// fakeMaaSModelLister implements models.MaaSModelLister for tests (namespace -> items).
-type fakeMaaSModelLister map[string][]*unstructured.Unstructured
+// fakeMaaSModelRefLister implements models.MaaSModelRefLister for tests (namespace -> items).
+type fakeMaaSModelRefLister map[string][]*unstructured.Unstructured
 
-func (f fakeMaaSModelLister) List(namespace string) ([]*unstructured.Unstructured, error) {
+func (f fakeMaaSModelRefLister) List(namespace string) ([]*unstructured.Unstructured, error) {
 	items := f[namespace]
 	if items == nil {
 		return nil, nil
@@ -184,7 +184,7 @@ func TestListingModels(t *testing.T) {
 				constant.AnnotationDescription:  "A large language model for general AI tasks",
 				constant.AnnotationDisplayName:  "Test Model Alpha",
 			},
-			// MaaSModel listing does not populate Details from annotations.
+			// MaaSModelRef listing does not populate Details from annotations.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
 				_ = model
@@ -200,7 +200,7 @@ func TestListingModels(t *testing.T) {
 			Annotations: map[string]string{
 				constant.AnnotationDisplayName: "Test Model Beta",
 			},
-			// MaaSModel listing does not populate Details.
+			// MaaSModelRef listing does not populate Details.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
 				_ = model
@@ -222,13 +222,13 @@ func TestListingModels(t *testing.T) {
 			},
 		},
 	}
-	// Build MaaSModel unstructured list from scenarios (same URLs as mock servers for access validation).
+	// Build MaaSModelRef unstructured list from scenarios (same URLs as mock servers for access validation).
 	maasModelItems := make([]*unstructured.Unstructured, 0, len(llmTestScenarios))
 	for _, s := range llmTestScenarios {
 		endpoint := s.URL.String()
 		maasModelItems = append(maasModelItems, maasModelUnstructured(s.Name, fixtures.TestNamespace, endpoint, s.Ready))
 	}
-	maasModelLister := fakeMaaSModelLister{fixtures.TestNamespace: maasModelItems}
+	maasModelLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelItems}
 
 	config := fixtures.TestServerConfig{
 		Objects: []runtime.Object{},

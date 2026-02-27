@@ -45,8 +45,8 @@ const (
 	defaultClusterAudience  = "https://kubernetes.default.svc"
 )
 
-// MaaSModelReconciler reconciles a MaaSModel object
-type MaaSModelReconciler struct {
+// MaaSModelRefReconciler reconciles a MaaSModelRef object
+type MaaSModelRefReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
@@ -55,23 +55,23 @@ type MaaSModelReconciler struct {
 	GatewayNamespace string
 }
 
-func (r *MaaSModelReconciler) gatewayName() string {
+func (r *MaaSModelRefReconciler) gatewayName() string {
 	if r.GatewayName != "" {
 		return r.GatewayName
 	}
 	return defaultGatewayName
 }
 
-func (r *MaaSModelReconciler) gatewayNamespace() string {
+func (r *MaaSModelRefReconciler) gatewayNamespace() string {
 	if r.GatewayNamespace != "" {
 		return r.GatewayNamespace
 	}
 	return defaultGatewayNamespace
 }
 
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodels,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodels/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodels/finalizers,verbs=update
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs/finalizers,verbs=update
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -80,15 +80,15 @@ func (r *MaaSModelReconciler) gatewayNamespace() string {
 const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
 
 // Reconcile is part of the main kubernetes reconciliation loop
-func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSModel", req.NamespacedName)
+func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSModelRef", req.NamespacedName)
 
-	model := &maasv1alpha1.MaaSModel{}
+	model := &maasv1alpha1.MaaSModelRef{}
 	if err := r.Get(ctx, req.NamespacedName, model); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		log.Error(err, "unable to fetch MaaSModel")
+		log.Error(err, "unable to fetch MaaSModelRef")
 		return ctrl.Result{}, err
 	}
 
@@ -149,7 +149,7 @@ func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-func (r *MaaSModelReconciler) handleDeletion(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (ctrl.Result, error) {
+func (r *MaaSModelRefReconciler) handleDeletion(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(model, maasModelFinalizer) {
 		// Clean up generated AuthPolicies for this model
 		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Name, "AuthPolicy", "kuadrant.io", "v1"); err != nil {
@@ -169,7 +169,7 @@ func (r *MaaSModelReconciler) handleDeletion(ctx context.Context, log logr.Logge
 			}
 		}
 
-		// Remove finalizer so the MaaSModel can be deleted
+		// Remove finalizer so the MaaSModelRef can be deleted
 		controllerutil.RemoveFinalizer(model, maasModelFinalizer)
 		if err := r.Update(ctx, model); err != nil {
 			return ctrl.Result{}, err
@@ -181,7 +181,7 @@ func (r *MaaSModelReconciler) handleDeletion(ctx context.Context, log logr.Logge
 
 // deleteGeneratedPoliciesByLabel finds and deletes all generated policies
 // (AuthPolicy or TokenRateLimitPolicy) labeled with the given model name.
-func (r *MaaSModelReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context, log logr.Logger, modelName, kind, group, version string) error {
+func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context, log logr.Logger, modelName, kind, group, version string) error {
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: version, Kind: kind + "List"})
 
@@ -199,7 +199,7 @@ func (r *MaaSModelReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context
 
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
-		log.Info(fmt.Sprintf("Deleting generated %s on MaaSModel deletion", kind),
+		log.Info(fmt.Sprintf("Deleting generated %s on MaaSModelRef deletion", kind),
 			"name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete %s %s/%s: %w", kind, p.GetNamespace(), p.GetName(), err)
@@ -209,12 +209,12 @@ func (r *MaaSModelReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context
 	return nil
 }
 
-func (r *MaaSModelReconciler) updateStatus(ctx context.Context, model *maasv1alpha1.MaaSModel, phase, message string) {
+func (r *MaaSModelRefReconciler) updateStatus(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message string) {
 	r.updateStatusWithReason(ctx, model, phase, message, "")
 }
 
 // updateStatusWithReason sets Phase and Ready condition; when phase is "Failed", reason overrides the default "ReconcileFailed" (e.g. "Unsupported" for unimplemented kinds).
-func (r *MaaSModelReconciler) updateStatusWithReason(ctx context.Context, model *maasv1alpha1.MaaSModel, phase, message, reason string) {
+func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message, reason string) {
 	model.Status.Phase = phase
 	condition := metav1.Condition{
 		Type:               "Ready",
@@ -247,31 +247,31 @@ func (r *MaaSModelReconciler) updateStatusWithReason(ctx context.Context, model 
 
 	if err := r.Status().Update(ctx, model); err != nil {
 		log := logr.FromContextOrDiscard(ctx)
-		log.Error(err, "failed to update MaaSModel status", "name", model.Name)
+		log.Error(err, "failed to update MaaSModelRef status", "name", model.Name)
 		// Intentionally do not return the error so we do not re-queue on status update conflict/failure.
 	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *MaaSModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaaSModel{}).
+		For(&maasv1alpha1.MaaSModelRef{}).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
-		// (fixes race condition where MaaSModel is created before HTTPRoute exists).
+		// (fixes race condition where MaaSModelRef is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
-			r.mapHTTPRouteToMaaSModels,
+			r.mapHTTPRouteToMaaSModelRefs,
 		)).
 		Complete(r)
 }
 
-// mapHTTPRouteToMaaSModels returns reconcile requests for all MaaSModels whose
-// route namespace (ModelRef.Namespace or MaaSModel.Namespace) matches the HTTPRoute's namespace.
-func (r *MaaSModelReconciler) mapHTTPRouteToMaaSModels(ctx context.Context, obj client.Object) []reconcile.Request {
+// mapHTTPRouteToMaaSModelRefs returns reconcile requests for all MaaSModelRefs whose
+// route namespace (ModelRef.Namespace or MaaSModelRef.Namespace) matches the HTTPRoute's namespace.
+func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
 	route, ok := obj.(*gatewayapiv1.HTTPRoute)
 	if !ok {
 		return nil
 	}
-	var models maasv1alpha1.MaaSModelList
+	var models maasv1alpha1.MaaSModelRefList
 	if err := r.List(ctx, &models); err != nil {
 		return nil
 	}

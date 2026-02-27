@@ -31,16 +31,16 @@ import (
 
 // llmisvcHandler implements BackendHandler for kind "llmisvc" (LLMInferenceService).
 type llmisvcHandler struct {
-	r *MaaSModelReconciler
+	r *MaaSModelRefReconciler
 }
 
-func (h *llmisvcHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
+func (h *llmisvcHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	return h.validateLLMISvcHTTPRoute(ctx, log, model)
 }
 
 // validateLLMISvcHTTPRoute ensures an HTTPRoute exists for the referenced LLMInferenceService (by labels),
-// populates MaaSModel status from the HTTPRoute and gateway ref.
-func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
+// populates MaaSModelRef status from the HTTPRoute and gateway ref.
+func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	routeNS := model.Namespace
 	if model.Spec.ModelRef.Namespace != "" {
 		routeNS = model.Spec.ModelRef.Namespace
@@ -105,7 +105,7 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 	return nil
 }
 
-func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (endpoint string, ready bool, err error) {
+func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error) {
 	llmisvcNS := model.Namespace
 	if model.Spec.ModelRef.Namespace != "" {
 		llmisvcNS = model.Spec.ModelRef.Namespace
@@ -140,7 +140,7 @@ func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maa
 // GetModelEndpoint returns the model endpoint URL using gateway/HTTPRoute hostname and path.
 // Used when LLMInferenceService status does not expose an endpoint. ExternalModel and other kinds
 // implement their own logic and need not use these path assumptions.
-func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (string, error) {
+func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
 	if len(model.Status.HTTPRouteHostnames) > 0 {
 		hostname := model.Status.HTTPRouteHostnames[0]
 		return fmt.Sprintf("https://%s/%s", hostname, model.Name), nil
@@ -196,15 +196,15 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 	return ""
 }
 
-func (h *llmisvcHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
+func (h *llmisvcHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	// llmisvc HTTPRoutes are owned by KServe; we do not delete them.
 	return nil
 }
 
-// llmisvcRouteResolver resolves the HTTPRoute for a MaaSModel that references an LLMInferenceService.
+// llmisvcRouteResolver resolves the HTTPRoute for a MaaSModelRef that references an LLMInferenceService.
 type llmisvcRouteResolver struct{}
 
-func (llmisvcRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModel) (routeName, routeNamespace string, err error) {
+func (llmisvcRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error) {
 	llmisvcNS := model.Namespace
 	if model.Spec.ModelRef.Namespace != "" {
 		llmisvcNS = model.Spec.ModelRef.Namespace
