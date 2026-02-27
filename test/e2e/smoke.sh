@@ -81,50 +81,40 @@ mkdir -p "${DIR}/reports"
 LOG="${DIR}/reports/smoke-${USER}.log"
 : > "${LOG}"
 
-FREE_OC_TOKEN="$(oc whoami -t || true)"
-TOKEN_RESPONSE="$(curl -skS \
-  -H "Authorization: Bearer ${FREE_OC_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"expiration":"10m"}' \
-  "${MAAS_API_BASE_URL}/v1/tokens" || true)"
-
-TOKEN="$(echo "${TOKEN_RESPONSE}" | jq -r .token 2>/dev/null || true)"
-if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
-  echo "[smoke] ERROR: could not mint MaaS token" | tee -a "${LOG}"
-  echo "${TOKEN_RESPONSE}" | tee -a "${LOG}"
-  exit 1
-fi
+# TODO: Use a Minted Token once the new token is implemented @ishita
+TOKEN="$(oc whoami -t)"
 export TOKEN
 
 # Log a masked preview of the token to the log (not the console)
 echo "[token] minted: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
 
-# 2) Get models, derive URL/ID — respect pre-set MODEL_URL/MODEL_NAME env vars
-if [[ -n "${MODEL_URL:-}" && -n "${MODEL_NAME:-}" ]]; then
-  MODEL_ID="${MODEL_NAME}"
-  echo "[smoke] Using pre-set MODEL_URL and MODEL_NAME (skipping catalog)" | tee -a "${LOG}"
-else
-  MODELS_JSON="$(curl -skS -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" || true)"
+# 2) Get models, derive URL/ID if catalog returns them (retry for transient empty cache)
+MODEL_ID=""
+for _attempt in $(seq 1 10); do
+  MODELS_JSON="$(curl -skS -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" 2>&1 || true)"
   MODEL_URL="$(echo "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.url // empty' 2>/dev/null || true)"
   MODEL_ID="$(echo  "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.id  // empty' 2>/dev/null || true)"
-
-  if [[ -z "${MODEL_ID}" || "${MODEL_ID}" == "null" ]]; then
-    if [[ -n "${MODEL_NAME:-}" ]]; then
-      MODEL_ID="${MODEL_NAME}"
-    else
-      # Catalog may be empty when FilterModelsByAccess cannot reach model
-      # endpoints from inside the cluster. Fall back to the simulator model.
-      echo "[smoke] WARNING: catalog returned no models, using default model name" | tee -a "${LOG}"
-      MODEL_ID="facebook/opt-125m"
-    fi
+  if [[ -n "${MODEL_ID}" && "${MODEL_ID}" != "null" ]]; then
+    break
   fi
+  echo "[smoke] models catalog empty (attempt ${_attempt}/10), retrying in 3s..." | tee -a "${LOG}"
+  sleep 3
+done
 
-  if [[ -z "${MODEL_URL}" || "${MODEL_URL}" == "null" ]]; then
-    _base="${MAAS_API_BASE_URL%/maas-api}"
-    _base="${_base#https://}"; _base="${_base#http://}"
-    MODEL_URL="https://${_base}/llm/${MODEL_ID}"
+# Fallbacks
+if [[ -z "${MODEL_ID}" || "${MODEL_ID}" == "null" ]]; then
+  if [[ -z "${MODEL_NAME:-}" ]]; then
+    echo "[smoke] ERROR: catalog did not return a model id and MODEL_NAME not set" | tee -a "${LOG}"
+    echo "[smoke] models response was: ${MODELS_JSON:0:500}"
+    exit 2
   fi
+  MODEL_ID="${MODEL_NAME}"
+fi
+
+if [[ -z "${MODEL_URL}" || "${MODEL_URL}" == "null" ]]; then
+  _base="${MAAS_API_BASE_URL%/maas-api}"
+  _base="${_base#https://}"; _base="${_base#http://}"
+  MODEL_URL="https://${_base}/llm/${MODEL_ID}"
 fi
 
 export MODEL_URL="${MODEL_URL%/}/v1"
@@ -145,7 +135,7 @@ PYTEST_ARGS=(
   --capture=tee-sys              # capture prints and also echo to console
   --show-capture=all             # include captured output in the report
   --log-level=INFO               # capture logging at INFO and above
-  "${DIR}/tests/test_smoke.py"
+  "${DIR}/tests/"
 )
 
 python -c 'import pytest_html' >/dev/null 2>&1 || echo "[smoke] WARNING: pytest-html not found (but we still passed --html)"

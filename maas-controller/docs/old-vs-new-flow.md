@@ -29,7 +29,7 @@ Gateway (maas-default-gateway)
     │       │
     │       └── 4. Set response: auth.identity.tier = matched tier
     │
-    ├── TokenRateLimitPolicy (gateway-token-rate-limits) ─── targets Gateway
+    ├── TokenRateLimitPolicy ─── targets Gateway
     │       │
     │       ├── if auth.identity.tier == "free"       → 100 tokens/min
     │       ├── if auth.identity.tier == "premium"    → 50,000 tokens/min
@@ -44,7 +44,7 @@ Model Endpoint
 | Resource | Namespace | Purpose |
 |----------|-----------|---------|
 | AuthPolicy `gateway-auth-policy` | openshift-ingress | Single gateway-level auth: token review + tier lookup + RBAC |
-| TokenRateLimitPolicy `gateway-token-rate-limits` | openshift-ingress | Single gateway-level rate limit with per-tier rates |
+| TokenRateLimitPolicy (gateway-level) | openshift-ingress | Gateway-level rate limit with per-tier rates |
 | ConfigMap `tier-to-group-mapping` | maas-api | Maps groups → tiers (free, premium, enterprise) |
 | Deployment `maas-api` | opendatahub | Go API server for tier lookup, token minting, model listing |
 
@@ -52,7 +52,7 @@ Model Endpoint
 
 1. **Define tiers**: Edit ConfigMap `tier-to-group-mapping` with tier names, levels, and group lists
 2. **Assign users to tiers**: Add users to Kubernetes groups (e.g. `tier-premium-users`)
-3. **Set rate limits**: Manually edit the `gateway-token-rate-limits` TokenRateLimitPolicy YAML
+3. **Set rate limits**: Manually edit the gateway-level TokenRateLimitPolicy YAML
 4. **Add models**: Deploy LLMInferenceService and annotate with `alpha.maas.opendatahub.io/tiers: '["free","premium"]'`
 
 ### Limitations

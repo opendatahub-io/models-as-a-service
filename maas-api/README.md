@@ -91,7 +91,7 @@ kubectl patch csv kuadrant-operator.v0.0.0 -n kuadrant-system --type='json' -p='
 
 ```shell
 PROJECT_DIR=$(git rev-parse --show-toplevel)
-kustomize build ${PROJECT_DIR}/deployment/base/policies | kubectl apply --server-side=true --force-conflicts -f -
+kustomize build ${PROJECT_DIR}/maas-controller/config/policies | kubectl apply --server-side=true --force-conflicts -f -
 ```
 
 #### Ensure the correct audience is set for AuthPolicy

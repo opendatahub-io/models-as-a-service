@@ -40,7 +40,7 @@ spec:
             value: "opendatahub"
           - name: CLUSTER_AUDIENCE
             value: "https://kubernetes.default.svc"
-        image: quay.io/maas/maas-controller:latest
+        image: maas-controller
         name: manager
         imagePullPolicy: Always
         securityContext:

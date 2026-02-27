@@ -128,10 +128,10 @@ This annotation automatically sets up the necessary RBAC (Role and RoleBinding) 
 
 ### 3. Configure Rate Limiting
 
-Add tier-specific rate limits by patching the existing `gateway-token-rate-limits` TokenRateLimitPolicy:
+Add tier-specific rate limits by patching the TokenRateLimitPolicy targeting the gateway:
 
 ```bash
-kubectl patch tokenratelimitpolicy gateway-token-rate-limits -n openshift-ingress --type merge --patch-file=/dev/stdin <<'EOF'
+kubectl patch tokenratelimitpolicy <policy-name> -n openshift-ingress --type merge --patch-file=/dev/stdin <<'EOF'
 spec:
   limits:
     stier-user-tokens: # 1
@@ -163,7 +163,7 @@ Validate the TokenRateLimitPolicy has been updated and enforced:
 kubectl delete pod -l control-plane=controller-manager -n kuadrant-system
 
 # Wait for the TokenRateLimitPolicy to be enforced
-kubectl wait --for=condition=Enforced=true tokenratelimitpolicy/gateway-token-rate-limits -n openshift-ingress --timeout=2m
+kubectl wait --for=condition=Enforced=true tokenratelimitpolicy/<policy-name> -n openshift-ingress --timeout=2m
 ```
 
 ### 4. Validate the Configuration
@@ -218,12 +218,12 @@ kubectl delete pod -l control-plane=controller-manager -n kuadrant-system
 
 #### 403 Forbidden: "not authorized: unknown reason"
 
-**Possible Cause:** Added new tier to ConfigMap but didn't update `gateway-token-rate-limits` TokenRateLimitPolicy.
+**Possible Cause:** Added new tier to ConfigMap but didn't update the TokenRateLimitPolicy.
 
 **Fix:** Validate/Update the TokenRateLimitPolicy as documented in [Configure Rate Limiting](#3-configure-rate-limiting), then restart the Kuadrant operator:
 
 ```bash
-kubectl patch tokenratelimitpolicy gateway-token-rate-limits -n openshift-ingress --type merge --patch-file=/dev/stdin <<'EOF'
+kubectl patch tokenratelimitpolicy <policy-name> -n openshift-ingress --type merge --patch-file=/dev/stdin <<'EOF'
 spec:
   limits:
     <tier-name>-user-tokens:

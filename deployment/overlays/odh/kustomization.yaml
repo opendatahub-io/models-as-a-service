@@ -11,6 +11,7 @@ namespace: opendatahub
 resources:
   - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule)
   - ../../../maas-controller/config/default
+  - ../../../maas-controller/config/policies  # gateway-default-auth, gateway-default-deny
   - maas-authorino-networkpolicy.yaml
 
 configMapGenerator:
@@ -47,6 +48,23 @@ patches:
     name: maas-api
 
 replacements:
+# Gateway policies must be in openshift-ingress to target maas-default-gateway
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-namespace
+  targets:
+  - select:
+      kind: AuthPolicy
+      name: gateway-default-auth
+    fieldPaths:
+    - metadata.namespace
+  - select:
+      kind: TokenRateLimitPolicy
+      name: gateway-default-deny
+    fieldPaths:
+    - metadata.namespace
 - source:
     kind: ConfigMap
     version: v1
