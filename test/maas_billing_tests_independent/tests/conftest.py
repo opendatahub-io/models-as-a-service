@@ -219,10 +219,10 @@ def policy_from_cluster():
         "gateway-rate-limits",
     )
     trlp = _first_existing(
-        "maas-api",
+        "openshift-ingress",
         ["tokenratelimitpolicies.gateway.networking.k8s.io",
          "tokenratelimitpolicies.kuadrant.io"],
-        "gateway-token-rate-limits",
+        "gateway-default-deny",
     )
     return {
         "free_burst":     (rlp or {}).get("spec", {}).get("limits", {}).get("free", {}).get("rates", [{}])[0].get("limit"),

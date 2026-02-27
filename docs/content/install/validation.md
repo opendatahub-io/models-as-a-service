@@ -201,7 +201,7 @@ For detailed TLS configuration options, see [TLS Configuration](../configuration
       - [ ] Verify that the model is recognized by maas-api by checking the `maas-api/v1/models` endpoint (see [List Available Models](#3-list-available-models))
 5. **Rate limiting not working**: Verify AuthPolicy and TokenRateLimitPolicy are applied
       - [ ] Verify `gateway-rate-limits` RateLimitPolicy is applied
-      - [ ] Verify `gateway-token-rate-limits` TokenRateLimitPolicy is applied
+      - [ ] Verify TokenRateLimitPolicy is applied (e.g. gateway-default-deny or per-route policies)
       - [ ] Verify the model is deployed and the `LLMInferenceService` has the `maas-default-gateway` gateway specified
       - [ ] Verify that the model is rate limited by checking the inference endpoint (see [Test Rate Limiting](#6-test-rate-limiting))
       - [ ] Verify that the model is token rate limited by checking the inference endpoint (see [Test Rate Limiting](#6-test-rate-limiting))
