@@ -230,6 +230,7 @@ class TestAuthEnforcement:
         """Admin user (in system:authenticated) should access the free model.
         Polls because AuthPolicies may still be syncing with Authorino."""
         token = _get_cluster_token()
+        print(f"Token: {token}")
         r = _poll_status(token, 200, timeout=90)
         log.info(f"Authorized user -> {r.status_code}")
 
