@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maas-controller
+  labels:
+    control-plane: maas-controller
+    app: maas-controller
+spec:
+  selector:
+    matchLabels:
+      control-plane: maas-controller
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        control-plane: maas-controller
+        app: maas-controller
+    spec:
+      serviceAccountName: maas-controller
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: manager
+        command:
+        - /manager
+        args:
+          - --leader-elect
+          - --health-probe-bind-address=:8081
+          - --gateway-name=$(GATEWAY_NAME)
+          - --gateway-namespace=$(GATEWAY_NAMESPACE)
+        env:
+          - name: GATEWAY_NAME
+            value: "maas-default-gateway"
+          - name: GATEWAY_NAMESPACE
+            value: "openshift-ingress"
+        image: maas-controller
+        imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+      terminationGracePeriodSeconds: 10
