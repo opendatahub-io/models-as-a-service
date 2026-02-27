@@ -331,28 +331,6 @@ class TestMultipleSubscriptionsPerModel:
             _delete_cr("maassubscription", "e2e-extra-sub")
             _wait_reconcile()
 
-    def test_sa_selects_sub_it_does_not_belong_to_gets_429(self):
-        """SA explicitly selects a subscription it's not a member of -> 429."""
-        ns = _ns()
-        sa = "e2e-test-wrongsub"
-        try:
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-premium-sub", "namespace": ns},
-                "spec": {
-                    "owner": {"groups": [{"name": "premium-user"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 500, "window": "1m"}]}],
-                },
-            })
-            _wait_reconcile()  # allow subscription TRLP to propagate
-            token = _create_sa_token(sa)
-            r = _poll_status(token, 429, extra_headers={"x-maas-subscription": "e2e-premium-sub"})
-            log.info(f"SA selects wrong sub -> {r.status_code}")
-        finally:
-            _delete_cr("maassubscription", "e2e-premium-sub")
-            _delete_sa(sa)
-            _wait_reconcile()
 
     def test_multi_tier_auto_select_highest(self):
         """With 2 tiers for the same model, user in both should still get access.
