@@ -14,7 +14,10 @@
 #                                   odh → kuadrant (community v1.3.1)
 #                                   rhoai → rhcl (Red Hat Connectivity Link)
 #   --enable-tls-backend          Enable TLS for Authorino/MaaS API (default: on)
-#   --namespace <namespace>       Target namespace
+#   --namespace <namespace>       Target namespace for deployment
+#                                 In operator mode: Ignored - uses fixed namespace based on operator type
+#                                   (redhat-ods-applications for RHOAI, opendatahub for ODH)
+#                                 In kustomize mode: Uses provided namespace (default: maas-api)
 #   --verbose                     Enable debug logging
 #   --dry-run                     Show what would be done
 #   --help                        Show full help with all options
@@ -36,8 +39,14 @@
 #   # Deploy RHOAI (uses rhcl policy engine)
 #   ./scripts/deploy.sh --operator-type rhoai
 #
-#   # Test custom MaaS API image
-#   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh
+#  # Test MaaS API with custom image
+#  MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh --operator-type odh
+#
+#  # Test ODH operator with custom operator catalog and image
+#  ./scripts/deploy.sh \\
+#    --operator-type odh \\
+#    --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:pr-456 \\
+#    --operator-image quay.io/opendatahub/opendatahub-operator:pr-456
 #
 # For detailed documentation, see:
 # https://opendatahub-io.github.io/models-as-a-service/latest/install/maas-setup/
@@ -113,7 +122,9 @@ OPTIONS:
 
   --namespace <namespace>
       Target namespace for deployment
-      Default: redhat-ods-applications (RHOAI) or opendatahub (ODH)
+      In operator mode: Ignored - uses fixed namespace based on operator type
+        (redhat-ods-applications for RHOAI, opendatahub for ODH)
+      In kustomize mode: Uses provided namespace (default: maas-api)
 
   --verbose
       Enable verbose/debug logging
@@ -136,6 +147,7 @@ ADVANCED OPTIONS (PR Testing):
   --channel <channel>
       Operator channel override
       Default: fast-3 (ODH), fast-3.x (RHOAI)
+              fast (both) when using custom catalog
 
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE        Custom MaaS API container image
@@ -154,10 +166,10 @@ EXAMPLES:
   # Deploy via Kustomize
   ./scripts/deploy.sh --deployment-mode kustomize
 
-  # Test MaaS API PR #123
+  # Test MaaS API with custom image
   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh --operator-type odh
 
-  # Test ODH operator PR #456 with manifests
+  # Test ODH operator with custom operator catalog and image
   ./scripts/deploy.sh \\
     --operator-type odh \\
     --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:pr-456 \\
@@ -455,7 +467,7 @@ deploy_via_kustomize() {
   trap cleanup_maas_api_image EXIT INT TERM
   set_maas_api_image
 
-  # Create namespace if it doesn't exist (kustomize mode uses maas-api namespace)
+  # Create namespace if it doesn't exist (kustomize mode uses provided namespace or maas-api by default)
   # This must be done before applying manifests that target this namespace
   if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
     log_info "Creating namespace: $NAMESPACE"

@@ -259,7 +259,7 @@ if kubectl get namespace kuadrant-system &>/dev/null; then
         print_fail "No Kuadrant pods running" "Kuadrant operators may not be installed" "Check: kubectl get pods -n kuadrant-system"
     fi
 else
-    print_fail "Kuadrant namespace not found" "Kuadrant may not be installed" "Run: ./scripts/install-dependencies.sh --kuadrant"
+    print_fail "Kuadrant namespace not found" "Kuadrant may not be installed" "Run: ./scripts/deploy.sh"
 fi
 
 # Check OpenDataHub/KServe pods

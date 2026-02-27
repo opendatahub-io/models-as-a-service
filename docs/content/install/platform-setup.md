@@ -91,6 +91,11 @@ LeaderWorkerSet API (LWS).
     kubectl apply --server-side -f https://github.com/kubernetes-sigs/lws/releases/download/${LATEST_LWS_VERSION}/manifests.yaml
     ```
 
+    !!! note "Operator-based Installation Alternative"
+        If you used the automated `./scripts/deploy.sh` script, LWS is installed via the Red Hat operator
+        in the `openshift-lws-operator` namespace (same as RHOAI), not in `lws-system`.
+        Use `kubectl get deployments -n openshift-lws-operator` to verify in that case.
+
 ### Verification
 
 Check that LWS deployments are ready:
@@ -112,6 +117,16 @@ Check that LWS deployments are ready:
 
     NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
     lws-controller-manager   2/2     2            2           35s
+    ```
+
+    For operator installation (if using `./scripts/deploy.sh` script):
+
+    ```shell
+    kubectl get deployments --namespace openshift-lws-operator
+
+    NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
+    lws-controller-manager   2/2     2            2           61s
+    openshift-lws-operator   1/1     1            1           4m26s
     ```
 
 ## Install Gateway API Controller
@@ -521,9 +536,9 @@ Verify that Authorino can communicate with the MaaS API:
     # Get Authorino pod
     AUTHORINO_POD=$(kubectl get pods -n kuadrant-system -l authorino-resource=authorino -o jsonpath='{.items[0].metadata.name}')
 
-    # Test connectivity
-    kubectl exec -n kuadrant-system $AUTHORINO_POD -- curl -s \
-      http://maas-api.redhat-ods-applications.svc.cluster.local:8080/health
+    # Test connectivity (TLS is enabled by default, uses port 8443)
+    kubectl exec -n kuadrant-system $AUTHORINO_POD -- curl -s -k \
+      https://maas-api.redhat-ods-applications.svc.cluster.local:8443/health
     ```
 
 === "Open Data Hub"
@@ -532,9 +547,9 @@ Verify that Authorino can communicate with the MaaS API:
     # Get Authorino pod
     AUTHORINO_POD=$(kubectl get pods -n kuadrant-system -l authorino-resource=authorino -o jsonpath='{.items[0].metadata.name}')
 
-    # Test connectivity
-    kubectl exec -n kuadrant-system $AUTHORINO_POD -- curl -s \
-      http://maas-api.opendatahub.svc.cluster.local:8080/health
+    # Test connectivity (TLS is enabled by default, uses port 8443)
+    kubectl exec -n kuadrant-system $AUTHORINO_POD -- curl -s -k \
+      https://maas-api.opendatahub.svc.cluster.local:8443/health
     ```
 
 Expected output:

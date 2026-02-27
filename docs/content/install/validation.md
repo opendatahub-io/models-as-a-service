@@ -7,7 +7,7 @@ This guide provides instructions for validating and testing your MaaS Platform d
 | Component | RHOAI | ODH |
 |-----------|-------|-----|
 | MaaS API | redhat-ods-applications | opendatahub |
-| Kuadrant/RHCL | kuadrant-system | kuadrant-system |
+| Kuadrant/RHCL | kuadrant-system |
 | Gateway | openshift-ingress | openshift-ingress |
 
 ## Manual Validation (Recommended)
@@ -99,10 +99,18 @@ done
 Check that all components are running:
 
 ```bash
-kubectl get pods -n maas-api && \
+# For RHOAI:
+kubectl get pods -n redhat-ods-applications && \
 kubectl get pods -n kuadrant-system && \
-kubectl get pods -n kserve && \
 kubectl get pods -n llm
+
+# For ODH:
+kubectl get pods -n opendatahub && \
+kubectl get pods -n kuadrant-system && \
+kubectl get pods -n llm
+
+# Note: KServe controller runs in the operator namespace (redhat-ods-applications for RHOAI, opendatahub for ODH)
+# not in a separate 'kserve' namespace
 ```
 
 Check Gateway status:
@@ -150,8 +158,13 @@ kubectl get secret maas-api-serving-cert -n redhat-ods-applications \
 ### Test HTTPS Endpoint
 
 ```bash
+# For RHOAI:
 kubectl run curl --rm -it --image=curlimages/curl -- \
   curl -vk https://maas-api.redhat-ods-applications.svc:8443/health
+
+# For ODH:
+kubectl run curl --rm -it --image=curlimages/curl -- \
+  curl -vk https://maas-api.opendatahub.svc:8443/health
 ```
 
 For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).
