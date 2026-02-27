@@ -22,6 +22,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
@@ -66,6 +67,57 @@ func (f fakeMaaSModelLister) List(namespace string) ([]*unstructured.Unstructure
 	return out, nil
 }
 
+// fakeSubscriptionLister implements subscription.Lister for tests.
+// Returns a single default subscription so that tests auto-select it.
+type fakeSubscriptionLister struct{}
+
+func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
+	// Return a single subscription that matches all users
+	sub := &unstructured.Unstructured{}
+	sub.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "maas.opendatahub.io",
+		Version: "v1alpha1",
+		Kind:    "MaaSSubscription",
+	})
+	sub.SetName("test-subscription")
+	sub.SetNamespace(fixtures.TestNamespace)
+
+	// Set spec.owner.groups to match test users
+	_ = unstructured.SetNestedSlice(sub.Object, []any{
+		map[string]any{"name": "free-users"},
+		map[string]any{"name": "premium-users"},
+	}, "spec", "owner", "groups")
+
+	return []*unstructured.Unstructured{sub}, nil
+}
+
+// fakeMultiSubscriptionLister returns multiple subscriptions by name -> groups mapping.
+type fakeMultiSubscriptionLister map[string][]string
+
+func (f fakeMultiSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
+	result := make([]*unstructured.Unstructured, 0, len(f))
+	for subName, groups := range f {
+		sub := &unstructured.Unstructured{}
+		sub.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "maas.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "MaaSSubscription",
+		})
+		sub.SetName(subName)
+		sub.SetNamespace(fixtures.TestNamespace)
+
+		// Set spec.owner.groups
+		groupSlice := make([]any, len(groups))
+		for i, g := range groups {
+			groupSlice[i] = map[string]any{"name": g}
+		}
+		_ = unstructured.SetNestedSlice(sub.Object, groupSlice, "spec", "owner", "groups")
+
+		result = append(result, sub)
+	}
+	return result, nil
+}
+
 // makeModelsResponse creates a JSON response for /v1/models endpoint.
 func makeModelsResponse(modelIDs ...string) []byte {
 	if len(modelIDs) == 0 {
@@ -94,6 +146,33 @@ func createMockModelServer(t *testing.T, modelID string) *httptest.Server {
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
 		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// createMockModelServerWithSubscriptionCheck creates a test server that checks both Authorization and x-maas-subscription headers.
+func createMockModelServerWithSubscriptionCheck(t *testing.T, modelID string, requiredSubscription string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		subscriptionHeader := r.Header.Get("X-Maas-Subscription")
+		w.Header().Set("Content-Type", "application/json")
+
+		// Check authorization
+		if !strings.HasPrefix(authHeader, "Bearer ") || len(authHeader) <= 7 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		// Check subscription (if required)
+		if requiredSubscription != "" && subscriptionHeader != requiredSubscription {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse(modelID))
 	}))
 	t.Cleanup(server.Close)
 	return server
@@ -242,7 +321,10 @@ func TestListingModels(t *testing.T) {
 	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
 	defer cleanup()
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, maasModelLister, fixtures.TestNamespace)
+	// Create a mock subscription selector that auto-selects for single subscription users
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{})
+
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, subscriptionSelector, maasModelLister, fixtures.TestNamespace)
 
 	// Create token handler to extract user info middleware
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
@@ -315,4 +397,134 @@ func mustParseURL(rawURL string) *apis.URL {
 		panic("test setup failed: invalid URL: " + err.Error())
 	}
 	return u
+}
+
+func TestListingModelsWithSubscriptionHeader(t *testing.T) {
+	testLogger := logger.Development()
+
+	// Create mock servers that require specific subscription headers
+	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "premium")
+	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "free")
+
+	// Build MaaSModel unstructured list
+	maasModelItems := []*unstructured.Unstructured{
+		maasModelUnstructured("premium-model", fixtures.TestNamespace, premiumModelServer.URL, true),
+		maasModelUnstructured("free-model", fixtures.TestNamespace, freeModelServer.URL, true),
+	}
+	maasModelLister := fakeMaaSModelLister{fixtures.TestNamespace: maasModelItems}
+
+	config := fixtures.TestServerConfig{
+		Objects: []runtime.Object{},
+	}
+	router, _ := fixtures.SetupTestServer(t, config)
+
+	modelMgr, errMgr := models.NewManager(testLogger)
+	require.NoError(t, errMgr)
+
+	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	defer cleanup()
+
+	// Create subscription lister with premium and free subscriptions
+	multiSubLister := &fakeMultiSubscriptionLister{
+		"premium": []string{"premium-users"},
+		"free":    []string{"free-users"},
+	}
+	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister)
+
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, subscriptionSelector, maasModelLister, fixtures.TestNamespace)
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
+
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	// Table-driven tests for subscription header variants
+	subscriptionTests := []struct {
+		name               string
+		subscription       string
+		userGroups         string
+		expectedModelID    string
+		expectedModelCount int
+	}{
+		{
+			name:               "with premium subscription header",
+			subscription:       "premium",
+			userGroups:         `["premium-users"]`,
+			expectedModelID:    "premium-model",
+			expectedModelCount: 1,
+		},
+		{
+			name:               "with free subscription header",
+			subscription:       "free",
+			userGroups:         `["free-users"]`,
+			expectedModelID:    "free-model",
+			expectedModelCount: 1,
+		},
+	}
+
+	for _, tt := range subscriptionTests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+			require.NoError(t, err, "Failed to create request")
+
+			req.Header.Set("Authorization", "Bearer valid-token")
+			req.Header.Set("X-Maas-Subscription", tt.subscription)
+			req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+			req.Header.Set(constant.HeaderGroup, tt.userGroups)
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
+
+			var response pagination.Page[models.Model]
+			err = json.Unmarshal(w.Body.Bytes(), &response)
+			require.NoError(t, err, "Failed to unmarshal response body")
+
+			require.Len(t, response.Data, tt.expectedModelCount, "Expected model count mismatch")
+			assert.Equal(t, tt.expectedModelID, response.Data[0].ID)
+		})
+	}
+
+	t.Run("without subscription header - single subscription auto-selects", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err, "Failed to create request")
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err, "Failed to unmarshal response body")
+
+		// User only has access to "free" subscription, so it auto-selects and returns free model
+		require.Len(t, response.Data, 1, "Expected one model with auto-selected free subscription")
+		assert.Equal(t, "free-model", response.Data[0].ID)
+	})
+
+	t.Run("without subscription header - multiple subscriptions requires header", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err, "Failed to create request")
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users", "premium-users"]`)
+		router.ServeHTTP(w, req)
+
+		// User has access to both subscriptions, must specify which one
+		// Returns 403 for consistency with inferencing (Authorino limitation)
+		require.Equal(t, http.StatusForbidden, w.Code, "Expected 403 Forbidden")
+
+		var errorResponse map[string]any
+		err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
+		require.NoError(t, err, "Failed to unmarshal error response")
+
+		errorObj, ok := errorResponse["error"].(map[string]any)
+		require.True(t, ok, "Expected error object")
+		assert.Equal(t, "permission_error", errorObj["type"])
+	})
 }
