@@ -7,13 +7,31 @@ export PYTHONPATH="${DIR}:${PYTHONPATH:-}"
 # Python virtual environment setup
 VENV_DIR="${DIR}/.venv"
 
+# Ensures Python 3.12 is available for smoke tests and sets PYTHON_BIN accordingly.
+ensure_python_312() {
+  echo "[smoke] Ensuring Python 3.12 is available for smoke tests..."
+
+  if command -v python3.12 >/dev/null 2>&1; then
+    python3.12 --version
+    export PYTHON_BIN=python3.12
+    return 0
+  fi
+
+  echo "❌ [smoke] python3.12 not found in test image."
+  echo "   This job runs as non-root, so installing via dnf/yum at runtime is not supported."
+  echo "   Fix: bake python3.12 into build_root image in openshift/release."
+  echo "   Current python: $(python3 --version 2>/dev/null || echo 'missing')"
+  exit 1
+}
+
 setup_python_venv() {
     echo "[smoke] Setting up Python virtual environment..."
     
     # Create virtual environment if it doesn't exist
     if [[ ! -d "${VENV_DIR}" ]]; then
-        echo "[smoke] Creating virtual environment at ${VENV_DIR}"
-        python3 -m venv "${VENV_DIR}" --upgrade-deps
+        echo "[smoke] Creating virtual environment at ${VENV_DIR}"    
+        PYTHON_BIN="${PYTHON_BIN:-python3}"
+        "${PYTHON_BIN}" -m venv "${VENV_DIR}" --upgrade-deps
     fi
     
     # Activate virtual environment
@@ -29,6 +47,7 @@ setup_python_venv() {
 }
 
 # Setup and activate virtual environment
+ensure_python_312
 setup_python_venv
 
 # Inputs via env or auto-discovery
@@ -143,7 +162,7 @@ PYTEST_ARGS=(
 
 python -c 'import pytest_html' >/dev/null 2>&1 || echo "[smoke] WARNING: pytest-html not found (but we still passed --html)"
 
-pytest "${PYTEST_ARGS[@]}"
+PYTHONWARNINGS="ignore" python -m pytest "${PYTEST_ARGS[@]}"
 
 echo "[smoke] Reports:"
 echo " - JUnit XML : ${XML}"
