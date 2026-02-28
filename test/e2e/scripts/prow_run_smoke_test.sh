@@ -71,6 +71,47 @@ export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 AUTHORINO_NAMESPACE="kuadrant-system"
 MAAS_NAMESPACE="${NAMESPACE:-opendatahub}"
 
+# ARTIFACTS is set by Prow; logs written here are collected as build artifacts
+ARTIFACTS_DIR="${ARTIFACTS:-$PROJECT_ROOT/test/e2e/reports}"
+
+patch_authorino_debug() {
+    echo "Patching Authorino to log_level DEBUG..."
+    local authorino_name
+    authorino_name=$(kubectl get authorino -n "$AUTHORINO_NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    if [[ -n "$authorino_name" ]]; then
+        if kubectl patch authorino "$authorino_name" -n "$AUTHORINO_NAMESPACE" --type=merge -p='{"spec":{"logLevel":"debug"}}' 2>/dev/null; then
+            echo "✅ Authorino patched to log_level DEBUG"
+            kubectl rollout status deployment/authorino -n "$AUTHORINO_NAMESPACE" --timeout=120s 2>/dev/null || true
+        else
+            echo "⚠️  Failed to patch Authorino (may not support logLevel)"
+        fi
+    else
+        echo "⚠️  No Authorino CR found in $AUTHORINO_NAMESPACE"
+    fi
+}
+
+dump_authorino_logs() {
+    echo ""
+    echo "========== Authorino logs =========="
+    mkdir -p "$ARTIFACTS_DIR"
+    : > "$ARTIFACTS_DIR/authorino.log"
+    for ns in "$AUTHORINO_NAMESPACE" openshift-ingress; do
+        for label in "app.kubernetes.io/name=authorino" "authorino-resource=authorino"; do
+            if kubectl get pods -n "$ns" -l "$label" --no-headers 2>/dev/null | head -1 | grep -q .; then
+                echo "--- Authorino pods in $ns (label=$label) ---"
+                kubectl logs -n "$ns" -l "$label" --tail=500 --all-containers=true 2>/dev/null || true
+                {
+                    echo "--- Authorino logs from $ns (label=$label) ---"
+                    kubectl logs -n "$ns" -l "$label" --tail=2000 --all-containers=true 2>/dev/null || true
+                } >> "$ARTIFACTS_DIR/authorino.log"
+                break
+            fi
+        done
+    done
+    echo "===================================="
+    [[ -s "$ARTIFACTS_DIR/authorino.log" ]] && echo "Authorino logs saved to $ARTIFACTS_DIR/authorino.log"
+}
+
 print_header() {
     echo ""
     echo "----------------------------------------"
@@ -467,12 +508,16 @@ setup_test_user() {
 }
 
 # Main execution
+# Dump Authorino logs on exit (success or failure) for debugging and Prow artifact collection
+trap 'dump_authorino_logs' EXIT
+
 print_header "Deploying Maas on OpenShift"
 check_prerequisites
 deploy_maas_platform
 
 print_header "Deploying Models"  
 deploy_models
+patch_authorino_debug
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
