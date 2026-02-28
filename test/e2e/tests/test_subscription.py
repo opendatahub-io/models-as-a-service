@@ -29,15 +29,17 @@ Environment variables (all optional, with defaults):
   - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 429 test (default: nonexistent-sub)
 """
 
+import base64
+import json
 import logging
 import os
 import subprocess
-import json
 import time
 import pytest
 import requests
 
 log = logging.getLogger(__name__)
+
 
 # Constants (override with env vars)
 TIMEOUT = int(os.environ.get("E2E_TIMEOUT", "30"))
@@ -68,27 +70,41 @@ def _gateway_url():
     scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
     return f"{scheme}://{host}"
 
+// Used for debugging
+def _decode_jwt_payload(token: str) -> dict | None:
+    """Decode JWT payload (no verification, for debugging). Returns claims dict or None."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)  # add padding
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        return json.loads(payload_bytes)
+    except Exception:
+        return None
+
 def _get_cluster_token():
     sa_ns = os.environ.get("E2E_TEST_TOKEN_SA_NAMESPACE")
     sa_name = os.environ.get("E2E_TEST_TOKEN_SA_NAME")
     if sa_ns and sa_name:
-        return _create_sa_token(sa_name, namespace=sa_ns)
-    result = subprocess.run(["oc", "whoami"], capture_output=True, text=True)
-    user = result.stdout.strip() if result.returncode == 0 else "unknown"
-    print(f"Cluster token user: {user}")
-    token_result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
-    token = token_result.stdout.strip() if token_result.returncode == 0 else ""
-    print(f"Cluster token: {token}")
-    if not token:
-        raise RuntimeError("Could not get cluster token via `oc whoami -t`; run with oc login first")
+        token = _create_sa_token(sa_name, namespace=sa_ns)
+    else:
+        token_result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
+        token = token_result.stdout.strip() if token_result.returncode == 0 else ""
+        if not token:
+            raise RuntimeError("Could not get cluster token via `oc whoami -t`; run with oc login first")
+    claims = _decode_jwt_payload(token)
+    if claims:
+        log.info("Token claims (decoded): %s", json.dumps(claims, indent=2))
     return token
 
 
 def _create_sa_token(sa_name, namespace=None, duration="10m"):
     namespace = namespace or _ns()
-    user = f"system:serviceaccount:{namespace}:{sa_name}"
-    print(f"Cluster token user: {user}")
-    sa_result = subprocess.run(["oc", "create", "sa", sa_name, "-n", namespace], capture_output=True, text=True)
+    sa_result = subprocess.run(
+        ["oc", "create", "sa", sa_name, "-n", namespace], capture_output=True, text=True
+    )
     if sa_result.returncode != 0 and "already exists" not in sa_result.stderr:
         raise RuntimeError(f"Failed to create SA {sa_name}: {sa_result.stderr}")
     result = subprocess.run(
@@ -230,7 +246,6 @@ class TestAuthEnforcement:
         """Admin user (in system:authenticated) should access the free model.
         Polls because AuthPolicies may still be syncing with Authorino."""
         token = _get_cluster_token()
-        print(f"Token: {token}")
         r = _poll_status(token, 200, timeout=90)
         log.info(f"Authorized user -> {r.status_code}")
 
