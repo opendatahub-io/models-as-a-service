@@ -91,10 +91,6 @@ func newPreexistingGeneratedPolicy(gvk schema.GroupVersionKind, name, namespace,
 // TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation verifies that
 // deleteGeneratedPoliciesByLabel respects the opt-out annotation on both
 // AuthPolicy and TokenRateLimitPolicy resources when a MaaSModel is deleted.
-//
-// NOTE: This test is expected to FAIL against the current implementation.
-// deleteGeneratedPoliciesByLabel does not inspect annotations before deleting; it must
-// be updated to skip resources where either managed annotation is "false".
 func TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation(t *testing.T) {
 	const (
 		modelName  = "llm"
