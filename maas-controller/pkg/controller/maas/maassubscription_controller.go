@@ -95,15 +95,15 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) error {
 	// Model-centric approach: for each model referenced by this subscription,
-	// find ALL subscriptions for that model and build a single aggregated TRLP.
+	// find ALL subscriptions for that model and build a single aggregated TokenRateLimitPolicy.
 	// Kuadrant only allows one TokenRateLimitPolicy per HTTPRoute target.
 	for _, modelRef := range subscription.Spec.ModelRefs {
 		httpRouteName, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, subscription.Namespace, modelRef.Name)
 		if err != nil {
 			if errors.Is(err, ErrModelNotFound) {
-				log.Info("model not found, cleaning up generated TRLP", "model", modelRef.Name)
+				log.Info("model not found, cleaning up generated TokenRateLimitPolicy", "model", modelRef.Name)
 				if delErr := r.deleteModelTRLP(ctx, log, modelRef.Name); delErr != nil {
-					return fmt.Errorf("failed to clean up TRLP for missing model %s: %w", modelRef.Name, delErr)
+					return fmt.Errorf("failed to clean up TokenRateLimitPolicy for missing model %s: %w", modelRef.Name, delErr)
 				}
 				continue
 			}
@@ -265,7 +265,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			}
 		}
 
-		// Build the aggregated TRLP (one per model, covering all subscriptions)
+		// Build the aggregated TokenRateLimitPolicy (one per model, covering all subscriptions)
 		policyName := fmt.Sprintf("maas-trlp-%s", modelRef.Name)
 		policy := &unstructured.Unstructured{}
 		policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
@@ -293,19 +293,19 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			return fmt.Errorf("failed to set spec: %w", err)
 		}
 
-		// Create or update
+		// Create or update TokenRateLimitPolicy
 		existing := &unstructured.Unstructured{}
 		existing.SetGroupVersionKind(policy.GroupVersionKind())
 		err = r.Get(ctx, client.ObjectKeyFromObject(policy), existing)
 		if apierrors.IsNotFound(err) {
 			if err := r.Create(ctx, policy); err != nil {
-				return fmt.Errorf("failed to create TRLP for model %s: %w", modelRef.Name, err)
+				return fmt.Errorf("failed to create TokenRateLimitPolicy for model %s: %w", modelRef.Name, err)
 			}
 			log.Info("TokenRateLimitPolicy created", "name", policyName, "model", modelRef.Name, "subscriptions", subNames)
 		} else if err != nil {
-			return fmt.Errorf("failed to get existing TRLP: %w", err)
+			return fmt.Errorf("failed to get existing TokenRateLimitPolicy: %w", err)
 		} else {
-			if existing.GetAnnotations()["maas.opendatahub.io/managed"] == "false" {
+			if isNotManaged(existing) {
 				log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
 			} else {
 				mergedAnnotations := existing.GetAnnotations()
@@ -329,7 +329,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 					return fmt.Errorf("failed to update spec: %w", err)
 				}
 				if err := r.Update(ctx, existing); err != nil {
-					return fmt.Errorf("failed to update TRLP for model %s: %w", modelRef.Name, err)
+					return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s: %w", modelRef.Name, err)
 				}
 				log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Name, "subscriptions", subNames)
 			}
@@ -338,7 +338,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 	return nil
 }
 
-// deleteModelTRLP deletes the aggregated TRLP for a model by label.
+// deleteModelTRLP deletes the aggregated TokenRateLimitPolicy for a model by label.
 func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log logr.Logger, modelName string) error {
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"})
@@ -351,13 +351,17 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
-		return fmt.Errorf("failed to list TRLPs for cleanup: %w", err)
+		return fmt.Errorf("failed to list TokenRateLimitPolicy for cleanup: %w", err)
 	}
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
-		log.Info("Deleting TRLP", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+		if isNotManaged(p) {
+			log.Info("TokenRateLimitPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+			continue
+		}
+		log.Info("Deleting TokenRateLimitPolicy", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete TRLP %s/%s: %w", p.GetNamespace(), p.GetName(), err)
+			return fmt.Errorf("failed to delete TokenRateLimitPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
 		}
 	}
 	return nil
@@ -371,9 +375,9 @@ func (r *MaaSSubscriptionReconciler) findHTTPRouteForModel(ctx context.Context, 
 func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
 		for _, modelRef := range subscription.Spec.ModelRefs {
-			log.Info("Deleting model TRLP so remaining subscriptions can rebuild it", "model", modelRef.Name)
+			log.Info("Deleting model TokenRateLimitPolicy so remaining subscriptions can rebuild it", "model", modelRef.Name)
 			if err := r.deleteModelTRLP(ctx, log, modelRef.Name); err != nil {
-				log.Error(err, "failed to clean up TRLP, will retry", "model", modelRef.Name)
+				log.Error(err, "failed to clean up TokenRateLimitPolicy, will retry", "model", modelRef.Name)
 				return ctrl.Result{}, err
 			}
 		}
@@ -445,7 +449,7 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // mapGeneratedTRLPToParent maps a generated TokenRateLimitPolicy back to any
-// MaaSSubscription that references the same model. The TRLP is per-model (aggregated),
+// MaaSSubscription that references the same model. The TokenRateLimitPolicy is per-model (aggregated),
 // so we use the model label to find a subscription to trigger reconciliation.
 func (r *MaaSSubscriptionReconciler) mapGeneratedTRLPToParent(ctx context.Context, obj client.Object) []reconcile.Request {
 	labels := obj.GetLabels()

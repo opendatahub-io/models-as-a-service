@@ -246,7 +246,7 @@ By default, Limitador stores rate-limiting counters in memory, which means:
 
 To enable persistent metric counts, refer to the detailed guide:
 
-**[Configuring Redis storage for rate limiting](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/configure-redis_connectivity-link)**
+**[Configuring Redis storage for rate limiting](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp)**
 
 This Red Hat documentation provides:
 

@@ -169,8 +169,8 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		}
 
 		audiences := []interface{}{fmt.Sprintf("%s-sa", r.gatewayName()), r.clusterAudience()}
-    
-    // Construct subscription selector URL using configured namespace
+
+		// Construct subscription selector URL using configured namespace
 		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/v1/subscriptions/select", r.MaaSAPINamespace)
 
 		rule := map[string]interface{}{
@@ -248,7 +248,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			rule["authorization"] = authRules
 		}
 
-		// Pass ALL user groups unfiltered in the response so TRLP predicates can
+		// Pass ALL user groups unfiltered in the response so TokenRateLimitPolicy predicates can
 		// match against subscription groups (which may differ from auth policy groups).
 		// Also inject subscription metadata from subscription-info for Limitador metrics.
 		rule["response"] = map[string]interface{}{
@@ -330,14 +330,18 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		refs = append(refs, authPolicyRef{Name: authPolicyName, Namespace: httpRouteNS, Model: modelName})
 
 		spec := map[string]interface{}{
-			"targetRef": map[string]interface{}{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": httpRouteName},
-			"rules":     rule,
+			"targetRef": map[string]interface{}{
+				"group": "gateway.networking.k8s.io",
+				"kind":  "HTTPRoute",
+				"name":  httpRouteName,
+			},
+			"rules": rule,
 		}
 		if err := unstructured.SetNestedMap(authPolicy.Object, spec, "spec"); err != nil {
 			return nil, fmt.Errorf("failed to set spec: %w", err)
 		}
 
-		// Create or update
+		// Create or update AuthPolicy
 		existing := &unstructured.Unstructured{}
 		existing.SetGroupVersionKind(authPolicy.GroupVersionKind())
 		err = r.Get(ctx, client.ObjectKeyFromObject(authPolicy), existing)
@@ -349,7 +353,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		} else if err != nil {
 			return nil, fmt.Errorf("failed to get existing AuthPolicy: %w", err)
 		} else {
-			if existing.GetAnnotations()["maas.opendatahub.io/managed"] == "false" {
+			if isNotManaged(existing) {
 				log.Info("AuthPolicy opted out, skipping", "name", authPolicyName)
 			} else {
 				mergedAnnotations := existing.GetAnnotations()
@@ -404,6 +408,10 @@ func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, lo
 	}
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
+		if isNotManaged(p) {
+			log.Info("AuthPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+			continue
+		}
 		log.Info("Deleting AuthPolicy", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete AuthPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
