@@ -305,7 +305,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 		} else if err != nil {
 			return fmt.Errorf("failed to get existing TokenRateLimitPolicy: %w", err)
 		} else {
-			if isManaged(existing) {
+			if isNotManaged(existing) {
 				log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
 			} else {
 				mergedAnnotations := existing.GetAnnotations()
@@ -355,7 +355,7 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 	}
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
-		if isManaged(p) {
+		if isNotManaged(p) {
 			log.Info("TokenRateLimitPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
 			continue
 		}

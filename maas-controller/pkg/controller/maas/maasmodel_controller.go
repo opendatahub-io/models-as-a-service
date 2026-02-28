@@ -199,7 +199,7 @@ func (r *MaaSModelReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context
 
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
-		if isManaged(p) {
+		if isNotManaged(p) {
 			log.Info(fmt.Sprintf("Generated %s opted out, skipping deletion", kind),
 				"name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
 			continue

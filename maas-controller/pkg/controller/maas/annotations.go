@@ -26,9 +26,9 @@ const ManagedByODHOperator = "opendatahub.io/managed"
 // Deprecated: Exists to preserve backwards compatibility and should not be used.
 const ManagedByMaasODHOperator = "maas.opendatahub.io/managed"
 
-// isManaged reports whether obj has explicitly opted out of maas or opendatahub controller management.
+// isNotManaged reports whether obj has explicitly opted out of maas or opendatahub controller management.
 // An object is opted out when either the current or the deprecated managed annotation is set to "false".
-func isManaged(obj metav1.Object) bool {
+func isNotManaged(obj metav1.Object) bool {
 	annotations := obj.GetAnnotations()
 	return annotations[ManagedByODHOperator] == "false" || annotations[ManagedByMaasODHOperator] == "false"
 }
