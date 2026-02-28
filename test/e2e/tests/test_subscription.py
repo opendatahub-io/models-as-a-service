@@ -35,6 +35,8 @@ import logging
 import os
 import subprocess
 import time
+from typing import Optional
+
 import pytest
 import requests
 
@@ -71,7 +73,7 @@ def _gateway_url():
     return f"{scheme}://{host}"
 
 # Used for debugging
-def _decode_jwt_payload(token: str) -> dict | None:
+def _decode_jwt_payload(token: str) -> Optional[dict]:
     """Decode JWT payload (no verification, for debugging). Returns claims dict or None."""
     try:
         parts = token.split(".")

@@ -71,8 +71,8 @@ export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 AUTHORINO_NAMESPACE="kuadrant-system"
 MAAS_NAMESPACE="${NAMESPACE:-opendatahub}"
 
-# ARTIFACTS is set by Prow; logs written here are collected as build artifacts
-ARTIFACTS_DIR="${ARTIFACTS:-$PROJECT_ROOT/test/e2e/reports}"
+# ARTIFACTS is set by OpenShift CI; LOG_DIR is a fallback used by some steps
+ARTIFACTS_DIR="${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}"
 
 patch_authorino_debug() {
     echo "Patching Authorino to log_level DEBUG..."
@@ -94,6 +94,7 @@ dump_authorino_logs() {
     echo ""
     echo "========== Authorino logs =========="
     mkdir -p "$ARTIFACTS_DIR"
+    echo "Writing Authorino logs to $ARTIFACTS_DIR (ARTIFACTS=${ARTIFACTS:-<unset>})"
     : > "$ARTIFACTS_DIR/authorino.log"
     for ns in "$AUTHORINO_NAMESPACE" openshift-ingress; do
         for label in "app.kubernetes.io/name=authorino" "authorino-resource=authorino"; do
