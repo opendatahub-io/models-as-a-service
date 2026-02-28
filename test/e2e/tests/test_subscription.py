@@ -70,7 +70,7 @@ def _gateway_url():
     scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
     return f"{scheme}://{host}"
 
-// Used for debugging
+# Used for debugging
 def _decode_jwt_payload(token: str) -> dict | None:
     """Decode JWT payload (no verification, for debugging). Returns claims dict or None."""
     try:

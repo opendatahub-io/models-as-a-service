@@ -485,8 +485,9 @@ print_header "Running Maas e2e Tests as admin user"
 ADMIN_TOKEN=$(oc create token tester-admin-user -n default)
 oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
 
-echo "Sleeping 4 hours for cluster debugging (Ctrl+C to skip)..."
-sleep 14400
+# 15m matches Prow step timeout; sleep leaves time for cluster debugging before tests
+echo "Sleeping 15 minutes for cluster debugging (Ctrl+C to skip)..."
+sleep 900
 
 run_subscription_tests
 
