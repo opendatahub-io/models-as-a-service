@@ -108,22 +108,22 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 			wantSpecChanged: true,
 		},
 		{
-			name:            "managed=false: controller skips update (opt-out)",
+			name:            "opendatahub.io/managed=false: controller skips update (opt-out)",
 			annotations:     map[string]string{ManagedByODHOperator: "false"},
 			wantSpecChanged: false,
 		},
 		{
-			name:            "managed=true: controller overwrites spec",
+			name:            "opendatahub.io/managed=true: controller overwrites spec",
 			annotations:     map[string]string{ManagedByODHOperator: "true"},
 			wantSpecChanged: true,
 		},
 		{
-			name:            "managed=false: controller skips update (opt-out)",
+			name:            "maas.opendatahub.io/managed=false: controller skips update (opt-out)",
 			annotations:     map[string]string{ManagedByMaasODHOperator: "false"},
 			wantSpecChanged: false,
 		},
 		{
-			name:            "managed=true: controller overwrites spec",
+			name:            "maas.opendatahub.io/managed=true: controller overwrites spec",
 			annotations:     map[string]string{ManagedByMaasODHOperator: "true"},
 			wantSpecChanged: true,
 		},
