@@ -512,8 +512,17 @@ setup_test_user() {
 }
 
 # Main execution
-# Dump Authorino logs on exit (success or failure) for debugging and Prow artifact collection
-trap 'dump_authorino_logs' EXIT
+# On exit (success or failure): dump Authorino logs and run auth debug script for Prow artifact collection
+_run_exit_artifacts() {
+    dump_authorino_logs
+    echo ""
+    echo "========== Auth Debug (debug_auth.sh) =========="
+    mkdir -p "$ARTIFACTS_DIR"
+    MAAS_NAMESPACE="$MAAS_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" \
+        "$PROJECT_ROOT/test/e2e/scripts/debug_auth.sh" 2>&1 | tee "$ARTIFACTS_DIR/auth-debug.log" || true
+    echo "================================================"
+}
+trap '_run_exit_artifacts' EXIT
 
 print_header "Deploying Maas on OpenShift"
 check_prerequisites
