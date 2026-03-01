@@ -21,7 +21,7 @@ spec:
   params:
   - name: git-url
     value: '{{source_url}}'
-  - name: revision
+  - name: git-rev
     value: '{{revision}}'
   - name: output-image
     value: quay.io/opendatahub/maas-api:odh-pr

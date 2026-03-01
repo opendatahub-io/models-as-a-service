@@ -5,8 +5,9 @@
 # Prerequisites: cert-manager and LWS operators (run install-cert-manager-and-lws.sh first).
 #
 # Environment variables:
-#   OPERATOR_CATALOG - Custom catalog image (default: quay.io/opendatahub/opendatahub-operator-catalog:latest)
-#   OPERATOR_CHANNEL - Subscription channel (default: fast-3 for released, fast for custom catalog)
+#   OPERATOR_CATALOG - Custom catalog image (optional). When unset, uses community-operators (ODH 3.3).
+#                      Set to e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest for custom builds.
+#   OPERATOR_CHANNEL - Subscription channel (default: fast-3 for community, fast for custom catalog)
 #   OPERATOR_IMAGE   - Custom operator image to patch into CSV (optional)
 #
 # Usage: ./install-odh.sh
@@ -18,7 +19,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DATA_DIR="${REPO_ROOT}/scripts/data"
 
 NAMESPACE="${NAMESPACE:-opendatahub}"
-OPERATOR_CATALOG="${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}"
+OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 
@@ -58,11 +59,18 @@ patch_operator_csv_if_needed() {
 echo "=== Installing OpenDataHub operator ==="
 echo ""
 
-# 1. Create custom CatalogSource (ODH requires v3+ for MaaS; community-operators may have older)
-echo "1. Creating ODH CatalogSource..."
-create_custom_catalogsource "odh-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
-catalog_source="odh-custom-catalog"
-channel="${OPERATOR_CHANNEL:-fast}"
+# 1. Catalog setup: use community-operators (ODH 3.3) by default, or custom catalog when OPERATOR_CATALOG is set
+echo "1. Setting up ODH catalog..."
+if [[ -n "$OPERATOR_CATALOG" ]]; then
+  echo "   Using custom catalog: $OPERATOR_CATALOG"
+  create_custom_catalogsource "odh-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
+  catalog_source="odh-custom-catalog"
+  channel="${OPERATOR_CHANNEL:-fast}"
+else
+  echo "   Using community-operators (ODH 3.3)"
+  catalog_source="community-operators"
+  channel="${OPERATOR_CHANNEL:-fast-3}"
+fi
 
 # 2. Install ODH operator via OLM
 echo "2. Installing ODH operator..."
@@ -135,6 +143,14 @@ echo "8. Waiting for DataScienceCluster (KServe)..."
 wait_datasciencecluster_ready "default-dsc" 600 || {
   log_error "DataScienceCluster did not become ready"
   exit 1
+}
+
+# 9. Wait for odh-model-controller webhook to be ready
+# The odh-model-controller registers a ConfigMap validating webhook. If we proceed before
+# its pods are ready, any ConfigMap create/update fails with "no endpoints available".
+echo "9. Waiting for odh-model-controller webhook..."
+wait_for_validating_webhooks "$NAMESPACE" 180 || {
+  log_warn "Validating webhooks in $NAMESPACE not ready after 180s, proceeding anyway..."
 }
 
 echo ""

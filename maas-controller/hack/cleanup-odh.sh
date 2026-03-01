@@ -131,9 +131,13 @@ for policy_ns in kuadrant-system rh-connectivity-link; do
     for name in $(kubectl get limitadors.limitador.kuadrant.io -n "$policy_ns" --no-headers 2>/dev/null | awk '{print $1}'); do
       kubectl patch limitadors.limitador.kuadrant.io "$name" -n "$policy_ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
     done
+    # Re-check namespace exists (it may have been deleted after patching CRs above)
     if kubectl get namespace "$policy_ns" &>/dev/null && command -v jq &>/dev/null; then
-      kubectl get namespace "$policy_ns" -o json | jq '.spec.finalizers = []' | \
-        kubectl replace --raw "/api/v1/namespaces/$policy_ns/finalize" -f -
+      ns_json=$(kubectl get namespace "$policy_ns" -o json 2>/dev/null || true)
+      if [[ -n "$ns_json" ]]; then
+        echo "$ns_json" | jq '.spec.finalizers = []' | \
+          kubectl replace --raw "/api/v1/namespaces/$policy_ns/finalize" -f - 2>/dev/null || true
+      fi
     fi
   fi
 done

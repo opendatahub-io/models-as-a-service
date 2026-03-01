@@ -26,7 +26,8 @@
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
-#   OPERATOR_CATALOG - ODH catalog image (default: quay.io/opendatahub/opendatahub-operator-catalog:latest)
+#   OPERATOR_CATALOG - ODH catalog image (optional). Unset = community-operators ODH 3.3.
+#                      Set for custom builds, e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest
 #   OPERATOR_IMAGE   - Custom ODH operator image for CSV patch (optional)
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
@@ -66,10 +67,17 @@ INSECURE_HTTP=${INSECURE_HTTP:-false}
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
-export OPERATOR_CATALOG=${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}
+export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 AUTHORINO_NAMESPACE="kuadrant-system"
 MAAS_NAMESPACE="${NAMESPACE:-opendatahub}"
+
+# Artifact collection: OpenShift CI provides ARTIFACT_DIR (docs.ci.openshift.org/docs/architecture/step-registry).
+# Files written here are collected to artifacts/<job>/<step>/ in Prow. Fallbacks: ARTIFACTS, LOG_DIR, or local reports.
+ARTIFACTS_DIR="${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}"
+
+# Source auth utils (patch_authorino_debug, collect_e2e_artifacts)
+source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
 
 print_header() {
     echo ""
@@ -137,8 +145,10 @@ deploy_maas_platform() {
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --deployment-mode kustomize
-        --operator-catalog "${OPERATOR_CATALOG}"
     )
+    if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
+        deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
+    fi
     if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         deploy_cmd+=(--operator-image "${OPERATOR_IMAGE}")
     fi
@@ -214,6 +224,7 @@ deploy_models() {
     fi
     echo "✅ Simulator models ready"
 
+    # TODO: Currently waits for  ever and bounces controller (seems like they are not reconciled even after llmisvc are reported as up)
     echo "Waiting for MaaSModels to be Ready..."
     local retries=0
     local all_ready=false
@@ -397,8 +408,8 @@ run_subscription_tests() {
     export MAAS_NAMESPACE
 
     local test_dir="$PROJECT_ROOT/test/e2e"
-    local reports_dir="$test_dir/reports"
-    mkdir -p "$reports_dir"
+    # Use ARTIFACTS_DIR so pytest reports go to Prow artifact collection (ARTIFACT_DIR)
+    mkdir -p "$ARTIFACTS_DIR"
 
     if [[ ! -d "$test_dir/.venv" ]]; then
         echo "Creating Python venv for subscription tests..."
@@ -410,8 +421,8 @@ run_subscription_tests() {
 
     local user
     user="$(oc whoami 2>/dev/null || echo 'unknown')"
-    local html="$reports_dir/subscription-${user}.html"
-    local xml="$reports_dir/subscription-${user}.xml"
+    local html="$ARTIFACTS_DIR/subscription-${user}.html"
+    local xml="$ARTIFACTS_DIR/subscription-${user}.xml"
 
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -q --maxfail=3 --disable-warnings \
@@ -467,12 +478,26 @@ setup_test_user() {
 }
 
 # Main execution
+# On exit (success or failure): collect artifacts (authorino-debug.log, cluster state, pod logs) and auth report
+_run_exit_artifacts() {
+    MAAS_NAMESPACE="$MAAS_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" ARTIFACTS_DIR="$ARTIFACTS_DIR" \
+        collect_e2e_artifacts
+    echo ""
+    echo "========== Auth Debug Report =========="
+    mkdir -p "$ARTIFACTS_DIR"
+    MAAS_NAMESPACE="$MAAS_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" \
+        run_auth_debug_report 2>&1 | tee "$ARTIFACTS_DIR/auth-debug.log" || true
+    echo "======================================"
+}
+trap '_run_exit_artifacts' EXIT
+
 print_header "Deploying Maas on OpenShift"
 check_prerequisites
 deploy_maas_platform
 
 print_header "Deploying Models"  
 deploy_models
+patch_authorino_debug  # from auth_utils.sh
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
@@ -484,6 +509,10 @@ setup_test_user "tester-admin-user" "cluster-admin"
 print_header "Running Maas e2e Tests as admin user"
 ADMIN_TOKEN=$(oc create token tester-admin-user -n default)
 oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
+
+# 15m matches Prow step timeout; sleep leaves time for cluster debugging before tests
+# echo "Sleeping 15 minutes for cluster debugging (Ctrl+C to skip)..."
+# sleep 900
 
 run_subscription_tests
 

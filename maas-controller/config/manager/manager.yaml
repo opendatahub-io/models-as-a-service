@@ -1,5 +1,6 @@
-# Deployed to opendatahub namespace (must exist; created by Open Data Hub operator).
-# Override namespace via: kustomize build config/default | kubectl apply -f -
+# Default namespace: opendatahub (ODH overlay). Override via kustomize.
+# MAAS_API_NAMESPACE uses the pod's namespace (downward API) so maas-api is assumed
+# to run in the same namespace as maas-controller.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,7 +38,9 @@ spec:
           - name: GATEWAY_NAMESPACE
             value: "openshift-ingress"
           - name: MAAS_API_NAMESPACE
-            value: "opendatahub"
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
           - name: CLUSTER_AUDIENCE
             value: "https://kubernetes.default.svc"
         image: maas-controller

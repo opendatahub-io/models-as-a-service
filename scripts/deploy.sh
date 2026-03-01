@@ -483,6 +483,21 @@ main() {
 
     log_info "  Subscription controller ready."
     log_info "  Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
+
+    # Patch controller with correct audience for HyperShift/ROSA clusters.
+    # The controller creates AuthPolicies with kubernetesTokenReview.audiences;
+    # on non-standard clusters the default audience (https://kubernetes.default.svc)
+    # causes Authorino token validation to fail with 401.
+    local cluster_aud
+    cluster_aud=$(get_cluster_audience 2>/dev/null || echo "")
+    if [[ -n "$cluster_aud" && "$cluster_aud" != "https://kubernetes.default.svc" ]]; then
+      log_info "  Non-standard cluster audience detected: $cluster_aud"
+      log_info "  Patching maas-controller with correct CLUSTER_AUDIENCE..."
+      kubectl set env deployment/maas-controller -n "$NAMESPACE" CLUSTER_AUDIENCE="$cluster_aud"
+      if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
+        log_warn "maas-controller rollout after audience patch did not complete in time"
+      fi
+    fi
   fi
 
   log_info "==================================================="
@@ -576,6 +591,9 @@ deploy_via_kustomize() {
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
     configure_tls_backend
   fi
+
+  # Configure audience for non-standard clusters (HyperShift/ROSA)
+  configure_cluster_audience
 
   log_info "Kustomize deployment completed"
 }
@@ -1323,8 +1341,8 @@ patch_operator_csv() {
 #   2. If non-standard, patches the maas-api AuthPolicy with the cluster-specific audience
 #   3. Annotates the AuthPolicy to prevent operator from reverting the patch
 #
-#   Note: maas-controller audience patching is handled separately in the subscription
-#   controller installation block (after the controller deployment exists).
+#   Note: maas-controller audience patching is handled in the common subscription
+#   controller block (after the controller deployment exists) via CLUSTER_AUDIENCE env var.
 configure_cluster_audience() {
   log_info "Checking cluster OIDC audience..."
 
