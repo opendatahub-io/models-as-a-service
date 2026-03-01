@@ -72,8 +72,9 @@ export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 AUTHORINO_NAMESPACE="kuadrant-system"
 MAAS_NAMESPACE="${NAMESPACE:-opendatahub}"
 
-# ARTIFACTS is set by OpenShift CI; LOG_DIR is a fallback used by some steps
-ARTIFACTS_DIR="${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}"
+# Artifact collection: OpenShift CI provides ARTIFACT_DIR (docs.ci.openshift.org/docs/architecture/step-registry).
+# Files written here are collected to artifacts/<job>/<step>/ in Prow. Fallbacks: ARTIFACTS, LOG_DIR, or local reports.
+ARTIFACTS_DIR="${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}"
 
 patch_authorino_debug() {
     echo "Patching Authorino to log_level DEBUG..."
@@ -95,7 +96,7 @@ dump_authorino_logs() {
     echo ""
     echo "========== Authorino logs =========="
     mkdir -p "$ARTIFACTS_DIR"
-    echo "Writing Authorino logs to $ARTIFACTS_DIR (ARTIFACTS=${ARTIFACTS:-<unset>})"
+    echo "Writing Authorino logs to $ARTIFACTS_DIR (ARTIFACT_DIR=${ARTIFACT_DIR:-<unset>})"
     : > "$ARTIFACTS_DIR/authorino.log"
     for ns in "$AUTHORINO_NAMESPACE" openshift-ingress; do
         for label in "app.kubernetes.io/name=authorino" "authorino-resource=authorino"; do
@@ -442,8 +443,8 @@ run_subscription_tests() {
     export MAAS_NAMESPACE
 
     local test_dir="$PROJECT_ROOT/test/e2e"
-    local reports_dir="$test_dir/reports"
-    mkdir -p "$reports_dir"
+    # Use ARTIFACTS_DIR so pytest reports go to Prow artifact collection (ARTIFACT_DIR)
+    mkdir -p "$ARTIFACTS_DIR"
 
     if [[ ! -d "$test_dir/.venv" ]]; then
         echo "Creating Python venv for subscription tests..."
@@ -455,8 +456,8 @@ run_subscription_tests() {
 
     local user
     user="$(oc whoami 2>/dev/null || echo 'unknown')"
-    local html="$reports_dir/subscription-${user}.html"
-    local xml="$reports_dir/subscription-${user}.xml"
+    local html="$ARTIFACTS_DIR/subscription-${user}.html"
+    local xml="$ARTIFACTS_DIR/subscription-${user}.xml"
 
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -q --maxfail=3 --disable-warnings \
