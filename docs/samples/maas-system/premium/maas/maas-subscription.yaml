@@ -1,0 +1,15 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: premium-simulator-subscription
+  namespace: opendatahub
+spec:
+  owner:
+    groups:
+      - name: premium-user
+    users: []
+  modelRefs:
+    - name: premium-simulated-simulated-premium
+      tokenRateLimits:
+        - limit: 1000
+          window: 1m

@@ -66,32 +66,15 @@ T+15s: RBAC fully propagated to API server
 - Monitor ODH Controller logs to confirm RBAC updates are complete
 - Use `kubectl get rolebinding -n <model-namespace>` to verify RoleBinding removal
 
-#### 3. Model List Visibility vs. Access Mismatch
+#### 3. Model List Visibility vs. Access
 
 **Description**:
 
-- The `/v1/models` endpoint lists all models that are part of the MaaS instance (via gateway references)
-- The endpoint does not filter models by tier access permissions
-- Users may see models in the list that they can no longer access after tier removal
-- Attempts to use these models will fail with `403 Forbidden` or `401 Unauthorized`
+- The **GET /v1/models** endpoint lists models from MaaSModel CRs and **filters by access**: it probes each model’s `/v1/models` endpoint with the client’s **Authorization** header (passed through as-is). Only models that return 2xx or 405 are included.
+- So after tier removal, a model that the client can no longer access should **not** appear in their list (the probe will get 401/403 and the model is excluded).
+- If there is a short delay between the tier change and the gateway enforcing it, a client might still see a model briefly until their next list call, or see it disappear on the next call.
 
-**Example**:
-
-```json
-// GET /v1/models returns:
-{
-  "data": [
-    {"id": "model-a", "ready": true},  // Still accessible
-    {"id": "model-b", "ready": true}   // No longer accessible after tier removal
-  ]
-}
-
-// POST to model-b fails with 403
-```
-
-**Workaround**:
-
-This behavior will be resolved in a future release where the model list is filtered by tier permissions (see [PR #294](https://github.com/opendatahub-io/models-as-a-service/pull/294)). In the meantime, clients should expect potential `403 Forbidden` errors if attempting to access models that appear in the list but are not permitted.
+**Note**: See [Model listing flow](model-listing-flow.md) for the full flow. Token exchange is not performed; the same Authorization header the client sends is used for the probe.
 
 #### 4. Token Validity vs. Model Access (Expected Behavior)
 
@@ -173,9 +156,8 @@ Tokens are per-user (Service Account), not per-model. Token validity and model a
 The following improvements are planned for future releases:
 
 1. **Graceful Shutdown**: Implement request draining before access revocation
-2. **Model List Filtering**: Filter `/v1/models` by tier permissions
-3. **Real-time Notifications**: Notify users when tier access changes
-4. **Audit Logging**: Enhanced logging for tier access changes
+2. **Real-time Notifications**: Notify users when tier access changes
+3. **Audit Logging**: Enhanced logging for tier access changes
 
 ### Related Documentation
 

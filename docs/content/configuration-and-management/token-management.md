@@ -93,31 +93,26 @@ sequenceDiagram
 
 ## Model Discovery
 
-The `/v1/models` endpoint allows you to discover which models you're authorized to access. This endpoint works with any valid authentication token - you don't need to create an API key first.
+The `/v1/models` endpoint allows you to discover which models you're authorized to access. This endpoint works with any valid authentication token — you don't need to create an API key first.
 
 ### How It Works
 
-When you call `/v1/models`, the system checks your authorization against each model's endpoint. If your token doesn't have the correct audience for these internal checks, the API automatically exchanges it for a short-lived service account token.
+When you call **GET /v1/models** with an **Authorization** header, the API passes that header **as-is** to each model's `/v1/models` endpoint to validate access. Only models that return 2xx or 405 are included in the list. No token exchange or modification is performed; the same header you send is used for the probe.
 
 ```mermaid
 flowchart LR
-    A[Your Token] --> B{Has correct<br/>audience?}
-    B -->|Yes| D[Use as-is]
-    B -->|No| C[Auto-exchange]
-    C --> D
-    D --> E[Check model<br/>authorization]
-    E --> F[Return<br/>authorized models]
+    A[Your Request\nAuthorization header] --> B[List MaaSModels]
+    B --> C[Probe each model endpoint\nwith same header]
+    C --> D[Return only models\nthat allow access]
 ```
 
 This means you can:
 
-1. **Authenticate with OpenShift or OIDC** - use your existing identity
-2. **Call `/v1/models` immediately** - see available models without creating an API key first
+1. **Authenticate with OpenShift or OIDC** — use your existing identity and the same token you would use for inference.
+2. **Call `/v1/models` immediately** — see only the models you can access, without creating an API key first.
 
-!!! info "Security Note"
-    The token exchange is an internal implementation detail. Authentication is still fully handled by Authorino - 
-    the API only peeks at the token's audience claim to decide if exchange is needed. Your identity always comes 
-    from Authorino's validated headers, not from parsing the token.
+!!! info "Future: Token minting"
+    Once MaaS API token minting is in place, the implementation may be revisited (e.g. minting a short-lived token for gateway auth when the client's token has a different audience). For now, the Authorization header is always passed through as-is.
 
 ---
 
@@ -208,19 +203,19 @@ A: Yes. Your token grants you access based on your tier's RBAC permissions. If y
 
 **Q: What's the difference between my OpenShift token and an API key?**
 
-A: Your **OpenShift token** is your identity token from authentication (e.g. OpenShift or OIDC). It proves who you are but may not have the correct audience for model access. An **API key** (issued via `/v1/tokens`) is a service account token with the correct audience and permissions for accessing models. You can use either to list models, but only API keys work for model inference.
+A: Your **OpenShift token** is your identity token from authentication (e.g. OpenShift or OIDC). An **API key** (issued via `/v1/tokens`) is a service account token with the correct audience and permissions for accessing models. For **GET /v1/models**, the API passes your Authorization header as-is to each model endpoint to determine which models to include; you can use your OpenShift token or an API key. For inference, use a token that your gateway accepts (e.g. OpenShift token or API key as configured).
 
 ---
 
 **Q: Do I need an API key to list available models?**
 
-A: No. You can call `/v1/models` with your OpenShift/OIDC token directly. The API automatically handles token exchange if needed. This lets you discover available models before deciding which API keys to create.
+A: No. Call **GET /v1/models** with your OpenShift/OIDC token (or any token your gateway accepts) in the Authorization header. The API uses that same header to probe each model endpoint and returns only models you can access.
 
 ---
 
 **Q: What is "token audience" and why does it matter?**
 
-A: Token audience identifies the intended recipient of a token. Model endpoints expect tokens with a specific audience (`{tenant}-sa`). OpenShift/OIDC tokens have different audiences, so the API exchanges them internally when needed for authorization checks.
+A: Token audience identifies the intended recipient of a token. Some gateways expect tokens with a specific audience. For **GET /v1/models**, the API does not modify or exchange your token; it forwards your Authorization header as-is. Once token minting is in place, audience handling may be revisited.
 
 ---
 

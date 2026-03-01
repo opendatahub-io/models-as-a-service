@@ -75,4 +75,4 @@ def is_https(maas_api_base_url: str) -> bool:
 def model_name(model_id: str) -> str:
     """Alias so tests can request `model_name` but we reuse model_id discovery."""
     return model_id
-
+    

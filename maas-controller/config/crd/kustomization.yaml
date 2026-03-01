@@ -1,0 +1,5 @@
+# This kustomization.yaml is used for CRD generation.
+resources:
+  - bases/maas.opendatahub.io_maasauthpolicies.yaml
+  - bases/maas.opendatahub.io_maasmodels.yaml
+  - bases/maas.opendatahub.io_maassubscriptions.yaml
