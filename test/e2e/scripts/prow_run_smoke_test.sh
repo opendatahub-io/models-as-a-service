@@ -26,7 +26,8 @@
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
-#   OPERATOR_CATALOG - ODH catalog image (default: quay.io/opendatahub/opendatahub-operator-catalog:latest)
+#   OPERATOR_CATALOG - ODH catalog image (optional). Unset = community-operators ODH 3.3.
+#                      Set for custom builds, e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest
 #   OPERATOR_IMAGE   - Custom ODH operator image for CSV patch (optional)
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
@@ -66,7 +67,7 @@ INSECURE_HTTP=${INSECURE_HTTP:-false}
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
-export OPERATOR_CATALOG=${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}
+export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 AUTHORINO_NAMESPACE="kuadrant-system"
 MAAS_NAMESPACE="${NAMESPACE:-opendatahub}"
@@ -100,7 +101,7 @@ dump_authorino_logs() {
         for label in "app.kubernetes.io/name=authorino" "authorino-resource=authorino"; do
             if kubectl get pods -n "$ns" -l "$label" --no-headers 2>/dev/null | head -1 | grep -q .; then
                 echo "--- Authorino pods in $ns (label=$label) ---"
-                kubectl logs -n "$ns" -l "$label" --tail=500 --all-containers=true 2>/dev/null || true
+                # kubectl logs -n "$ns" -l "$label" --tail=15 --all-containers=true 2>/dev/null || true
                 {
                     echo "--- Authorino logs from $ns (label=$label) ---"
                     kubectl logs -n "$ns" -l "$label" --tail=2000 --all-containers=true 2>/dev/null || true
@@ -179,8 +180,10 @@ deploy_maas_platform() {
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --deployment-mode kustomize
-        --operator-catalog "${OPERATOR_CATALOG}"
     )
+    if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
+        deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
+    fi
     if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         deploy_cmd+=(--operator-image "${OPERATOR_IMAGE}")
     fi
