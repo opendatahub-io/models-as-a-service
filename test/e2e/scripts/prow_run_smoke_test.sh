@@ -101,7 +101,7 @@ dump_authorino_logs() {
         for label in "app.kubernetes.io/name=authorino" "authorino-resource=authorino"; do
             if kubectl get pods -n "$ns" -l "$label" --no-headers 2>/dev/null | head -1 | grep -q .; then
                 echo "--- Authorino pods in $ns (label=$label) ---"
-                # kubectl logs -n "$ns" -l "$label" --tail=15 --all-containers=true 2>/dev/null || true
+                kubectl logs -n "$ns" -l "$label" --tail=15 --all-containers=true 2>/dev/null || true
                 {
                     echo "--- Authorino logs from $ns (label=$label) ---"
                     kubectl logs -n "$ns" -l "$label" --tail=2000 --all-containers=true 2>/dev/null || true
