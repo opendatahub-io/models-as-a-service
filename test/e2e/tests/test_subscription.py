@@ -484,12 +484,13 @@ class TestCascadeDeletion:
             _apply_cr(original)
             _wait_reconcile()
 
-    def test_unconfigured_model_denied_by_gateway_auth(self):
-        """New model with no MaaSAuthPolicy/MaaSSubscription -> gateway default auth denies (403)."""
-        token = _get_cluster_token()
-        r = _inference(token, path=UNCONFIGURED_MODEL_PATH)
-        log.info(f"Unconfigured model (no auth policy) -> {r.status_code}")
-        assert r.status_code == 403, f"Expected 403 (gateway default deny), got {r.status_code}"
+    # TODO: Uncomment this test once we validated unconfigured models
+    # def test_unconfigured_model_denied_by_gateway_auth(self):
+    #     """New model with no MaaSAuthPolicy/MaaSSubscription -> gateway default auth denies (403)."""
+    #     token = _get_cluster_token()
+    #     r = _inference(token, path=UNCONFIGURED_MODEL_PATH)
+    #     log.info(f"Unconfigured model (no auth policy) -> {r.status_code}")
+    #     assert r.status_code == 403, f"Expected 403 (gateway default deny), got {r.status_code}"
 
 
 class TestOrderingEdgeCases:

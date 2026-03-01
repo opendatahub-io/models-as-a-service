@@ -161,6 +161,10 @@ func discoveredToModels(discovered []openai.Model, original Model) []Model {
 			Details: original.Details,
 		})
 	}
+	// Fallback: if backend returned items but all had empty IDs, use original model
+	if len(out) == 0 {
+		return []Model{original}
+	}
 	return out
 }
 
