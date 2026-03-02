@@ -80,30 +80,6 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 		maasSubName   = "sub-a"
 	)
 
-	// Shared objects used during reconciliation – recreated fresh per sub-test via WithObjects.
-	model := &maasv1alpha1.MaaSModel{
-		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
-		Spec: maasv1alpha1.MaaSModelSpec{
-			ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
-		},
-	}
-	route := &gatewayapiv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: namespace},
-	}
-	// The subscription must have at least one owner group so that the membership
-	// check is non-empty and the controller writes a limits entry into the TRLP spec.
-	maasSub := &maasv1alpha1.MaaSSubscription{
-		ObjectMeta: metav1.ObjectMeta{Name: maasSubName, Namespace: namespace},
-		Spec: maasv1alpha1.MaaSSubscriptionSpec{
-			Owner: maasv1alpha1.OwnerSpec{
-				Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
-			},
-			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
-				{Name: modelName, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
-			},
-		},
-	}
-
 	tests := []struct {
 		name            string
 		annotations     map[string]string
@@ -128,6 +104,28 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			model := &maasv1alpha1.MaaSModel{
+				ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
+				Spec: maasv1alpha1.MaaSModelSpec{
+					ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
+				},
+			}
+			route := &gatewayapiv1.HTTPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: namespace},
+			}
+			// The subscription must have at least one owner group so that the membership
+			// check is non-empty and the controller writes a limits entry into the TRLP spec.
+			maasSub := &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{Name: maasSubName, Namespace: namespace},
+				Spec: maasv1alpha1.MaaSSubscriptionSpec{
+					Owner: maasv1alpha1.OwnerSpec{
+						Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
+					},
+					ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+						{Name: modelName, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+					},
+				},
+			}
 			// Pre-populate the store with a generated TRLP whose spec contains a
 			// sentinel targetRef. After reconciliation we check whether it changed.
 			existingTRLP := newPreexistingTRLP(trlpName, namespace, modelName, tc.annotations)

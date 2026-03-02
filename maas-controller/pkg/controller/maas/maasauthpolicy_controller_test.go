@@ -79,24 +79,6 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 		maasPolicyName = "policy-a"
 	)
 
-	// Shared objects used during reconciliation – recreated fresh per sub-test via WithObjects.
-	model := &maasv1alpha1.MaaSModel{
-		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
-		Spec: maasv1alpha1.MaaSModelSpec{
-			ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
-		},
-	}
-	route := &gatewayapiv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: namespace},
-	}
-	maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: maasPolicyName, Namespace: namespace},
-		Spec: maasv1alpha1.MaaSAuthPolicySpec{
-			ModelRefs: []string{modelName},
-			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
-		},
-	}
-
 	tests := []struct {
 		name            string
 		annotations     map[string]string
@@ -121,6 +103,22 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			model := &maasv1alpha1.MaaSModel{
+				ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
+				Spec: maasv1alpha1.MaaSModelSpec{
+					ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
+				},
+			}
+			route := &gatewayapiv1.HTTPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: namespace},
+			}
+			maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: maasPolicyName, Namespace: namespace},
+				Spec: maasv1alpha1.MaaSAuthPolicySpec{
+					ModelRefs: []string{modelName},
+					Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
+				},
+			}
 			// Pre-populate the store with a generated AuthPolicy whose spec contains a
 			// sentinel targetRef. After reconciliation we check whether it changed.
 			existingAP := newPreexistingAuthPolicy(authPolicyName, namespace, modelName, tc.annotations)
