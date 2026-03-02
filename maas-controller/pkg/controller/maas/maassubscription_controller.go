@@ -473,7 +473,7 @@ func (r *MaaSSubscriptionReconciler) mapMaaSModelRefToMaaSSubscriptions(ctx cont
 		return nil
 	}
 	var subscriptions maasv1alpha1.MaaSSubscriptionList
-	if err := r.List(ctx, &subscriptions); err != nil {
+	if err := r.List(ctx, &subscriptions, client.InNamespace(model.Namespace)); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
@@ -502,17 +502,19 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 	if err := r.List(ctx, &models); err != nil {
 		return nil
 	}
-	modelNamesInNS := map[string]bool{}
+	// Use namespace-qualified keys to prevent cross-namespace matches
+	modelKeysInNS := map[string]bool{}
 	for _, m := range models.Items {
 		ns := m.Spec.ModelRef.Namespace
 		if ns == "" {
 			ns = m.Namespace
 		}
 		if ns == route.Namespace {
-			modelNamesInNS[m.Name] = true
+			key := m.Namespace + "/" + m.Name
+			modelKeysInNS[key] = true
 		}
 	}
-	if len(modelNamesInNS) == 0 {
+	if len(modelKeysInNS) == 0 {
 		return nil
 	}
 	// Find MaaSSubscriptions that reference any of these models
@@ -523,7 +525,8 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 	var requests []reconcile.Request
 	for _, s := range subscriptions.Items {
 		for _, ref := range s.Spec.ModelRefs {
-			if modelNamesInNS[ref.Name] {
+			key := s.Namespace + "/" + ref.Name
+			if modelKeysInNS[key] {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{Name: s.Name, Namespace: s.Namespace},
 				})

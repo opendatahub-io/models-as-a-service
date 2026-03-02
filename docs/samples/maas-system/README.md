@@ -22,6 +22,6 @@ kustomize build docs/samples/maas-system/ | kubectl apply -f -
 ## Verify
 
 ```bash
-kubectl get maasmodel,maasauthpolicy,maassubscription -n opendatahub
+kubectl get maasmodelref,maasauthpolicy,maassubscription -n opendatahub
 kubectl get llminferenceservice -n llm
 ```

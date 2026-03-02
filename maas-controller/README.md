@@ -53,7 +53,7 @@ MaaSModelRef's `spec.modelRef.kind` selects how the controller discovers and exp
 | **LLMInferenceService** | Validates that an HTTPRoute exists for the referenced LLMInferenceService (created by KServe). Reads endpoint and readiness from the LLMInferenceService/HTTPRoute. |
 | **ExternalModel** | Stub: not yet implemented. Controller sets status **Phase=Failed** and condition **Reason=Unsupported**. When implemented, users supply the HTTPRoute (controller does not create it); see `providers_external.go`. |
 
-The CRD enum for `kind` is `LLMInferenceService` and `ExternalModel` (see `api/maas/v1alpha1/maasmodel_types.go`). The registry accepts **LLMInferenceService** (and the alias **llmisvc** for backwards compatibility). Use `kind: LLMInferenceService` in MaaSModelRef specs.
+The CRD enum for `kind` is `LLMInferenceService` and `ExternalModel` (see `api/maas/v1alpha1/maasmodelref_types.go`). The registry accepts **LLMInferenceService** (and the alias **llmisvc** for backwards compatibility). Use `kind: LLMInferenceService` in MaaSModelRef specs.
 
 **Status for unimplemented kinds:** If a kind returns `ErrKindNotImplemented` (e.g. ExternalModel), the controller updates status with Phase=Failed and Ready condition Reason=**Unsupported** (instead of ReconcileFailed), so UIs can distinguish "not implemented" from other failures.
 
@@ -61,8 +61,8 @@ The CRD enum for `kind` is `LLMInferenceService` and `ExternalModel` (see `api/m
 
 To support a new model kind (e.g. a new backend type):
 
-1. **Extend the API (optional)**  
-   If the new kind needs extra fields (e.g. `endpoint` for ExternalModel), add them to `ModelReference` in `api/maas/v1alpha1/maasmodel_types.go` and add the new value to the `Kind` enum. Run `make generate` and `make manifests` in the controller directory.
+1. **Extend the API (optional)**
+   If the new kind needs extra fields (e.g. `endpoint` for ExternalModel), add them to `ModelReference` in `api/maas/v1alpha1/maasmodelref_types.go` and add the new value to the `Kind` enum. Run `make generate` and `make manifests` in the controller directory.
 
 2. **Implement BackendHandler**  
    Create a new file (e.g. `providers_mykind.go`) and implement the `BackendHandler` interface:

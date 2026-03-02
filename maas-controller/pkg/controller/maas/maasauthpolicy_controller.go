@@ -551,7 +551,7 @@ func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context
 		return nil
 	}
 	var policies maasv1alpha1.MaaSAuthPolicyList
-	if err := r.List(ctx, &policies); err != nil {
+	if err := r.List(ctx, &policies, client.InNamespace(model.Namespace)); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
@@ -580,17 +580,19 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 	if err := r.List(ctx, &models); err != nil {
 		return nil
 	}
-	modelNamesInNS := map[string]bool{}
+	// Use namespace-qualified keys to prevent cross-namespace matches
+	modelKeysInNS := map[string]bool{}
 	for _, m := range models.Items {
 		ns := m.Spec.ModelRef.Namespace
 		if ns == "" {
 			ns = m.Namespace
 		}
 		if ns == route.Namespace {
-			modelNamesInNS[m.Name] = true
+			key := m.Namespace + "/" + m.Name
+			modelKeysInNS[key] = true
 		}
 	}
-	if len(modelNamesInNS) == 0 {
+	if len(modelKeysInNS) == 0 {
 		return nil
 	}
 	// Find MaaSAuthPolicies that reference any of these models
@@ -601,7 +603,8 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 	var requests []reconcile.Request
 	for _, p := range policies.Items {
 		for _, ref := range p.Spec.ModelRefs {
-			if modelNamesInNS[ref] {
+			key := p.Namespace + "/" + ref
+			if modelKeysInNS[key] {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
 				})
