@@ -62,28 +62,6 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		return
 	}
 
-	// Extract user info from context (set by ExtractUserInfo middleware)
-	userContextVal, exists := c.Get("user")
-	if !exists {
-		h.logger.Error("User context not found - ExtractUserInfo middleware not called")
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": "Internal server error",
-				"type":    "server_error",
-			}})
-		return
-	}
-	userContext, ok := userContextVal.(*token.UserContext)
-	if !ok {
-		h.logger.Error("Invalid user context type")
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": "Internal server error",
-				"type":    "server_error",
-			}})
-		return
-	}
-
 	// Extract x-maas-subscription header to pass through to model endpoints for authorization checks.
 	// This is required for users with multiple subscriptions.
 	requestedSubscription := strings.TrimSpace(c.GetHeader("x-maas-subscription"))
@@ -92,6 +70,29 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	// This ensures consistent error handling with inferencing endpoints.
 	var selectedSubscription string
 	if h.subscriptionSelector != nil {
+		// Extract user info from context (set by ExtractUserInfo middleware)
+		// Only needed when subscription selector is configured
+		userContextVal, exists := c.Get("user")
+		if !exists {
+			h.logger.Error("User context not found - ExtractUserInfo middleware not called")
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": gin.H{
+					"message": "Internal server error",
+					"type":    "server_error",
+				}})
+			return
+		}
+		userContext, ok := userContextVal.(*token.UserContext)
+		if !ok {
+			h.logger.Error("Invalid user context type")
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": gin.H{
+					"message": "Internal server error",
+					"type":    "server_error",
+				}})
+			return
+		}
+
 		result, err := h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription)
 		if err != nil {
 			var multipleSubsErr *subscription.MultipleSubscriptionsError
@@ -174,7 +175,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 				}})
 			return
 		}
-		h.logger.Debug("MaaSModelRef list succeeded, validating access by probing each model endpoint", "modelCount", len(list), "subscription", selectedSubscription)
+		h.logger.Debug("MaaSModelRef list succeeded, validating access by probing each model endpoint", "modelCount", len(list), "subscriptionHeaderProvided", selectedSubscription != "")
 		modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, selectedSubscription)
 		h.logger.Debug("Access validation complete", "listed", len(list), "accessible", len(modelList))
 	} else {
