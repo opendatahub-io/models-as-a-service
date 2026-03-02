@@ -117,16 +117,6 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 			annotations:     map[string]string{ManagedByODHOperator: "true"},
 			wantSpecChanged: true,
 		},
-		{
-			name:            "maas.opendatahub.io/managed=false: controller skips update (opt-out)",
-			annotations:     map[string]string{ManagedByMaasODHOperator: "false"},
-			wantSpecChanged: false,
-		},
-		{
-			name:            "maas.opendatahub.io/managed=true: controller overwrites spec",
-			annotations:     map[string]string{ManagedByMaasODHOperator: "true"},
-			wantSpecChanged: true,
-		},
 	}
 
 	for _, tc := range tests {
@@ -172,8 +162,7 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 
 // TestMaaSAuthPolicyReconciler_DeleteAnnotation verifies that the Reconcile deletion
 // path respects the opt-out annotation: an AuthPolicy with opendatahub.io/managed=false
-// or maas.opendatahub.io/managed=false must not be deleted when the parent
-// MaaSAuthPolicy is removed.
+// must not be deleted when the parent MaaSAuthPolicy is removed.
 func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 	const (
 		modelName      = "llm"
@@ -193,23 +182,13 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 			wantDeleted: true,
 		},
 		{
-			name:        "managed=true (new annotation): controller deletes",
+			name:        "opendatahub.io/managed=true: controller deletes",
 			annotations: map[string]string{ManagedByODHOperator: "true"},
 			wantDeleted: true,
 		},
 		{
-			name:        "managed=false (new annotation): controller must not delete",
+			name:        "opendatahub.io/managed=false: controller must not delete",
 			annotations: map[string]string{ManagedByODHOperator: "false"},
-			wantDeleted: false,
-		},
-		{
-			name:        "managed=true (legacy annotation): controller deletes",
-			annotations: map[string]string{ManagedByMaasODHOperator: "true"},
-			wantDeleted: true,
-		},
-		{
-			name:        "managed=false (legacy annotation): controller must not delete",
-			annotations: map[string]string{ManagedByMaasODHOperator: "false"},
 			wantDeleted: false,
 		},
 	}

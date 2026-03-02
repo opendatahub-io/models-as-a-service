@@ -118,23 +118,13 @@ func TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation(t *testin
 			wantDeleted: true,
 		},
 		{
-			name:        "managed=true (new annotation): controller deletes",
+			name:        "opendatahub.io/managed=true: controller deletes",
 			annotations: map[string]string{ManagedByODHOperator: "true"},
 			wantDeleted: true,
 		},
 		{
-			name:        "managed=false (new annotation): controller must not delete",
+			name:        "opendatahub.io/managed=false: controller must not delete",
 			annotations: map[string]string{ManagedByODHOperator: "false"},
-			wantDeleted: false,
-		},
-		{
-			name:        "managed=true (legacy annotation): controller deletes",
-			annotations: map[string]string{ManagedByMaasODHOperator: "true"},
-			wantDeleted: true,
-		},
-		{
-			name:        "managed=false (legacy annotation): controller must not delete",
-			annotations: map[string]string{ManagedByMaasODHOperator: "false"},
 			wantDeleted: false,
 		},
 	}

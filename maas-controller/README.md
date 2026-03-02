@@ -264,8 +264,6 @@ kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed-
 kubectl annotate tokenratelimitpolicy <name> -n <namespace> opendatahub.io/managed-
 ```
 
-> **Note:** The legacy annotation `maas.opendatahub.io/managed=false` is still honoured for backwards compatibility but is deprecated. Prefer `opendatahub.io/managed=false` for new annotations.
-
 > **Warning: orphaned resources.** An opted-out policy can become permanently orphaned (no longer reconciled and not deleted) in two situations:
 >
 > - **Last owner deleted.** When the last `MaaSAuthPolicy` or `MaaSSubscription` that references a model is deleted, the controller skips deletion of any opted-out generated policy for that model. The policy will persist until it is manually deleted.
