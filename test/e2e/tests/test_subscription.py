@@ -10,7 +10,6 @@ Requires:
   - oc/kubectl access to create service account tokens
 
 Environment variables (all optional, with defaults):
-  - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_NAMESPACE: MaaS namespace (default: opendatahub)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: When set, use this SA token
     instead of oc whoami -t (e.g. for Prow where oc whoami -t is unavailable)
@@ -30,6 +29,7 @@ Environment variables (all optional, with defaults):
 """
 
 import base64
+import copy
 import json
 import logging
 import os
@@ -37,7 +37,6 @@ import subprocess
 import time
 from typing import Optional
 
-import pytest
 import requests
 
 log = logging.getLogger(__name__)
@@ -60,6 +59,10 @@ PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get(
 SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
 INVALID_SUBSCRIPTION = os.environ.get("E2E_INVALID_SUBSCRIPTION", "nonexistent-sub")
 
+AUTH_POLICY_NAME = f"maas-auth-{MODEL_REF}"
+TRLP_NAME = f"maas-trlp-{MODEL_REF}"
+MANAGED_ANNOTATION = "opendatahub.io/managed"
+
 
 def _ns():
     return os.environ.get("MAAS_NAMESPACE", "opendatahub")
@@ -71,6 +74,7 @@ def _gateway_url():
         raise RuntimeError("GATEWAY_HOST env var is required")
     scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
     return f"{scheme}://{host}"
+
 
 # Used for debugging
 def _decode_jwt_payload(token: str) -> Optional[dict]:
@@ -85,6 +89,7 @@ def _decode_jwt_payload(token: str) -> Optional[dict]:
         return json.loads(payload_bytes)
     except Exception:
         return None
+
 
 def _get_cluster_token():
     sa_ns = os.environ.get("E2E_TEST_TOKEN_SA_NAMESPACE")
@@ -217,7 +222,7 @@ def _poll_status(token, expected, path=None, extra_headers=None, subscription=No
     if last_err is not None:
         err_msg += f", last error: {last_err}"
     if last is None and last_err is None:
-        err_msg += f", no response (all requests may have raised non-RequestException)"
+        err_msg += ", no response (all requests may have raised non-RequestException)"
     raise AssertionError(err_msg)
 
 
@@ -237,9 +242,25 @@ def _snapshot_cr(kind, name, namespace=None):
     return cr
 
 
+def _annotate(kind, name, annotation, namespace=None):
+    """Set or remove an annotation on a resource.
+
+    To set:   _annotate("authpolicy", "name", "key=value")
+    To remove: _annotate("authpolicy", "name", "key-")
+    """
+    namespace = namespace or _ns()
+    subprocess.run(
+        ["oc", "annotate", kind, name, annotation, "-n", namespace, "--overwrite"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestAuthEnforcement:
     """Tests that MaaSAuthPolicy correctly enforces access."""
@@ -353,7 +374,6 @@ class TestMultipleSubscriptionsPerModel:
         finally:
             _delete_cr("maassubscription", "e2e-extra-sub")
             _wait_reconcile()
-
 
     def test_multi_tier_auto_select_highest(self):
         """With 2 tiers for the same model, user in both should still get access.
@@ -534,4 +554,142 @@ class TestOrderingEdgeCases:
             _delete_cr("maassubscription", "e2e-ordering-sub")
             _delete_cr("maasauthpolicy", "e2e-ordering-auth")
             _delete_sa(sa)
+            _wait_reconcile()
+
+
+class TestManagedAnnotation:
+    """Tests that opendatahub.io/managed=false prevents the controller from updating generated resources."""
+
+    def test_authpolicy_managed_false_prevents_update(self):
+        """AuthPolicy annotated with opendatahub.io/managed=false must not have
+        its spec updated when the parent MaaSAuthPolicy is modified."""
+        ns = _ns()
+        ap_ns = "llm"
+        parent_snapshot = None
+        try:
+            # 1. Verify the AuthPolicy exists
+            ap = _get_cr("authpolicy", AUTH_POLICY_NAME, ap_ns)
+            assert ap, f"AuthPolicy {AUTH_POLICY_NAME} not found in {ap_ns}"
+
+            # 2. Snapshot the parent MaaSAuthPolicy for cleanup
+            parent_snapshot = _snapshot_cr(
+                "maasauthpolicy", SIMULATOR_ACCESS_POLICY, ns
+            )
+            assert parent_snapshot, f"MaaSAuthPolicy {SIMULATOR_ACCESS_POLICY} not found in {ns}"
+
+            # 3. Annotate the AuthPolicy with managed=false
+            _annotate("authpolicy", AUTH_POLICY_NAME, f"{MANAGED_ANNOTATION}=false", ap_ns)
+            log.info("Annotated AuthPolicy %s with %s=false", AUTH_POLICY_NAME, MANAGED_ANNOTATION)
+
+            # 4. Re-read the AuthPolicy to capture baseline spec (post-annotation)
+            ap_baseline = _get_cr("authpolicy", AUTH_POLICY_NAME, ap_ns)
+            assert ap_baseline, f"AuthPolicy {AUTH_POLICY_NAME} disappeared after annotation"
+            baseline_spec = ap_baseline["spec"]
+
+            # 5. Modify the parent MaaSAuthPolicy (add a group to subjects)
+            modified_parent = copy.deepcopy(parent_snapshot)
+            groups = modified_parent["spec"].get("subjects", {}).get("groups", [])
+            groups.append({"name": "e2e-managed-annotation-test-group"})
+            modified_parent["spec"]["subjects"]["groups"] = groups
+            _apply_cr(modified_parent)
+            log.info("Modified parent MaaSAuthPolicy %s (added test group)", SIMULATOR_ACCESS_POLICY)
+
+            # 6. Wait for reconciliation
+            _wait_reconcile()
+
+            # 7. Re-read the AuthPolicy and compare spec
+            ap_after = _get_cr("authpolicy", AUTH_POLICY_NAME, ap_ns)
+            assert ap_after, f"AuthPolicy {AUTH_POLICY_NAME} disappeared after parent update"
+            after_spec = ap_after["spec"]
+
+            assert baseline_spec == after_spec, (
+                f"AuthPolicy spec changed despite {MANAGED_ANNOTATION}=false.\n"
+                f"Before: {json.dumps(baseline_spec, indent=2)}\n"
+                f"After:  {json.dumps(after_spec, indent=2)}"
+            )
+            log.info("AuthPolicy spec unchanged after parent modification — managed=false respected")
+
+        finally:
+            # Remove the annotation (best-effort so parent restore still runs)
+            try:
+                _annotate("authpolicy", AUTH_POLICY_NAME, f"{MANAGED_ANNOTATION}-", ap_ns)
+                log.info("Removed %s annotation from AuthPolicy %s", MANAGED_ANNOTATION, AUTH_POLICY_NAME)
+            except subprocess.CalledProcessError:
+                log.warning("Failed to remove %s annotation from AuthPolicy %s (may not exist)", MANAGED_ANNOTATION, AUTH_POLICY_NAME)
+
+            # Restore the parent MaaSAuthPolicy
+            if parent_snapshot:
+                _apply_cr(parent_snapshot)
+                log.info(
+                    "Restored parent MaaSAuthPolicy %s from snapshot",
+                    SIMULATOR_ACCESS_POLICY,
+                )
+
+            _wait_reconcile()
+
+    def test_trlp_managed_false_prevents_update(self):
+        """TokenRateLimitPolicy annotated with opendatahub.io/managed=false must not
+        have its spec updated when the parent MaaSSubscription is modified."""
+        ns = _ns()
+        trlp_ns = "llm"
+        parent_snapshot = None
+        try:
+            # 1. Verify the TRLP exists
+            trlp = _get_cr("tokenratelimitpolicy", TRLP_NAME, trlp_ns)
+            assert trlp, f"TokenRateLimitPolicy {TRLP_NAME} not found in {trlp_ns}"
+
+            # 2. Snapshot the parent MaaSSubscription for cleanup
+            parent_snapshot = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION, ns)
+            assert parent_snapshot, f"MaaSSubscription {SIMULATOR_SUBSCRIPTION} not found in {ns}"
+
+            # 3. Annotate the TRLP with managed=false
+            _annotate("tokenratelimitpolicy", TRLP_NAME, f"{MANAGED_ANNOTATION}=false", trlp_ns)
+            log.info("Annotated TokenRateLimitPolicy %s with %s=false", TRLP_NAME, MANAGED_ANNOTATION)
+
+            # 4. Re-read the TRLP to capture baseline spec (post-annotation)
+            trlp_baseline = _get_cr("tokenratelimitpolicy", TRLP_NAME, trlp_ns)
+            assert trlp_baseline, f"TokenRateLimitPolicy {TRLP_NAME} disappeared after annotation"
+            baseline_spec = trlp_baseline["spec"]
+
+            # 5. Modify the parent MaaSSubscription (change the token rate limit value)
+            modified_parent = copy.deepcopy(parent_snapshot)
+            model_refs = modified_parent["spec"].get("modelRefs", [])
+            assert model_refs, f"MaaSSubscription {SIMULATOR_SUBSCRIPTION} has no modelRefs"
+            for ref in model_refs:
+                if ref.get("name") == MODEL_REF:
+                    limits = ref.get("tokenRateLimits", [])
+                    assert limits, f"modelRef {MODEL_REF} has no tokenRateLimits"
+                    limits[0]["limit"] = limits[0]["limit"] + 99999
+                    break
+            _apply_cr(modified_parent)
+            log.info("Modified parent MaaSSubscription %s (changed token rate limit)", SIMULATOR_SUBSCRIPTION)
+
+            # 6. Wait for reconciliation
+            _wait_reconcile()
+
+            # 7. Re-read the TRLP and compare spec
+            trlp_after = _get_cr("tokenratelimitpolicy", TRLP_NAME, trlp_ns)
+            assert trlp_after, f"TokenRateLimitPolicy {TRLP_NAME} disappeared after parent update"
+            after_spec = trlp_after["spec"]
+
+            assert baseline_spec == after_spec, (
+                f"TokenRateLimitPolicy spec changed despite {MANAGED_ANNOTATION}=false.\n"
+                f"Before: {json.dumps(baseline_spec, indent=2)}\n"
+                f"After:  {json.dumps(after_spec, indent=2)}"
+            )
+            log.info("TokenRateLimitPolicy spec unchanged after parent modification — managed=false respected")
+
+        finally:
+            # Remove the annotation (best-effort so parent restore still runs)
+            try:
+                _annotate("tokenratelimitpolicy", TRLP_NAME, f"{MANAGED_ANNOTATION}-", trlp_ns)
+                log.info("Removed %s annotation from TokenRateLimitPolicy %s", MANAGED_ANNOTATION, TRLP_NAME)
+            except subprocess.CalledProcessError:
+                log.warning("Failed to remove %s annotation from TokenRateLimitPolicy %s (may not exist)", MANAGED_ANNOTATION, TRLP_NAME)
+
+            # Restore the parent MaaSSubscription
+            if parent_snapshot:
+                _apply_cr(parent_snapshot)
+                log.info("Restored parent MaaSSubscription %s from snapshot", SIMULATOR_SUBSCRIPTION)
+
             _wait_reconcile()
