@@ -199,7 +199,7 @@ func (r *MaaSModelReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context
 
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
-		if isNotManaged(p) {
+		if !isManaged(p) {
 			// Respect the opendatahub.io/managed=false annotation even though it can lead to orphaned/stale Kuadrant resources
 			log.Info(fmt.Sprintf("Generated %s opted out, skipping deletion", kind),
 				"name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)

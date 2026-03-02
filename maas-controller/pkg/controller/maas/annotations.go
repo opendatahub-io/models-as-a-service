@@ -21,8 +21,15 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // ManagedByODHOperator is used to denote if a resource/component should be reconciled - when missing or true, reconcile.
 const ManagedByODHOperator = "opendatahub.io/managed"
 
-// isNotManaged reports whether obj has explicitly opted out of maas or opendatahub controller management.
-func isNotManaged(obj metav1.Object) bool {
+// isManaged reports whether obj has explicitly opted out of maas or opendatahub controller management.
+func isManaged(obj metav1.Object) bool {
 	annotations := obj.GetAnnotations()
-	return annotations[ManagedByODHOperator] == "false"
+	val, ok := annotations[ManagedByODHOperator]
+
+	if !ok {
+		// Annotation is absent -> is managed
+		return true
+	}
+
+	return val != "false"
 }
