@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/go-logr/logr"
 )
 
 var (
@@ -19,7 +19,7 @@ var (
 type SQLStore struct {
 	db     *sql.DB
 	dbType DBType
-	logger *logger.Logger
+	logger logr.Logger
 }
 
 var _ MetadataStore = (*SQLStore)(nil)
@@ -27,7 +27,7 @@ var _ MetadataStore = (*SQLStore)(nil)
 // NewSQLiteStore creates a SQLite store with a file path.
 // Use ":memory:" for an in-memory database (ephemeral, for testing).
 // Use a file path like "/data/maas-api.db" for persistent storage.
-func NewSQLiteStore(ctx context.Context, log *logger.Logger, dbPath string) (*SQLStore, error) {
+func NewSQLiteStore(ctx context.Context, log logr.Logger, dbPath string) (*SQLStore, error) {
 	if dbPath == "" {
 		dbPath = sqliteMemory
 	}

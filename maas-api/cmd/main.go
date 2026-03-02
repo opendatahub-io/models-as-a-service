@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
@@ -37,9 +38,10 @@ func serve() error {
 	cfg := config.Load()
 	flag.Parse()
 
-	log := logger.New(cfg.DebugMode)
+	baseLogger, log := logger.New(cfg.DebugMode)
+
 	defer func() {
-		if err := log.Sync(); err != nil {
+		if err := baseLogger.Sync(); err != nil {
 			// Can't use logger if sync failed
 			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
 		}
@@ -81,7 +83,7 @@ func serve() error {
 	}
 	defer func() {
 		if err := store.Close(); err != nil {
-			log.Error("Failed to close token store", "error", err)
+			log.Error(err, "Failed to close token store")
 		}
 	}()
 
@@ -132,7 +134,7 @@ func serve() error {
 //   - external: External database (PostgreSQL), supports multiple replicas
 //
 //nolint:ireturn // Returns MetadataStore interface by design for pluggable storage backends.
-func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
+func initStore(ctx context.Context, log logr.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
 	switch cfg.StorageMode {
 	case config.StorageModeInMemory, "":
 		log.Info("Using in-memory storage (data will be lost on restart). " +
@@ -160,7 +162,7 @@ func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api
 	}
 }
 
-func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, store api_keys.MetadataStore) error {
+func registerHandlers(ctx context.Context, log logr.Logger, router *gin.Engine, cfg *config.Config, store api_keys.MetadataStore) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
 
 	cluster, err := config.NewClusterConfig(cfg.Namespace, constant.DefaultResyncPeriod)
@@ -182,7 +184,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	modelManager, err := models.NewManager(log)
 	if err != nil {
-		log.Fatal("Failed to create model manager", "error", err)
+		return fmt.Errorf("failed to create model manager: %w", err)
 	}
 
 	tokenManager := token.NewManager(

@@ -10,21 +10,18 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 type Handler struct {
 	name    string
 	manager *Manager
-	logger  *logger.Logger
+	logger  logr.Logger
 }
 
-func NewHandler(log *logger.Logger, name string, manager *Manager) *Handler {
-	if log == nil {
-		log = logger.Production()
-	}
+func NewHandler(log logr.Logger, name string, manager *Manager) *Handler {
 	return &Handler{
 		name:    name,
 		manager: manager,
@@ -66,7 +63,7 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		// Validate required headers exist and are not empty
 		// Missing headers indicate a configuration issue with the auth policy (internal error)
 		if username == "" {
-			h.logger.Error("Missing or empty username header",
+			h.logger.Error(nil, "Missing or empty username header",
 				"header", constant.HeaderUsername,
 			)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -79,7 +76,7 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		}
 
 		if groupHeader == "" {
-			h.logger.Error("Missing group header",
+			h.logger.Error(nil, "Missing group header",
 				"header", constant.HeaderGroup,
 				"username", username,
 			)
@@ -96,10 +93,9 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		// Parsing errors also indicate configuration issues
 		groups, err := parseGroupsHeader(groupHeader)
 		if err != nil {
-			h.logger.Error("Failed to parse group header",
+			h.logger.Error(err, "Failed to parse group header",
 				"header", constant.HeaderGroup,
 				"header_value", groupHeader,
-				"error", err,
 			)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":         "Exception thrown while generating token",
@@ -116,7 +112,7 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 			Groups:   groups,
 		}
 
-		h.logger.Debug("Extracted user info from headers",
+		h.logger.V(1).Info("Extracted user info from headers",
 			"username", username,
 			"groups", groups,
 		)
@@ -167,8 +163,7 @@ func (h *Handler) IssueToken(c *gin.Context) {
 	// For ephemeral tokens, we explicitly pass an empty name.
 	token, err := h.manager.GenerateToken(c.Request.Context(), user, expiration)
 	if err != nil {
-		h.logger.Error("Failed to generate token",
-			"error", err,
+		h.logger.Error(err, "Failed to generate token",
 			"expiration", expiration.String(),
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})

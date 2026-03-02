@@ -5,17 +5,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
+	"github.com/go-logr/zapr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 func createTestStore(t *testing.T) *api_keys.SQLStore {
 	t.Helper()
 	ctx := context.Background()
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 	store, err := api_keys.NewSQLiteStore(ctx, testLogger, ":memory:")
 	require.NoError(t, err, "failed to create test store")
 	return store
@@ -165,7 +168,8 @@ func TestStoreValidation(t *testing.T) {
 
 func TestSQLiteStore(t *testing.T) {
 	ctx := context.Background()
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 
 	t.Run("InMemory", func(t *testing.T) {
 		store, err := api_keys.NewSQLiteStore(ctx, testLogger, ":memory:")
@@ -191,7 +195,8 @@ func TestSQLiteStore(t *testing.T) {
 
 func TestExternalStore(t *testing.T) {
 	ctx := context.Background()
-	testLogger := logger.Development()
+	zapLog, _ := zap.NewDevelopment()
+	testLogger := zapr.NewLogger(zapLog)
 
 	t.Run("InvalidURL", func(t *testing.T) {
 		_, err := api_keys.NewExternalStore(ctx, testLogger, "mysql://localhost:3306/db")
