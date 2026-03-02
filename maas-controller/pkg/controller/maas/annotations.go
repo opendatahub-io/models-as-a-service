@@ -22,7 +22,6 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 const ManagedByODHOperator = "opendatahub.io/managed"
 
 // isNotManaged reports whether obj has explicitly opted out of maas or opendatahub controller management.
-// An object is opted out when either the current or the deprecated managed annotation is set to "false".
 func isNotManaged(obj metav1.Object) bool {
 	annotations := obj.GetAnnotations()
 	return annotations[ManagedByODHOperator] == "false"
