@@ -264,12 +264,13 @@ kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed-
 kubectl annotate tokenratelimitpolicy <name> -n <namespace> opendatahub.io/managed-
 ```
 
-> **Warning: orphaned resources.** An opted-out policy can become permanently orphaned (no longer reconciled and not deleted) in two situations:
+> **Warning: orphaned resources.** An opted-out policy can become permanently orphaned (no longer reconciled and not deleted) in the following situations:
 >
 > - **Last owner deleted.** When the last `MaaSAuthPolicy` or `MaaSSubscription` that references a model is deleted, the controller skips deletion of any opted-out generated policy for that model. The policy will persist until it is manually deleted.
 > - **Model reference removed.** When a model is removed from a `MaaSAuthPolicy.spec.modelRefs` or `MaaSSubscription.spec.modelRefs` (edit rather than deletion), the controller does not clean up the generated policy for that model regardless of the opt-out annotation.
+> - **MaasModel deleted.** When a MaaSModel is deleted, the controller's finalizer skips deletion of any opted-out generated policy for that model. The policy will persist until it is manually deleted.
 >
-> In both cases, manually delete the orphaned resource when it is no longer needed.
+> In all cases, manually delete the orphaned resource when it is no longer needed.
 
 ## Build and push image
 
