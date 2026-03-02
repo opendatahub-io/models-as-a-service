@@ -153,15 +153,17 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 
 			// The controller sets spec.targetRef.name to the HTTPRoute name on update.
 			// A sentinel value means no update occurred.
-			targetRefName, _, _ := unstructured.NestedString(got.Object, "spec", "targetRef", "name")
-			specChanged := targetRefName != "sentinel-route"
+			targetRefName, found, err := unstructured.NestedString(got.Object, "spec", "targetRef", "name")
+			if err != nil || !found {
+				t.Fatalf("spec.targetRef.name missing or invalid: found=%v err=%v", found, err)
+			}
 
-			if specChanged != tc.wantSpecChanged {
-				if tc.wantSpecChanged {
-					t.Errorf("spec.targetRef.name = %q: expected controller to overwrite sentinel value %q", targetRefName, "sentinel-route")
-				} else {
-					t.Errorf("spec.targetRef.name = %q: expected controller to preserve sentinel value %q (managed=false opt-out)", targetRefName, "sentinel-route")
+			if tc.wantSpecChanged {
+				if targetRefName != httpRouteName {
+					t.Errorf("spec.targetRef.name = %q: expected %q", targetRefName, httpRouteName)
 				}
+			} else if targetRefName != "sentinel-route" {
+				t.Errorf("spec.targetRef.name = %q: expected sentinel %q (managed=false opt-out)", targetRefName, "sentinel-route")
 			}
 		})
 	}
