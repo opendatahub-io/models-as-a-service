@@ -8,9 +8,10 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
 
@@ -68,7 +69,8 @@ func setupTestRouter(lister subscription.Lister) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
-	log := logger.New(false)
+	zapLog, _ := zap.NewDevelopment()
+	log := zapr.NewLogger(zapLog)
 	selector := subscription.NewSelector(log, lister)
 	handler := subscription.NewHandler(log, selector)
 

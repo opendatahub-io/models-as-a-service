@@ -5,10 +5,10 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/go-logr/logr"
 	"k8s.io/utils/env"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 // StorageMode represents the storage backend type.
@@ -170,10 +170,10 @@ func (c *Config) handleDeprecatedFlags() {
 }
 
 // PrintDeprecationWarnings prints warnings for deprecated flags to stderr.
-func (c *Config) PrintDeprecationWarnings(log *logger.Logger) {
+func (c *Config) PrintDeprecationWarnings(log logr.Logger) {
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "port" {
-			log.Warn("WARNING: --port is deprecated, use --address with --secure=false to serve insecure HTTP traffic")
+			log.Info("WARNING: --port is deprecated, use --address with --secure=false to serve insecure HTTP traffic")
 		}
 	})
 }
