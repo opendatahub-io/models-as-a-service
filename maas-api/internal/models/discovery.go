@@ -71,7 +71,7 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 	if len(models) == 0 {
 		return models
 	}
-	m.logger.Debug("FilterModelsByAccess: validating access for models", "count", len(models), "subscription", subscriptionHeader)
+	m.logger.Debug("FilterModelsByAccess: validating access for models", "count", len(models), "subscriptionHeaderProvided", subscriptionHeader != "")
 	var out []Model
 	var mu sync.Mutex
 	g, ctx := errgroup.WithContext(ctx)
@@ -186,7 +186,7 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, s
 		"service", meta.ServiceName,
 		"endpoint", meta.Endpoint,
 		"kind", meta.Kind,
-		"subscription", subscriptionHeader,
+		"subscriptionHeaderProvided", subscriptionHeader != "",
 	)
 	backoff := wait.Backoff{
 		Steps:    4,
@@ -245,7 +245,7 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 		"endpoint", meta.Endpoint,
 		"statusCode", resp.StatusCode,
 		"authHeaderLen", len(authHeader),
-		"subscriptionHeader", subscriptionHeader,
+		"subscriptionHeaderProvided", subscriptionHeader != "",
 	)
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))

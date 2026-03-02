@@ -527,4 +527,50 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		require.True(t, ok, "Expected error object")
 		assert.Equal(t, "permission_error", errorObj["type"])
 	})
+
+	t.Run("unknown subscription header - returns 403", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err, "Failed to create request")
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Subscription", "nonexistent-subscription")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		// User provides a subscription that doesn't exist
+		require.Equal(t, http.StatusForbidden, w.Code, "Expected 403 Forbidden")
+
+		var errorResponse map[string]any
+		err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
+		require.NoError(t, err, "Failed to unmarshal error response")
+
+		errorObj, ok := errorResponse["error"].(map[string]any)
+		require.True(t, ok, "Expected error object")
+		assert.Equal(t, "permission_error", errorObj["type"])
+	})
+
+	t.Run("subscription user lacks access to - returns 403", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err, "Failed to create request")
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Subscription", "premium")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		// User requests premium subscription but only has access to free
+		require.Equal(t, http.StatusForbidden, w.Code, "Expected 403 Forbidden")
+
+		var errorResponse map[string]any
+		err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
+		require.NoError(t, err, "Failed to unmarshal error response")
+
+		errorObj, ok := errorResponse["error"].(map[string]any)
+		require.True(t, ok, "Expected error object")
+		assert.Equal(t, "permission_error", errorObj["type"])
+	})
 }

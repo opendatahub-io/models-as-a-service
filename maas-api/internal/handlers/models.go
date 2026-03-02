@@ -103,8 +103,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			// subscription errors), we return 403 Forbidden for all subscription-related errors.
 			if errors.As(err, &multipleSubsErr) {
 				h.logger.Debug("User has multiple subscriptions, x-maas-subscription header required",
-					"username", userContext.Username,
-					"subscriptions", multipleSubsErr.Subscriptions,
+					"subscriptionCount", len(multipleSubsErr.Subscriptions),
 				)
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{
@@ -115,10 +114,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 
 			if errors.As(err, &accessDeniedErr) {
-				h.logger.Debug("Access denied to subscription",
-					"username", userContext.Username,
-					"subscription", selectedSubscription,
-				)
+				h.logger.Debug("Access denied to subscription")
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{
 						"message": err.Error(),
@@ -128,9 +124,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 
 			if errors.As(err, &notFoundErr) {
-				h.logger.Debug("Subscription not found",
-					"subscription", selectedSubscription,
-				)
+				h.logger.Debug("Subscription not found")
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{
 						"message": err.Error(),
@@ -140,9 +134,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 
 			if errors.As(err, &noSubErr) {
-				h.logger.Debug("No subscription found for user",
-					"username", userContext.Username,
-				)
+				h.logger.Debug("No subscription found for user")
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{
 						"message": err.Error(),
@@ -154,7 +146,6 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			// Other errors are internal server errors
 			h.logger.Error("Subscription selection failed",
 				"error", err,
-				"username", userContext.Username,
 			)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": gin.H{
