@@ -223,9 +223,8 @@ run_auth_debug_report() {
   _append ""
 
   # Determine maas-api namespace
-  local maas_api_ns
-  maas_api_ns=$(kubectl get deployment maas-controller -n $MAAS_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name=="MAAS_API_NAMESPACE") | .value' 2>/dev/null || echo "$MAAS_NAMESPACE")
-  [[ -z "$maas_api_ns" ]] && maas_api_ns="$MAAS_NAMESPACE"
+  # Note: MAAS_API_NAMESPACE uses valueFrom.fieldRef, so .value is null; use MAAS_NAMESPACE instead
+  local maas_api_ns="$MAAS_NAMESPACE"
 
   local sub_select_url="https://maas-api.${maas_api_ns}.svc.cluster.local:8443/v1/subscriptions/select"
   _section "Subscription Selector Endpoint Validation"

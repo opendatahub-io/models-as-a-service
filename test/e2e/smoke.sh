@@ -66,6 +66,7 @@ if [[ -z "${MAAS_API_BASE_URL}" ]]; then
 fi
 
 export HOST
+export GATEWAY_HOST="${HOST}"  # Required by test_subscription.py
 export MAAS_API_BASE_URL
 
 echo "[smoke] MAAS_API_BASE_URL=${MAAS_API_BASE_URL}"
