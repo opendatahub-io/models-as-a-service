@@ -1,5 +1,8 @@
 # MaaS Platform Documentation
 
+!!! warning "Outdated Blog Post"
+    The blog post [Introducing Models-as-a-Service in OpenShift AI](https://developers.redhat.com/articles/2025/11/25/introducing-models-service-openshift-ai) references old URLs and contains broken instructions. Please use **this documentation** for up-to-date installation and configuration steps.
+
 Welcome to the Models-as-a-Service (MaaS) Platform documentation.
 
 The MaaS Platform enhances the model serving capabilities of [Open Data Hub](https://github.com/opendatahub-io) by adding a management layer for self-service access control, rate limiting, and tier-based subscriptions.
