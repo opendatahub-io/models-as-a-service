@@ -239,9 +239,9 @@ def _snapshot_cr(kind, name, namespace=None):
 
 def _get_auth_policies_for_model(model_ref, namespace=None):
     """Get all MaaSAuthPolicies that reference a model.
-    
+
     Args:
-        model_ref: Name of the MaaSModel
+        model_ref: Name of the MaaSModelRef
         namespace: Namespace to search (defaults to _ns())
     
     Returns:
@@ -260,9 +260,9 @@ def _get_auth_policies_for_model(model_ref, namespace=None):
 
 def _get_subscriptions_for_model(model_ref, namespace=None):
     """Get all MaaSSubscriptions that reference a model.
-    
+
     Args:
-        model_ref: Name of the MaaSModel
+        model_ref: Name of the MaaSModelRef
         namespace: Namespace to search (defaults to _ns())
     
     Returns:
@@ -287,7 +287,7 @@ def _list_crs(kind, namespace=None):
     """List all CRs of a given kind.
 
     Args:
-        kind: CR kind (e.g., 'maasmodel', 'maasauthpolicy')
+        kind: CR kind (e.g., 'maasmodelref', 'maasauthpolicy')
         namespace: Namespace to search (defaults to _ns())
 
     Returns:
@@ -298,7 +298,7 @@ def _list_crs(kind, namespace=None):
     """
     namespace = namespace or _ns()
     plural = {
-        "maasmodel": "maasmodels",
+        "maasmodelref": "maasmodelrefs",
         "maasauthpolicy": "maasauthpolicies",
         "maassubscription": "maassubscriptions",
     }.get(kind, f"{kind}s")
@@ -331,12 +331,12 @@ def _sa_to_user(sa_name, namespace=None):
 
 
 def _create_test_maas_model(name, llmis_name="facebook-opt-125m-simulated", llmis_namespace="llm", namespace=None):
-    """Create a MaaSModel CR for testing."""
+    """Create a MaaSModelRef CR for testing."""
     namespace = namespace or _ns()
-    log.info("Creating MaaSModel: %s", name)
+    log.info("Creating MaaSModelRef: %s", name)
     _apply_cr({
         "apiVersion": "maas.opendatahub.io/v1alpha1",
-        "kind": "MaaSModel",
+        "kind": "MaaSModelRef",
         "metadata": {"name": name, "namespace": namespace},
         "spec": {
             "modelRef": {
@@ -381,10 +381,10 @@ def _create_test_auth_policy(name, model_refs, users=None, groups=None, namespac
 
 
 def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
-    """Wait for MaaSModel to reach Ready phase.
+    """Wait for MaaSModelRef to reach Ready phase.
 
     Args:
-        name: Name of the MaaSModel
+        name: Name of the MaaSModelRef
         namespace: Namespace (defaults to _ns())
         timeout: Maximum wait time in seconds (default: 120)
 
@@ -392,28 +392,28 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
         str: The model endpoint URL
 
     Raises:
-        TimeoutError: If MaaSModel doesn't become Ready within timeout
+        TimeoutError: If MaaSModelRef doesn't become Ready within timeout
     """
     namespace = namespace or _ns()
     deadline = time.time() + timeout
-    log.info(f"Waiting for MaaSModel {name} to become Ready (timeout: {timeout}s)...")
+    log.info(f"Waiting for MaaSModelRef {name} to become Ready (timeout: {timeout}s)...")
 
     while time.time() < deadline:
-        cr = _get_cr("maasmodel", name, namespace)
+        cr = _get_cr("maasmodelref", name, namespace)
         if cr:
             phase = cr.get("status", {}).get("phase")
             endpoint = cr.get("status", {}).get("endpoint")
             if phase == "Ready" and endpoint:
-                log.info(f"✅ MaaSModel {name} is Ready (endpoint: {endpoint})")
+                log.info(f"✅ MaaSModelRef {name} is Ready (endpoint: {endpoint})")
                 return endpoint
-            log.debug(f"MaaSModel {name} phase: {phase}, endpoint: {endpoint or 'none'}")
+            log.debug(f"MaaSModelRef {name} phase: {phase}, endpoint: {endpoint or 'none'}")
         time.sleep(5)
 
     # Timeout - log current state for debugging
-    cr = _get_cr("maasmodel", name, namespace)
+    cr = _get_cr("maasmodelref", name, namespace)
     current_phase = cr.get("status", {}).get("phase") if cr else "not found"
     raise TimeoutError(
-        f"MaaSModel {name} did not become Ready within {timeout}s (current phase: {current_phase})"
+        f"MaaSModelRef {name} did not become Ready within {timeout}s (current phase: {current_phase})"
     )
 
 
@@ -945,7 +945,7 @@ class TestOrderingEdgeCases:
 
 class TestE2ESubscriptionFlow:
     """
-    End-to-end tests that create MaaSModel, MaaSAuthPolicy, and MaaSSubscription
+    End-to-end tests that create MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription
     from scratch and validate the complete subscription flow.
 
     Each test creates all necessary CRs and validates one scenario:
@@ -971,15 +971,15 @@ class TestE2ESubscriptionFlow:
         log.info("=" * 60)
         
         # Validate MODEL_REF exists and is Ready
-        model = _get_cr("maasmodel", MODEL_REF)
+        model = _get_cr("maasmodelref", MODEL_REF)
         if not model:
-            pytest.fail(f"PREREQUISITE MISSING: MaaSModel '{MODEL_REF}' not found. "
+            pytest.fail(f"PREREQUISITE MISSING: MaaSModelRef '{MODEL_REF}' not found. "
                        f"Ensure prow setup has created the model.")
-        
+
         phase = model.get("status", {}).get("phase")
         endpoint = model.get("status", {}).get("endpoint")
         if phase != "Ready" or not endpoint:
-            pytest.fail(f"PREREQUISITE INVALID: MaaSModel '{MODEL_REF}' not Ready "
+            pytest.fail(f"PREREQUISITE INVALID: MaaSModelRef '{MODEL_REF}' not Ready "
                        f"(phase={phase}, endpoint={endpoint or 'none'}). "
                        f"Wait for reconciliation or check controller logs.")
         
@@ -1016,11 +1016,11 @@ class TestE2ESubscriptionFlow:
 
     def test_e2e_with_both_access_and_subscription_gets_200(self):
         """
-        Full E2E test: Create MaaSModel, MaaSAuthPolicy, and MaaSSubscription from scratch.
+        Full E2E test: Create MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription from scratch.
         Token with both access and subscription should get 200 OK.
 
         This is the comprehensive test that validates the complete E2E flow including
-        MaaSModel creation and reconciliation. Other tests use existing models for speed.
+        MaaSModelRef creation and reconciliation. Other tests use existing models for speed.
         """
         ns = _ns()
         model_ref = "e2e-test-model-success"
@@ -1054,7 +1054,7 @@ class TestE2ESubscriptionFlow:
         finally:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
-            _delete_cr("maasmodel", model_ref, namespace=ns)
+            _delete_cr("maasmodelref", model_ref, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
             _wait_reconcile()
 
