@@ -67,18 +67,16 @@ To have models appear via the **MaaSModelRef** flow:
 
 3. Create a **MaaSModelRef** for each model you want to expose, referencing the LLMIS:
 
-   ```yaml
-   apiVersion: maas.opendatahub.io/v1alpha1
-   kind: MaaSModelRef
-   metadata:
-     name: my-model-name   # This becomes the model "id" in GET /v1/models
-     namespace: opendatahub
-   spec:
-     modelRef:
-       kind: llmisvc
-       name: my-llm-isvc-name
-       namespace: llm
-   ```
+        apiVersion: maas.opendatahub.io/v1alpha1
+        kind: MaaSModelRef
+        metadata:
+          name: my-model-name   # This becomes the model "id" in GET /v1/models
+          namespace: opendatahub
+        spec:
+          modelRef:
+            kind: LLMInferenceService
+            name: my-llm-isvc-name
+            namespace: llm
 
 4. The controller reconciles the MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API (in the same namespace) will then include this model in GET /v1/models when it lists MaaSModelRef CRs.
 

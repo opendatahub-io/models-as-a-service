@@ -27,17 +27,17 @@ import (
 )
 
 const (
-	maasModelGVRGroup    = "maas.opendatahub.io"
-	maasModelGVRVersion  = "v1alpha1"
-	maasModelGVRResource = "maasmodelrefs"
+	maasModelRefGVRGroup    = "maas.opendatahub.io"
+	maasModelRefGVRVersion  = "v1alpha1"
+	maasModelRefGVRResource = "maasmodelrefs"
 )
 
-// maasModelUnstructured returns an unstructured MaaSModelRef for testing (name, namespace, endpoint URL, ready).
-func maasModelUnstructured(name, namespace, endpoint string, ready bool) *unstructured.Unstructured {
+// maasModelRefUnstructured returns an unstructured MaaSModelRef for testing (name, namespace, endpoint URL, ready).
+func maasModelRefUnstructured(name, namespace, endpoint string, ready bool) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   maasModelGVRGroup,
-		Version: maasModelGVRVersion,
+		Group:   maasModelRefGVRGroup,
+		Version: maasModelRefGVRVersion,
 		Kind:    "MaaSModelRef",
 	})
 	u.SetName(name)
@@ -223,12 +223,12 @@ func TestListingModels(t *testing.T) {
 		},
 	}
 	// Build MaaSModelRef unstructured list from scenarios (same URLs as mock servers for access validation).
-	maasModelItems := make([]*unstructured.Unstructured, 0, len(llmTestScenarios))
+	maasModelRefItems := make([]*unstructured.Unstructured, 0, len(llmTestScenarios))
 	for _, s := range llmTestScenarios {
 		endpoint := s.URL.String()
-		maasModelItems = append(maasModelItems, maasModelUnstructured(s.Name, fixtures.TestNamespace, endpoint, s.Ready))
+		maasModelRefItems = append(maasModelRefItems, maasModelRefUnstructured(s.Name, fixtures.TestNamespace, endpoint, s.Ready))
 	}
-	maasModelLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelItems}
+	maasModelRefLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelRefItems}
 
 	config := fixtures.TestServerConfig{
 		Objects: []runtime.Object{},
@@ -242,7 +242,7 @@ func TestListingModels(t *testing.T) {
 	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
 	defer cleanup()
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, maasModelLister, fixtures.TestNamespace)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, maasModelRefLister, fixtures.TestNamespace)
 
 	// Create token handler to extract user info middleware
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)

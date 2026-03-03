@@ -10,7 +10,7 @@ MaaSModelRef's `spec.modelRef` identifies the **referent** (the backend that ser
 
 | Field       | Description |
 | ----------- | ----------- |
-| **kind**    | The type of backend. Determines which controller reconciles this MaaSModelRef and how the endpoint is resolved. Example: `llmisvc`, `ExternalModel`. |
+| **kind**    | The type of backend. Determines which controller reconciles this MaaSModelRef and how the endpoint is resolved. Valid values: `LLMInferenceService`, `ExternalModel`. The alias `llmisvc` is also accepted for backwards compatibility. |
 | **name**    | Name of the referent resource (e.g. LLMInferenceService name, or external model identifier). |
 | **namespace** | *(Optional)* Namespace of the referent. If empty, the MaaSModelRef's namespace is used. |
 
@@ -18,9 +18,9 @@ The controller that reconciles MaaSModelRef uses **kind** to decide how to resol
 
 ## Current behavior
 
-- **Supported kind today:** `llmisvc` (default). The MaaS controller reconciles MaaSModelRefs whose **modelRef** points to an LLMInferenceService (by name and optional namespace). It sets `status.endpoint` from the LLMInferenceService status and `status.phase` from its readiness.
+- **Supported kind today:** `LLMInferenceService` (also accepts the alias `llmisvc` for backwards compatibility). The MaaS controller reconciles MaaSModelRefs whose **modelRef** points to an LLMInferenceService (by name and optional namespace). It sets `status.endpoint` from the LLMInferenceService status and `status.phase` from its readiness.
 - **API behavior:** The API reads MaaSModelRefs from the informer cache, maps each to an API model (`id`, `url`, `ready`, `kind`, etc.), then **validates access** by probing each model's `/v1/models` endpoint with the request's **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included.
-- **Kind on the wire:** Each model in the GET /v1/models response can carry a `kind` field (e.g. `llmisvc`) from `spec.modelRef.kind` for clients or tooling.
+- **Kind on the wire:** Each model in the GET /v1/models response can carry a `kind` field (e.g. `LLMInferenceService`) from `spec.modelRef.kind` for clients or tooling.
 
 ## Adding a new kind in the future
 
