@@ -26,8 +26,8 @@ type ClusterConfig struct {
 	NamespaceLister      corev1listers.NamespaceLister
 	ServiceAccountLister corev1listers.ServiceAccountLister
 
-	// MaaSModelLister lists MaaSModel CRs from the informer cache for GET /v1/models.
-	MaaSModelLister models.MaaSModelLister
+	// MaaSModelRefLister lists MaaSModelRef CRs from the informer cache for GET /v1/models.
+	MaaSModelRefLister models.MaaSModelRefLister
 
 	// MaaSSubscriptionLister lists MaaSSubscription CRs from the informer cache for subscription selection.
 	MaaSSubscriptionLister subscription.Lister
@@ -36,12 +36,12 @@ type ClusterConfig struct {
 	startFuncs      []func(<-chan struct{})
 }
 
-// maasModelLister implements models.MaaSModelLister from a cache.GenericLister (informer-backed).
-type maasModelLister struct {
+// maasModelRefLister implements models.MaaSModelRefLister from a cache.GenericLister (informer-backed).
+type maasModelRefLister struct {
 	lister cache.GenericLister
 }
 
-func (m *maasModelLister) List(namespace string) ([]*unstructured.Unstructured, error) {
+func (m *maasModelRefLister) List(namespace string) ([]*unstructured.Unstructured, error) {
 	objs, err := m.lister.List(labels.Everything())
 	if err != nil {
 		return nil, err
@@ -104,11 +104,11 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 	nsInformer := coreFactory.Core().V1().Namespaces()
 	saInformer := coreFactory.Core().V1().ServiceAccounts()
 
-	// MaaSModel informer (cached); watches all namespaces so we can list any namespace from cache.
+	// MaaSModelRef informer (cached); watches all namespaces so we can list any namespace from cache.
 	maasDynamicFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, resyncPeriod)
 	maasGVR := models.GVR()
 	maasInformer := maasDynamicFactory.ForResource(maasGVR)
-	maasModelListerVal := &maasModelLister{lister: maasInformer.Lister()}
+	maasModelRefListerVal := &maasModelRefLister{lister: maasInformer.Lister()}
 
 	// MaaSSubscription informer (cached); watches all namespaces for subscription selection.
 	subscriptionGVR := subscription.GVR()
@@ -122,7 +122,7 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 		NamespaceLister:      nsInformer.Lister(),
 		ServiceAccountLister: saInformer.Lister(),
 
-		MaaSModelLister:        maasModelListerVal,
+		MaaSModelRefLister:     maasModelRefListerVal,
 		MaaSSubscriptionLister: maasSubscriptionListerVal,
 
 		informersSynced: []cache.InformerSynced{

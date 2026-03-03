@@ -1,5 +1,5 @@
 apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSModel
+kind: MaaSModelRef
 metadata:
   name: facebook-opt-125m-simulated
   namespace: opendatahub

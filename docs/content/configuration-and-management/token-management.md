@@ -101,7 +101,7 @@ When you call **GET /v1/models** with an **Authorization** header, the API passe
 
 ```mermaid
 flowchart LR
-    A[Your Request\nAuthorization header] --> B[List MaaSModels]
+    A[Your Request\nAuthorization header] --> B[List MaaSModelRefs]
     B --> C[Probe each model endpoint\nwith same header]
     C --> D[Return only models\nthat allow access]
 ```

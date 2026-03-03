@@ -104,7 +104,7 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			model := &maasv1alpha1.MaaSModel{
+			model := &maasv1alpha1.MaaSModelRef{
 				ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
 				Spec: maasv1alpha1.MaaSModelSpec{
 					ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},

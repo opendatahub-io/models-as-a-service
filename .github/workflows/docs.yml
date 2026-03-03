@@ -22,7 +22,7 @@ env:
   # Set to 'false' to allow external link failures without failing the build
   # Configure via: Settings → Secrets and variables → Actions → Variables → New repository variable ->
   # Name: FAIL_ON_BROKEN_LINKS, Value: false
-  FAIL_ON_BROKEN_LINKS: ${{ vars.FAIL_ON_BROKEN_LINKS || 'true' }}
+  FAIL_ON_BROKEN_LINKS: ${{ vars.FAIL_ON_BROKEN_LINKS == 'true' }}
 
 concurrency:
   group: "pages"

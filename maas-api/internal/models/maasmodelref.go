@@ -12,17 +12,17 @@ import (
 const (
 	maasGroup    = "maas.opendatahub.io"
 	maasVersion  = "v1alpha1"
-	maasResource = "maasmodels"
+	maasResource = "maasmodelrefs"
 )
 
-// MaaSModelLister lists MaaSModel CRs from a cache (e.g. informer-backed). Used for GET /v1/models.
-type MaaSModelLister interface {
-	// List returns MaaSModel unstructured items in the given namespace.
+// MaaSModelRefLister lists MaaSModelRef CRs from a cache (e.g. informer-backed). Used for GET /v1/models.
+type MaaSModelRefLister interface {
+	// List returns MaaSModelRef unstructured items in the given namespace.
 	List(namespace string) ([]*unstructured.Unstructured, error)
 }
 
-// ListFromMaaSModelLister converts cached MaaSModel items to API models. Uses status.endpoint and status.phase.
-func ListFromMaaSModelLister(lister MaaSModelLister, namespace string) ([]Model, error) {
+// ListFromMaaSModelRefLister converts cached MaaSModelRef items to API models. Uses status.endpoint and status.phase.
+func ListFromMaaSModelRefLister(lister MaaSModelRefLister, namespace string) ([]Model, error) {
 	if lister == nil || namespace == "" {
 		return nil, nil
 	}
@@ -32,7 +32,7 @@ func ListFromMaaSModelLister(lister MaaSModelLister, namespace string) ([]Model,
 	}
 	out := make([]Model, 0, len(items))
 	for _, u := range items {
-		m := maasModelToModel(u)
+		m := maasModelRefToModel(u)
 		if m != nil {
 			out = append(out, *m)
 		}
@@ -40,13 +40,13 @@ func ListFromMaaSModelLister(lister MaaSModelLister, namespace string) ([]Model,
 	return out, nil
 }
 
-// GVR returns the GroupVersionResource for MaaSModel CRs.
+// GVR returns the GroupVersionResource for MaaSModelRef CRs.
 func GVR() schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: maasGroup, Version: maasVersion, Resource: maasResource}
 }
 
-// maasModelToModel converts a MaaSModel unstructured to a Model for the API.
-func maasModelToModel(u *unstructured.Unstructured) *Model {
+// maasModelRefToModel converts a MaaSModelRef unstructured to a Model for the API.
+func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 	if u == nil {
 		return nil
 	}

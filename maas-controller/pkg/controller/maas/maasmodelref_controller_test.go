@@ -29,30 +29,30 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-func TestMaaSModelReconciler_gatewayName(t *testing.T) {
+func TestMaaSModelRefReconciler_gatewayName(t *testing.T) {
 	t.Run("default_when_empty", func(t *testing.T) {
-		r := &MaaSModelReconciler{}
+		r := &MaaSModelRefReconciler{}
 		if got := r.gatewayName(); got != defaultGatewayName {
 			t.Errorf("gatewayName() = %q, want %q", got, defaultGatewayName)
 		}
 	})
 	t.Run("custom_when_set", func(t *testing.T) {
-		r := &MaaSModelReconciler{GatewayName: "my-gateway"}
+		r := &MaaSModelRefReconciler{GatewayName: "my-gateway"}
 		if got := r.gatewayName(); got != "my-gateway" {
 			t.Errorf("gatewayName() = %q, want %q", got, "my-gateway")
 		}
 	})
 }
 
-func TestMaaSModelReconciler_gatewayNamespace(t *testing.T) {
+func TestMaaSModelRefReconciler_gatewayNamespace(t *testing.T) {
 	t.Run("default_when_empty", func(t *testing.T) {
-		r := &MaaSModelReconciler{}
+		r := &MaaSModelRefReconciler{}
 		if got := r.gatewayNamespace(); got != defaultGatewayNamespace {
 			t.Errorf("gatewayNamespace() = %q, want %q", got, defaultGatewayNamespace)
 		}
 	})
 	t.Run("custom_when_set", func(t *testing.T) {
-		r := &MaaSModelReconciler{GatewayNamespace: "my-ns"}
+		r := &MaaSModelRefReconciler{GatewayNamespace: "my-ns"}
 		if got := r.gatewayNamespace(); got != "my-ns" {
 			t.Errorf("gatewayNamespace() = %q, want %q", got, "my-ns")
 		}
@@ -142,7 +142,7 @@ func TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation(t *testin
 						WithObjects(existing).
 						Build()
 
-					r := &MaaSModelReconciler{Client: c, Scheme: scheme}
+					r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
 					if err := r.deleteGeneratedPoliciesByLabel(context.Background(), logr.Discard(), modelName, res.kind, res.group, res.version); err != nil {
 						t.Fatalf("deleteGeneratedPoliciesByLabel: unexpected error: %v", err)
 					}
