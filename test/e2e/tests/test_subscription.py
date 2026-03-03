@@ -799,7 +799,7 @@ class TestMultipleAuthPoliciesPerModel:
 
             # Verify admin can access with both policies active
             token = _get_cluster_token()
-            r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-admin-premium-sub")
+            _poll_status(token, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-admin-premium-sub")
 
             # Delete one auth policy
             _delete_cr("maasauthpolicy", "e2e-extra-auth-1")
@@ -836,7 +836,7 @@ class TestCascadeDeletion:
             _delete_cr("maassubscription", "e2e-temp-sub")
 
             token = _get_cluster_token()
-            r = _poll_status(token, 200)
+            _poll_status(token, 200)
         finally:
             _delete_cr("maassubscription", "e2e-temp-sub")
 
@@ -936,7 +936,7 @@ class TestE2ESubscriptionFlow:
 
     Each test creates all necessary CRs and validates one scenario:
     1. Token with both access (MaaSAuthPolicy) and subscription → 200 OK
-    2. Token with access but no subscription → 429 Rate Limited
+    2. Token with access but no subscription → 403 Forbidden
     3. Token with subscription but not in MaaSAuthPolicy → 403 Forbidden
     4. Token with single subscription + no header → auto-select (200 OK)
     5. Token with multiple subscriptions + no header → 403 Forbidden
