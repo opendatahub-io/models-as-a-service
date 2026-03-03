@@ -10,8 +10,8 @@ help:
 	@echo "  make test         - run tests"
 	@echo "  make generate     - generate deepcopy code for API types"
 	@echo "  make manifests    - generate CRD manifests"
-	@echo "  make install      - apply config/default (CRDs, RBAC, deployment)"
-	@echo "  make uninstall    - delete config/default resources"
+	@echo "  make install      - apply deployment/base/maas-controller/default (CRDs, RBAC, deployment)"
+	@echo "  make uninstall    - delete deployment/base/maas-controller/default resources"
 	@echo "  make image-build  - build container image (podman/buildah/docker); default IMAGE=quay.io/opendatahub/maas-controller"
 	@echo "  make image-push   - build and push image; override with IMAGE=... IMAGE_TAG=..."
 
@@ -46,14 +46,14 @@ generate:
 
 # Generate CRD manifests
 manifests:
-	controller-gen crd paths="./api/..." output:crd:dir=./config/crd/bases
+	controller-gen crd paths="./api/..." output:crd:dir=../deployment/base/maas-controller/crd/bases
 
 # Install CRDs, RBAC, and manager deployment (default: opendatahub namespace)
 install:
-	kubectl apply -k config/default
+	kubectl apply -k ../deployment/base/maas-controller/default
 
 uninstall:
-	kubectl delete -k config/default --ignore-not-found
+	kubectl delete -k ../deployment/base/maas-controller/default --ignore-not-found
 
 # Build container image (podman, buildah, or docker)
 # buildah uses "bud" (build-using-dockerfile) instead of "build"

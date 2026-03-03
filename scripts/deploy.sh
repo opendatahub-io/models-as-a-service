@@ -443,7 +443,7 @@ main() {
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local project_root="$script_dir/.."
   local controller_dir="$project_root/maas-controller"
-  local config_dir="$controller_dir/config/default"
+  local config_dir="$project_root/deployment/base/maas-controller/default"
 
   if [[ ! -d "$controller_dir" ]]; then
     log_error "maas-controller directory not found at $controller_dir — subscription controller required"
@@ -457,7 +457,7 @@ main() {
       fi
       set_maas_controller_image
       if [[ "$NAMESPACE" != "opendatahub" ]]; then
-        (cd "$project_root" && kustomize build maas-controller/config/default | \
+        (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
           sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
           cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
@@ -472,7 +472,7 @@ main() {
       fi
       cleanup_maas_controller_image
     else
-      log_info "  Controller deployed via kustomize overlay (maas-controller/config/default)"
+      log_info "  Controller deployed via kustomize overlay (deployment/base/maas-controller/default)"
     fi
 
     log_info "  Waiting for maas-controller to be ready..."
@@ -587,7 +587,7 @@ deploy_via_kustomize() {
 
   # Apply gateway policies separately so they stay in openshift-ingress (overlay
   # namespace would otherwise overwrite them to $NAMESPACE)
-  local policies_dir="$project_root/maas-controller/config/policies"
+  local policies_dir="$project_root/deployment/base/maas-controller/policies"
   if [[ -d "$policies_dir" ]]; then
     log_info "Applying gateway policies (openshift-ingress)..."
     kubectl apply --server-side=true -f <(kustomize build "$policies_dir")
