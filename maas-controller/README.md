@@ -46,7 +46,7 @@ Relationships are many-to-many: multiple MaaSAuthPolicies/MaaSSubscriptions can 
 
 ### Model kinds and the provider pattern
 
-MaaSModelRef's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TokenRateLimitPolicy). These are registered in `pkg/controller/maas/providers.go`.
+MaaSModelRefRef's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TokenRateLimitPolicy). These are registered in `pkg/controller/maas/providers.go`.
 
 | Kind (CRD value) | Behaviour |
 |------------------|-----------|
