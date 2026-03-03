@@ -112,12 +112,16 @@ For detailed validation and troubleshooting, see the [Validation Guide](install/
 
 #### Simulator Model (CPU)
 
+A lightweight mock service for testing that generates responses without running an actual language model.
+
 ```bash
 PROJECT_DIR=$(git rev-parse --show-toplevel)
 kustomize build ${PROJECT_DIR}/docs/samples/models/simulator/ | kubectl apply -f -
 ```
 
 #### Facebook OPT-125M Model (CPU)
+
+An inference deployment that loads and runs a 125M parameter model without the need for a GPU.
 
 ```bash
 PROJECT_DIR=$(git rev-parse --show-toplevel)
@@ -126,8 +130,7 @@ kustomize build ${PROJECT_DIR}/docs/samples/models/facebook-opt-125m-cpu/ | kube
 
 #### Qwen3 Model (GPU Required)
 
-!!! warning
-    This model requires GPU nodes with `nvidia.com/gpu` resources available in your cluster.
+⚠️ This model requires GPU nodes with `nvidia.com/gpu` resources available in your cluster.
 
 ```bash
 PROJECT_DIR=$(git rev-parse --show-toplevel)
