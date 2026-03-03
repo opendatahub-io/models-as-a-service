@@ -28,6 +28,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -36,6 +37,80 @@ import (
 func init() {
 	utilruntime.Must(kservev1alpha1.AddToScheme(scheme))
 }
+
+// --- Test helpers ---
+
+// newMaasModel is a helper function to create a MaasModel resource.
+func newMaaSModel(name, ns, kind, refName, refNS string) *maasv1alpha1.MaaSModel {
+	m := &maasv1alpha1.MaaSModel{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{
+				Kind: kind,
+				Name: refName,
+			},
+		},
+	}
+	if refNS != "" {
+		m.Spec.ModelRef.Namespace = refNS
+	}
+	return m
+}
+
+// newLLMISvc is a helper function to create a LLMInferenceService resource.
+func newLLMISvc(name, ns string, readyStatus ...corev1.ConditionStatus) *kservev1alpha1.LLMInferenceService {
+	svc := &kservev1alpha1.LLMInferenceService{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+	}
+	if len(readyStatus) > 0 {
+		svc.Status = kservev1alpha1.LLMInferenceServiceStatus{
+			Status: duckv1.Status{
+				Conditions: duckv1.Conditions{{Type: "Ready", Status: readyStatus[0]}},
+			},
+		}
+	}
+	return svc
+}
+
+// newLLMISvcRoute is a helper function to create a HTTPRoute resource.
+func newLLMISvcRoute(llmisvcName, ns string) *gatewayapiv1.HTTPRoute {
+	gwNS := gatewayapiv1.Namespace(defaultGatewayNamespace)
+	return &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      llmisvcName + "-route",
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      llmisvcName,
+				"app.kubernetes.io/component": "llminferenceservice-router",
+				"app.kubernetes.io/part-of":   "llminferenceservice",
+			},
+		},
+		Spec: gatewayapiv1.HTTPRouteSpec{
+			Hostnames: []gatewayapiv1.Hostname{"model.example.com"},
+			CommonRouteSpec: gatewayapiv1.CommonRouteSpec{
+				ParentRefs: []gatewayapiv1.ParentReference{{
+					Name:      gatewayapiv1.ObjectName(defaultGatewayName),
+					Namespace: &gwNS,
+				}},
+			},
+		},
+	}
+}
+
+// newTestReconciler creates a MaaSModelReconciler with a fake client pre-configured
+// with the field index and status subresource for MaaSModel. LLMInferenceService is
+// intentionally NOT a status subresource so that plain Update() can set its status.
+func newTestReconciler(objects ...client.Object) (*MaaSModelReconciler, client.Client) {
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithStatusSubresource(&maasv1alpha1.MaaSModel{}).
+		WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
+		Build()
+	return &MaaSModelReconciler{Client: c, Scheme: scheme}, c
+}
+
+// --- Tests ---
 
 func TestMaaSModelReconciler_gatewayName(t *testing.T) {
 	t.Run("default_when_empty", func(t *testing.T) {
@@ -78,61 +153,10 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 		ns          = "default"
 	)
 
-	// HTTPRoute created by KServe for the LLMInferenceService.
-	// A hostname is included so that GetModelEndpoint can build an endpoint URL
-	// without needing a Gateway object in the fake client.
-	gwNS := gatewayapiv1.Namespace(defaultGatewayNamespace)
-	route := &gatewayapiv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-llmisvc-route",
-			Namespace: ns,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      llmisvcName,
-				"app.kubernetes.io/component": "llminferenceservice-router",
-				"app.kubernetes.io/part-of":   "llminferenceservice",
-			},
-		},
-		Spec: gatewayapiv1.HTTPRouteSpec{
-			Hostnames: []gatewayapiv1.Hostname{"model.example.com"},
-			CommonRouteSpec: gatewayapiv1.CommonRouteSpec{
-				ParentRefs: []gatewayapiv1.ParentReference{{
-					Name:      gatewayapiv1.ObjectName(defaultGatewayName),
-					Namespace: &gwNS,
-				}},
-			},
-		},
-	}
-
-	// LLMInferenceService, initially not-ready.
-	llmisvc := &kservev1alpha1.LLMInferenceService{
-		ObjectMeta: metav1.ObjectMeta{Name: llmisvcName, Namespace: ns},
-		Status: kservev1alpha1.LLMInferenceServiceStatus{
-			Status: duckv1.Status{
-				Conditions: duckv1.Conditions{{Type: "Ready", Status: corev1.ConditionFalse}},
-			},
-		},
-	}
-
-	model := &maasv1alpha1.MaaSModel{
-		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: ns},
-		Spec: maasv1alpha1.MaaSModelSpec{
-			ModelRef: maasv1alpha1.ModelReference{
-				Kind: "LLMInferenceService",
-				Name: llmisvcName,
-			},
-		},
-	}
-
-	// LLMInferenceService is not registered as a status subresource so that plain
-	// Update() can set its status, mirroring KServe's own controller behaviour.
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(model, route, llmisvc).
-		WithStatusSubresource(&maasv1alpha1.MaaSModel{}).
-		WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
-		Build()
-
-	r := &MaaSModelReconciler{Client: fakeClient, Scheme: scheme}
+	route := newLLMISvcRoute(llmisvcName, ns)
+	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionFalse)
+	model := newMaaSModel(modelName, ns, "LLMInferenceService", llmisvcName, "")
+	r, c := newTestReconciler(model, route, llmisvc)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
 	// --- Phase 1: reconcile while llmisvc is not-ready -> model enters Pending ---
@@ -141,7 +165,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 		t.Fatalf("Reconcile (llmisvc not-ready): %v", err)
 	}
 	got := &maasv1alpha1.MaaSModel{}
-	if err := fakeClient.Get(ctx, req.NamespacedName, got); err != nil {
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
 		t.Fatalf("Get after first reconcile: %v", err)
 	}
 	if got.Status.Phase != "Pending" {
@@ -151,18 +175,14 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 	// --- Phase 2: KServe marks the llmisvc ready -> model should become Ready ---
 
 	currentLLMISvc := &kservev1alpha1.LLMInferenceService{}
-	if err := fakeClient.Get(ctx, types.NamespacedName{Name: llmisvcName, Namespace: ns}, currentLLMISvc); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: llmisvcName, Namespace: ns}, currentLLMISvc); err != nil {
 		t.Fatalf("Get llmisvc: %v", err)
 	}
 	currentLLMISvc.Status.Conditions = duckv1.Conditions{{Type: "Ready", Status: corev1.ConditionTrue}}
-	if err := fakeClient.Update(ctx, currentLLMISvc); err != nil {
+	if err := c.Update(ctx, currentLLMISvc); err != nil {
 		t.Fatalf("Update llmisvc to ready: %v", err)
 	}
 
-	// Simulate what a watch on LLMInferenceService should do: map the changed
-	// LLMInferenceService back to its referencing MaaSModel(s) and enqueue a
-	// reconcile request for each. We call mapLLMISvcToMaaSModels to obtain the
-	// requests, then reconcile each one.
 	requests := r.mapLLMISvcToMaaSModels(ctx, currentLLMISvc)
 	if len(requests) == 0 {
 		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModel referencing this LLMInferenceService should have been enqueued")
@@ -174,7 +194,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 	}
 
 	final := &maasv1alpha1.MaaSModel{}
-	if err := fakeClient.Get(ctx, req.NamespacedName, final); err != nil {
+	if err := c.Get(ctx, req.NamespacedName, final); err != nil {
 		t.Fatalf("Get MaaSModel after llmisvc became ready: %v", err)
 	}
 	if final.Status.Phase != "Ready" {
@@ -193,59 +213,10 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 		ns          = "default"
 	)
 
-	// HTTPRoute created by KServe for the LLMInferenceService.
-	gwNS := gatewayapiv1.Namespace(defaultGatewayNamespace)
-	route := &gatewayapiv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-llmisvc-route",
-			Namespace: ns,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      llmisvcName,
-				"app.kubernetes.io/component": "llminferenceservice-router",
-				"app.kubernetes.io/part-of":   "llminferenceservice",
-			},
-		},
-		Spec: gatewayapiv1.HTTPRouteSpec{
-			Hostnames: []gatewayapiv1.Hostname{"model.example.com"},
-			CommonRouteSpec: gatewayapiv1.CommonRouteSpec{
-				ParentRefs: []gatewayapiv1.ParentReference{{
-					Name:      gatewayapiv1.ObjectName(defaultGatewayName),
-					Namespace: &gwNS,
-				}},
-			},
-		},
-	}
-
-	// LLMInferenceService, initially ready.
-	llmisvc := &kservev1alpha1.LLMInferenceService{
-		ObjectMeta: metav1.ObjectMeta{Name: llmisvcName, Namespace: ns},
-		Status: kservev1alpha1.LLMInferenceServiceStatus{
-			Status: duckv1.Status{
-				Conditions: duckv1.Conditions{{Type: "Ready", Status: corev1.ConditionTrue}},
-			},
-		},
-	}
-
-	model := &maasv1alpha1.MaaSModel{
-		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: ns},
-		Spec: maasv1alpha1.MaaSModelSpec{
-			ModelRef: maasv1alpha1.ModelReference{
-				Kind: "LLMInferenceService",
-				Name: llmisvcName,
-			},
-		},
-	}
-
-	// LLMInferenceService is not registered as a status subresource so that plain
-	// Update() can set its status, mirroring KServe's own controller behaviour.
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(model, route, llmisvc).
-		WithStatusSubresource(&maasv1alpha1.MaaSModel{}).
-		WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
-		Build()
-
-	r := &MaaSModelReconciler{Client: fakeClient, Scheme: scheme}
+	route := newLLMISvcRoute(llmisvcName, ns)
+	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionTrue)
+	model := newMaaSModel(modelName, ns, "LLMInferenceService", llmisvcName, "")
+	r, c := newTestReconciler(model, route, llmisvc)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
 	// --- Phase 1: reconcile while llmisvc is ready -> model enters Ready ---
@@ -254,7 +225,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 		t.Fatalf("Reconcile (llmisvc ready): %v", err)
 	}
 	got := &maasv1alpha1.MaaSModel{}
-	if err := fakeClient.Get(ctx, req.NamespacedName, got); err != nil {
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
 		t.Fatalf("Get after first reconcile: %v", err)
 	}
 	if got.Status.Phase != "Ready" {
@@ -264,16 +235,14 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 	// --- Phase 2: KServe marks the llmisvc not-ready -> model should become Pending ---
 
 	currentLLMISvc := &kservev1alpha1.LLMInferenceService{}
-	if err := fakeClient.Get(ctx, types.NamespacedName{Name: llmisvcName, Namespace: ns}, currentLLMISvc); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: llmisvcName, Namespace: ns}, currentLLMISvc); err != nil {
 		t.Fatalf("Get llmisvc: %v", err)
 	}
 	currentLLMISvc.Status.Conditions = duckv1.Conditions{{Type: "Ready", Status: corev1.ConditionFalse}}
-	if err := fakeClient.Update(ctx, currentLLMISvc); err != nil {
+	if err := c.Update(ctx, currentLLMISvc); err != nil {
 		t.Fatalf("Update llmisvc to not-ready: %v", err)
 	}
 
-	// Simulate the watch: map the changed LLMInferenceService back to its
-	// referencing MaaSModel(s) and enqueue a reconcile request for each.
 	requests := r.mapLLMISvcToMaaSModels(ctx, currentLLMISvc)
 	if len(requests) == 0 {
 		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModel referencing this LLMInferenceService should have been enqueued")
@@ -285,7 +254,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 	}
 
 	final := &maasv1alpha1.MaaSModel{}
-	if err := fakeClient.Get(ctx, req.NamespacedName, final); err != nil {
+	if err := c.Get(ctx, req.NamespacedName, final); err != nil {
 		t.Fatalf("Get MaaSModel after llmisvc became not-ready: %v", err)
 	}
 	if final.Status.Phase != "Pending" {
@@ -297,94 +266,30 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 // LLMInferenceService changes to the MaaSModels that reference them.
 func TestMapLLMISvcToMaaSModels(t *testing.T) {
 	t.Run("different_kind_not_enqueued", func(t *testing.T) {
-		ctx := context.Background()
-
-		// MaaSModel references an ExternalModel, not an LLMInferenceService.
-		model := &maasv1alpha1.MaaSModel{
-			ObjectMeta: metav1.ObjectMeta{Name: "ext-model", Namespace: "default"},
-			Spec: maasv1alpha1.MaaSModelSpec{
-				ModelRef: maasv1alpha1.ModelReference{
-					Kind: "ExternalModel",
-					Name: "my-svc",
-				},
-			},
-		}
-
-		llmisvc := &kservev1alpha1.LLMInferenceService{
-			ObjectMeta: metav1.ObjectMeta{Name: "my-svc", Namespace: "default"},
-		}
-
-		fakeClient := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithObjects(model, llmisvc).
-			WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
-			Build()
-
-		r := &MaaSModelReconciler{Client: fakeClient, Scheme: scheme}
-		requests := r.mapLLMISvcToMaaSModels(ctx, llmisvc)
+		svc := newLLMISvc("my-svc", "default")
+		model := newMaaSModel("ext-model", "default", "ExternalModel", "my-svc", "")
+		r, _ := newTestReconciler(model, svc)
+		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 0 {
 			t.Errorf("expected no requests for ExternalModel kind, got %d: %v", len(requests), requests)
 		}
 	})
 
 	t.Run("different_name_not_enqueued", func(t *testing.T) {
-		ctx := context.Background()
-
-		// MaaSModel references a different LLMInferenceService name.
-		model := &maasv1alpha1.MaaSModel{
-			ObjectMeta: metav1.ObjectMeta{Name: "my-model", Namespace: "default"},
-			Spec: maasv1alpha1.MaaSModelSpec{
-				ModelRef: maasv1alpha1.ModelReference{
-					Kind: "LLMInferenceService",
-					Name: "svc-alpha",
-				},
-			},
-		}
-
-		llmisvc := &kservev1alpha1.LLMInferenceService{
-			ObjectMeta: metav1.ObjectMeta{Name: "svc-beta", Namespace: "default"},
-		}
-
-		fakeClient := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithObjects(model, llmisvc).
-			WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
-			Build()
-
-		r := &MaaSModelReconciler{Client: fakeClient, Scheme: scheme}
-		requests := r.mapLLMISvcToMaaSModels(ctx, llmisvc)
+		svc := newLLMISvc("svc-beta", "default")
+		model := newMaaSModel("my-model", "default", "LLMInferenceService", "svc-alpha", "")
+		r, _ := newTestReconciler(model, svc)
+		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 0 {
 			t.Errorf("expected no requests for different name, got %d: %v", len(requests), requests)
 		}
 	})
 
 	t.Run("cross_namespace_match", func(t *testing.T) {
-		ctx := context.Background()
-
-		// MaaSModel in ns-a references an LLMInferenceService in ns-b.
-		model := &maasv1alpha1.MaaSModel{
-			ObjectMeta: metav1.ObjectMeta{Name: "cross-ns-model", Namespace: "ns-a"},
-			Spec: maasv1alpha1.MaaSModelSpec{
-				ModelRef: maasv1alpha1.ModelReference{
-					Kind:      "LLMInferenceService",
-					Name:      "shared-svc",
-					Namespace: "ns-b",
-				},
-			},
-		}
-
-		llmisvc := &kservev1alpha1.LLMInferenceService{
-			ObjectMeta: metav1.ObjectMeta{Name: "shared-svc", Namespace: "ns-b"},
-		}
-
-		fakeClient := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithObjects(model, llmisvc).
-			WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
-			Build()
-
-		r := &MaaSModelReconciler{Client: fakeClient, Scheme: scheme}
-		requests := r.mapLLMISvcToMaaSModels(ctx, llmisvc)
+		svc := newLLMISvc("shared-svc", "ns-b")
+		model := newMaaSModel("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
+		r, _ := newTestReconciler(model, svc)
+		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 1 {
 			t.Fatalf("expected 1 request for cross-namespace match, got %d: %v", len(requests), requests)
 		}
@@ -394,64 +299,20 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 	})
 
 	t.Run("cross_namespace_no_match", func(t *testing.T) {
-		ctx := context.Background()
-
-		// MaaSModel in ns-a references an LLMInferenceService in ns-b,
-		// but the actual LLMInferenceService is in ns-c.
-		model := &maasv1alpha1.MaaSModel{
-			ObjectMeta: metav1.ObjectMeta{Name: "cross-ns-model", Namespace: "ns-a"},
-			Spec: maasv1alpha1.MaaSModelSpec{
-				ModelRef: maasv1alpha1.ModelReference{
-					Kind:      "LLMInferenceService",
-					Name:      "shared-svc",
-					Namespace: "ns-b",
-				},
-			},
-		}
-
-		llmisvc := &kservev1alpha1.LLMInferenceService{
-			ObjectMeta: metav1.ObjectMeta{Name: "shared-svc", Namespace: "ns-c"},
-		}
-
-		fakeClient := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithObjects(model, llmisvc).
-			WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
-			Build()
-
-		r := &MaaSModelReconciler{Client: fakeClient, Scheme: scheme}
-		requests := r.mapLLMISvcToMaaSModels(ctx, llmisvc)
+		svc := newLLMISvc("shared-svc", "ns-c")
+		model := newMaaSModel("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
+		r, _ := newTestReconciler(model, svc)
+		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 0 {
 			t.Errorf("expected no requests for namespace mismatch, got %d: %v", len(requests), requests)
 		}
 	})
 
 	t.Run("llmisvc_alias_enqueued", func(t *testing.T) {
-		ctx := context.Background()
-
-		// MaaSModel uses the backwards-compat "llmisvc" kind alias.
-		model := &maasv1alpha1.MaaSModel{
-			ObjectMeta: metav1.ObjectMeta{Name: "alias-model", Namespace: "default"},
-			Spec: maasv1alpha1.MaaSModelSpec{
-				ModelRef: maasv1alpha1.ModelReference{
-					Kind: "llmisvc",
-					Name: "my-svc",
-				},
-			},
-		}
-
-		llmisvc := &kservev1alpha1.LLMInferenceService{
-			ObjectMeta: metav1.ObjectMeta{Name: "my-svc", Namespace: "default"},
-		}
-
-		fakeClient := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithObjects(model, llmisvc).
-			WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
-			Build()
-
-		r := &MaaSModelReconciler{Client: fakeClient, Scheme: scheme}
-		requests := r.mapLLMISvcToMaaSModels(ctx, llmisvc)
+		svc := newLLMISvc("my-svc", "default")
+		model := newMaaSModel("alias-model", "default", "llmisvc", "my-svc", "")
+		r, _ := newTestReconciler(model, svc)
+		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 1 {
 			t.Fatalf("expected 1 request for llmisvc alias kind, got %d: %v", len(requests), requests)
 		}
@@ -461,45 +322,14 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 	})
 
 	t.Run("multiple_models_same_llmisvc", func(t *testing.T) {
-		ctx := context.Background()
-
-		// Two MaaSModels both reference the same LLMInferenceService.
-		model1 := &maasv1alpha1.MaaSModel{
-			ObjectMeta: metav1.ObjectMeta{Name: "model-1", Namespace: "default"},
-			Spec: maasv1alpha1.MaaSModelSpec{
-				ModelRef: maasv1alpha1.ModelReference{
-					Kind: "LLMInferenceService",
-					Name: "shared-svc",
-				},
-			},
-		}
-		model2 := &maasv1alpha1.MaaSModel{
-			ObjectMeta: metav1.ObjectMeta{Name: "model-2", Namespace: "default"},
-			Spec: maasv1alpha1.MaaSModelSpec{
-				ModelRef: maasv1alpha1.ModelReference{
-					Kind: "LLMInferenceService",
-					Name: "shared-svc",
-				},
-			},
-		}
-
-		llmisvc := &kservev1alpha1.LLMInferenceService{
-			ObjectMeta: metav1.ObjectMeta{Name: "shared-svc", Namespace: "default"},
-		}
-
-		fakeClient := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithObjects(model1, model2, llmisvc).
-			WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
-			Build()
-
-		r := &MaaSModelReconciler{Client: fakeClient, Scheme: scheme}
-		requests := r.mapLLMISvcToMaaSModels(ctx, llmisvc)
+		svc := newLLMISvc("shared-svc", "default")
+		model1 := newMaaSModel("model-1", "default", "LLMInferenceService", "shared-svc", "")
+		model2 := newMaaSModel("model-2", "default", "LLMInferenceService", "shared-svc", "")
+		r, _ := newTestReconciler(model1, model2, svc)
+		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 2 {
 			t.Fatalf("expected 2 requests for two models referencing same llmisvc, got %d: %v", len(requests), requests)
 		}
-
-		// Verify both model names are present in the requests (order may vary).
 		names := map[string]bool{}
 		for _, req := range requests {
 			names[req.Name] = true
@@ -516,21 +346,10 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 	p := llmisvcReadyChangedPredicate{}
 
-	newLLMISvc := func(readyStatus corev1.ConditionStatus) *kservev1alpha1.LLMInferenceService {
-		return &kservev1alpha1.LLMInferenceService{
-			ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "default"},
-			Status: kservev1alpha1.LLMInferenceServiceStatus{
-				Status: duckv1.Status{
-					Conditions: duckv1.Conditions{{Type: "Ready", Status: readyStatus}},
-				},
-			},
-		}
-	}
-
 	t.Run("ready_changed_true_to_false", func(t *testing.T) {
 		e := event.UpdateEvent{
-			ObjectOld: newLLMISvc(corev1.ConditionTrue),
-			ObjectNew: newLLMISvc(corev1.ConditionFalse),
+			ObjectOld: newLLMISvc("svc", "default", corev1.ConditionTrue),
+			ObjectNew: newLLMISvc("svc", "default", corev1.ConditionFalse),
 		}
 		if !p.Update(e) {
 			t.Error("expected Update to return true when Ready changes from True to False")
@@ -539,8 +358,8 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 
 	t.Run("ready_changed_false_to_true", func(t *testing.T) {
 		e := event.UpdateEvent{
-			ObjectOld: newLLMISvc(corev1.ConditionFalse),
-			ObjectNew: newLLMISvc(corev1.ConditionTrue),
+			ObjectOld: newLLMISvc("svc", "default", corev1.ConditionFalse),
+			ObjectNew: newLLMISvc("svc", "default", corev1.ConditionTrue),
 		}
 		if !p.Update(e) {
 			t.Error("expected Update to return true when Ready changes from False to True")
@@ -549,8 +368,8 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 
 	t.Run("ready_unchanged_true", func(t *testing.T) {
 		e := event.UpdateEvent{
-			ObjectOld: newLLMISvc(corev1.ConditionTrue),
-			ObjectNew: newLLMISvc(corev1.ConditionTrue),
+			ObjectOld: newLLMISvc("svc", "default", corev1.ConditionTrue),
+			ObjectNew: newLLMISvc("svc", "default", corev1.ConditionTrue),
 		}
 		if p.Update(e) {
 			t.Error("expected Update to return false when Ready status is unchanged (True)")
@@ -559,8 +378,8 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 
 	t.Run("ready_unchanged_false", func(t *testing.T) {
 		e := event.UpdateEvent{
-			ObjectOld: newLLMISvc(corev1.ConditionFalse),
-			ObjectNew: newLLMISvc(corev1.ConditionFalse),
+			ObjectOld: newLLMISvc("svc", "default", corev1.ConditionFalse),
+			ObjectNew: newLLMISvc("svc", "default", corev1.ConditionFalse),
 		}
 		if p.Update(e) {
 			t.Error("expected Update to return false when Ready status is unchanged (False)")
@@ -568,9 +387,7 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 	})
 
 	t.Run("no_ready_condition", func(t *testing.T) {
-		noConditions := &kservev1alpha1.LLMInferenceService{
-			ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "default"},
-		}
+		noConditions := newLLMISvc("svc", "default")
 		e := event.UpdateEvent{ObjectOld: noConditions, ObjectNew: noConditions}
 		if p.Update(e) {
 			t.Error("expected Update to return false when neither object has a Ready condition")
