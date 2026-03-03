@@ -110,6 +110,24 @@ func newTestReconciler(objects ...client.Object) (*MaaSModelReconciler, client.C
 	return &MaaSModelReconciler{Client: c, Scheme: scheme}, c
 }
 
+// assertReadyCondition checks that the conditions slice contains a Ready condition
+// with the expected status and reason.
+func assertReadyCondition(t *testing.T, conditions []metav1.Condition, wantStatus metav1.ConditionStatus, wantReason string) {
+	t.Helper()
+	for _, c := range conditions {
+		if c.Type == "Ready" {
+			if c.Status != wantStatus {
+				t.Errorf("Ready condition Status = %q, want %q", c.Status, wantStatus)
+			}
+			if c.Reason != wantReason {
+				t.Errorf("Ready condition Reason = %q, want %q", c.Reason, wantReason)
+			}
+			return
+		}
+	}
+	t.Error("Ready condition not found in status conditions")
+}
+
 // --- Tests ---
 
 func TestMaaSModelReconciler_gatewayName(t *testing.T) {
@@ -171,6 +189,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 	if got.Status.Phase != "Pending" {
 		t.Fatalf("after first reconcile: Phase = %q, want Pending", got.Status.Phase)
 	}
+	assertReadyCondition(t, got.Status.Conditions, metav1.ConditionFalse, "BackendNotReady")
 
 	// --- Phase 2: KServe marks the llmisvc ready -> model should become Ready ---
 
@@ -200,6 +219,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 	if final.Status.Phase != "Ready" {
 		t.Errorf("after llmisvc became ready: Phase = %q, want Ready", final.Status.Phase)
 	}
+	assertReadyCondition(t, final.Status.Conditions, metav1.ConditionTrue, "Reconciled")
 }
 
 // TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending verifies that when
@@ -231,6 +251,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 	if got.Status.Phase != "Ready" {
 		t.Fatalf("after first reconcile: Phase = %q, want Ready", got.Status.Phase)
 	}
+	assertReadyCondition(t, got.Status.Conditions, metav1.ConditionTrue, "Reconciled")
 
 	// --- Phase 2: KServe marks the llmisvc not-ready -> model should become Pending ---
 
@@ -260,6 +281,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 	if final.Status.Phase != "Pending" {
 		t.Errorf("after llmisvc became not-ready: Phase = %q, want Pending", final.Status.Phase)
 	}
+	assertReadyCondition(t, final.Status.Conditions, metav1.ConditionFalse, "BackendNotReady")
 }
 
 // TestMapLLMISvcToMaaSModels verifies edge cases for the mapper function that maps
@@ -383,6 +405,16 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 		}
 		if p.Update(e) {
 			t.Error("expected Update to return false when Ready status is unchanged (False)")
+		}
+	})
+
+	t.Run("no_condition_to_ready", func(t *testing.T) {
+		e := event.UpdateEvent{
+			ObjectOld: newLLMISvc("svc", "default"),
+			ObjectNew: newLLMISvc("svc", "default", corev1.ConditionTrue),
+		}
+		if !p.Update(e) {
+			t.Error("expected Update to return true when Ready appears for first time")
 		}
 	})
 

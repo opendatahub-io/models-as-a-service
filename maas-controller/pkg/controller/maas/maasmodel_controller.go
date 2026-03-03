@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"knative.dev/pkg/apis"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -286,7 +287,7 @@ func (llmisvcReadyChangedPredicate) Update(e event.UpdateEvent) bool {
 
 func llmisvcReadyStatus(obj *kservev1alpha1.LLMInferenceService) string {
 	for _, c := range obj.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == apis.ConditionReady {
 			return string(c.Status)
 		}
 	}
@@ -351,6 +352,7 @@ func (r *MaaSModelReconciler) mapLLMISvcToMaaSModels(ctx context.Context, obj cl
 	}
 	var models maasv1alpha1.MaaSModelList
 	if err := r.List(ctx, &models, client.MatchingFields{modelRefNameIndex: llmisvc.Name}); err != nil {
+		logr.FromContextOrDiscard(ctx).Error(err, "failed to list MaaSModels by modelRef.name index", "llmisvcName", llmisvc.Name)
 		return nil
 	}
 	var requests []reconcile.Request
