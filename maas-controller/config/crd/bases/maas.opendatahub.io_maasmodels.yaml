@@ -55,6 +55,8 @@ spec:
           spec:
             description: MaaSModelSpec defines the desired state of MaaSModel
             properties:
+              endpointOverride:
+                type: string
               modelRef:
                 description: ModelRef references the actual model endpoint
                 properties:
