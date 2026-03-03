@@ -277,7 +277,7 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 		assert.Len(t, response.Data, 1, "should return only active keys by default")
-		assert.Equal(t, "active", response.Data[0].Status)
+		assert.Equal(t, StatusActive, response.Data[0].Status)
 	})
 
 	t.Run("ExplicitActiveFilter", func(t *testing.T) {
@@ -297,7 +297,7 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 		assert.Len(t, response.Data, 1)
-		assert.Equal(t, "active", response.Data[0].Status)
+		assert.Equal(t, StatusActive, response.Data[0].Status)
 	})
 
 	t.Run("RevokedFilter", func(t *testing.T) {
@@ -317,7 +317,7 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 		assert.Len(t, response.Data, 1)
-		assert.Equal(t, "revoked", response.Data[0].Status)
+		assert.Equal(t, StatusRevoked, response.Data[0].Status)
 	})
 
 	t.Run("AllStatuses", func(t *testing.T) {
@@ -646,7 +646,7 @@ func TestSearchAPIKeys_AdminFiltersByUsernameAndStatus(t *testing.T) {
 		assert.Len(t, response.Data, 2, "alice should have 2 active keys")
 		for _, key := range response.Data {
 			assert.Equal(t, "alice", key.Username)
-			assert.Equal(t, "active", key.Status)
+			assert.Equal(t, StatusActive, key.Status)
 		}
 	})
 
@@ -668,7 +668,7 @@ func TestSearchAPIKeys_AdminFiltersByUsernameAndStatus(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, response.Data, 1, "alice should have 1 revoked key")
 		assert.Equal(t, "alice", response.Data[0].Username)
-		assert.Equal(t, "revoked", response.Data[0].Status)
+		assert.Equal(t, StatusRevoked, response.Data[0].Status)
 	})
 
 	t.Run("BobActiveKeys", func(t *testing.T) {
@@ -678,7 +678,7 @@ func TestSearchAPIKeys_AdminFiltersByUsernameAndStatus(t *testing.T) {
 		assert.Len(t, response.Data, 2, "bob should have 2 active keys")
 		for _, key := range response.Data {
 			assert.Equal(t, "bob", key.Username)
-			assert.Equal(t, "active", key.Status)
+			assert.Equal(t, StatusActive, key.Status)
 		}
 	})
 }
@@ -876,7 +876,7 @@ func TestAdminCanCreateForOtherUser_RegularUserCannot(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "alice", meta.Username)
 		// Verify groups were stored correctly
-		assert.Equal(t, []string{"tier-premium", "system:authenticated"}, meta.OriginalUserGroups)
+		assert.Equal(t, []string{"tier-premium", "system:authenticated"}, meta.Groups)
 	})
 
 	t.Run("RegularUserCannotCreateForOther", func(t *testing.T) {
@@ -947,5 +947,5 @@ func testRegularUserCreateOwnKey(t *testing.T, handler *Handler, store *MockStor
 	meta, err := store.Get(context.Background(), response.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "alice", meta.Username)
-	assert.Equal(t, []string{"tier-free", "system:authenticated"}, meta.OriginalUserGroups)
+	assert.Equal(t, []string{"tier-free", "system:authenticated"}, meta.Groups)
 }

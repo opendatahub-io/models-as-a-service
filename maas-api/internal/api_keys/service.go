@@ -114,7 +114,7 @@ func (s *Service) List(ctx context.Context, username string, params PaginationPa
 	return s.store.List(ctx, username, params, statuses)
 }
 
-func (s *Service) GetAPIKey(ctx context.Context, id string) (*ApiKeyMetadata, error) {
+func (s *Service) GetAPIKey(ctx context.Context, id string) (*ApiKey, error) {
 	return s.store.Get(ctx, id)
 }
 
@@ -173,10 +173,10 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		}
 	}()
 
-	// Return the user's original groups (stored at key creation time)
+	// Return the user's groups (stored at key creation time)
 	// These groups are used directly by subscription-based authorization
 	// Note: Groups are immutable - they reflect user's group membership at creation time
-	groups := metadata.OriginalUserGroups
+	groups := metadata.Groups
 	if groups == nil {
 		groups = []string{} // Return empty array if no groups stored
 	}

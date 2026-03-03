@@ -126,9 +126,9 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 	}
 	defer rows.Close()
 
-	var keys []ApiKeyMetadata
+	var keys []ApiKey
 	for rows.Next() {
-		var k ApiKeyMetadata
+		var k ApiKey
 		var createdAt time.Time
 		var expiresAt, lastUsedAt sql.NullTime
 		var description sql.NullString
@@ -246,9 +246,9 @@ func (s *PostgresStore) Search(
 	}
 	defer rows.Close()
 
-	var keys []ApiKeyMetadata
+	var keys []ApiKey
 	for rows.Next() {
-		var key ApiKeyMetadata
+		var key ApiKey
 		var createdAt, expiresAt, lastUsedAt sql.NullTime
 		var description sql.NullString
 
@@ -299,7 +299,7 @@ func (s *PostgresStore) Search(
 }
 
 // Get retrieves a single API key by ID.
-func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, error) {
+func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 	query := `
 		SELECT id, name, description, username, created_at, expires_at, status, last_used_at
 		FROM api_keys
@@ -307,7 +307,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata,
 	`
 	row := s.db.QueryRowContext(ctx, query, keyID)
 
-	var k ApiKeyMetadata
+	var k ApiKey
 	var createdAt time.Time
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
@@ -334,7 +334,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata,
 }
 
 // GetByHash looks up an API key by its SHA-256 hash (critical path for validation).
-func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetadata, error) {
+func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, error) {
 	query := `
 		SELECT id, username, name, description, user_groups, status, expires_at, last_used_at
 		FROM api_keys
@@ -342,7 +342,7 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 	`
 	row := s.db.QueryRowContext(ctx, query, keyHash)
 
-	var k ApiKeyMetadata
+	var k ApiKey
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
 	var userGroups []string
@@ -359,7 +359,7 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 		k.Description = description.String
 	}
 	// user_groups is now directly scanned as []string - no JSON parsing needed
-	k.OriginalUserGroups = userGroups
+	k.Groups = userGroups
 
 	if lastUsedAt.Valid {
 		k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
@@ -367,18 +367,18 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 
 	// Check expiration and auto-update status if expired
 	if expiresAt.Valid && time.Now().UTC().After(expiresAt.Time) {
-		if k.Status == TokenStatusActive {
+		if k.Status == StatusActive {
 			// Auto-update status to expired
 			updateQuery := `UPDATE api_keys SET status = 'expired' WHERE id = $1 AND status = 'active'`
 			if _, err := s.db.ExecContext(ctx, updateQuery, k.ID); err != nil {
 				s.logger.Warn("Failed to update expired key status", "key_id", k.ID, "error", err)
 			}
-			k.Status = TokenStatusExpired
+			k.Status = StatusExpired
 		}
 	}
 
 	// Reject revoked/expired keys
-	if k.Status == TokenStatusRevoked || k.Status == TokenStatusExpired {
+	if k.Status == StatusRevoked || k.Status == StatusExpired {
 		return nil, ErrInvalidKey
 	}
 

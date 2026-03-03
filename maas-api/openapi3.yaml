@@ -166,132 +166,6 @@ paths:
                             example:
                                 error: internal_error
                                 message: "failed to lookup tier: connection to configmap failed"
-    /v1/tokens:
-        post:
-            tags:
-                - tokens
-            summary: Issues a new ephemeral token with specified expiration
-            description: Issues a new token with configurable expiration. Accepts either Go-style duration string or seconds as number. Default is 4 hours. Minimum expiration is 10 minutes.
-            operationId: tokens#issue
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/TokenRequest'
-                        examples:
-                            default_expiration:
-                                summary: Default 4 hour expiration
-                                value:
-                                    expiration: 4h
-                            duration_string:
-                                summary: Go-style duration string
-                                value:
-                                    expiration: 2h30m
-                            seconds_number:
-                                summary: Expiration in seconds
-                                value:
-                                    expiration: 7200
-                            one_day:
-                                summary: One day expiration
-                                value:
-                                    expiration: 24h
-                            minimal_expiration:
-                                summary: Minimum allowed expiration (10 minutes)
-                                value:
-                                    expiration: 10m
-            responses:
-                "201":
-                    description: Created response.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/TokenResponse'
-                            examples:
-                                four_hour_token:
-                                    summary: 4 hour token response
-                                    value:
-                                        token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJtYWFzLWFwaSIsInN1YiI6InRlc3QtdXNlciIsImF1ZCI6WyJtYWFzLWFwaSJdLCJleHAiOjE2NzI1NDU2MDAsIm5iZiI6MTY3MjUzMTIwMCwiaWF0IjoxNjcyNTMxMjAwfQ.signature
-                                        expiration: 4h
-                                        expiresAt: 1672545600
-                                duration_token:
-                                    summary: Custom duration token response  
-                                    value:
-                                        token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJtYWFzLWFwaSIsInN1YiI6InRlc3QtdXNlciIsImF1ZCI6WyJtYWFzLWFwaSJdLCJleHAiOjE2NzI1NDAyMDAsIm5iZiI6MTY3MjUzMTIwMCwiaWF0IjoxNjcyNTMxMjAwfQ.signature
-                                        expiration: 2h30m
-                                        expiresAt: 1672540200
-                "400":
-                    description: Bad Request response.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/ErrorResponse'
-                            examples:
-                                invalid_format:
-                                    summary: Invalid expiration format
-                                    value:
-                                        error: "Invalid expiration format, must be positive"
-                                too_short:
-                                    summary: Expiration too short
-                                    value:
-                                        error: "invalid duration \"5m\": must be a positive number ending in s, m, or h (e.g. \"10s\", \"5m\", \"2h\")"
-                                invalid_duration:
-                                    summary: Invalid duration string
-                                    value:
-                                        error: "invalid duration \"2x\": must be a positive number ending in s, m, or h (e.g. \"10s\", \"5m\", \"2h\")"
-                                json_error:
-                                    summary: JSON binding error
-                                    value:
-                                        error: "invalid character 'x' looking for beginning of value"
-                "401":
-                    description: Unauthorized response.
-        delete:
-            tags:
-                - tokens
-            summary: Revoke all ephemeral tokens for the authenticated user
-            description: Invalidate all ephemeral tokens for the current user. This will break any applications currently using those tokens.
-            operationId: tokens#revoke_all
-            responses:
-                "204":
-                    description: No Content response. All tokens have been successfully revoked.
-                "401":
-                    description: Unauthorized response.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/ErrorResponse'
-                            examples:
-                                missing_auth:
-                                    summary: Missing Authorization header
-                                    value:
-                                        error: Authorization header required
-                                invalid_format:
-                                    summary: Invalid authorization format
-                                    value:
-                                        error: "Invalid authorization format. Use: Authorization: Bearer <token>"
-                                validation_failed:
-                                    summary: Token validation failed
-                                    value:
-                                        error: validation failed
-                                not_authenticated:
-                                    summary: Token not authenticated
-                                    value:
-                                        error: not authenticated
-                "500":
-                    description: Internal Server Error response.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/ErrorResponse'
-                            examples:
-                                user_context_missing:
-                                    summary: User context not found
-                                    value:
-                                        error: User context not found
-                                revocation_failed:
-                                    summary: Token revocation failed
-                                    value:
-                                        error: Failed to revoke tokens
     /v1/api-keys:
         post:
             tags:
@@ -385,6 +259,7 @@ paths:
                                             type: array
                                             items:
                                                 type: string
+                                                enum: [active, revoked, expired]
                                             description: Filter by status (active, revoked, expired). Defaults to active only.
                                 sort:
                                     type: object
@@ -542,7 +417,7 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/TokenMetadata'
+                                $ref: '#/components/schemas/ApiKey'
                 "404":
                     description: Not Found. API key not found.
                 "401":
@@ -566,7 +441,7 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/TokenMetadata'
+                                $ref: '#/components/schemas/ApiKey'
                             example:
                                 id: key_abc123
                                 name: my-production-key
@@ -738,101 +613,49 @@ components:
             required:
                 - error
                 - message
-        
-        # Token request
-        TokenRequest:
-            type: object
-            properties:
-                expiration:
-                    oneOf:
-                        - type: string
-                          description: Go-style duration string (e.g., '30s', '2h45m')
-                          example: 4h
-                        - type: number
-                          description: Number of seconds
-                          example: 14400
-                    description: Token expiration - accepts either Go-style duration string or number of seconds. Minimum 10 minutes. Default is 4 hours.
-                name:
-                    type: string
-                    description: Optional name for the token. If provided, the token will be tracked in the metadata store.
-                    example: my-application-token
-                description:
-                    type: string
-                    description: Optional description for the token. Provides additional context about the token's purpose.
-                    example: Production API key for backend service
-        
-        # Token metadata
-        TokenMetadata:
+
+        # API Key metadata
+        ApiKey:
             type: object
             properties:
                 id:
                     type: string
-                    description: Unique identifier for the token metadata
-                keyPrefix:
-                    type: string
-                    description: Display prefix for the key (e.g., sk-oai-abc)
-                    example: sk-oai-abc
+                    description: Unique identifier for the API key
                 name:
                     type: string
-                    description: User-friendly name
+                    description: User-friendly name for the API key
                 description:
                     type: string
-                    description: Optional description providing context about the token's purpose
+                    description: Optional description providing context about the key's purpose
+                username:
+                    type: string
+                    description: Username that owns this API key
+                groups:
+                    type: array
+                    items:
+                        type: string
+                    description: User's groups at creation time (immutable snapshot for authorization)
                 creationDate:
                     type: string
                     format: date-time
-                    description: When the token was created
+                    description: When the API key was created
                 expirationDate:
                     type: string
                     format: date-time
-                    description: When the token expires
+                    description: When the API key expires (empty for permanent keys)
                 status:
                     type: string
-                    description: Current status (active, expired)
-                expiredAt:
+                    enum: [active, revoked, expired]
+                    description: Current status of the API key
+                lastUsedAt:
                     type: string
                     format: date-time
-                    description: When the token was revoked/expired (if applicable)
+                    description: When the API key was last used for validation
             required:
                 - id
                 - name
                 - creationDate
-                - expirationDate
                 - status
-
-        # Token response
-        TokenResponse:
-            type: object
-            properties:
-                token:
-                    type: string
-                    description: Generated JWT token
-                    example: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
-                expiration:
-                    type: string
-                    description: Token expiration duration as string
-                    example: 4h
-                expiresAt:
-                    type: integer
-                    description: Token expiration timestamp (Unix seconds)
-                    example: 1672531200
-                    format: int64
-                jti:
-                    type: string
-                    description: JWT ID (JTI) - unique identifier for the token. Present in API key responses.
-                    example: abc123def456
-                name:
-                    type: string
-                    description: Token name. Present in API key responses.
-                    example: my-production-app
-                description:
-                    type: string
-                    description: Token description. Present in API key responses if provided.
-                    example: Production API key for backend service
-            required:
-                - token
-                - expiration
-                - expiresAt
 
         # API Key List Response (paginated)
         ApiKeyListResponse:
@@ -845,7 +668,7 @@ components:
                 data:
                     type: array
                     items:
-                        $ref: '#/components/schemas/TokenMetadata'
+                        $ref: '#/components/schemas/ApiKey'
                     description: Array of API key metadata objects
                 has_more:
                     type: boolean

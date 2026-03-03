@@ -14,6 +14,8 @@ var (
 	ErrEmptyName     = errors.New("key name is required and cannot be empty")
 )
 
+// Legacy constants for backward compatibility with database operations.
+// Prefer using Status enum constants in new code.
 const (
 	TokenStatusActive  = "active"
 	TokenStatusExpired = "expired"
@@ -43,11 +45,11 @@ type MetadataStore interface {
 		pagination *PaginationParams,
 	) (*PaginatedResult, error)
 
-	Get(ctx context.Context, jti string) (*ApiKeyMetadata, error)
+	Get(ctx context.Context, jti string) (*ApiKey, error)
 
 	// GetByHash looks up an API key by its SHA-256 hash (for Authorino validation)
 	// Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked
-	GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetadata, error)
+	GetByHash(ctx context.Context, keyHash string) (*ApiKey, error)
 
 	// InvalidateAll marks all active tokens for a user as revoked.
 	// Returns the count of keys that were revoked.

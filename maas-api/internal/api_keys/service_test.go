@@ -244,7 +244,7 @@ func TestRevokeAPIKey(t *testing.T) {
 	// Verify it's active
 	meta, err := store.Get(ctx, keyID)
 	require.NoError(t, err)
-	assert.Equal(t, api_keys.TokenStatusActive, meta.Status)
+	assert.Equal(t, api_keys.StatusActive, meta.Status)
 
 	// Revoke via service layer
 	err = svc.RevokeAPIKey(ctx, keyID)
@@ -253,7 +253,7 @@ func TestRevokeAPIKey(t *testing.T) {
 	// Verify it's revoked
 	meta, err = store.Get(ctx, keyID)
 	require.NoError(t, err)
-	assert.Equal(t, api_keys.TokenStatusRevoked, meta.Status)
+	assert.Equal(t, api_keys.StatusRevoked, meta.Status)
 }
 
 func TestServiceList(t *testing.T) {

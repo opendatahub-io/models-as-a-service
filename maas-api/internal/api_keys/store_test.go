@@ -83,7 +83,7 @@ func TestAPIKeyOperations(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "my-key", key.Name)
 		assert.Equal(t, "user1", key.Username)
-		assert.Equal(t, []string{"system:authenticated", "premium-user"}, key.OriginalUserGroups)
+		assert.Equal(t, []string{"system:authenticated", "premium-user"}, key.Groups)
 	})
 
 	t.Run("GetByHashNotFound", func(t *testing.T) {
@@ -227,7 +227,7 @@ func TestFilterByStatus(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, result.Keys, 3, "should return 3 active keys")
 		for _, key := range result.Keys {
-			assert.Equal(t, "active", key.Status)
+			assert.Equal(t, api_keys.StatusActive, key.Status)
 		}
 	})
 
@@ -236,7 +236,7 @@ func TestFilterByStatus(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, result.Keys, 2, "should return 2 revoked keys")
 		for _, key := range result.Keys {
-			assert.Equal(t, "revoked", key.Status)
+			assert.Equal(t, api_keys.StatusRevoked, key.Status)
 		}
 	})
 }
@@ -277,7 +277,7 @@ func TestFilterByMultipleStatuses(t *testing.T) {
 	// Verify we have both statuses
 	statuses := make(map[string]int)
 	for _, key := range result.Keys {
-		statuses[key.Status]++
+		statuses[string(key.Status)]++
 	}
 	assert.Equal(t, 2, statuses["active"], "should have 2 active keys")
 	assert.Equal(t, 1, statuses["revoked"], "should have 1 revoked key")
@@ -327,7 +327,7 @@ func TestFilterByUsernameAndStatus(t *testing.T) {
 		assert.Len(t, result.Keys, 2, "alice should have 2 active keys")
 		for _, key := range result.Keys {
 			assert.Equal(t, "alice", key.Username)
-			assert.Equal(t, "active", key.Status)
+			assert.Equal(t, api_keys.StatusActive, key.Status)
 		}
 	})
 
@@ -336,7 +336,7 @@ func TestFilterByUsernameAndStatus(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, result.Keys, 1, "alice should have 1 revoked key")
 		assert.Equal(t, "alice", result.Keys[0].Username)
-		assert.Equal(t, "revoked", result.Keys[0].Status)
+		assert.Equal(t, api_keys.StatusRevoked, result.Keys[0].Status)
 	})
 
 	t.Run("BobActive", func(t *testing.T) {
@@ -344,7 +344,7 @@ func TestFilterByUsernameAndStatus(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, result.Keys, 1, "bob should have 1 active key")
 		assert.Equal(t, "bob", result.Keys[0].Username)
-		assert.Equal(t, "active", result.Keys[0].Status)
+		assert.Equal(t, api_keys.StatusActive, result.Keys[0].Status)
 	})
 
 	t.Run("BobRevoked", func(t *testing.T) {
@@ -353,7 +353,7 @@ func TestFilterByUsernameAndStatus(t *testing.T) {
 		assert.Len(t, result.Keys, 2, "bob should have 2 revoked keys")
 		for _, key := range result.Keys {
 			assert.Equal(t, "bob", key.Username)
-			assert.Equal(t, "revoked", key.Status)
+			assert.Equal(t, api_keys.StatusRevoked, key.Status)
 		}
 	})
 }

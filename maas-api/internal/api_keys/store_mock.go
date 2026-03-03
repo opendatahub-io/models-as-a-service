@@ -18,7 +18,7 @@ type MockStore struct {
 }
 
 type storedKey struct {
-	metadata   ApiKeyMetadata
+	metadata   ApiKey
 	username   string
 	keyHash    string
 	expiresAt  time.Time
@@ -56,13 +56,13 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, 
 
 	// userGroups is already []string - no parsing needed
 	m.keys[keyID] = &storedKey{
-		metadata: ApiKeyMetadata{
-			ID:                 keyID,
-			Name:               name,
-			Description:        description,
-			OriginalUserGroups: userGroups,
-			Status:             TokenStatusActive,
-			CreationDate:       time.Now().UTC().Format(time.RFC3339),
+		metadata: ApiKey{
+			ID:           keyID,
+			Name:         name,
+			Description:  description,
+			Groups:       userGroups,
+			Status:       StatusActive,
+			CreationDate: time.Now().UTC().Format(time.RFC3339),
 		},
 		username:  username,
 		keyHash:   keyHash,
@@ -89,7 +89,7 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 	defer m.mu.RUnlock()
 
 	// Get all keys matching filters
-	allKeys := make([]ApiKeyMetadata, 0)
+	allKeys := make([]ApiKey, 0)
 	now := time.Now().UTC()
 
 	for _, k := range m.keys {
@@ -102,12 +102,12 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 		meta.Username = k.username // Set username field
 
 		// Auto-expire logic
-		if meta.Status == TokenStatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
-			meta.Status = TokenStatusExpired
+		if meta.Status == StatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
+			meta.Status = StatusExpired
 		}
 
 		// Filter by status
-		if len(statuses) > 0 && !slices.Contains(statuses, meta.Status) {
+		if len(statuses) > 0 && !slices.Contains(statuses, string(meta.Status)) {
 			continue
 		}
 
@@ -126,7 +126,7 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 
 	if start >= len(allKeys) {
 		return &PaginatedResult{
-			Keys:    []ApiKeyMetadata{},
+			Keys:    []ApiKey{},
 			HasMore: false,
 		}, nil
 	}
@@ -149,8 +149,8 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 }
 
 // filterKeys applies username and status filters to API keys.
-func (m *MockStore) filterKeys(username string, statusFilters []string, now time.Time) []ApiKeyMetadata {
-	filtered := make([]ApiKeyMetadata, 0, len(m.keys))
+func (m *MockStore) filterKeys(username string, statusFilters []string, now time.Time) []ApiKey {
+	filtered := make([]ApiKey, 0, len(m.keys))
 
 	for _, k := range m.keys {
 		// Filter by username
@@ -162,15 +162,15 @@ func (m *MockStore) filterKeys(username string, statusFilters []string, now time
 		meta.Username = k.username
 
 		// Auto-expire logic
-		if meta.Status == TokenStatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
-			meta.Status = TokenStatusExpired
+		if meta.Status == StatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
+			meta.Status = StatusExpired
 		}
 
 		// Filter by status
 		if len(statusFilters) > 0 {
 			found := false
 			for _, status := range statusFilters {
-				if strings.TrimSpace(status) == meta.Status {
+				if strings.TrimSpace(status) == string(meta.Status) {
 					found = true
 					break
 				}
@@ -220,7 +220,7 @@ func compareTimestampFields(val1, val2 string) (int, bool) {
 }
 
 // compareKeys compares two API keys based on the sort field and order.
-func compareKeys(key1, key2 ApiKeyMetadata, sortBy, order string) bool {
+func compareKeys(key1, key2 ApiKey, sortBy, order string) bool {
 	var cmp int
 
 	switch sortBy {
@@ -268,10 +268,10 @@ func compareKeys(key1, key2 ApiKeyMetadata, sortBy, order string) bool {
 }
 
 // applyPagination applies offset and limit to the result set.
-func applyPagination(keys []ApiKeyMetadata, offset, limit int) ([]ApiKeyMetadata, bool) {
+func applyPagination(keys []ApiKey, offset, limit int) ([]ApiKey, bool) {
 	// Handle offset out of bounds
 	if offset >= len(keys) {
-		return []ApiKeyMetadata{}, false
+		return []ApiKey{}, false
 	}
 
 	// Apply offset
@@ -323,7 +323,7 @@ func (m *MockStore) Search(
 	}, nil
 }
 
-func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, error) {
+func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -337,8 +337,8 @@ func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, err
 
 	// Compute status
 	now := time.Now().UTC()
-	if meta.Status == TokenStatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
-		meta.Status = TokenStatusExpired
+	if meta.Status == StatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
+		meta.Status = StatusExpired
 	}
 	if !k.expiresAt.IsZero() {
 		meta.ExpirationDate = k.expiresAt.Format(time.RFC3339)
@@ -350,7 +350,7 @@ func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, err
 	return &meta, nil
 }
 
-func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetadata, error) {
+func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -359,13 +359,13 @@ func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetad
 			// Check expiration and auto-update status if expired
 			now := time.Now().UTC()
 			if !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
-				if k.metadata.Status == TokenStatusActive {
-					k.metadata.Status = TokenStatusExpired
+				if k.metadata.Status == StatusActive {
+					k.metadata.Status = StatusExpired
 				}
 			}
 
 			// Reject revoked/expired keys
-			if k.metadata.Status == TokenStatusRevoked || k.metadata.Status == TokenStatusExpired {
+			if k.metadata.Status == StatusRevoked || k.metadata.Status == StatusExpired {
 				return nil, ErrInvalidKey
 			}
 
@@ -387,8 +387,8 @@ func (m *MockStore) InvalidateAll(ctx context.Context, username string) (int, er
 
 	count := 0
 	for _, k := range m.keys {
-		if k.username == username && k.metadata.Status == TokenStatusActive {
-			k.metadata.Status = TokenStatusRevoked
+		if k.username == username && k.metadata.Status == StatusActive {
+			k.metadata.Status = StatusRevoked
 			count++
 		}
 	}
@@ -405,7 +405,7 @@ func (m *MockStore) Revoke(ctx context.Context, keyID string) error {
 		return ErrKeyNotFound
 	}
 
-	k.metadata.Status = TokenStatusRevoked
+	k.metadata.Status = StatusRevoked
 	return nil
 }
 
