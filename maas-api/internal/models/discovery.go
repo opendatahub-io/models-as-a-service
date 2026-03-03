@@ -103,7 +103,7 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 		}
 		g.Go(func() error {
 			if discovered := m.fetchModelsWithRetry(ctx, authHeader, subscriptionHeader, meta); discovered != nil {
-				// Use model names from the backend's /v1/models response instead of MaaSModel metadata.name
+				// Use model names from the backend's /v1/models response instead of MaaSModelRef metadata.name
 				converted := discoveredToModels(discovered, model)
 				mu.Lock()
 				out = append(out, converted...)
@@ -129,8 +129,8 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 // 5xx/other → retry (authRetry).
 
 // discoveredToModels converts backend /v1/models response to our Model type, using the backend's
-// model names (id) and preserving URL, Ready, Kind from the original MaaSModel-derived model.
-// If the backend returns no models, falls back to the original model (MaaSModel metadata.name).
+// model names (id) and preserving URL, Ready, Kind from the original MaaSModelRef-derived model.
+// If the backend returns no models, falls back to the original model (MaaSModelRef metadata.name).
 func discoveredToModels(discovered []openai.Model, original Model) []Model {
 	if len(discovered) == 0 {
 		return []Model{original}

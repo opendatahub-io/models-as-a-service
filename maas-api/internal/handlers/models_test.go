@@ -406,12 +406,12 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "premium")
 	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "free")
 
-	// Build MaaSModel unstructured list
-	maasModelItems := []*unstructured.Unstructured{
-		maasModelUnstructured("premium-model", fixtures.TestNamespace, premiumModelServer.URL, true),
-		maasModelUnstructured("free-model", fixtures.TestNamespace, freeModelServer.URL, true),
+	// Build MaaSModelRef unstructured list
+	maasModelRefItems := []*unstructured.Unstructured{
+		maasModelRefUnstructured("premium-model", fixtures.TestNamespace, premiumModelServer.URL, true),
+		maasModelRefUnstructured("free-model", fixtures.TestNamespace, freeModelServer.URL, true),
 	}
-	maasModelLister := fakeMaaSModelLister{fixtures.TestNamespace: maasModelItems}
+	maasModelRefLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelRefItems}
 
 	config := fixtures.TestServerConfig{
 		Objects: []runtime.Object{},
@@ -431,7 +431,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister)
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, subscriptionSelector, maasModelLister, fixtures.TestNamespace)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, subscriptionSelector, maasModelRefLister, fixtures.TestNamespace)
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
 
 	v1 := router.Group("/v1")
