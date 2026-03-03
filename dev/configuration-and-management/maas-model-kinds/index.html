@@ -25,7 +25,7 @@
     
     
       
-        <title>MaaSModel Kinds (future) - ODH Models-as-a-Service Documentation</title>
+        <title>MaaSModelRef Kinds (future) - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#maasmodel-kinds-future" class="md-skip">
+        <a href="#maasmodelref-kinds-future" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              MaaSModel Kinds (future)
+              MaaSModelRef Kinds (future)
             
           </span>
         </div>
@@ -1044,7 +1044,7 @@
   <span class="md-ellipsis">
     
   
-    MaaSModel Kinds (future)
+    MaaSModelRef Kinds (future)
   
 
     
@@ -1062,7 +1062,7 @@
   <span class="md-ellipsis">
     
   
-    MaaSModel Kinds (future)
+    MaaSModelRef Kinds (future)
   
 
     
@@ -1624,11 +1624,11 @@
   
 
 
-<h1 id="maasmodel-kinds-future">MaaSModel kinds (future)</h1>
-<p>The MaaS API lists models from <strong>MaaSModel</strong> CRs only. Each MaaSModel defines a <strong>backend reference</strong> (<code>spec.modelRef</code>) that identifies the type and location of the model endpoint—similar in spirit to how <a href="https://gateway-api.sigs.k8s.io/reference/spec/#backendref">Gateway API’s BackendRef</a> defines how a Route forwards requests to a Kubernetes resource (group, kind, name, namespace).</p>
+<h1 id="maasmodelref-kinds-future">MaaSModelRef kinds (future)</h1>
+<p>The MaaS API lists models from <strong>MaaSModelRef</strong> CRs only. Each MaaSModelRef defines a <strong>backend reference</strong> (<code>spec.modelRef</code>) that identifies the type and location of the model endpoint—similar in spirit to how <a href="https://gateway-api.sigs.k8s.io/reference/spec/#backendref">Gateway API's BackendRef</a> defines how a Route forwards requests to a Kubernetes resource (group, kind, name, namespace).</p>
 <p>This document describes the current <strong>modelRef</strong> semantics and how new kinds can be supported in the future.</p>
 <h2 id="modelref-backend-reference">ModelRef (backend reference)</h2>
-<p>MaaSModel’s <code>spec.modelRef</code> identifies the <strong>referent</strong> (the backend that serves the model):</p>
+<p>MaaSModelRef's <code>spec.modelRef</code> identifies the <strong>referent</strong> (the backend that serves the model):</p>
 <table>
 <thead>
 <tr>
@@ -1639,7 +1639,7 @@
 <tbody>
 <tr>
 <td><strong>kind</strong></td>
-<td>The type of backend. Determines which controller reconciles this MaaSModel and how the endpoint is resolved. Example: <code>llmisvc</code>, <code>ExternalModel</code>.</td>
+<td>The type of backend. Determines which controller reconciles this MaaSModelRef and how the endpoint is resolved. Valid values: <code>LLMInferenceService</code>, <code>ExternalModel</code>. The alias <code>llmisvc</code> is also accepted for backwards compatibility.</td>
 </tr>
 <tr>
 <td><strong>name</strong></td>
@@ -1647,21 +1647,21 @@
 </tr>
 <tr>
 <td><strong>namespace</strong></td>
-<td><em>(Optional)</em> Namespace of the referent. If empty, the MaaSModel’s namespace is used.</td>
+<td><em>(Optional)</em> Namespace of the referent. If empty, the MaaSModelRef's namespace is used.</td>
 </tr>
 </tbody>
 </table>
-<p>The controller that reconciles MaaSModel uses <strong>kind</strong> to decide how to resolve the backend and populate <code>status.endpoint</code> and <code>status.phase</code>. Cross-namespace references are supported by specifying <code>modelRef.namespace</code>.</p>
+<p>The controller that reconciles MaaSModelRef uses <strong>kind</strong> to decide how to resolve the backend and populate <code>status.endpoint</code> and <code>status.phase</code>. Cross-namespace references are supported by specifying <code>modelRef.namespace</code>.</p>
 <h2 id="current-behavior">Current behavior</h2>
 <ul>
-<li><strong>Supported kind today:</strong> <code>llmisvc</code> (default). The MaaS controller reconciles MaaSModels whose <strong>modelRef</strong> points to an LLMInferenceService (by name and optional namespace). It sets <code>status.endpoint</code> from the LLMInferenceService status and <code>status.phase</code> from its readiness.</li>
-<li><strong>API behavior:</strong> The API reads MaaSModels from the informer cache, maps each to an API model (<code>id</code>, <code>url</code>, <code>ready</code>, <code>kind</code>, etc.), then <strong>validates access</strong> by probing each model’s <code>/v1/models</code> endpoint with the request’s <strong>Authorization header</strong> (passed through as-is). Only models that return 2xx or 405 are included.</li>
-<li><strong>Kind on the wire:</strong> Each model in the GET /v1/models response can carry a <code>kind</code> field (e.g. <code>llmisvc</code>) from <code>spec.modelRef.kind</code> for clients or tooling.</li>
+<li><strong>Supported kind today:</strong> <code>LLMInferenceService</code> (also accepts the alias <code>llmisvc</code> for backwards compatibility). The MaaS controller reconciles MaaSModelRefs whose <strong>modelRef</strong> points to an LLMInferenceService (by name and optional namespace). It sets <code>status.endpoint</code> from the LLMInferenceService status and <code>status.phase</code> from its readiness.</li>
+<li><strong>API behavior:</strong> The API reads MaaSModelRefs from the informer cache, maps each to an API model (<code>id</code>, <code>url</code>, <code>ready</code>, <code>kind</code>, etc.), then <strong>validates access</strong> by probing each model's <code>/v1/models</code> endpoint with the request's <strong>Authorization header</strong> (passed through as-is). Only models that return 2xx or 405 are included.</li>
+<li><strong>Kind on the wire:</strong> Each model in the GET /v1/models response can carry a <code>kind</code> field (e.g. <code>LLMInferenceService</code>) from <code>spec.modelRef.kind</code> for clients or tooling.</li>
 </ul>
 <h2 id="adding-a-new-kind-in-the-future">Adding a new kind in the future</h2>
 <p>To support a new backend type (a new <strong>kind</strong> in <code>spec.modelRef</code>):</p>
 <ol>
-<li><strong>MaaSModel CRD and controller</strong></li>
+<li><strong>MaaSModelRef CRD and controller</strong></li>
 <li>Add a new allowed value for <code>spec.modelRef.kind</code> (e.g. <code>mybackend</code>).</li>
 <li>
 <p>In the <strong>maas-controller</strong>, extend the reconciler so that when <strong>kind</strong> is the new value it:</p>
@@ -1673,19 +1673,19 @@
 <li>
 <p><strong>MaaS API</strong></p>
 </li>
-<li><strong>Listing:</strong> No change required. The API lists all MaaSModels and uses <code>status.endpoint</code> and <code>status.phase</code>; it does not branch on <strong>kind</strong> for listing.</li>
+<li><strong>Listing:</strong> No change required. The API lists all MaaSModelRefs and uses <code>status.endpoint</code> and <code>status.phase</code>; it does not branch on <strong>kind</strong> for listing.</li>
 <li>
-<p><strong>Access validation:</strong> The API probes <code>status.endpoint</code> + <code>/v1/models</code> with the request’s Authorization header. If a new kind uses a different path or protocol:</p>
+<p><strong>Access validation:</strong> The API probes <code>status.endpoint</code> + <code>/v1/models</code> with the request's Authorization header. If a new kind uses a different path or protocol:</p>
 <ul>
 <li><strong>Option A (preferred):</strong> The backend exposes the same path the API expects (e.g. OpenAI-compatible <code>/v1/models</code>), so no API change.</li>
-<li><strong>Option B:</strong> Extend the API’s access-validation logic to branch on <strong>kind</strong> and use a kind-specific probe (different URL path or client), while keeping the same contract: include a model only if the probe with the user’s token succeeds.</li>
+<li><strong>Option B:</strong> Extend the API's access-validation logic to branch on <strong>kind</strong> and use a kind-specific probe (different URL path or client), while keeping the same contract: include a model only if the probe with the user's token succeeds.</li>
 </ul>
 </li>
 <li>
 <p><strong>Enrichment (optional)</strong></p>
 </li>
 <li>
-<p>Extra metadata (e.g. display name) can be set by the controller in status or annotations and mapped into the model response. For a new kind, add a small branch in the MaaSModel → API model conversion if needed.</p>
+<p>Extra metadata (e.g. display name) can be set by the controller in status or annotations and mapped into the model response. For a new kind, add a small branch in the MaaSModelRef → API model conversion if needed.</p>
 </li>
 <li>
 <p><strong>RBAC</strong></p>
@@ -1695,8 +1695,8 @@
 <h2 id="summary">Summary</h2>
 <ul>
 <li><strong>modelRef</strong> is the backend reference (kind, name, optional namespace), analogous to <a href="https://gateway-api.sigs.k8s.io/reference/spec/#backendref">Gateway API BackendRef</a>.</li>
-<li><strong>Listing:</strong> Always from MaaSModel cache; no kind-specific listing logic.</li>
-<li><strong>Access validation:</strong> Same probe (GET endpoint with the request’s Authorization header as-is) for all kinds unless kind-specific probes are added later.</li>
+<li><strong>Listing:</strong> Always from MaaSModelRef cache; no kind-specific listing logic.</li>
+<li><strong>Access validation:</strong> Same probe (GET endpoint with the request's Authorization header as-is) for all kinds unless kind-specific probes are added later.</li>
 <li><strong>New kinds:</strong> Implement in the controller (resolve referent, set status.endpoint and status.phase); extend the API only if the new kind cannot use the same probe path or needs different enrichment.</li>
 </ul>
 
@@ -1721,7 +1721,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 27, 2026 17:58:09 UTC">February 27, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 3, 2026 21:33:09 UTC">March 3, 2026</span>
   </span>
 
     

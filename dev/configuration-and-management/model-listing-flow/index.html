@@ -1071,15 +1071,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#maasmodel-flow" class="md-nav__link">
+  <a href="#maasmodelref-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        MaaSModel flow
+        MaaSModelRef flow
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="MaaSModel flow">
+    <nav class="md-nav" aria-label="MaaSModelRef flow">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1143,7 +1143,7 @@
   <span class="md-ellipsis">
     
   
-    MaaSModel Kinds (future)
+    MaaSModelRef Kinds (future)
   
 
     
@@ -1589,15 +1589,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#maasmodel-flow" class="md-nav__link">
+  <a href="#maasmodelref-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        MaaSModel flow
+        MaaSModelRef flow
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="MaaSModel flow">
+    <nav class="md-nav" aria-label="MaaSModelRef flow">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1660,23 +1660,23 @@
 
 <h1 id="model-listing-flow">Model listing flow</h1>
 <p>This document describes how the <strong>GET /v1/models</strong> endpoint discovers and returns the list of available models.</p>
-<p>The list is <strong>based on MaaSModel</strong> custom resources: the API returns models that are registered as MaaSModels in its configured namespace.</p>
+<p>The list is <strong>based on MaaSModelRef</strong> custom resources: the API returns models that are registered as MaaSModelRefs in its configured namespace.</p>
 <h2 id="overview">Overview</h2>
 <p>When a client calls <strong>GET /v1/models</strong> with an <strong>Authorization</strong> header, the MaaS API returns an OpenAI-compatible list of models.</p>
-<p>Each entry includes an <code>id</code>, <strong><code>url</code></strong> (the model’s endpoint), a <code>ready</code> flag, and related metadata. The list is built from <strong>MaaSModel</strong> CRs. The API then validates access by probing each model’s endpoint with the same Authorization header; only models the client can access are included in the response.</p>
+<p>Each entry includes an <code>id</code>, <strong><code>url</code></strong> (the model’s endpoint), a <code>ready</code> flag, and related metadata. The list is built from <strong>MaaSModelRef</strong> CRs. The API then validates access by probing each model’s endpoint with the same Authorization header; only models the client can access are included in the response.</p>
 <div class="admonition note">
 <p class="admonition-title">Model endpoints and routing</p>
 <p>The returned value includes a <strong>URL</strong> per model; clients use that URL to call the model (e.g. for chat or completions).</p>
 <p>Currently each model is served on a <strong>different endpoint</strong>. <strong>Body Based Routing</strong> is being evaluated to provide a more unified OpenAI API feel (single endpoint with model selection in the request body).</p>
 </div>
-<h2 id="maasmodel-flow">MaaSModel flow</h2>
-<p>When the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS controller</a> is installed and the API is configured with a MaaSModel lister and namespace, the flow is:</p>
+<h2 id="maasmodelref-flow">MaaSModelRef flow</h2>
+<p>When the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS controller</a> is installed and the API is configured with a MaaSModelRef lister and namespace, the flow is:</p>
 <ol>
 <li>
-<p>The MaaS API lists all <strong>MaaSModel</strong> custom resources in its configured namespace (e.g. <code>opendatahub</code>). It reads them from an <strong>in-memory cache</strong> in the maas-api component (maintained by a Kubernetes informer), so it does not call the Kubernetes API on every request.</p>
+<p>The MaaS API lists all <strong>MaaSModelRef</strong> custom resources in its configured namespace (e.g. <code>opendatahub</code>). It reads them from an <strong>in-memory cache</strong> in the maas-api component (maintained by a Kubernetes informer), so it does not call the Kubernetes API on every request.</p>
 </li>
 <li>
-<p>For each MaaSModel, it reads <strong>id</strong> (<code>metadata.name</code>), <strong>url</strong> (<code>status.endpoint</code>), <strong>ready</strong> (<code>status.phase == "Ready"</code>), and related metadata. The controller has populated <code>status.endpoint</code> and <code>status.phase</code> from the underlying LLMInferenceService (for llmisvc) or HTTPRoute/Gateway.</p>
+<p>For each MaaSModelRef, it reads <strong>id</strong> (<code>metadata.name</code>), <strong>url</strong> (<code>status.endpoint</code>), <strong>ready</strong> (<code>status.phase == "Ready"</code>), and related metadata. The controller has populated <code>status.endpoint</code> and <code>status.phase</code> from the underlying LLMInferenceService (for llmisvc) or HTTPRoute/Gateway.</p>
 </li>
 <li>
 <p><strong>Access validation</strong>: The API probes each model’s <code>/v1/models</code> endpoint with the <strong>exact Authorization header</strong> the client sent (passed through as-is). Only models that return <strong>2xx</strong>, <strong>3xx</strong> or <strong>405</strong> are included in the response. This ensures the list only shows models the client is authorized to use.</p>
@@ -1692,8 +1692,8 @@
     participant Model as Model endpoint
 
     Client-&gt;&gt;MaaS API: GET /v1/models (Authorization header)
-    MaaS API-&gt;&gt;K8s: List MaaSModel CRs
-    K8s--&gt;&gt;MaaS API: MaaSModel list
+    MaaS API-&gt;&gt;K8s: List MaaSModelRef CRs
+    K8s--&gt;&gt;MaaS API: MaaSModelRef list
     loop For each model
         MaaS API-&gt;&gt;Model: GET endpoint with same Authorization header
         Model--&gt;&gt;MaaS API: include or exclude by response
@@ -1703,7 +1703,7 @@
 <h3 id="benefits">Benefits</h3>
 <ul>
 <li>
-<p><strong>List is based on MaaSModels</strong>: Only models registered as a MaaSModel appear. The controller reconciles each MaaSModel and sets its endpoint and phase; access and quotas are controlled by MaaSAuthPolicy and MaaSSubscription.</p>
+<p><strong>List is based on MaaSModelRefs</strong>: Only models registered as a MaaSModelRef appear. The controller reconciles each MaaSModelRef and sets its endpoint and phase; access and quotas are controlled by MaaSAuthPolicy and MaaSSubscription.</p>
 </li>
 <li>
 <p><strong>Access-filtered</strong>: The API probes each model with the client’s Authorization header (passed through as-is), so the returned list only includes models the client can actually use.</p>
@@ -1712,10 +1712,10 @@
 <p><strong>Consistent with gateway</strong>: The same model names and routes are used for inference; the list matches what the gateway will accept for that client.</p>
 </li>
 </ul>
-<p>If the API is not configured with a MaaSModel lister and namespace, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.</p>
-<p>For how to add new MaaSModel <strong>kinds</strong> (backend types) in the future, see <a href="../maas-model-kinds/">MaaSModel kinds (future)</a>.</p>
+<p>If the API is not configured with a MaaSModelRef lister and namespace, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.</p>
+<p>For how to add new MaaSModelRef <strong>kinds</strong> (backend types) in the future, see <a href="../maas-model-kinds/">MaaSModelRef kinds (future)</a>.</p>
 <h2 id="registering-models">Registering models</h2>
-<p>To have models appear via the <strong>MaaSModel</strong> flow:</p>
+<p>To have models appear via the <strong>MaaSModelRef</strong> flow:</p>
 <ol>
 <li>
 <p>Install the <strong>MaaS controller</strong> (CRDs, controller deployment, and optionally the default-deny policy). See <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">maas-controller README</a>.</p>
@@ -1724,29 +1724,29 @@
 <p>Ensure the underlying <strong>LLMInferenceService</strong> exists and (if applicable) has an HTTPRoute created by KServe.</p>
 </li>
 <li>
-<p>Create a <strong>MaaSModel</strong> for each model you want to expose, referencing the LLMIS:</p>
+<p>Create a <strong>MaaSModelRef</strong> for each model you want to expose, referencing the LLMIS:</p>
+<div class="highlight"><pre><span></span><code>apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: my-model-name   # This becomes the model &quot;id&quot; in GET /v1/models
+  namespace: opendatahub
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: my-llm-isvc-name
+    namespace: llm
+</code></pre></div>
+</li>
+<li>
+<p>The controller reconciles the MaaSModelRef and sets <code>status.endpoint</code> and <code>status.phase</code>. The MaaS API (in the same namespace) will then include this model in GET /v1/models when it lists MaaSModelRef CRs.</p>
 </li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModel</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-model-name</span><span class="w">   </span><span class="c1"># This becomes the model &quot;id&quot; in GET /v1/models</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">opendatahub</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llmisvc</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-llm-isvc-name</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm</span>
-</code></pre></div>
-<ol>
-<li>The controller reconciles the MaaSModel and sets <code>status.endpoint</code> and <code>status.phase</code>. The MaaS API (in the same namespace) will then include this model in GET /v1/models when it lists MaaSModel CRs.</li>
-</ol>
-<p>You can use the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/maas-system">maas-system samples</a> as a template; the install script deploys LLMInferenceService + MaaSModel + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly.</p>
+<p>You can use the <a href="../../samples/maas-system/README.md">maas-system samples</a> as a template; the install script deploys LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly.</p>
 <hr />
 <h2 id="related-documentation">Related documentation</h2>
 <ul>
-<li><a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS Controller README</a> — install and MaaSModel/MaaSAuthPolicy/MaaSSubscription</li>
-<li><a href="../model-setup/">Model setup</a> — configuring LLMInferenceServices (gateway reference, tier annotation) as backends for MaaSModel</li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS Controller README</a> — install and MaaSModelRef/MaaSAuthPolicy/MaaSSubscription</li>
+<li><a href="../model-setup/">Model setup</a> — configuring LLMInferenceServices (gateway reference, tier annotation) as backends for MaaSModelRef</li>
 <li><a href="../../architecture/">Architecture</a> — overall MaaS architecture</li>
 </ul>
 
@@ -1771,7 +1771,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 27, 2026 17:58:09 UTC">February 27, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 3, 2026 21:33:09 UTC">March 3, 2026</span>
   </span>
 
     
