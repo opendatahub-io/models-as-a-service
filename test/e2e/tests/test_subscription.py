@@ -13,7 +13,7 @@ Requires:
 Environment variables (all optional, with defaults):
   - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_API_BASE_URL: MaaS API URL (required for API key creation)
-  - MAAS_NAMESPACE: MaaS namespace (default: opendatahub)
+  - MAAS_SYSTEM_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: When set, use this SA token
     instead of oc whoami -t (e.g. for Prow where oc whoami -t is unavailable)
   - E2E_TIMEOUT: Request timeout in seconds (default: 30)
@@ -66,7 +66,7 @@ INVALID_SUBSCRIPTION = os.environ.get("E2E_INVALID_SUBSCRIPTION", "nonexistent-s
 
 
 def _ns():
-    return os.environ.get("MAAS_NAMESPACE", "opendatahub")
+    return os.environ.get("MAAS_SYSTEM_NAMESPACE", "models-as-a-service")
 
 
 def _gateway_url():
@@ -352,6 +352,19 @@ def _snapshot_cr(kind, name, namespace=None):
         meta.pop("annotations", None)
     cr.pop("status", None)
     return cr
+
+
+def _get_cr_annotations(kind, name, namespace="llm"):
+    """Return annotations dict of a CR, or None if not found."""
+    result = subprocess.run(
+        ["oc", "get", kind, name, "-n", namespace, "-o", "json"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    obj = json.loads(result.stdout)
+    return obj.get("metadata", {}).get("annotations") or {}
 
 
 # ---------------------------------------------------------------------------
@@ -695,3 +708,114 @@ class TestOrderingEdgeCases:
             _delete_cr("maassubscription", "e2e-ordering-sub")
             _delete_cr("maasauthpolicy", "e2e-ordering-auth")
             _wait_reconcile()
+
+
+class TestMaaSSystemNamespace:
+    """Verifies MaaS Controller only reconciles CRs in the configured MaaS System Namespace."""
+
+    def test_authpolicy_and_subscription_in_maas_system_namespace(self):
+        """MaaSAuthPolicy and MaaSSubscription in MaaS System Namespace should be reconciled
+        and should appear in the AuthPolicy and TRLP annotations for the model."""
+        ns = _ns()
+        try:
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-watched-auth", "namespace": ns},
+                "spec": {
+                    "modelRefs": [MODEL_REF],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-watched-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
+                },
+            })
+            _wait_reconcile()
+            _wait_reconcile()
+
+            auth_name = f"maas-auth-{MODEL_REF}"
+            auth_annotations = _get_cr_annotations("authpolicy", auth_name, "llm")
+            assert auth_annotations is not None, (
+                f"AuthPolicy {auth_name} not found"
+            )
+            assert "e2e-watched-auth" in auth_annotations.get("maas.opendatahub.io/auth-policies", "").split(","), (
+                f"MaaSAuthPolicy e2e-watched-auth not reconciled"
+            )
+
+            trlp_name = f"maas-trlp-{MODEL_REF}"
+            trlp_annotations = _get_cr_annotations("tokenratelimitpolicy", trlp_name, "llm")
+            assert trlp_annotations is not None, (
+                f"TRLP {trlp_name} not found"
+            )
+            assert "e2e-watched-sub" in trlp_annotations.get("maas.opendatahub.io/subscriptions", "").split(","), (
+                f"MaaSSubscription e2e-watched-sub not reconciled"
+            )
+        finally:
+            _delete_cr("maasauthpolicy", "e2e-watched-auth")
+            _delete_cr("maassubscription", "e2e-watched-sub")
+            _wait_reconcile()
+
+    def test_authpolicy_and_subscription_in_another_namespace(self):
+        """MaaSAuthPolicy and MaaSSubscription in another namespace should not be reconciled
+        and should not appear in the AuthPolicy and TRLP annotations for the model."""
+        ns = "e2e-unwatched-ns"
+        subprocess.run(
+            ["oc", "create", "namespace", ns],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        try:
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-unwatched-auth", "namespace": ns},
+                "spec": {
+                    "modelRefs": [MODEL_REF],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-unwatched-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
+                },
+            })
+            _wait_reconcile()
+            _wait_reconcile()
+
+            auth_name = f"maas-auth-{MODEL_REF}"
+            auth_annotations = _get_cr_annotations("authpolicy", auth_name, "llm")
+            assert auth_annotations is not None, (
+                f"AuthPolicy {auth_name} not found"
+            )
+            assert "e2e-unwatched-auth" not in auth_annotations.get("maas.opendatahub.io/auth-policies", "").split(","), (
+                f"MaaSAuthPolicy e2e-unwatched-auth reconciled"
+            )
+
+            trlp_name = f"maas-trlp-{MODEL_REF}"
+            trlp_annotations = _get_cr_annotations("tokenratelimitpolicy", trlp_name, "llm")
+            assert trlp_annotations is not None, (
+                f"TRLP {trlp_name} not found"
+            )
+            assert "e2e-unwatched-sub" not in trlp_annotations.get("maas.opendatahub.io/subscriptions", "").split(","), (
+                f"MaaSSubscription e2e-unwatched-sub reconciled"
+            )
+        finally:
+            _delete_cr("maasauthpolicy", "e2e-unwatched-auth", namespace=ns)
+            _delete_cr("maassubscription", "e2e-unwatched-sub", namespace=ns)
+            _wait_reconcile()
+            subprocess.run(
+                ["oc", "delete", "namespace", ns, "--ignore-not-found", "--timeout=30s"],
+                capture_output=True,
+                text=True,
+            )
