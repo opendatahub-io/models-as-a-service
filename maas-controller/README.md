@@ -202,11 +202,13 @@ maas-controller/scripts/install-examples.sh
 This creates:
 
 **Regular tier**
+
 - `LLMInferenceService/facebook-opt-125m-simulated` in `llm` namespace
 - `MaaSModel/facebook-opt-125m-simulated` in `opendatahub`
 - `MaaSAuthPolicy/simulator-access` (group: `free-user`) and `MaaSSubscription/simulator-subscription` (100 tokens/min)
 
 **Premium tier**
+
 - `LLMInferenceService/premium-simulated-simulated-premium` in `llm` namespace
 - `MaaSModel/premium-simulated-simulated-premium` in `opendatahub`
 - `MaaSAuthPolicy/premium-simulator-access` (group: `premium-user`) and `MaaSSubscription/premium-simulator-subscription` (1000 tokens/min)
@@ -268,6 +270,10 @@ make -C maas-controller image-push                     # push to quay.io/maas/ma
 # Custom image/tag
 make -C maas-controller image-build IMAGE=quay.io/myorg/maas-controller IMAGE_TAG=v0.1.0
 make -C maas-controller image-push IMAGE=quay.io/myorg/maas-controller IMAGE_TAG=v0.1.0
+
+# Custom image/tag on macOS
+make -C maas-controller image-build IMAGE=quay.io/myorg/maas-controller IMAGE_TAG=v0.1.0 CONTAINER_ENGINE_EXTRA_FLAGS="--platform linux/amd64"
+make -C maas-controller image-push IMAGE=quay.io/myorg/maas-controller IMAGE_TAG=v0.1.0 CONTAINER_ENGINE_EXTRA_FLAGS="--platform linux/amd64"
 ```
 
 ## Development
@@ -286,6 +292,7 @@ make -C maas-controller uninstall # remove everything
 
 **MaaS CRs stuck in `Failed` state:**
 The controller retries with exponential backoff. If the HTTPRoute doesn't exist yet (KServe still deploying), the CRs will auto-recover when it appears. If they stay stuck, check controller logs:
+
 ```bash
 kubectl logs deployment/maas-controller -n opendatahub --tail=20
 ```
