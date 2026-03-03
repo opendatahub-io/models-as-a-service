@@ -44,9 +44,14 @@ tidy:
 generate:
 	controller-gen object paths="./api/..."
 
-# Generate CRD manifests
+# Deployment manifests directory (ODH operator only copies deployment/)
+DEPLOY_DIR := ../deployment/base/maas-controller
+
+# Generate CRD manifests into both local config and deployment directories
 manifests:
 	controller-gen crd paths="./api/..." output:crd:dir=./config/crd/bases
+	controller-gen crd paths="./api/..." output:crd:dir=$(DEPLOY_DIR)/crd/bases
+	@echo "CRDs generated in config/crd/bases/ and $(DEPLOY_DIR)/crd/bases/"
 
 # Install CRDs, RBAC, and manager deployment (default: opendatahub namespace)
 install:
