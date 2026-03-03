@@ -32,9 +32,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -45,6 +48,16 @@ const (
 	defaultGatewayNamespace = "openshift-ingress"
 	defaultClusterAudience  = "https://kubernetes.default.svc"
 )
+
+const modelRefNameIndex = "spec.modelRef.name"
+
+func modelRefNameIndexer(obj client.Object) []string {
+	model := obj.(*maasv1alpha1.MaaSModel)
+	if model.Spec.ModelRef.Name == "" {
+		return nil
+	}
+	return []string{model.Spec.ModelRef.Name}
+}
 
 // MaaSModelReconciler reconciles a MaaSModel object
 type MaaSModelReconciler struct {
@@ -253,22 +266,53 @@ func (r *MaaSModelReconciler) updateStatusWithReason(ctx context.Context, model 
 	}
 }
 
+// llmisvcReadyChangedPredicate passes Create/Delete events and Update events
+// where the LLMInferenceService's Ready condition status changed.
+type llmisvcReadyChangedPredicate struct {
+	predicate.Funcs
+}
+
+func (llmisvcReadyChangedPredicate) Update(e event.UpdateEvent) bool {
+	oldObj, ok := e.ObjectOld.(*kservev1alpha1.LLMInferenceService)
+	if !ok {
+		return true
+	}
+	newObj, ok := e.ObjectNew.(*kservev1alpha1.LLMInferenceService)
+	if !ok {
+		return true
+	}
+	return llmisvcReadyStatus(oldObj) != llmisvcReadyStatus(newObj)
+}
+
+func llmisvcReadyStatus(obj *kservev1alpha1.LLMInferenceService) string {
+	for _, c := range obj.Status.Conditions {
+		if c.Type == "Ready" {
+			return string(c.Status)
+		}
+	}
+	return ""
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *MaaSModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	ctx := context.Background()
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer); err != nil {
+		return fmt.Errorf("failed to create field index %s: %w", modelRefNameIndex, err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaaSModel{}).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
 		// (fixes race condition where MaaSModel is created before HTTPRoute exists).
-		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
-			r.mapHTTPRouteToMaaSModels,
-		)).
-		// Watch LLMInferenceServices so we re-reconcile when the backend becomes ready
-		// (or transitions away from ready). No predicate: the reconciler reads
-		// LLMInferenceService status (Ready condition, addresses), so status updates
-		// must not be filtered out.
-		Watches(&kservev1alpha1.LLMInferenceService{}, handler.EnqueueRequestsFromMapFunc(
-			r.mapLLMISvcToMaaSModels,
-		)).
+		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.mapHTTPRouteToMaaSModels)).
+		// Watch LLMInferenceServices so we re-reconcile when the backend becomes
+		// ready (or transitions away from ready). The predicate filters to spec
+		// changes (generation) and Ready-condition status changes, skipping
+		// metadata-only updates.
+		Watches(&kservev1alpha1.LLMInferenceService{},
+			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModels),
+			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
+		).
 		Complete(r)
 }
 
@@ -306,16 +350,13 @@ func (r *MaaSModelReconciler) mapLLMISvcToMaaSModels(ctx context.Context, obj cl
 		return nil
 	}
 	var models maasv1alpha1.MaaSModelList
-	if err := r.List(ctx, &models); err != nil {
+	if err := r.List(ctx, &models, client.MatchingFields{modelRefNameIndex: llmisvc.Name}); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
 	for _, m := range models.Items {
 		kind := m.Spec.ModelRef.Kind
-		if kind != "LLMInferenceService" {
-			continue
-		}
-		if m.Spec.ModelRef.Name != llmisvc.Name {
+		if kind != "LLMInferenceService" && kind != "llmisvc" {
 			continue
 		}
 		refNS := m.Spec.ModelRef.Namespace
