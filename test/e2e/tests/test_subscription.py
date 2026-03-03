@@ -727,7 +727,7 @@ class TestMultipleAuthPoliciesPerModel:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSAuthPolicy",
-                "metadata": {"name": "e2e-premium-admin-auth", "namespace": ns},
+                "metadata": {"name": "e2e-free-admin-auth", "namespace": ns},
                 "spec": {
                     "modelRefs": [PREMIUM_MODEL_REF],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
@@ -736,7 +736,7 @@ class TestMultipleAuthPoliciesPerModel:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-premium-admin-sub", "namespace": ns},
+                "metadata": {"name": "e2e-free-admin-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
                     "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 500, "window": "1m"}]}],
@@ -752,13 +752,13 @@ class TestMultipleAuthPoliciesPerModel:
 
             # Test: Admin via system:authenticated policy can also access (OR logic)
             admin_token = _get_cluster_token()
-            r2 = _inference(admin_token, path=PREMIUM_MODEL_PATH, subscription="e2e-premium-admin-sub")
+            r2 = _inference(admin_token, path=PREMIUM_MODEL_PATH, subscription="e2e-free-admin-sub")
             assert r2.status_code == 200, f"Expected 200 (admin via system:authenticated policy), got {r2.status_code}"
         finally:
             _delete_cr("maassubscription", "e2e-premium-sa-sub")
-            _delete_cr("maassubscription", "e2e-premium-admin-sub")
+            _delete_cr("maassubscription", "e2e-free-admin-sub")
             _delete_cr("maasauthpolicy", "e2e-premium-sa-auth")
-            _delete_cr("maasauthpolicy", "e2e-premium-admin-auth")
+            _delete_cr("maasauthpolicy", "e2e-free-admin-auth")
             _delete_sa(sa)
             _wait_reconcile()
 
@@ -789,7 +789,7 @@ class TestMultipleAuthPoliciesPerModel:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-admin-premium-sub", "namespace": ns},
+                "metadata": {"name": "e2e-admin-free-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
                     "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 200, "window": "1m"}]}],
@@ -799,17 +799,17 @@ class TestMultipleAuthPoliciesPerModel:
 
             # Verify admin can access with both policies active
             token = _get_cluster_token()
-            _poll_status(token, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-admin-premium-sub")
+            _poll_status(token, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-admin-free-sub")
 
             # Delete one auth policy
             _delete_cr("maasauthpolicy", "e2e-extra-auth-1")
             _wait_reconcile()
 
             # Verify admin can still access via remaining policy (OR logic)
-            r2 = _poll_status(token, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-admin-premium-sub")
+            r2 = _poll_status(token, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-admin-free-sub")
             log.info(f"After deleting 1 of 2 auth policies -> {r2.status_code}")
         finally:
-            _delete_cr("maassubscription", "e2e-admin-premium-sub")
+            _delete_cr("maassubscription", "e2e-admin-free-sub")
             _delete_cr("maasauthpolicy", "e2e-extra-auth-1")
             _delete_cr("maasauthpolicy", "e2e-extra-auth-2")
             _wait_reconcile()
