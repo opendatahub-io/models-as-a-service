@@ -41,14 +41,14 @@ func init() {
 var scheme = runtime.NewScheme()
 
 func TestGetBackendHandler_UnknownKind_ReturnsNil(t *testing.T) {
-	r := &MaaSModelReconciler{}
+	r := &MaaSModelRefReconciler{}
 	if got := GetBackendHandler("unknown", r); got != nil {
 		t.Errorf("GetBackendHandler(%q) = %v, want nil", "unknown", got)
 	}
 }
 
 func TestGetBackendHandler_Llmisvc_ReturnsHandler(t *testing.T) {
-	r := &MaaSModelReconciler{}
+	r := &MaaSModelRefReconciler{}
 	got := GetBackendHandler("llmisvc", r)
 	if got == nil {
 		t.Fatal("GetBackendHandler(\"llmisvc\") = nil, want non-nil")
@@ -60,7 +60,7 @@ func TestGetBackendHandler_Llmisvc_ReturnsHandler(t *testing.T) {
 
 func TestGetBackendHandler_LLMInferenceService_ReturnsHandler(t *testing.T) {
 	// CRD enum value is LLMInferenceService; ensure it resolves to the same handler as llmisvc.
-	r := &MaaSModelReconciler{}
+	r := &MaaSModelRefReconciler{}
 	got := GetBackendHandler("LLMInferenceService", r)
 	if got == nil {
 		t.Fatal("GetBackendHandler(\"LLMInferenceService\") = nil, want non-nil")
@@ -71,7 +71,7 @@ func TestGetBackendHandler_LLMInferenceService_ReturnsHandler(t *testing.T) {
 }
 
 func TestGetBackendHandler_ExternalModel_ReturnsHandler(t *testing.T) {
-	r := &MaaSModelReconciler{}
+	r := &MaaSModelRefReconciler{}
 	got := GetBackendHandler("ExternalModel", r)
 	if got == nil {
 		t.Fatal("GetBackendHandler(\"ExternalModel\") = nil, want non-nil")
@@ -128,7 +128,7 @@ func TestErrModelNotFound(t *testing.T) {
 func TestFindHTTPRouteForModel_NotFound(t *testing.T) {
 	ctx := context.Background()
 	b := fake.NewClientBuilder().WithScheme(scheme)
-	// No MaaSModels
+	// No MaaSModelRefs
 	c := b.Build()
 	_, _, err := findHTTPRouteForModel(ctx, c, "default", "nonexistent")
 	if err == nil {
@@ -141,7 +141,7 @@ func TestFindHTTPRouteForModel_NotFound(t *testing.T) {
 
 func TestFindHTTPRouteForModel_UnknownKind(t *testing.T) {
 	ctx := context.Background()
-	model := &maasv1alpha1.MaaSModel{
+	model := &maasv1alpha1.MaaSModelRef{
 		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"},
 		Spec: maasv1alpha1.MaaSModelSpec{
 			ModelRef: maasv1alpha1.ModelReference{Kind: "UnknownKind", Name: "x"},
@@ -159,7 +159,7 @@ func TestFindHTTPRouteForModel_UnknownKind(t *testing.T) {
 
 func TestFindHTTPRouteForModel_ExternalModel_Success(t *testing.T) {
 	ctx := context.Background()
-	model := &maasv1alpha1.MaaSModel{
+	model := &maasv1alpha1.MaaSModelRef{
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
 		Spec: maasv1alpha1.MaaSModelSpec{
 			ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: "foo"},

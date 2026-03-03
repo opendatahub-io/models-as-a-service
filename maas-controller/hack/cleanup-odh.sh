@@ -88,9 +88,9 @@ if kubectl get namespace opendatahub &>/dev/null; then
         echo "   Removing finalizers from MaaSAuthPolicy $name..."
         kubectl patch maasauthpolicies.maas.opendatahub.io "$name" -n opendatahub --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
     done
-    for name in $(kubectl get maasmodels.maas.opendatahub.io -n opendatahub --no-headers 2>/dev/null | awk '{print $1}'); do
-        echo "   Removing finalizers from MaaSModel $name..."
-        kubectl patch maasmodels.maas.opendatahub.io "$name" -n opendatahub --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+    for name in $(kubectl get maasmodelrefs.maas.opendatahub.io -n opendatahub --no-headers 2>/dev/null | awk '{print $1}'); do
+        echo "   Removing finalizers from MaaSModelRef $name..."
+        kubectl patch maasmodelrefs.maas.opendatahub.io "$name" -n opendatahub --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
     done
     for name in $(kubectl get maassubscriptions.maas.opendatahub.io -n opendatahub --no-headers 2>/dev/null | awk '{print $1}'); do
         echo "   Removing finalizers from MaaSSubscription $name..."

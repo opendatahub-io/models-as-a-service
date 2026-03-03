@@ -41,8 +41,8 @@ func init() {
 // --- Test helpers ---
 
 // newMaasModel is a helper function to create a MaasModel resource.
-func newMaaSModel(name, ns, kind, refName, refNS string) *maasv1alpha1.MaaSModel {
-	m := &maasv1alpha1.MaaSModel{
+func newMaaSModel(name, ns, kind, refName, refNS string) *maasv1alpha1.MaaSModelRef {
+	m := &maasv1alpha1.MaaSModelRef{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: maasv1alpha1.MaaSModelSpec{
 			ModelRef: maasv1alpha1.ModelReference{
@@ -100,14 +100,14 @@ func newLLMISvcRoute(llmisvcName, ns string) *gatewayapiv1.HTTPRoute {
 // newTestReconciler creates a MaaSModelReconciler with a fake client pre-configured
 // with the field index and status subresource for MaaSModel. LLMInferenceService is
 // intentionally NOT a status subresource so that plain Update() can set its status.
-func newTestReconciler(objects ...client.Object) (*MaaSModelReconciler, client.Client) {
+func newTestReconciler(objects ...client.Object) (*MaaSModelRefReconciler, client.Client) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objects...).
-		WithStatusSubresource(&maasv1alpha1.MaaSModel{}).
-		WithIndex(&maasv1alpha1.MaaSModel{}, modelRefNameIndex, modelRefNameIndexer).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		WithIndex(&maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer).
 		Build()
-	return &MaaSModelReconciler{Client: c, Scheme: scheme}, c
+	return &MaaSModelRefReconciler{Client: c, Scheme: scheme}, c
 }
 
 // assertReadyCondition checks that the conditions slice contains a Ready condition
@@ -130,30 +130,30 @@ func assertReadyCondition(t *testing.T, conditions []metav1.Condition, wantStatu
 
 // --- Tests ---
 
-func TestMaaSModelReconciler_gatewayName(t *testing.T) {
+func TestMaaSModelRefReconciler_gatewayName(t *testing.T) {
 	t.Run("default_when_empty", func(t *testing.T) {
-		r := &MaaSModelReconciler{}
+		r := &MaaSModelRefReconciler{}
 		if got := r.gatewayName(); got != defaultGatewayName {
 			t.Errorf("gatewayName() = %q, want %q", got, defaultGatewayName)
 		}
 	})
 	t.Run("custom_when_set", func(t *testing.T) {
-		r := &MaaSModelReconciler{GatewayName: "my-gateway"}
+		r := &MaaSModelRefReconciler{GatewayName: "my-gateway"}
 		if got := r.gatewayName(); got != "my-gateway" {
 			t.Errorf("gatewayName() = %q, want %q", got, "my-gateway")
 		}
 	})
 }
 
-func TestMaaSModelReconciler_gatewayNamespace(t *testing.T) {
+func TestMaaSModelRefReconciler_gatewayNamespace(t *testing.T) {
 	t.Run("default_when_empty", func(t *testing.T) {
-		r := &MaaSModelReconciler{}
+		r := &MaaSModelRefReconciler{}
 		if got := r.gatewayNamespace(); got != defaultGatewayNamespace {
 			t.Errorf("gatewayNamespace() = %q, want %q", got, defaultGatewayNamespace)
 		}
 	})
 	t.Run("custom_when_set", func(t *testing.T) {
-		r := &MaaSModelReconciler{GatewayNamespace: "my-ns"}
+		r := &MaaSModelRefReconciler{GatewayNamespace: "my-ns"}
 		if got := r.gatewayNamespace(); got != "my-ns" {
 			t.Errorf("gatewayNamespace() = %q, want %q", got, "my-ns")
 		}
@@ -182,7 +182,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatalf("Reconcile (llmisvc not-ready): %v", err)
 	}
-	got := &maasv1alpha1.MaaSModel{}
+	got := &maasv1alpha1.MaaSModelRef{}
 	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
 		t.Fatalf("Get after first reconcile: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 		}
 	}
 
-	final := &maasv1alpha1.MaaSModel{}
+	final := &maasv1alpha1.MaaSModelRef{}
 	if err := c.Get(ctx, req.NamespacedName, final); err != nil {
 		t.Fatalf("Get MaaSModel after llmisvc became ready: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatalf("Reconcile (llmisvc ready): %v", err)
 	}
-	got := &maasv1alpha1.MaaSModel{}
+	got := &maasv1alpha1.MaaSModelRef{}
 	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
 		t.Fatalf("Get after first reconcile: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 		}
 	}
 
-	final := &maasv1alpha1.MaaSModel{}
+	final := &maasv1alpha1.MaaSModelRef{}
 	if err := c.Get(ctx, req.NamespacedName, final); err != nil {
 		t.Fatalf("Get MaaSModel after llmisvc became not-ready: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 	})
 
 	t.Run("non_llmisvc_passes_through", func(t *testing.T) {
-		other := &maasv1alpha1.MaaSModel{
+		other := &maasv1alpha1.MaaSModelRef{
 			ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"},
 		}
 		e := event.UpdateEvent{ObjectOld: other, ObjectNew: other}

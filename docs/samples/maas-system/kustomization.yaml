@@ -1,4 +1,4 @@
-# Bundled MaaS system: LLMInferenceService + MaaSModel + MaaSAuthPolicy + MaaSSubscription
+# Bundled MaaS system: LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription
 # per tier. Deploy all at once so dependencies resolve correctly.
 # - free: system:authenticated, 100 tokens/min
 # - premium: premium-user, 1000 tokens/min

@@ -72,7 +72,7 @@ func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies/finalizers,verbs=update
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodels,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
@@ -511,9 +511,9 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSAuthPolicies,
 		)).
-		// Watch MaaSModels so we re-reconcile when a model is created or deleted.
-		Watches(&maasv1alpha1.MaaSModel{}, handler.EnqueueRequestsFromMapFunc(
-			r.mapMaaSModelToMaaSAuthPolicies,
+		// Watch MaaSModelRefs so we re-reconcile when a model is created or deleted.
+		Watches(&maasv1alpha1.MaaSModelRef{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapMaaSModelRefToMaaSAuthPolicies,
 		)).
 		// Watch generated AuthPolicies so manual edits get overwritten by the controller.
 		Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
@@ -543,15 +543,15 @@ func (r *MaaSAuthPolicyReconciler) mapGeneratedAuthPolicyToParent(ctx context.Co
 	}}
 }
 
-// mapMaaSModelToMaaSAuthPolicies returns reconcile requests for all MaaSAuthPolicies
-// that reference the given MaaSModel.
-func (r *MaaSAuthPolicyReconciler) mapMaaSModelToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
-	model, ok := obj.(*maasv1alpha1.MaaSModel)
+// mapMaaSModelRefToMaaSAuthPolicies returns reconcile requests for all MaaSAuthPolicies
+// that reference the given MaaSModelRef.
+func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
 	if !ok {
 		return nil
 	}
 	var policies maasv1alpha1.MaaSAuthPolicyList
-	if err := r.List(ctx, &policies); err != nil {
+	if err := r.List(ctx, &policies, client.InNamespace(model.Namespace)); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
@@ -575,22 +575,24 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 	if !ok {
 		return nil
 	}
-	// Find MaaSModels in this namespace
-	var models maasv1alpha1.MaaSModelList
+	// Find MaaSModelRefs in this namespace
+	var models maasv1alpha1.MaaSModelRefList
 	if err := r.List(ctx, &models); err != nil {
 		return nil
 	}
-	modelNamesInNS := map[string]bool{}
+	// Use namespace-qualified keys to prevent cross-namespace matches
+	modelKeysInNS := map[string]bool{}
 	for _, m := range models.Items {
 		ns := m.Spec.ModelRef.Namespace
 		if ns == "" {
 			ns = m.Namespace
 		}
 		if ns == route.Namespace {
-			modelNamesInNS[m.Name] = true
+			key := m.Namespace + "/" + m.Name
+			modelKeysInNS[key] = true
 		}
 	}
-	if len(modelNamesInNS) == 0 {
+	if len(modelKeysInNS) == 0 {
 		return nil
 	}
 	// Find MaaSAuthPolicies that reference any of these models
@@ -601,7 +603,8 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 	var requests []reconcile.Request
 	for _, p := range policies.Items {
 		for _, ref := range p.Spec.ModelRefs {
-			if modelNamesInNS[ref] {
+			key := p.Namespace + "/" + ref
+			if modelKeysInNS[key] {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
 				})
