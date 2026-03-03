@@ -225,7 +225,10 @@ func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, mod
 	}
 	if phase != "Ready" {
 		condition.Status = metav1.ConditionFalse
-		if phase == "Failed" {
+		if reason != "" {
+			// Use provided reason when available (e.g., "Unsupported" for unimplemented kinds)
+			condition.Reason = reason
+		} else if phase == "Failed" {
 			condition.Reason = "ReconcileFailed"
 		} else {
 			condition.Reason = "BackendNotReady"
