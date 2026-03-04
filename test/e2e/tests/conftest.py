@@ -26,13 +26,17 @@ def _obtain_token(maas_api_base_url: str) -> str:
             ["oc", "create", "token", sa_name, "-n", sa_ns, "--duration=30m"],
             capture_output=True, text=True, timeout=30,
         )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to create SA token for {sa_ns}/{sa_name}: {result.stderr.strip()}"
+            )
         tok = result.stdout.strip()
-        if tok:
-            print(f"[token] using SA token {sa_ns}/{sa_name} (len={len(tok)})")
-            return tok
-        raise RuntimeError(
-            f"Failed to create SA token for {sa_ns}/{sa_name}: {result.stderr}"
-        )
+        if not tok:
+            raise RuntimeError(
+                f"Failed to create SA token for {sa_ns}/{sa_name}: empty output"
+            )
+        print(f"[token] using SA token {sa_ns}/{sa_name} (len={len(tok)})")
+        return tok
 
     result = subprocess.run(
         ["oc", "whoami", "-t"], capture_output=True, text=True, timeout=30

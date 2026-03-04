@@ -122,7 +122,9 @@ def _create_sa_token(sa_name, namespace=None, duration="10m"):
 
 def _delete_sa(sa_name, namespace=None):
     namespace = namespace or _ns()
-    subprocess.run(["oc", "delete", "sa", sa_name, "-n", namespace, "--ignore-not-found"], capture_output=True, text=True, timeout=30)
+    result = subprocess.run(["oc", "delete", "sa", sa_name, "-n", namespace, "--ignore-not-found"], capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        log.warning(f"Failed to delete SA {sa_name}: {result.stderr.strip()}")
 
 
 def _apply_cr(cr_dict):
@@ -131,7 +133,9 @@ def _apply_cr(cr_dict):
 
 def _delete_cr(kind, name, namespace=None):
     namespace = namespace or _ns()
-    subprocess.run(["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"], capture_output=True, text=True, timeout=60)
+    result = subprocess.run(["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"], capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        log.warning(f"Failed to delete {kind}/{name} in {namespace}: {result.stderr.strip()}")
 
 
 def _get_cr(kind, name, namespace=None):
@@ -1003,56 +1007,66 @@ class TestE2ESubscriptionFlow:
         The test suite is self-contained: if the expected base resources (model,
         auth policy, subscription) don't exist, they are created automatically.
         This allows the suite to run without any pre-deployed sample CRs.
+
+        Wrapped in try/except so resources are cleaned up if setup fails partway
+        through (pytest does not call teardown_class when setup_class raises).
         """
         log.info("=" * 60)
         log.info("Setting up E2E Test Prerequisites")
         log.info("=" * 60)
         cls._created_resources = []
 
-        # Ensure MODEL_REF exists and is Ready
-        model = _get_cr("maasmodelref", MODEL_REF)
-        if not model:
-            log.info(f"MaaSModelRef '{MODEL_REF}' not found, creating...")
-            _create_test_maas_model(MODEL_REF)
-            cls._created_resources.append(("maasmodelref", MODEL_REF))
-            _wait_for_maas_model_ready(MODEL_REF)
-        else:
-            phase = model.get("status", {}).get("phase")
-            endpoint = model.get("status", {}).get("endpoint")
-            if phase != "Ready" or not endpoint:
-                pytest.fail(f"MaaSModelRef '{MODEL_REF}' exists but not Ready "
-                           f"(phase={phase}, endpoint={endpoint or 'none'}). "
-                           f"Check controller logs.")
-            log.info(f"  Model '{MODEL_REF}' is Ready (endpoint: {endpoint})")
+        try:
+            # Ensure MODEL_REF exists and is Ready
+            model = _get_cr("maasmodelref", MODEL_REF)
+            if not model:
+                log.info(f"MaaSModelRef '{MODEL_REF}' not found, creating...")
+                _create_test_maas_model(MODEL_REF)
+                cls._created_resources.append(("maasmodelref", MODEL_REF))
+                _wait_for_maas_model_ready(MODEL_REF)
+            else:
+                phase = model.get("status", {}).get("phase")
+                endpoint = model.get("status", {}).get("endpoint")
+                if phase != "Ready" or not endpoint:
+                    pytest.fail(f"MaaSModelRef '{MODEL_REF}' exists but not Ready "
+                               f"(phase={phase}, endpoint={endpoint or 'none'}). "
+                               f"Check controller logs.")
+                log.info(f"  Model '{MODEL_REF}' is Ready (endpoint: {endpoint})")
 
-        # Ensure auth policy exists
-        existing_policies = _get_auth_policies_for_model(MODEL_REF)
-        if SIMULATOR_ACCESS_POLICY not in existing_policies:
-            log.info(f"Auth policy '{SIMULATOR_ACCESS_POLICY}' not found, creating...")
-            _create_test_auth_policy(
-                SIMULATOR_ACCESS_POLICY, MODEL_REF,
-                groups=["system:authenticated"],
-            )
-            cls._created_resources.append(("maasauthpolicy", SIMULATOR_ACCESS_POLICY))
-        else:
-            log.info(f"  Auth policy '{SIMULATOR_ACCESS_POLICY}' exists")
+            # Ensure auth policy exists
+            existing_policies = _get_auth_policies_for_model(MODEL_REF)
+            if SIMULATOR_ACCESS_POLICY not in existing_policies:
+                log.info(f"Auth policy '{SIMULATOR_ACCESS_POLICY}' not found, creating...")
+                _create_test_auth_policy(
+                    SIMULATOR_ACCESS_POLICY, MODEL_REF,
+                    groups=["system:authenticated"],
+                )
+                cls._created_resources.append(("maasauthpolicy", SIMULATOR_ACCESS_POLICY))
+            else:
+                log.info(f"  Auth policy '{SIMULATOR_ACCESS_POLICY}' exists")
 
-        # Ensure subscription exists
-        existing_subs = _get_subscriptions_for_model(MODEL_REF)
-        if SIMULATOR_SUBSCRIPTION not in existing_subs:
-            log.info(f"Subscription '{SIMULATOR_SUBSCRIPTION}' not found, creating...")
-            _create_test_subscription(
-                SIMULATOR_SUBSCRIPTION, MODEL_REF,
-                groups=["system:authenticated"],
-            )
-            cls._created_resources.append(("maassubscription", SIMULATOR_SUBSCRIPTION))
-        else:
-            log.info(f"  Subscription '{SIMULATOR_SUBSCRIPTION}' exists")
+            # Ensure subscription exists
+            existing_subs = _get_subscriptions_for_model(MODEL_REF)
+            if SIMULATOR_SUBSCRIPTION not in existing_subs:
+                log.info(f"Subscription '{SIMULATOR_SUBSCRIPTION}' not found, creating...")
+                _create_test_subscription(
+                    SIMULATOR_SUBSCRIPTION, MODEL_REF,
+                    groups=["system:authenticated"],
+                )
+                cls._created_resources.append(("maassubscription", SIMULATOR_SUBSCRIPTION))
+            else:
+                log.info(f"  Subscription '{SIMULATOR_SUBSCRIPTION}' exists")
 
-        _wait_reconcile()
-        log.info("=" * 60)
-        log.info("All prerequisites ready - proceeding with tests")
-        log.info("=" * 60)
+            _wait_reconcile()
+            log.info("=" * 60)
+            log.info("All prerequisites ready - proceeding with tests")
+            log.info("=" * 60)
+        except Exception:
+            log.error("setup_class failed, cleaning up created resources")
+            for kind, name in reversed(cls._created_resources):
+                log.info(f"Cleaning up {kind}/{name}")
+                _delete_cr(kind, name)
+            raise
 
     @classmethod
     def teardown_class(cls):
