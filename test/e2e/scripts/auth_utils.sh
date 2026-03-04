@@ -116,7 +116,7 @@ collect_cluster_state() {
     kubectl get tokenratelimitpolicies -A 2>/dev/null || true
     echo ""
     echo "--- MaaS CRs ---"
-    kubectl get maasmodels,maasauthpolicies,maassubscriptions -n "$MAAS_NAMESPACE" 2>/dev/null || true
+    kubectl get maasmodelrefs,maasauthpolicies,maassubscriptions -n "$MAAS_NAMESPACE" 2>/dev/null || true
     echo ""
     echo "--- HTTPRoutes ---"
     kubectl get httproutes -A 2>/dev/null | head -30 || true
@@ -210,7 +210,7 @@ run_auth_debug_report() {
   _section "MaaS CRs"
   _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n $MAAS_NAMESPACE -o wide 2>/dev/null || true"
   _run "MaaSSubscriptions" "kubectl get maassubscriptions -n $MAAS_NAMESPACE -o wide 2>/dev/null || true"
-  _run "MaaSModels" "kubectl get maasmodels -n $MAAS_NAMESPACE -o wide 2>/dev/null || true"
+  _run "MaaSModelRefs" "kubectl get maasmodelrefs -n $MAAS_NAMESPACE -o wide 2>/dev/null || true"
   _append ""
 
   _section "Gateway / HTTPRoutes"
@@ -223,9 +223,8 @@ run_auth_debug_report() {
   _append ""
 
   # Determine maas-api namespace
-  local maas_api_ns
-  maas_api_ns=$(kubectl get deployment maas-controller -n $MAAS_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name=="MAAS_API_NAMESPACE") | .value' 2>/dev/null || echo "$MAAS_NAMESPACE")
-  [[ -z "$maas_api_ns" ]] && maas_api_ns="$MAAS_NAMESPACE"
+  # Note: MAAS_API_NAMESPACE uses valueFrom.fieldRef, so .value is null; use MAAS_NAMESPACE instead
+  local maas_api_ns="$MAAS_NAMESPACE"
 
   local sub_select_url="https://maas-api.${maas_api_ns}.svc.cluster.local:8443/v1/subscriptions/select"
   _section "Subscription Selector Endpoint Validation"
