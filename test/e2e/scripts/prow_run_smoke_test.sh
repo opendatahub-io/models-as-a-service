@@ -438,7 +438,10 @@ run_e2e_tests() {
 
     if [[ ! -d "$test_dir/.venv" ]]; then
         echo "Creating Python venv for e2e tests..."
-        python3 -m venv "$test_dir/.venv" --upgrade-deps
+        if ! python3 -m venv "$test_dir/.venv" --upgrade-deps 2>/dev/null; then
+            echo "  --upgrade-deps not supported, creating venv without it"
+            python3 -m venv "$test_dir/.venv"
+        fi
     fi
     source "$test_dir/.venv/bin/activate"
     python -m pip install --upgrade pip --quiet
