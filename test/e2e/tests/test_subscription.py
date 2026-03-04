@@ -520,7 +520,7 @@ def _create_test_subscription(
     model_refs,
     users=None,
     groups=None,
-    token_limit=100,
+    token_limit=1000000,
     window="1m",
     namespace=None,
 ):
@@ -683,7 +683,7 @@ class TestSubscriptionEnforcement:
                         "modelRefs": [
                             {
                                 "name": MODEL_REF,
-                                "tokenRateLimits": [{"limit": 100, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -750,7 +750,7 @@ class TestMultipleSubscriptionsPerModel:
                         "modelRefs": [
                             {
                                 "name": MODEL_REF,
-                                "tokenRateLimits": [{"limit": 100, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -768,7 +768,7 @@ class TestMultipleSubscriptionsPerModel:
                         "modelRefs": [
                             {
                                 "name": MODEL_REF,
-                                "tokenRateLimits": [{"limit": 999, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -826,7 +826,7 @@ class TestMultipleSubscriptionsPerModel:
                         "modelRefs": [
                             {
                                 "name": MODEL_REF,
-                                "tokenRateLimits": [{"limit": 100, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -842,7 +842,7 @@ class TestMultipleSubscriptionsPerModel:
                         "modelRefs": [
                             {
                                 "name": MODEL_REF,
-                                "tokenRateLimits": [{"limit": 9999, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -900,7 +900,7 @@ class TestMultipleAuthPoliciesPerModel:
                         "modelRefs": [
                             {
                                 "name": PREMIUM_MODEL_REF,
-                                "tokenRateLimits": [{"limit": 100, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -929,7 +929,7 @@ class TestMultipleAuthPoliciesPerModel:
                         "modelRefs": [
                             {
                                 "name": PREMIUM_MODEL_REF,
-                                "tokenRateLimits": [{"limit": 500, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -999,7 +999,7 @@ class TestMultipleAuthPoliciesPerModel:
                         "modelRefs": [
                             {
                                 "name": PREMIUM_MODEL_REF,
-                                "tokenRateLimits": [{"limit": 200, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -1046,7 +1046,7 @@ class TestCascadeDeletion:
                         "modelRefs": [
                             {
                                 "name": MODEL_REF,
-                                "tokenRateLimits": [{"limit": 50, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -1127,7 +1127,7 @@ class TestOrderingEdgeCases:
                         "modelRefs": [
                             {
                                 "name": PREMIUM_MODEL_REF,
-                                "tokenRateLimits": [{"limit": 100, "window": "1m"}],
+                                "tokenRateLimits": [{"limit": 1000000, "window": "1m"}],
                             }
                         ],
                     },
@@ -1676,10 +1676,10 @@ class TestE2ESubscriptionFlow:
             # Create test resources with 2 subscriptions for the same user
             _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(
-                subscription_1, MODEL_REF, users=[sa_user], token_limit=100
+                subscription_1, MODEL_REF, users=[sa_user], token_limit=1000000
             )
             _create_test_subscription(
-                subscription_2, MODEL_REF, users=[sa_user], token_limit=500
+                subscription_2, MODEL_REF, users=[sa_user], token_limit=1000000
             )
 
             _wait_reconcile()
@@ -1724,10 +1724,10 @@ class TestE2ESubscriptionFlow:
             # Create test resources with 2 subscriptions for the same user
             _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(
-                subscription_1, MODEL_REF, users=[sa_user], token_limit=100
+                subscription_1, MODEL_REF, users=[sa_user], token_limit=1000000
             )
             _create_test_subscription(
-                subscription_2, MODEL_REF, users=[sa_user], token_limit=1000
+                subscription_2, MODEL_REF, users=[sa_user], token_limit=1000000
             )
 
             _wait_reconcile()
