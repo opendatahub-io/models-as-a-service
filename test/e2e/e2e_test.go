@@ -148,6 +148,7 @@ func TestSubscription(t *testing.T) {
 	requireTool(t, "python3")
 	requireTool(t, "oc")
 	requireEnvOrCluster(t)
+	ensureToken(t)
 
 	if os.Getenv("GATEWAY_HOST") == "" {
 		host := os.Getenv("HOST")
