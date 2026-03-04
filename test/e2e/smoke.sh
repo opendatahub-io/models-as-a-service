@@ -65,7 +65,13 @@ if [[ -z "${MAAS_API_BASE_URL}" ]]; then
   MAAS_API_BASE_URL="${SCHEME}://${HOST}/maas-api"
 fi
 
+# Extract HOST from MAAS_API_BASE_URL if not already set
+if [[ -z "${HOST}" && -n "${MAAS_API_BASE_URL}" ]]; then
+  HOST=$(echo "${MAAS_API_BASE_URL}" | sed -E 's|^[^:]+://([^/]+).*|\1|')
+fi
+
 export HOST
+export GATEWAY_HOST="${HOST}"  # Required by test_subscription.py
 export MAAS_API_BASE_URL
 
 echo "[smoke] MAAS_API_BASE_URL=${MAAS_API_BASE_URL}"
