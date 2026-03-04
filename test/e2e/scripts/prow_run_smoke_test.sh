@@ -12,8 +12,9 @@
 #   2. Deploy MaaS platform via kustomize (RHCL, gateway, MaaS API, maas-controller)
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
 #   4. Deploy MaaS system (free + premium + unconfigured: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
-#   5. Run subscription controller tests (test_subscription.py)
-#   6. Create admin test user and run deployment validation + token metadata verification
+#   5. Setup test tokens (admin + regular user) for comprehensive testing
+#   6. Run E2E tests (API keys + subscription tests)
+#   7. Run deployment validation + token metadata verification
 # 
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
@@ -60,7 +61,6 @@ source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 # Options (can be set as environment variables)
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
-SKIP_SUBSCRIPTION_TESTS=${SKIP_SUBSCRIPTION_TESTS:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
@@ -399,20 +399,21 @@ setup_premium_test_token() {
     echo "✅ Premium test token setup complete (E2E_TEST_TOKEN_SA_* exported)"
 }
 
-run_subscription_tests() {
-    echo "-- Subscription Controller Tests --"
+run_e2e_tests() {
+    echo "-- E2E Tests (API Keys + Subscription) --"
 
     setup_premium_test_token
 
     export GATEWAY_HOST="${HOST}"
     export MAAS_NAMESPACE
+    # TOKEN and ADMIN_OC_TOKEN are already exported by setup_test_tokens()
 
     local test_dir="$PROJECT_ROOT/test/e2e"
     # Use ARTIFACTS_DIR so pytest reports go to Prow artifact collection (ARTIFACT_DIR)
     mkdir -p "$ARTIFACTS_DIR"
 
     if [[ ! -d "$test_dir/.venv" ]]; then
-        echo "Creating Python venv for subscription tests..."
+        echo "Creating Python venv for e2e tests..."
         python3 -m venv "$test_dir/.venv" --upgrade-deps
     fi
     source "$test_dir/.venv/bin/activate"
@@ -421,20 +422,27 @@ run_subscription_tests() {
 
     local user
     user="$(oc whoami 2>/dev/null || echo 'unknown')"
-    local html="$ARTIFACTS_DIR/subscription-${user}.html"
-    local xml="$ARTIFACTS_DIR/subscription-${user}.xml"
+    local html="$ARTIFACTS_DIR/e2e-${user}.html"
+    local xml="$ARTIFACTS_DIR/e2e-${user}.xml"
 
+    echo "Running e2e tests with:"
+    echo "  - TOKEN: $(echo "${TOKEN:-not set}" | cut -c1-20)..."
+    echo "  - ADMIN_OC_TOKEN: $(echo "${ADMIN_OC_TOKEN:-not set}" | cut -c1-20)..."
+    echo "  - GATEWAY_HOST: ${GATEWAY_HOST}"
+
+    # Run all e2e tests: API keys and subscription tests
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
-        -q --maxfail=3 --disable-warnings \
+        -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         --capture=tee-sys --show-capture=all --log-level=INFO \
+        "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_subscription.py"; then
-        echo "❌ ERROR: Subscription tests failed"
+        echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
 
-    echo "✅ Subscription tests completed"
+    echo "✅ E2E tests completed"
     echo " - JUnit XML : ${xml}"
     echo " - HTML      : ${html}"
 }
@@ -477,6 +485,56 @@ setup_test_user() {
     echo "✅ User setup completed: $username"
 }
 
+setup_test_tokens() {
+    # Setup dual-token environment for admin + regular user tests
+    # This allows e2e tests to verify both admin and non-admin behaviors
+    #
+    # Strategy:
+    # - Use current Prow user as admin (already has cluster-admin and is in odh-admins)
+    # - Create a regular test user service account for non-admin tests
+    
+    echo "Setting up test tokens (admin + regular user)..."
+    
+    local admin_user
+    admin_user=$(oc whoami)
+    echo "Current user (will be admin): $admin_user"
+    
+    # 1. Add current user to odh-admins group so maas-api recognizes them as admin
+    # The Auth CR uses odh-admins group for admin detection
+    if oc get group odh-admins &>/dev/null; then
+        if ! oc get group odh-admins -o jsonpath='{.users}' | grep -q "$admin_user"; then
+            echo "Adding $admin_user to odh-admins group..."
+            oc patch group odh-admins --type=json \
+                -p "[{\"op\": \"add\", \"path\": \"/users/-\", \"value\": \"$admin_user\"}]" || \
+            oc adm groups add-users odh-admins "$admin_user" || true
+        fi
+        echo "✅ Admin user is in odh-admins group"
+    else
+        echo "⚠️  odh-admins group not found - admin tests may fail"
+    fi
+    
+    # 2. Capture admin token from current session
+    export ADMIN_OC_TOKEN
+    ADMIN_OC_TOKEN=$(oc whoami -t)
+    echo "✅ Admin token captured (ADMIN_OC_TOKEN) for user: $admin_user"
+    
+    # 3. Create regular test user (basic authenticated user, no admin privileges)
+    setup_test_user "tester-regular-user" "view"
+    
+    # 4. Get regular user token and export as TOKEN
+    export TOKEN
+    TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
+    echo "✅ Regular user token created (TOKEN)"
+    
+    # 5. Stay logged in as admin for cluster operations, but tests use TOKEN for regular user
+    # The pytest tests use TOKEN env var for regular user and ADMIN_OC_TOKEN for admin
+    echo "✅ Staying logged in as admin: $(oc whoami)"
+    
+    # Both ADMIN_OC_TOKEN and TOKEN are now exported
+    # - ADMIN_OC_TOKEN: current Prow admin user (in odh-admins group)
+    # - TOKEN: regular test user SA (not in odh-admins)
+}
+
 # Main execution
 # On exit (success or failure): collect artifacts (authorino-debug.log, cluster state, pod logs) and auth report
 _run_exit_artifacts() {
@@ -502,19 +560,16 @@ patch_authorino_debug  # from auth_utils.sh
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
-# Setup admin user for validation
-print_header "Setting up test user"
-setup_test_user "tester-admin-user" "cluster-admin"
-
-print_header "Running Maas e2e Tests as admin user"
-ADMIN_TOKEN=$(oc create token tester-admin-user -n default)
-oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
+# Setup test tokens (admin + regular user) for comprehensive e2e testing
+print_header "Setting up test tokens"
+setup_test_tokens
 
 # 15m matches Prow step timeout; sleep leaves time for cluster debugging before tests
 # echo "Sleeping 15 minutes for cluster debugging (Ctrl+C to skip)..."
 # sleep 900
 
-run_subscription_tests
+print_header "Running E2E Tests"
+run_e2e_tests
 
 print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment

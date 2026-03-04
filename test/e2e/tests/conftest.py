@@ -2,12 +2,51 @@ import os
 import pytest
 import requests
 
+
 @pytest.fixture(scope="session")
-def maas_api_base_url() -> str:
-    url = os.environ.get("MAAS_API_BASE_URL")
-    if not url:
-        raise RuntimeError("MAAS_API_BASE_URL env var is required")
-    return url.rstrip("/")
+def gateway_host() -> str:
+    """
+    Gateway hostname. Primary source of truth for endpoint URLs.
+    Can be set via GATEWAY_HOST or derived from MAAS_API_BASE_URL.
+    """
+    host = os.environ.get("GATEWAY_HOST", "")
+    if host:
+        return host
+    
+    # Fall back to deriving from MAAS_API_BASE_URL
+    url = os.environ.get("MAAS_API_BASE_URL", "")
+    if url:
+        # Extract host from https://host/maas-api
+        url = url.rstrip("/")
+        if url.endswith("/maas-api"):
+            url = url[:-len("/maas-api")]
+        # Remove scheme
+        if "://" in url:
+            url = url.split("://", 1)[1]
+        return url
+    
+    raise RuntimeError("GATEWAY_HOST or MAAS_API_BASE_URL env var is required")
+
+
+@pytest.fixture(scope="session")
+def is_https() -> bool:
+    """Check if we should use HTTPS (default) or HTTP."""
+    return os.environ.get("INSECURE_HTTP", "").lower() != "true"
+
+
+@pytest.fixture(scope="session")
+def maas_api_base_url(gateway_host: str, is_https: bool) -> str:
+    """
+    MaaS API base URL. Derived from GATEWAY_HOST or MAAS_API_BASE_URL.
+    """
+    # If explicitly set, use it
+    url = os.environ.get("MAAS_API_BASE_URL", "")
+    if url:
+        return url.rstrip("/")
+    
+    # Otherwise derive from gateway_host
+    scheme = "https" if is_https else "http"
+    return f"{scheme}://{gateway_host}/maas-api"
 
 @pytest.fixture(scope="session")
 def token() -> str:
@@ -51,14 +90,13 @@ def model_id(model_catalog: dict):
     return items[0]["id"]
 
 @pytest.fixture(scope="session")
-def model_base_url(model_catalog: dict, model_id: str, maas_api_base_url: str) -> str:
+def model_base_url(model_catalog: dict, model_id: str, gateway_url: str) -> str:
     items = (model_catalog.get("data") or model_catalog.get("models") or [])
     first = items[0] if items else {}
     url = (first or {}).get("url")
     if not url:
-        # Build from gateway host derived from MAAS_API_BASE_URL
-        base = maas_api_base_url[:-len("/maas-api")]
-        url = f"{base}/llm/{model_id}"
+        # Build from gateway URL
+        url = f"{gateway_url}/llm/{model_id}"
     return url.rstrip("/")
 
 @pytest.fixture(scope="session")
@@ -66,8 +104,10 @@ def model_v1(model_base_url: str) -> str:
     return f"{model_base_url}/v1"
 
 @pytest.fixture(scope="session")
-def is_https(maas_api_base_url: str) -> bool:
-    return maas_api_base_url.lower().startswith("https://")
+def gateway_url(gateway_host: str, is_https: bool) -> str:
+    """Full gateway URL (without path)."""
+    scheme = "https" if is_https else "http"
+    return f"{scheme}://{gateway_host}"
 
 @pytest.fixture(scope="session")
 def model_name(model_id: str) -> str:
@@ -78,11 +118,6 @@ def model_name(model_id: str) -> str:
 def api_keys_base_url(maas_api_base_url: str) -> str:
     """Base URL for API Keys v1 endpoints."""
     return f"{maas_api_base_url}/v1/api-keys"
-
-@pytest.fixture(scope="session")
-def api_keys_validation_url(maas_api_base_url: str) -> str:
-    """URL for internal API key validation endpoint."""
-    return f"{maas_api_base_url}/internal/v1/api-keys/validate"
 
 @pytest.fixture(scope="session")
 def admin_token() -> str:
@@ -109,6 +144,9 @@ def api_key(api_keys_base_url: str, headers: dict) -> str:
     """
     Create an API key for model inference tests.
     Returns the plaintext API key (show-once pattern).
+    
+    Note: The key inherits the authenticated user's groups, which should include
+    system:authenticated to satisfy AuthPolicy requirements for model access.
     """
     print("[api_key] Creating API key for inference tests...")
     r = requests.post(
@@ -118,7 +156,8 @@ def api_key(api_keys_base_url: str, headers: dict) -> str:
         timeout=30,
         verify=False,
     )
-    if r.status_code != 201:
+    # Accept both 200 and 201 as success
+    if r.status_code not in (200, 201):
         raise RuntimeError(f"Failed to create API key: {r.status_code} {r.text}")
 
     data = r.json()

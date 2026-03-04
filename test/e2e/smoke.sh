@@ -98,6 +98,51 @@ export TOKEN
 # Log a masked preview of the token to the log (not the console)
 echo "[token] using OC token: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
 
+# Admin token setup - use current user if they're an admin
+setup_admin_token() {
+  if [[ -n "${ADMIN_OC_TOKEN:-}" ]]; then
+    echo "[smoke] ADMIN_OC_TOKEN already set externally"
+    export ADMIN_OC_TOKEN
+    return 0
+  fi
+
+  echo "[smoke] Setting up admin token for admin tests..."
+  
+  local current_user
+  current_user=$(oc whoami)
+  
+  # Check if user has admin permissions (can patch groups)
+  if ! oc auth can-i patch groups &>/dev/null; then
+    echo "[smoke] Current user lacks admin permissions - admin tests will be skipped"
+    return 0
+  fi
+
+  # Add current user to odh-admins group so maas-api recognizes them as admin
+  if oc get group odh-admins &>/dev/null; then
+    if ! oc get group odh-admins -o jsonpath='{.users}' | grep -q "$current_user"; then
+      echo "[smoke] Adding $current_user to odh-admins group..."
+      oc patch group odh-admins --type=json \
+        -p "[{\"op\": \"add\", \"path\": \"/users/-\", \"value\": \"$current_user\"}]" 2>/dev/null || \
+      oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
+    fi
+    echo "[smoke] User $current_user is in odh-admins group"
+  else
+    echo "[smoke] odh-admins group not found - admin tests may fail"
+    return 0
+  fi
+
+  # Use current user's token as admin token
+  ADMIN_OC_TOKEN="$(oc whoami -t 2>/dev/null || true)"
+  if [[ -n "${ADMIN_OC_TOKEN}" ]]; then
+    export ADMIN_OC_TOKEN
+    echo "[smoke] ADMIN_OC_TOKEN configured (current user: $current_user) - admin tests will run"
+  else
+    echo "[smoke] Failed to get admin token - admin tests will be skipped"
+  fi
+}
+
+setup_admin_token
+
 # 2) Get models, derive URL/ID if catalog returns them (retry for transient empty cache)
 MODEL_ID=""
 for _attempt in $(seq 1 10); do

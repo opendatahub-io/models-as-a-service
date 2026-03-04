@@ -844,96 +844,22 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 }
 
 // ============================================================
-// CREATE API KEY TESTS (unchanged, for compatibility)
+// CREATE API KEY TESTS
 // ============================================================
 
-func TestAdminCanCreateForOtherUser_RegularUserCannot(t *testing.T) {
+func TestUserCanCreateOwnKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
 	service := NewServiceWithLogger(store, cfg, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
-
-	t.Run("AdminCreatesForOtherUser", func(t *testing.T) {
-		adminUser := &token.UserContext{
-			Username: "admin",
-			Groups:   []string{"admin-users", "system:authenticated"},
-		}
-
-		// Admin must provide groups when creating keys for other users
-		requestBody := `{"name": "Alice's Key", "username": "alice", "groups": ["tier-premium", "system:authenticated"]}`
-
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
-		c.Request.Header.Set("Content-Type", "application/json")
-		c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
-		c.Set("user", adminUser)
-
-		handler.CreateAPIKey(c)
-
-		assert.Equal(t, http.StatusCreated, w.Code)
-		var response CreateAPIKeyResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-
-		// Verify key owned by alice, not admin
-		meta, err := store.Get(context.Background(), response.ID)
-		require.NoError(t, err)
-		assert.Equal(t, "alice", meta.Username)
-		// Verify groups were stored correctly
-		assert.Equal(t, []string{"tier-premium", "system:authenticated"}, meta.Groups)
-	})
-
-	t.Run("RegularUserCannotCreateForOther", func(t *testing.T) {
-		regularUser := &token.UserContext{
-			Username: "bob",
-			Groups:   []string{"system:authenticated"},
-		}
-
-		requestBody := `{"name": "Test Key", "username": "alice"}`
-
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
-		c.Request.Header.Set("Content-Type", "application/json")
-		c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
-		c.Set("user", regularUser)
-
-		handler.CreateAPIKey(c)
-
-		assert.Equal(t, http.StatusForbidden, w.Code)
-	})
-}
-
-func TestRegularUserCanCreateOwnKey(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	store := NewMockStore()
-	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
-
-	t.Run("ImplicitUsername", func(t *testing.T) {
-		// Regular user creates key without specifying username (implicit self)
-		// Note: requested groups are ignored - user's actual groups are always used
-		testRegularUserCreateOwnKey(t, handler, store, `{"name": "my-key"}`)
-	})
-
-	t.Run("ExplicitUsername", func(t *testing.T) {
-		// Regular user creates key with username=self
-		// Note: requested groups are ignored - user's actual groups are always used
-		testRegularUserCreateOwnKey(t, handler, store, `{"name": "my-key", "username": "alice"}`)
-	})
-}
-
-// testRegularUserCreateOwnKey is a helper to test regular user creating their own key.
-func testRegularUserCreateOwnKey(t *testing.T, handler *Handler, store *MockStore, requestBody string) {
-	t.Helper()
 
 	regularUser := &token.UserContext{
 		Username: "alice",
 		Groups:   []string{"tier-free", "system:authenticated"},
 	}
+
+	requestBody := `{"name": "my-key"}`
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -949,7 +875,7 @@ func testRegularUserCreateOwnKey(t *testing.T, handler *Handler, store *MockStor
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	// Verify key is owned by alice with her full groups
+	// Verify key is owned by alice with her actual groups
 	meta, err := store.Get(context.Background(), response.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "alice", meta.Username)

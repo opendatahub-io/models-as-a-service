@@ -242,27 +242,18 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 
 // CreateAPIKeyRequest is the request body for creating an API key.
 // Keys can be permanent (no expiresIn) or expiring (with expiresIn).
-// Admins can optionally specify a username and groups to create keys for other users.
-//
-// TODO: Admin user-groups approach needs team consensus
-// Current implementation requires admins to explicitly provide groups when creating keys
-// for other users. Alternative approaches to consider:
-// 1. Remove admin-create-for-user feature entirely (users create own keys)
-// 2. Lookup user's live groups via impersonation/TokenReview
-// 3. Add organizationId/costCenter fields instead of/alongside groups
-// 4. Make groups optional and use default groups for the target user.
+// Users can only create keys for themselves - the key inherits the user's groups.
 type CreateAPIKeyRequest struct {
 	Name        string          `binding:"required"           json:"name"`
 	Description string          `json:"description,omitempty"`
 	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"` // Optional - nil means permanent
-	Username    string          `json:"username,omitempty"`  // Optional - admin can create for other users
-	Groups      []string        `json:"groups,omitempty"`    // Optional - admin must provide when creating for others (TODO: needs consensus)
 }
 
 // CreateAPIKey handles POST /v1/api-keys
 // Creates a new API key (sk-oai-* format) per Feature Refinement.
 // Keys can be permanent (no expiresIn) or expiring (with expiresIn).
 // Per "Keys Shown Only Once": key is returned ONCE at creation and never again.
+// Users can only create keys for themselves - the key inherits the user's groups.
 func (h *Handler) CreateAPIKey(c *gin.Context) {
 	var req CreateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -275,47 +266,6 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		return
 	}
 
-	// Determine target username (admin can create for other users)
-	targetUsername := req.Username
-	if targetUsername == "" {
-		// No username provided - use authenticated user
-		targetUsername = user.Username
-	}
-
-	// Determine groups for the API key
-	var keyGroups []string
-
-	if targetUsername == user.Username {
-		// Creating key for self - always use authenticated user's groups
-		keyGroups = user.Groups
-	} else {
-		// Creating key for another user - admin only
-		if !h.isAdmin(user) {
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": "only admins can create API keys for other users",
-			})
-			return
-		}
-
-		// TODO: Admin groups approach needs team consensus
-		// Current: Admin must explicitly provide groups when creating keys for other users.
-		// Problem: Admin may not know what groups the target user should have.
-		// Alternative approaches:
-		//   1. Remove this feature (users create own keys only)
-		//   2. Lookup target user's current groups via impersonation/TokenReview
-		//   3. Use organizationId/costCenter for billing instead of groups for access
-		//   4. Allow empty groups and use sensible defaults (e.g., ["system:authenticated"])
-		// Current implementation chosen for explicit control and avoiding privilege escalation.
-		if len(req.Groups) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "groups must be provided when creating API keys for other users",
-			})
-			return
-		}
-
-		keyGroups = req.Groups
-	}
-
 	// Parse expiration duration if provided
 	var expiresIn *time.Duration
 	if req.ExpiresIn != nil {
@@ -323,7 +273,8 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		expiresIn = &d
 	}
 
-	result, err := h.service.CreateAPIKey(c.Request.Context(), targetUsername, keyGroups, req.Name, req.Description, expiresIn)
+	// Create key for the authenticated user with their groups
+	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, req.Name, req.Description, expiresIn)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -333,9 +284,8 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	h.logger.Info("Created API key",
 		"keyId", result.ID,
 		"keyPrefix", result.KeyPrefix,
-		"username", targetUsername,
-		"groups", keyGroups,
-		"createdBy", user.Username,
+		"username", user.Username,
+		"groups", user.Groups,
 	)
 
 	// Return the key - THIS IS THE ONLY TIME THE PLAINTEXT IS SHOWN
