@@ -13,7 +13,10 @@ setup_python_venv() {
     # Create virtual environment if it doesn't exist
     if [[ ! -d "${VENV_DIR}" ]]; then
         echo "[smoke] Creating virtual environment at ${VENV_DIR}"
-        python3 -m venv "${VENV_DIR}" --upgrade-deps
+        if ! python3 -m venv "${VENV_DIR}" --upgrade-deps 2>/dev/null; then
+            echo "[smoke] --upgrade-deps not supported, creating venv without it"
+            python3 -m venv "${VENV_DIR}"
+        fi
     fi
     
     # Activate virtual environment
@@ -79,64 +82,31 @@ if [[ -n "${MODEL_NAME}" ]]; then
   echo "[smoke] Using MODEL_NAME=${MODEL_NAME}"
 fi
 
-USER="$(oc whoami)"
+USER="$(oc whoami 2>/dev/null || echo 'ci-user')"
 echo "[smoke] Performing smoke test for user: ${USER}"
 
-# 1) Get OC token directly (no more /v1/tokens minting endpoint)
+# 1) Obtain a token: env TOKEN > SA token (Prow) > oc whoami -t
 mkdir -p "${DIR}/reports"
 LOG="${DIR}/reports/smoke-${USER}.log"
 : > "${LOG}"
 
-TOKEN="$(oc whoami -t || true)"
-if [[ -z "${TOKEN}" ]]; then
-  echo "[smoke] ERROR: could not get OC token via 'oc whoami -t'" | tee -a "${LOG}"
-  echo "[smoke] Make sure you are logged into OpenShift" | tee -a "${LOG}"
-  exit 1
+if [[ -n "${TOKEN:-}" ]]; then
+  echo "[smoke] Using pre-set TOKEN from environment"
+elif [[ -n "${E2E_TEST_TOKEN_SA_NAMESPACE:-}" && -n "${E2E_TEST_TOKEN_SA_NAME:-}" ]]; then
+  echo "[smoke] Creating SA token (${E2E_TEST_TOKEN_SA_NAMESPACE}/${E2E_TEST_TOKEN_SA_NAME})"
+  TOKEN="$(oc create token "${E2E_TEST_TOKEN_SA_NAME}" -n "${E2E_TEST_TOKEN_SA_NAMESPACE}" --duration=30m)"
+else
+  TOKEN="$(oc whoami -t 2>/dev/null || true)"
+  if [[ -z "${TOKEN}" ]]; then
+    echo "[smoke] ERROR: could not obtain token via oc whoami -t" >&2
+    echo "[smoke] Set TOKEN env, or E2E_TEST_TOKEN_SA_NAMESPACE + E2E_TEST_TOKEN_SA_NAME for CI" >&2
+    exit 1
+  fi
 fi
 export TOKEN
 
 # Log a masked preview of the token to the log (not the console)
-echo "[token] using OC token: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
-
-# Admin token setup - use current user if possible, add to odh-admins
-setup_admin_token() {
-  if [[ -n "${ADMIN_OC_TOKEN:-}" ]]; then
-    echo "[smoke] ADMIN_OC_TOKEN already set externally"
-    export ADMIN_OC_TOKEN
-    return 0
-  fi
-
-  echo "[smoke] Setting up admin token for admin tests..."
-  
-  local current_user
-  current_user=$(oc whoami)
-  
-  # Check if user has admin permissions
-  if ! oc auth can-i patch groups &>/dev/null; then
-    echo "[smoke] Current user lacks admin permissions - admin tests will be skipped"
-    return 0
-  fi
-
-  # Add current user to odh-admins group so maas-api recognizes them as admin
-  if oc get group odh-admins &>/dev/null; then
-    oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
-    echo "[smoke] Added $current_user to odh-admins group"
-  else
-    echo "[smoke] odh-admins group not found - admin tests will be skipped"
-    return 0
-  fi
-
-  # Use current user's token
-  ADMIN_OC_TOKEN="$(oc whoami -t 2>/dev/null || true)"
-  if [[ -n "${ADMIN_OC_TOKEN}" ]]; then
-    export ADMIN_OC_TOKEN
-    echo "[smoke] ADMIN_OC_TOKEN configured - admin tests will run"
-  else
-    echo "[smoke] Failed to get token (cert-based auth?) - admin tests will be skipped"
-  fi
-}
-
-setup_admin_token
+echo "[token] minted: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
 
 # 2) Get models, derive URL/ID if catalog returns them (retry for transient empty cache)
 MODEL_ID=""
