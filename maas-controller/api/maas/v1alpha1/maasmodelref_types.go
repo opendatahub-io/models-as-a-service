@@ -27,6 +27,7 @@ type MaaSModelSpec struct {
 	// EndpointOverride, when set, overrides the endpoint URL that the controller
 	// would otherwise discover from the backend (e.g. LLMInferenceService status
 	// or Gateway/HTTPRoute).
+	// +optional
 	EndpointOverride string `json:"endpointOverride,omitempty"`
 }
 
