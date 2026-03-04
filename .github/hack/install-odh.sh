@@ -109,12 +109,14 @@ if kubectl get deployment opendatahub-operator-controller-manager -n "$NAMESPACE
   }
 fi
 
-# 6. Apply DSCInitialization
+# 6. Apply DSCInitialization (with retries)
 echo "6. Applying DSCInitialization..."
 if kubectl get dscinitializations default-dsci &>/dev/null; then
   echo "   DSCInitialization already exists, skipping"
 else
-  kubectl apply -f - <<EOF
+  dsci_applied=false
+  for attempt in $(seq 1 5); do
+    if kubectl apply -f - <<EOF
 apiVersion: dscinitialization.opendatahub.io/v1
 kind: DSCInitialization
 metadata:
@@ -128,6 +130,17 @@ spec:
   trustedCABundle:
     managementState: Managed
 EOF
+    then
+      dsci_applied=true
+      break
+    fi
+    echo "   Attempt $attempt/5 failed (webhook may not be ready), retrying in 15s..."
+    sleep 15
+  done
+  if [[ "$dsci_applied" != "true" ]]; then
+    log_error "Failed to apply DSCInitialization after 5 attempts"
+    exit 1
+  fi
 fi
 
 # 7. Apply DataScienceCluster (modelsAsService Unmanaged - MaaS deployed separately)

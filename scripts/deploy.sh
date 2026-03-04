@@ -1025,8 +1025,11 @@ apply_dsci() {
     return 0
   fi
 
-  # Create DSCI only if it doesn't exist
-  cat <<EOF | kubectl apply -f -
+  # Create DSCI with retries
+  local max_attempts=5
+  local wait_seconds=15
+  for attempt in $(seq 1 $max_attempts); do
+    if cat <<EOF | kubectl apply -f -
 apiVersion: dscinitialization.opendatahub.io/v1
 kind: DSCInitialization
 metadata:
@@ -1040,6 +1043,15 @@ spec:
   trustedCABundle:
     managementState: Managed
 EOF
+    then
+      return 0
+    fi
+    log_warn "DSCInitialization apply attempt $attempt/$max_attempts failed (webhook may not be ready), retrying in ${wait_seconds}s..."
+    sleep $wait_seconds
+  done
+
+  log_error "Failed to apply DSCInitialization after $max_attempts attempts"
+  return 1
 }
 
 apply_dsc() {
