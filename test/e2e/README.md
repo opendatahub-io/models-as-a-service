@@ -53,25 +53,6 @@ See `tests/test_subscription.py` docstring for all available environment variabl
 - `E2E_TIMEOUT`: Request timeout in seconds (default: 30)
 - `E2E_RECONCILE_WAIT`: Wait time for reconciliation in seconds (default: 8)
 
-### Run via Go Test (self-contained)
-
-The test suite can also be run via `go test` with the `e2e` build tag:
-
-```bash
-# Smoke tests only (MaaS already deployed)
-go test -tags=e2e -run TestSmoke -timeout=10m -v ./test/e2e/
-
-# Subscription controller tests only
-go test -tags=e2e -run TestSubscription -timeout=15m -v ./test/e2e/
-
-# Full E2E: deploy + all tests (nightly CI)
-go test -tags=e2e -run TestFull -timeout=30m -v ./test/e2e/
-```
-
-The Go wrapper automatically sets up the Python venv, discovers the cluster,
-obtains a token, and runs pytest. Tests gracefully skip if tools or cluster
-aren't available.
-
 ## Test Artifacts
 
 All test runs produce artifacts in `ARTIFACT_DIR` (default: `test/e2e/reports/`):
