@@ -13,7 +13,7 @@ For persistent, production-ready rate limiting where counts are maintained acros
 
 . [Requirements for Persistent Counts](#requirements-for-persistent-counts)
 . [Example Limitador CR Configuration](#example-limitador-cr-configuration)
-. [Local Validation Script](#local-validation-script-basic-redis)
+. [Local Validation Script](#local-validation-script-basic-dev-only-redis)
 . [How to Validate Persistence](#how-to-validate-persistence)
 . [Related Documentation](#related-documentation)
 
@@ -56,7 +56,7 @@ To configure Limitador to use Redis for persistent storage, you need to:
    ```
 
    Edit your existing Limitador CR:
-   
+
    ```bash
    kubectl edit limitador <your-instance-name> -n <your-limitador-namespace>
    ```
