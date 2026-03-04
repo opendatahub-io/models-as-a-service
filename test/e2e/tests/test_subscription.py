@@ -169,7 +169,7 @@ def _get_cluster_token():
         token = _create_sa_token(sa_name, namespace=sa_ns)
     else:
         # Priority 3: oc whoami -t fallback
-        token_result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
+        token_result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True, timeout=30)
         token = token_result.stdout.strip() if token_result.returncode == 0 else ""
         if not token:
             raise RuntimeError("Could not get cluster token via `oc whoami -t`; run with oc login first")
@@ -182,13 +182,13 @@ def _get_cluster_token():
 def _create_sa_token(sa_name, namespace=None, duration="10m"):
     namespace = namespace or _ns()
     sa_result = subprocess.run(
-        ["oc", "create", "sa", sa_name, "-n", namespace], capture_output=True, text=True
+        ["oc", "create", "sa", sa_name, "-n", namespace], capture_output=True, text=True, timeout=30
     )
     if sa_result.returncode != 0 and "already exists" not in sa_result.stderr:
         raise RuntimeError(f"Failed to create SA {sa_name}: {sa_result.stderr}")
     result = subprocess.run(
         ["oc", "create", "token", sa_name, "-n", namespace, f"--duration={duration}"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=30,
     )
     token = result.stdout.strip()
     if not token:
@@ -283,16 +283,16 @@ def _get_default_api_key() -> str:
 
 def _delete_sa(sa_name, namespace=None):
     namespace = namespace or _ns()
-    subprocess.run(["oc", "delete", "sa", sa_name, "-n", namespace, "--ignore-not-found"], capture_output=True, text=True)
+    subprocess.run(["oc", "delete", "sa", sa_name, "-n", namespace, "--ignore-not-found"], capture_output=True, text=True, timeout=30)
 
 
 def _apply_cr(cr_dict):
-    subprocess.run(["oc", "apply", "-f", "-"], input=json.dumps(cr_dict), capture_output=True, text=True, check=True)
+    subprocess.run(["oc", "apply", "-f", "-"], input=json.dumps(cr_dict), capture_output=True, text=True, check=True, timeout=30)
 
 
 def _delete_cr(kind, name, namespace=None):
     namespace = namespace or _ns()
-    subprocess.run(["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"], capture_output=True, text=True)
+    subprocess.run(["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"], capture_output=True, text=True, timeout=60)
 
 
 def _get_cr(kind, name, namespace=None):
@@ -301,7 +301,7 @@ def _get_cr(kind, name, namespace=None):
     retry_delay = 2
 
     for attempt in range(max_retries):
-        result = subprocess.run(["oc", "get", kind, name, "-n", namespace, "-o", "json"], capture_output=True, text=True)
+        result = subprocess.run(["oc", "get", kind, name, "-n", namespace, "-o", "json"], capture_output=True, text=True, timeout=30)
 
         if result.returncode == 0:
             return json.loads(result.stdout)
@@ -324,7 +324,7 @@ def _get_cr(kind, name, namespace=None):
 
 def _cr_exists(kind, name, namespace=None):
     namespace = namespace or _ns()
-    result = subprocess.run(["oc", "get", kind, name, "-n", namespace], capture_output=True, text=True)
+    result = subprocess.run(["oc", "get", kind, name, "-n", namespace], capture_output=True, text=True, timeout=30)
     return result.returncode == 0
 
 
