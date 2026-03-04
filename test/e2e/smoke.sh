@@ -92,7 +92,11 @@ LOG="${DIR}/reports/smoke-${USER}.log"
 
 if [[ -n "${TOKEN:-}" ]]; then
   echo "[smoke] Using pre-set TOKEN from environment"
-elif [[ -n "${E2E_TEST_TOKEN_SA_NAMESPACE:-}" && -n "${E2E_TEST_TOKEN_SA_NAME:-}" ]]; then
+elif [[ -n "${E2E_TEST_TOKEN_SA_NAMESPACE:-}" || -n "${E2E_TEST_TOKEN_SA_NAME:-}" ]]; then
+  if [[ -z "${E2E_TEST_TOKEN_SA_NAMESPACE:-}" || -z "${E2E_TEST_TOKEN_SA_NAME:-}" ]]; then
+    echo "[smoke] ERROR: set both E2E_TEST_TOKEN_SA_NAMESPACE and E2E_TEST_TOKEN_SA_NAME" >&2
+    exit 1
+  fi
   echo "[smoke] Creating SA token (${E2E_TEST_TOKEN_SA_NAMESPACE}/${E2E_TEST_TOKEN_SA_NAME})"
   TOKEN="$(oc create token "${E2E_TEST_TOKEN_SA_NAME}" -n "${E2E_TEST_TOKEN_SA_NAMESPACE}" --duration=30m)"
 else
