@@ -53,8 +53,8 @@ const (
 const modelRefNameIndex = "spec.modelRef.name"
 
 func modelRefNameIndexer(obj client.Object) []string {
-	model := obj.(*maasv1alpha1.MaaSModelRef)
-	if model.Spec.ModelRef.Name == "" {
+	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
+	if !ok || model.Spec.ModelRef.Name == "" {
 		return nil
 	}
 	return []string{model.Spec.ModelRef.Name}
