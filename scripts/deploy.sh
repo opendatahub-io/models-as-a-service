@@ -143,7 +143,7 @@ ADVANCED OPTIONS (PR Testing):
 
   --maas-controller-image <image>
       Custom MaaS controller container image (PR testing)
-      Example: quay.io/maas/maas-controller:pr-42
+      Example: quay.io/opendatahub/maas-controller:pr-406
 
   --channel <channel>
       Operator channel override

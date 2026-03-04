@@ -187,7 +187,7 @@ kubectl get crd | grep maas.opendatahub.io
 |-----------|------|-------------|
 | CRDs | `config/crd/` | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription |
 | RBAC | `config/rbac/` | ClusterRole, ServiceAccount, bindings |
-| Controller | `config/manager/` | Deployment (`quay.io/maas/maas-controller:latest`) |
+| Controller | `config/manager/` | Deployment (`quay.io/opendatahub/maas-controller:latest`) |
 | Default auth policy | `config/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |
 | Default deny policy | `config/policies/` | Gateway-level TokenRateLimitPolicy with 0 tokens (deny unsubscribed, 429) |
 
@@ -259,11 +259,11 @@ kubectl annotate authpolicy <name> -n <namespace> maas.opendatahub.io/managed-
 
 ## Build and push image
 
-The default deployment uses `quay.io/maas/maas-controller:latest` (temporary).
+The default deployment uses `quay.io/opendatahub/maas-controller:latest`.
 
 ```bash
 make -C maas-controller image-build                    # build with podman/buildah/docker
-make -C maas-controller image-push                     # push to quay.io/maas/maas-controller:latest
+make -C maas-controller image-push                     # push to quay.io/opendatahub/maas-controller:latest (this image is created automatically on main branch, so preferably push images with different tag and/or to your temp registry if you are doing some testing and verification)
 
 # Custom image/tag
 make -C maas-controller image-build IMAGE=quay.io/myorg/maas-controller IMAGE_TAG=v0.1.0
@@ -302,5 +302,5 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 ## Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build maas-controller/config/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
-- **Image**: Default is `quay.io/maas/maas-controller:latest`. Override in the deployment or via Kustomize.
+- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override in the deployment or via Kustomize.
 - **Gateway name**: The default auth policy targets `maas-default-gateway` in `openshift-ingress`. Edit `config/policies/gateway-default-auth.yaml` if your gateway has a different name.
