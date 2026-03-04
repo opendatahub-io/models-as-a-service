@@ -15,12 +15,16 @@ def _obtain_token(maas_api_base_url: str) -> str:
         print(f"[token] using env TOKEN (len={len(tok)})")
         return tok
 
-    sa_ns = os.environ.get("E2E_TEST_TOKEN_SA_NAMESPACE")
-    sa_name = os.environ.get("E2E_TEST_TOKEN_SA_NAME")
-    if sa_ns and sa_name:
+    sa_ns = os.environ.get("E2E_TEST_TOKEN_SA_NAMESPACE", "")
+    sa_name = os.environ.get("E2E_TEST_TOKEN_SA_NAME", "")
+    if sa_ns or sa_name:
+        if not (sa_ns and sa_name):
+            raise RuntimeError(
+                "Set both E2E_TEST_TOKEN_SA_NAMESPACE and E2E_TEST_TOKEN_SA_NAME"
+            )
         result = subprocess.run(
             ["oc", "create", "token", sa_name, "-n", sa_ns, "--duration=30m"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=30,
         )
         tok = result.stdout.strip()
         if tok:
@@ -30,7 +34,9 @@ def _obtain_token(maas_api_base_url: str) -> str:
             f"Failed to create SA token for {sa_ns}/{sa_name}: {result.stderr}"
         )
 
-    result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
+    result = subprocess.run(
+        ["oc", "whoami", "-t"], capture_output=True, text=True, timeout=30
+    )
     cluster_token = result.stdout.strip() if result.returncode == 0 else ""
     if not cluster_token:
         raise RuntimeError(
