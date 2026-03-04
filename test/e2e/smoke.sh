@@ -98,7 +98,7 @@ export TOKEN
 # Log a masked preview of the token to the log (not the console)
 echo "[token] using OC token: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
 
-# Admin token setup - use current user if they're an admin
+# Admin token setup - use current user if possible, add to odh-admins
 setup_admin_token() {
   if [[ -n "${ADMIN_OC_TOKEN:-}" ]]; then
     echo "[smoke] ADMIN_OC_TOKEN already set externally"
@@ -111,7 +111,7 @@ setup_admin_token() {
   local current_user
   current_user=$(oc whoami)
   
-  # Check if user has admin permissions (can patch groups)
+  # Check if user has admin permissions
   if ! oc auth can-i patch groups &>/dev/null; then
     echo "[smoke] Current user lacks admin permissions - admin tests will be skipped"
     return 0
@@ -119,25 +119,20 @@ setup_admin_token() {
 
   # Add current user to odh-admins group so maas-api recognizes them as admin
   if oc get group odh-admins &>/dev/null; then
-    if ! oc get group odh-admins -o jsonpath='{.users}' | grep -q "$current_user"; then
-      echo "[smoke] Adding $current_user to odh-admins group..."
-      oc patch group odh-admins --type=json \
-        -p "[{\"op\": \"add\", \"path\": \"/users/-\", \"value\": \"$current_user\"}]" 2>/dev/null || \
-      oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
-    fi
-    echo "[smoke] User $current_user is in odh-admins group"
+    oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
+    echo "[smoke] Added $current_user to odh-admins group"
   else
-    echo "[smoke] odh-admins group not found - admin tests may fail"
+    echo "[smoke] odh-admins group not found - admin tests will be skipped"
     return 0
   fi
 
-  # Use current user's token as admin token
+  # Use current user's token
   ADMIN_OC_TOKEN="$(oc whoami -t 2>/dev/null || true)"
   if [[ -n "${ADMIN_OC_TOKEN}" ]]; then
     export ADMIN_OC_TOKEN
-    echo "[smoke] ADMIN_OC_TOKEN configured (current user: $current_user) - admin tests will run"
+    echo "[smoke] ADMIN_OC_TOKEN configured - admin tests will run"
   else
-    echo "[smoke] Failed to get admin token - admin tests will be skipped"
+    echo "[smoke] Failed to get token (cert-based auth?) - admin tests will be skipped"
   fi
 }
 

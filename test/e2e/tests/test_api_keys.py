@@ -305,10 +305,19 @@ class TestAPIKeyModelInference:
         api_key_headers: dict,
         inference_model_name: str,
     ):
-        """Test 11: Valid API key can access model endpoint - verify 200 response."""
+        """Test 11: Valid API key can access model endpoint - verify 200 response.
+        
+        Note: Users with access to multiple subscriptions must specify which one
+        to use via X-MaaS-Subscription header.
+        """
+        # Add subscription header - required when user matches multiple subscriptions
+        subscription_name = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+        headers = api_key_headers.copy()
+        headers["X-MaaS-Subscription"] = subscription_name
+        
         r = requests.post(
             model_completions_url,
-            headers=api_key_headers,
+            headers=headers,
             json={
                 "model": inference_model_name,
                 "prompt": "Hello world",

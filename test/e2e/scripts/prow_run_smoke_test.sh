@@ -490,49 +490,50 @@ setup_test_tokens() {
     # This allows e2e tests to verify both admin and non-admin behaviors
     #
     # Strategy:
-    # - Use current Prow user as admin (already has cluster-admin and is in odh-admins)
-    # - Create a regular test user service account for non-admin tests
+    # - Try to use current user's token (works for htpasswd users)
+    # - Fallback to creating admin SA (for Prow's system:admin which is cert-based)
+    # - Always create a regular user SA for non-admin tests
     
     echo "Setting up test tokens (admin + regular user)..."
     
-    local admin_user
-    admin_user=$(oc whoami)
-    echo "Current user (will be admin): $admin_user"
+    local current_user
+    current_user=$(oc whoami)
+    echo "Current user: $current_user"
     
-    # 1. Add current user to odh-admins group so maas-api recognizes them as admin
-    # The Auth CR uses odh-admins group for admin detection
-    if oc get group odh-admins &>/dev/null; then
-        if ! oc get group odh-admins -o jsonpath='{.users}' | grep -q "$admin_user"; then
-            echo "Adding $admin_user to odh-admins group..."
-            oc patch group odh-admins --type=json \
-                -p "[{\"op\": \"add\", \"path\": \"/users/-\", \"value\": \"$admin_user\"}]" || \
-            oc adm groups add-users odh-admins "$admin_user" || true
-        fi
-        echo "✅ Admin user is in odh-admins group"
-    else
-        echo "⚠️  odh-admins group not found - admin tests may fail"
-    fi
-    
-    # 2. Capture admin token from current session
+    # 1. Setup admin token - try existing user first, fallback to SA
     export ADMIN_OC_TOKEN
-    ADMIN_OC_TOKEN=$(oc whoami -t)
-    echo "✅ Admin token captured (ADMIN_OC_TOKEN) for user: $admin_user"
+    ADMIN_OC_TOKEN=$(oc whoami -t 2>/dev/null || true)
     
-    # 3. Create regular test user (basic authenticated user, no admin privileges)
+    if [[ -n "$ADMIN_OC_TOKEN" ]]; then
+        # Current user has a token (htpasswd user) - add them to odh-admins
+        echo "Using current user token for admin..."
+        if oc get group odh-admins &>/dev/null; then
+            oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
+            echo "✅ Added $current_user to odh-admins group"
+        fi
+    else
+        # No token available (system:admin uses cert auth) - create admin SA
+        echo "Current user uses cert auth, creating admin SA..."
+        setup_test_user "tester-admin-user" "cluster-admin"
+        
+        # Add admin SA to odh-admins group
+        local admin_sa="system:serviceaccount:default:tester-admin-user"
+        if oc get group odh-admins &>/dev/null; then
+            oc adm groups add-users odh-admins "$admin_sa" 2>/dev/null || true
+            echo "✅ Added $admin_sa to odh-admins group"
+        fi
+        
+        ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n default --duration=1h)
+    fi
+    echo "✅ Admin token configured (ADMIN_OC_TOKEN)"
+    
+    # 2. Create regular test user SA (not in odh-admins)
     setup_test_user "tester-regular-user" "view"
-    
-    # 4. Get regular user token and export as TOKEN
     export TOKEN
     TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
     echo "✅ Regular user token created (TOKEN)"
     
-    # 5. Stay logged in as admin for cluster operations, but tests use TOKEN for regular user
-    # The pytest tests use TOKEN env var for regular user and ADMIN_OC_TOKEN for admin
-    echo "✅ Staying logged in as admin: $(oc whoami)"
-    
     # Both ADMIN_OC_TOKEN and TOKEN are now exported
-    # - ADMIN_OC_TOKEN: current Prow admin user (in odh-admins group)
-    # - TOKEN: regular test user SA (not in odh-admins)
 }
 
 # Main execution
