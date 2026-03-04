@@ -48,8 +48,8 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, na
 	if keyHash == "" {
 		return errors.New("key hash is required")
 	}
-	if len(userGroups) == 0 {
-		return errors.New("user groups are required")
+	if userGroups == nil {
+		userGroups = []string{}
 	}
 
 	query := `

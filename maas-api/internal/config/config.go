@@ -86,7 +86,7 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.deprecatedHTTPPort, "port", c.deprecatedHTTPPort, "DEPRECATED: use --address with --secure=false")
 
 	fs.BoolVar(&c.DebugMode, "debug", c.DebugMode, "Enable debug mode")
-	fs.StringVar(&c.DBConnectionURL, "db-connection-url", c.DBConnectionURL, "PostgreSQL connection URL (required)")
+	// Note: DBConnectionURL is loaded from K8s secret 'maas-db-config', not from CLI flag
 }
 
 // Validate validates the configuration after flags have been parsed.
@@ -97,7 +97,7 @@ func (c *Config) Validate() error {
 
 	// Validate required fields
 	if c.DBConnectionURL == "" {
-		return errors.New("db connection URL is required")
+		return errors.New("db connection URL is required (loaded from K8s secret 'maas-db-config')")
 	}
 
 	if err := c.TLS.validate(); err != nil {

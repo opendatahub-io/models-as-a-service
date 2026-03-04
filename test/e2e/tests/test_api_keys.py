@@ -24,8 +24,9 @@ class TestAPIKeyCRUD:
         # Verify response structure
         assert "id" in data and "key" in data and "name" in data
         key = data["key"]
-        assert key.startswith("maas_"), f"Key should start with 'maas_', got: {key[:20]}"
-        assert data.get("status") == "active"
+        assert key.startswith("sk-oai-"), f"Expected sk-oai- prefix, got: {key[:20]}"
+        assert len(key) > len("sk-oai-"), "Key body should not be empty"
+        # Note: status field not included in create response (only in list/get)
 
         print(f"[create] Created key id={data['id']}, key prefix={key[:15]}...")
 
@@ -185,7 +186,8 @@ class TestAPIKeyValidation:
         # Validate it
         r_val = requests.post(
             api_keys_validation_url,
-            headers={"X-API-Key": key, "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},
+            json={"key": key},
             timeout=30,
             verify=False,
         )
@@ -209,7 +211,8 @@ class TestAPIKeyValidation:
         # Validate revoked key
         r_val = requests.post(
             api_keys_validation_url,
-            headers={"X-API-Key": key, "Content-Type": "application/json"},
+            headers={"Content-Type": "application/json"},
+            json={"key": key},
             timeout=30,
             verify=False,
         )

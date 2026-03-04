@@ -65,9 +65,25 @@ func HashAPIKey(key string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// IsValidKeyFormat checks if a key has the correct sk-oai-* prefix.
+// IsValidKeyFormat checks if a key has the correct sk-oai-* prefix and valid base62 body.
 func IsValidKeyFormat(key string) bool {
-	return strings.HasPrefix(key, KeyPrefix)
+	if !strings.HasPrefix(key, KeyPrefix) {
+		return false
+	}
+
+	body := key[len(KeyPrefix):]
+	if len(body) == 0 {
+		return false // Reject empty body
+	}
+
+	// Validate base62 charset (0-9, A-Z, a-z)
+	for _, c := range body {
+		if (c < '0' || c > '9') && (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+
+	return true
 }
 
 // encodeBase62 converts byte array to base62 string

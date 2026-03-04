@@ -679,8 +679,6 @@ components:
                 - data
                 - has_more
 tags:
-    - name: tokens
-      description: "\U0001F511 Ephemeral Token Management service. Short-lived tokens for temporary access."
     - name: api-keys
       description: "\U0001F5DD️ Named API Key Management service. Long-lived, trackable tokens for applications."
     - name: models

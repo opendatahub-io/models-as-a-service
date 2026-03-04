@@ -73,19 +73,7 @@ func TestGenerateAPIKey_Uniqueness(t *testing.T) {
 }
 
 func TestHashAPIKey(t *testing.T) {
-	tests := []struct {
-		name string
-		key  string
-		want string // Pre-computed SHA-256 hash
-	}{
-		{
-			name: "known test vector",
-			key:  "sk-oai-test123",
-			want: "c9d26d3b0f5e8d7a4c8b5e2f1d9a6c3e8b5f2d9a6c3e8b5f2d9a6c3e8b5f2d9a", // Placeholder - will be computed
-		},
-	}
-
-	// Actually compute the hash for the test key
+	// Compute the hash for the test key
 	testKey := "sk-oai-test123"
 	hash := api_keys.HashAPIKey(testKey)
 
@@ -105,8 +93,6 @@ func TestHashAPIKey(t *testing.T) {
 	if hash == differentHash {
 		t.Error("HashAPIKey() produced same hash for different keys")
 	}
-
-	_ = tests // Silence unused variable warning
 }
 
 func TestIsValidKeyFormat(t *testing.T) {

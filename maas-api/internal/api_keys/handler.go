@@ -30,6 +30,9 @@ func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker)
 	if log == nil {
 		log = logger.Production()
 	}
+	if adminChecker == nil {
+		panic("adminChecker cannot be nil")
+	}
 	return &Handler{
 		service:      service,
 		logger:       log,
@@ -59,6 +62,9 @@ func (h *Handler) getUserContext(c *gin.Context) *token.UserContext {
 // The Auth CR defines adminGroups that are allowed to perform admin operations.
 // Returns true if the user belongs to at least one admin group, false otherwise.
 func (h *Handler) isAdmin(user *token.UserContext) bool {
+	if h == nil || h.adminChecker == nil || user == nil {
+		return false
+	}
 	return h.adminChecker.IsAdmin(user.Groups)
 }
 
