@@ -34,16 +34,16 @@ type fakeHandler struct {
 	ready    bool
 }
 
-func (f *fakeHandler) ReconcileRoute(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModel) error {
+func (f *fakeHandler) ReconcileRoute(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
 	return nil
 }
-func (f *fakeHandler) Status(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModel) (string, bool, error) {
+func (f *fakeHandler) Status(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, bool, error) {
 	return f.endpoint, f.ready, nil
 }
-func (f *fakeHandler) GetModelEndpoint(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModel) (string, error) {
+func (f *fakeHandler) GetModelEndpoint(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, error) {
 	return f.endpoint, nil
 }
-func (f *fakeHandler) CleanupOnDelete(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModel) error {
+func (f *fakeHandler) CleanupOnDelete(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
 	return nil
 }
 
@@ -85,14 +85,14 @@ func TestReconcile_EndpointOverride(t *testing.T) {
 	}
 
 	// Register a fake handler kind for testing.
-	backendHandlerFactories[testKind] = func(_ *MaaSModelReconciler) BackendHandler {
+	backendHandlerFactories[testKind] = func(_ *MaaSModelRefReconciler) BackendHandler {
 		return &fakeHandler{endpoint: discoveredEndpoint, ready: true}
 	}
 	defer delete(backendHandlerFactories, testKind)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			model := &maasv1alpha1.MaaSModel{
+			model := &maasv1alpha1.MaaSModelRef{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-model", Namespace: "default"},
 				Spec: maasv1alpha1.MaaSModelSpec{
 					ModelRef:         maasv1alpha1.ModelReference{Kind: testKind, Name: "backend"},
@@ -106,14 +106,14 @@ func TestReconcile_EndpointOverride(t *testing.T) {
 				WithStatusSubresource(model).
 				Build()
 
-			r := &MaaSModelReconciler{Client: c, Scheme: scheme}
+			r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-model", Namespace: "default"}}
 
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile() error = %v", err)
 			}
 
-			updated := &maasv1alpha1.MaaSModel{}
+			updated := &maasv1alpha1.MaaSModelRef{}
 			if err := c.Get(context.Background(), req.NamespacedName, updated); err != nil {
 				t.Fatalf("Get() error = %v", err)
 			}
