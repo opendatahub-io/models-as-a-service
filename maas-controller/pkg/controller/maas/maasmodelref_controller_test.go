@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -65,7 +66,7 @@ func newLLMISvc(name, ns string, readyStatus ...corev1.ConditionStatus) *kservev
 	if len(readyStatus) > 0 {
 		svc.Status = kservev1alpha1.LLMInferenceServiceStatus{
 			Status: duckv1.Status{
-				Conditions: duckv1.Conditions{{Type: "Ready", Status: readyStatus[0]}},
+				Conditions: duckv1.Conditions{{Type: apis.ConditionReady, Status: readyStatus[0]}},
 			},
 		}
 	}
@@ -197,7 +198,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 	if err := c.Get(ctx, types.NamespacedName{Name: llmisvcName, Namespace: ns}, currentLLMISvc); err != nil {
 		t.Fatalf("Get llmisvc: %v", err)
 	}
-	currentLLMISvc.Status.Conditions = duckv1.Conditions{{Type: "Ready", Status: corev1.ConditionTrue}}
+	currentLLMISvc.Status.Conditions = duckv1.Conditions{{Type: apis.ConditionReady, Status: corev1.ConditionTrue}}
 	if err := c.Update(ctx, currentLLMISvc); err != nil {
 		t.Fatalf("Update llmisvc to ready: %v", err)
 	}
@@ -259,7 +260,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 	if err := c.Get(ctx, types.NamespacedName{Name: llmisvcName, Namespace: ns}, currentLLMISvc); err != nil {
 		t.Fatalf("Get llmisvc: %v", err)
 	}
-	currentLLMISvc.Status.Conditions = duckv1.Conditions{{Type: "Ready", Status: corev1.ConditionFalse}}
+	currentLLMISvc.Status.Conditions = duckv1.Conditions{{Type: apis.ConditionReady, Status: corev1.ConditionFalse}}
 	if err := c.Update(ctx, currentLLMISvc); err != nil {
 		t.Fatalf("Update llmisvc to not-ready: %v", err)
 	}
