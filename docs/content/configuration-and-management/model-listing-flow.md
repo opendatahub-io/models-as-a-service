@@ -17,7 +17,7 @@ Each entry includes an `id`, **`url`** (the model’s endpoint), a `ready` flag,
 
 ## MaaSModelRef flow
 
-When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed and the API is configured with a MaaSModelRef lister and namespace, the flow is:
+When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/maas-system) is installed and the API is configured with a MaaSModelRef lister and namespace, the flow is:
 
 1. The MaaS API lists all **MaaSModelRef** custom resources in its configured namespace (e.g. `opendatahub`). It reads them from an **in-memory cache** in the maas-api component (maintained by a Kubernetes informer), so it does not call the Kubernetes API on every request.
 
