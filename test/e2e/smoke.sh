@@ -82,7 +82,8 @@ if [[ -n "${MODEL_NAME}" ]]; then
   echo "[smoke] Using MODEL_NAME=${MODEL_NAME}"
 fi
 
-USER="$(oc whoami 2>/dev/null || echo 'ci-user')"
+RAW_USER="$(oc whoami 2>/dev/null || echo 'ci-user')"
+USER="$(printf '%s' "${RAW_USER}" | tr -cs '[:alnum:]_.@-' '_')"
 echo "[smoke] Performing smoke test for user: ${USER}"
 
 # 1) Obtain a token: env TOKEN > SA token (Prow) > oc whoami -t
@@ -98,9 +99,12 @@ elif [[ -n "${E2E_TEST_TOKEN_SA_NAMESPACE:-}" || -n "${E2E_TEST_TOKEN_SA_NAME:-}
     exit 1
   fi
   echo "[smoke] Creating SA token (${E2E_TEST_TOKEN_SA_NAMESPACE}/${E2E_TEST_TOKEN_SA_NAME})"
-  TOKEN="$(oc create token "${E2E_TEST_TOKEN_SA_NAME}" -n "${E2E_TEST_TOKEN_SA_NAMESPACE}" --duration=30m)"
+  if ! TOKEN="$(oc --request-timeout=30s create token "${E2E_TEST_TOKEN_SA_NAME}" -n "${E2E_TEST_TOKEN_SA_NAMESPACE}" --duration=30m)"; then
+    echo "[smoke] ERROR: failed to create SA token (${E2E_TEST_TOKEN_SA_NAMESPACE}/${E2E_TEST_TOKEN_SA_NAME})" >&2
+    exit 1
+  fi
 else
-  TOKEN="$(oc whoami -t 2>/dev/null || true)"
+  TOKEN="$(oc --request-timeout=30s whoami -t 2>/dev/null || true)"
   if [[ -z "${TOKEN}" ]]; then
     echo "[smoke] ERROR: could not obtain token via oc whoami -t" >&2
     echo "[smoke] Set TOKEN env, or E2E_TEST_TOKEN_SA_NAMESPACE + E2E_TEST_TOKEN_SA_NAME for CI" >&2
