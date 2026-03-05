@@ -207,7 +207,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 		t.Fatalf("Update llmisvc to ready: %v", err)
 	}
 
-	requests := r.mapLLMISvcToMaaSModels(ctx, currentLLMISvc)
+	requests := r.mapLLMISvcToMaaSModelRefs(ctx, currentLLMISvc)
 	if len(requests) == 0 {
 		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModelRef referencing this LLMInferenceService should have been enqueued")
 	}
@@ -269,7 +269,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 		t.Fatalf("Update llmisvc to not-ready: %v", err)
 	}
 
-	requests := r.mapLLMISvcToMaaSModels(ctx, currentLLMISvc)
+	requests := r.mapLLMISvcToMaaSModelRefs(ctx, currentLLMISvc)
 	if len(requests) == 0 {
 		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModelRef referencing this LLMInferenceService should have been enqueued")
 	}
@@ -296,7 +296,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 		svc := newLLMISvc("my-svc", "default")
 		model := newMaaSModelRef("ext-model", "default", "ExternalModel", "my-svc", "")
 		r, _ := newTestReconciler(model, svc)
-		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
+		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 0 {
 			t.Errorf("expected no requests for ExternalModel kind, got %d: %v", len(requests), requests)
 		}
@@ -306,7 +306,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 		svc := newLLMISvc("svc-beta", "default")
 		model := newMaaSModelRef("my-model", "default", "LLMInferenceService", "svc-alpha", "")
 		r, _ := newTestReconciler(model, svc)
-		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
+		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 0 {
 			t.Errorf("expected no requests for different name, got %d: %v", len(requests), requests)
 		}
@@ -316,7 +316,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 		svc := newLLMISvc("shared-svc", "ns-b")
 		model := newMaaSModelRef("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
 		r, _ := newTestReconciler(model, svc)
-		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
+		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 1 {
 			t.Fatalf("expected 1 request for cross-namespace match, got %d: %v", len(requests), requests)
 		}
@@ -329,7 +329,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 		svc := newLLMISvc("shared-svc", "ns-c")
 		model := newMaaSModelRef("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
 		r, _ := newTestReconciler(model, svc)
-		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
+		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 0 {
 			t.Errorf("expected no requests for namespace mismatch, got %d: %v", len(requests), requests)
 		}
@@ -340,7 +340,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 		model1 := newMaaSModelRef("model-1", "default", "LLMInferenceService", "shared-svc", "")
 		model2 := newMaaSModelRef("model-2", "default", "LLMInferenceService", "shared-svc", "")
 		r, _ := newTestReconciler(model1, model2, svc)
-		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
+		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 2 {
 			t.Fatalf("expected 2 requests for two models referencing same llmisvc, got %d: %v", len(requests), requests)
 		}

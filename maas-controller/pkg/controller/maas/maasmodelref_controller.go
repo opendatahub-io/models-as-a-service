@@ -320,7 +320,7 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// changes (generation) and Ready-condition status changes, skipping
 		// metadata-only updates.
 		Watches(&kservev1alpha1.LLMInferenceService{},
-			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModels),
+			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
 			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
 		).
 		Complete(r)
@@ -352,9 +352,9 @@ func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context
 	return requests
 }
 
-// mapLLMISvcToMaaSModels returns reconcile requests for all MaaSModels that
+// mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
 // reference the given LLMInferenceService by name and namespace.
-func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModels(ctx context.Context, obj client.Object) []reconcile.Request {
+func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
 	llmisvc, ok := obj.(*kservev1alpha1.LLMInferenceService)
 	if !ok {
 		return nil
