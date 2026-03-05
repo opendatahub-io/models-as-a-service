@@ -147,7 +147,7 @@ A user can have a subscription but no access → **403**.
 To move from old flow to new flow on an existing cluster:
 
 1. Deploy the full stack (including maas-controller): `./scripts/deploy.sh`
-   - Or install just the controller: `kubectl apply -k maas-controller/config/default`
+   - Or install just the controller: `kubectl apply -k deployment/base/maas-controller/default`
 2. For each model:
    - Create a `MaaSModelRef` CR referencing the LLMInferenceService
    - Create a `MaaSAuthPolicy` CR with the allowed groups

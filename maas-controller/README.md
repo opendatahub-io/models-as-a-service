@@ -165,13 +165,13 @@ plus the subscription controller.
 If MaaS infrastructure is already deployed, install just the controller:
 
 ```bash
-kubectl apply -k maas-controller/config/default
+kubectl apply -k deployment/base/maas-controller/default
 ```
 
 To install into another namespace:
 
 ```bash
-kustomize build maas-controller/config/default | sed "s/namespace: opendatahub/namespace: my-namespace/g" | kubectl apply -f -
+kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: my-namespace/g" | kubectl apply -f -
 ```
 
 ### Verify
@@ -185,11 +185,11 @@ kubectl get crd | grep maas.opendatahub.io
 
 | Component | Path | Description |
 |-----------|------|-------------|
-| CRDs | `config/crd/` | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription |
-| RBAC | `config/rbac/` | ClusterRole, ServiceAccount, bindings |
-| Controller | `config/manager/` | Deployment (`quay.io/opendatahub/maas-controller:latest`) |
-| Default auth policy | `config/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |
-| Default deny policy | `config/policies/` | Gateway-level TokenRateLimitPolicy with 0 tokens (deny unsubscribed, 429) |
+| CRDs | `deployment/base/maas-controller/crd/` | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription |
+| RBAC | `deployment/base/maas-controller/rbac/` | ClusterRole, ServiceAccount, bindings |
+| Controller | `deployment/base/maas-controller/manager/` | Deployment (`quay.io/opendatahub/maas-controller:latest`) |
+| Default auth policy | `deployment/base/maas-controller/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |
+| Default deny policy | `deployment/base/maas-controller/policies/` | Gateway-level TokenRateLimitPolicy with 0 tokens (deny unsubscribed, 429) |
 
 ## Examples
 
@@ -293,7 +293,7 @@ From the repository root:
 make -C maas-controller build      # build binary to maas-controller/bin/manager
 make -C maas-controller run        # run locally (uses kubeconfig)
 make -C maas-controller test       # run tests
-make -C maas-controller install    # apply config/default to cluster
+make -C maas-controller install    # apply deployment/base/maas-controller/default to cluster
 make -C maas-controller uninstall # remove everything
 ```
 
@@ -317,6 +317,6 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 ## Configuration
 
-- **Controller namespace**: Default is `opendatahub`. Override via `kustomize build maas-controller/config/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
+- **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
 - **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override in the deployment or via Kustomize.
-- **Gateway name**: The default auth policy targets `maas-default-gateway` in `openshift-ingress`. Edit `config/policies/gateway-default-auth.yaml` if your gateway has a different name.
+- **Gateway name**: The default auth policy targets `maas-default-gateway` in `openshift-ingress`. Edit `deployment/base/maas-controller/policies/gateway-default-auth.yaml` if your gateway has a different name.

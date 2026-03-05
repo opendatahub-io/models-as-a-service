@@ -3,4 +3,4 @@ kind: Kustomization
 
 resources:
   - ../../base/maas-api
-  - ../../../maas-controller/config/default
+  - ../../base/maas-controller/default

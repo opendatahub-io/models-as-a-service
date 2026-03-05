@@ -10,8 +10,8 @@ metadata:
 namespace: opendatahub
 resources:
   - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule + NetworkPolicy)
-  - ../../../maas-controller/config/default
-  - ../../../maas-controller/config/policies  # gateway-default-auth, gateway-default-deny
+  - ../../base/maas-controller/default
+  - ../../base/maas-controller/policies  # gateway-default-auth, gateway-default-deny
 
 configMapGenerator:
 - envs:

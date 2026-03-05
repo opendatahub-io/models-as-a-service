@@ -666,7 +666,7 @@ set_maas_controller_image() {
   local project_root
   project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-  export _MAAS_CONTROLLER_KUSTOMIZATION="$project_root/maas-controller/config/manager/kustomization.yaml"
+  export _MAAS_CONTROLLER_KUSTOMIZATION="$project_root/deployment/base/maas-controller/manager/kustomization.yaml"
   export _MAAS_CONTROLLER_BACKUP="${_MAAS_CONTROLLER_KUSTOMIZATION}.backup"
   export _MAAS_CONTROLLER_IMAGE_SET=1
 
