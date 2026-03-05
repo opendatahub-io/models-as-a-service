@@ -8,6 +8,14 @@
 - jq
 - kustomize 5.7
 - OCP 4.19.9+ (for GW API)
+- **PostgreSQL database** (required for API key management)
+
+!!! warning "Database Required"
+    The maas-api **requires** a PostgreSQL database and will fail to start without it.
+    You must create a Secret named `maas-db-config` with the `DB_CONNECTION_URL` key before deploying.
+
+    For development, the `scripts/deploy.sh` script creates this automatically.
+    For production ODH/RHOAI deployments, see [Database Prerequisites](../docs/content/install/prerequisites.md#database-prerequisite).
 
 ### Setup
 
@@ -169,29 +177,51 @@ TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token)
 ```
 
 > [!NOTE]
-> This is a self-service endpoint that issues ephemeral tokens. Openshift Identity (`$(oc whoami -t)`) is used as a refresh token.
+> ServiceAccount-based tokens have been removed. All authentication now uses API keys (`sk-oai-*` format) with hash-based storage.
 
-##### API Keys (Named Tokens)
+##### API Keys
 
-To create a named API key that can be tracked and managed:
+The API uses hash-based API keys with OpenAI-compatible format (`sk-oai-*`). These keys support both permanent and expiring modes.
 
 ```shell
 HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
 
-# Create a named API key
+# Create a permanent API key (no expiration)
 API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{
-    "expiration": "720h",
-    "name": "my-application-key"
+    "name": "my-permanent-key",
+    "description": "Production API key for my application"
   }' \
   "${HOST}/maas-api/v1/api-keys")
 
 echo $API_KEY_RESPONSE | jq -r .
-TOKEN=$(echo $API_KEY_RESPONSE | jq -r .token)
+API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 
+# Create an expiring API key (90 days)
+API_KEY_RESPONSE=$(curl -sSk \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{
+    "name": "my-expiring-key",
+    "description": "90-day test key",
+    "expiresIn": "90d"
+  }' \
+  "${HOST}/maas-api/v1/api-keys")
+
+echo $API_KEY_RESPONSE | jq -r .
+API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
+```
+
+> [!IMPORTANT]
+> The plaintext API key is shown ONLY ONCE at creation time. Store it securely - it cannot be retrieved again.
+
+**Managing API Keys:**
+
+```shell
 # List all your API keys
 curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
@@ -203,49 +233,24 @@ curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}" | jq .
 
-# Revoke all tokens (ephemeral and API keys)
+# Revoke specific API key
 curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -X DELETE \
-  "${HOST}/maas-api/v1/tokens"
+  "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}"
 ```
 
 > [!NOTE]
-> API keys are stored in the configured database (see [Storage Configuration](#storage-configuration)) with metadata including creation date, expiration date, and status. They can be listed and inspected individually. To revoke tokens, use `DELETE /v1/tokens` which revokes all tokens (ephemeral and API keys) by recreating the Service Account and marking API key metadata as expired.
+> API keys use hash-based storage (only SHA-256 hash stored, never plaintext). They are OpenAI-compatible (sk-oai-* format) and support optional expiration. API keys are stored in the configured database (see [Storage Configuration](#storage-configuration)) with metadata including creation date, expiration date, and status.
 
-### Storage Configuration
+### Database Configuration
 
-maas-api supports three storage modes, controlled by the `--storage` flag:
+maas-api uses PostgreSQL for persistent storage of API key metadata. The database connection is configured via a Kubernetes Secret.
 
-| Mode | Flag | Use Case | Persistence |
-|------|------|----------|-------------|
-| **In-memory** (default) | `--storage=in-memory` | Development/testing | ❌ Data lost on restart |
-| **Disk** | `--storage=disk` | Single replica, demos | ✅ Survives restarts |
-| **External** | `--storage=external` | Production, HA | ✅ Full persistence |
+!!! note "Automatic Setup"
+    When using `scripts/deploy.sh` for development, PostgreSQL is deployed automatically with the secret created.
 
-#### Quick Start
-
-```bash
-# In-memory (default - no configuration needed)
-
-# Disk storage (persistent, single replica)
-kustomize build deployment/overlays/tls-backend-disk | kubectl apply -f -
-
-# External database - see docs/samples/database/external for configuration
-```
-
-#### Configuration Flags and Environment Variables
-
-| Flag | Environment Variable | Default | Description |
-|------|---------------------|---------|-------------|
-| `--storage` | `STORAGE_MODE` | `in-memory` | Storage mode: `in-memory`, `disk`, or `external` |
-| `--db-connection-url` | `DB_CONNECTION_URL` | - | Database URL (required for `--storage=external`) |
-| `--data-path` | `DATA_PATH` | `/data/maas-api.db` | Path for disk storage |
-| - | `DB_MAX_OPEN_CONNS` | 25 | Max open connections (external mode only) |
-| - | `DB_MAX_IDLE_CONNS` | 5 | Max idle connections (external mode only) |
-| - | `DB_CONN_MAX_LIFETIME_SECONDS` | 300 | Connection max lifetime in seconds (external mode only) |
-
-For detailed external database setup instructions, see [docs/samples/database/external](../docs/samples/database/external/README.md).
+For production deployments, see the [Database Prerequisites](../docs/content/install/prerequisites.md#database-prerequisite) guide.
 
 #### Calling the model and hitting the rate limit
 

@@ -1,12 +1,25 @@
 # Install MaaS Components
 
-After enabling MaaS in your DataScienceCluster (set `modelsAsService.managementState: Managed`
+## Prerequisites
+
+!!! warning "Database Required"
+    Before enabling MaaS, you **must** create the `maas-db-config` Secret with your PostgreSQL database connection URL.
+
+    See the [Database Prerequisites](prerequisites.md#database-prerequisite) for detailed setup instructions and database options.
+
+## Enable MaaS in DataScienceCluster
+
+After creating the database Secret, enable MaaS in your DataScienceCluster (set `modelsAsService.managementState: Managed`
 in the `spec.components.kserve` section - see [platform setup guide](platform-setup.md#install-platform-with-model-serving)
-for the complete configuration), the operator will automatically deploy:
+for the complete configuration).
+
+The operator will automatically deploy:
 
 - **MaaS API** (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)
 - **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
 - **NetworkPolicy** (maas-authorino-allow) - Allows Authorino to reach MaaS API
+
+## Manual Installation Steps
 
 You must manually install the following components after completing the [platform setup](platform-setup.md)
 (which includes creating the required `maas-default-gateway`):

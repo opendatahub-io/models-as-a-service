@@ -17,7 +17,6 @@ import (
 // ModelsHandler handles model-related endpoints.
 type ModelsHandler struct {
 	modelMgr             *models.Manager
-	tokenManager         *token.Manager
 	subscriptionSelector *subscription.Selector
 	logger               *logger.Logger
 	maasModelRefLister   models.MaaSModelRefLister
@@ -29,7 +28,6 @@ type ModelsHandler struct {
 func NewModelsHandler(
 	log *logger.Logger,
 	modelMgr *models.Manager,
-	tokenMgr *token.Manager,
 	subscriptionSelector *subscription.Selector,
 	maasModelRefLister models.MaaSModelRefLister,
 	maasModelNamespace string,
@@ -39,7 +37,6 @@ func NewModelsHandler(
 	}
 	return &ModelsHandler{
 		modelMgr:             modelMgr,
-		tokenManager:         tokenMgr,
 		subscriptionSelector: subscriptionSelector,
 		logger:               log,
 		maasModelRefLister:   maasModelRefLister,
@@ -50,7 +47,6 @@ func NewModelsHandler(
 // ListLLMs handles GET /v1/models.
 func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	// Require Authorization header and pass it through as-is to list and access validation.
-	// TODO: Once minting is done we may revisit token exchange (e.g. mint SA token for gateway auth when audience doesn't match).
 	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 	if authHeader == "" {
 		h.logger.Error("Authorization header missing")

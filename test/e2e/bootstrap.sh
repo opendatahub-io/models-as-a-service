@@ -35,6 +35,126 @@ export MODEL_NAME="${MODEL_NAME:-$DEDUCED_CR}"
 echo "[bootstrap] Using kind=llminferenceservice ns=${NS} (${MODEL_PATH##*/})"
 echo "[bootstrap] Model CR name: ${MODEL_NAME}"
 
+# ---- Deploy PostgreSQL for API key storage (required for E2E tests)
+MAAS_NS="${MAAS_NS:-opendatahub}"
+echo "[bootstrap] Checking PostgreSQL in namespace: ${MAAS_NS}"
+if ! kubectl get deployment postgres -n "${MAAS_NS}" &>/dev/null; then
+  echo "[bootstrap] PostgreSQL not found, deploying..."
+
+  POSTGRES_USER="${POSTGRES_USER:-maas}"
+  POSTGRES_DB="${POSTGRES_DB:-maas}"
+
+  # Generate random password if not provided
+  POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+  if [[ -z "${POSTGRES_PASSWORD}" ]]; then
+    POSTGRES_PASSWORD="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
+    echo "[bootstrap] Generated random PostgreSQL password (stored in secret postgres-creds)"
+  fi
+
+  kubectl apply -n "${MAAS_NS}" -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-creds
+  labels:
+    app: postgres
+    purpose: e2e-test
+stringData:
+  POSTGRES_USER: "${POSTGRES_USER}"
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+  POSTGRES_DB: "${POSTGRES_DB}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    purpose: e2e-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: registry.redhat.io/rhel9/postgresql-15:latest
+        env:
+        - name: POSTGRESQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-creds
+              key: POSTGRES_USER
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-creds
+              key: POSTGRES_PASSWORD
+        - name: POSTGRESQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: postgres-creds
+              key: POSTGRES_DB
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/pgsql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        readinessProbe:
+          exec:
+            command: ["/usr/libexec/check-container"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    purpose: e2e-test
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: maas-db-config
+  labels:
+    app: maas-api
+    purpose: e2e-test
+stringData:
+  DB_CONNECTION_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+EOF
+
+  echo "[bootstrap] Waiting for PostgreSQL to be ready..."
+  kubectl wait -n "${MAAS_NS}" --for=condition=available deployment/postgres --timeout=120s || {
+    echo "[bootstrap] WARNING: PostgreSQL deployment failed, E2E tests may fail"
+  }
+  echo "[bootstrap] PostgreSQL deployed successfully"
+else
+  echo "[bootstrap] PostgreSQL already deployed in ${MAAS_NS}"
+fi
+
 # ---- (Optional) deploy/redeploy the model
 if [[ "${SKIP_DEPLOY}" != "true" ]]; then
   oc get ns "${NS}" >/dev/null 2>&1 || oc create ns "${NS}"
@@ -74,12 +194,9 @@ export MAAS_API_BASE_URL="${SCHEME}://${HOST}/maas-api"
 FREE_OC_TOKEN="$(oc whoami -t || true)"
 MODEL_URL_DISC=""
 if [[ -n "${FREE_OC_TOKEN}" ]]; then
-  TOKEN_RESPONSE="$(curl -sSk -H "Authorization: Bearer ${FREE_OC_TOKEN}" -H "Content-Type: application/json" -X POST -d '{"expiration":"10m"}' "${MAAS_API_BASE_URL}/v1/tokens" || true)"
-  TOKEN="$(echo "${TOKEN_RESPONSE}" | jq -r .token 2>/dev/null || true)"
-  if [[ -n "${TOKEN}" && "${TOKEN}" != "null" ]]; then
-    MODELS_JSON="$(curl -sSk -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" || true)"
-    MODEL_URL_DISC="$(echo "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.url // empty' 2>/dev/null || true)"
-  fi
+  # Note: /v1/tokens endpoint was removed, now use OC token directly for management APIs
+  MODELS_JSON="$(curl -sSk -H "Authorization: Bearer ${FREE_OC_TOKEN}" "${MAAS_API_BASE_URL}/v1/models" || true)"
+  MODEL_URL_DISC="$(echo "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.url // empty' 2>/dev/null || true)"
 fi
 
 # Compose model URL if catalog didn’t give us one

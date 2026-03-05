@@ -31,21 +31,9 @@ spec:
     name: maas-default-gateway
   defaults:
     rules:
-      authentication:
-        service-accounts:
-          cache:
-            key:
-              selector: "context.request.http.headers.authorization.@case:lower"
-            ttl: 600
-          defaults:
-            userid:
-              selector: "auth.identity.user.username"
-          kubernetesTokenReview:
-            audiences:
-            - maas-default-gateway-sa
-            - https://kubernetes.default.svc
-          metrics: false
-          priority: 0
+      # No default authentication - per-route AuthPolicies define api-keys auth
+      # Service account JWT tokens are NOT supported (hash-based API keys only)
+      authentication: {}
       authorization:
         deny-unconfigured-models:
           metrics: false
