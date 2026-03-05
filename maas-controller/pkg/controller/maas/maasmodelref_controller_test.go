@@ -335,19 +335,6 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 		}
 	})
 
-	t.Run("llmisvc_alias_enqueued", func(t *testing.T) {
-		svc := newLLMISvc("my-svc", "default")
-		model := newMaaSModel("alias-model", "default", "llmisvc", "my-svc", "")
-		r, _ := newTestReconciler(model, svc)
-		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
-		if len(requests) != 1 {
-			t.Fatalf("expected 1 request for llmisvc alias kind, got %d: %v", len(requests), requests)
-		}
-		if requests[0].Name != "alias-model" {
-			t.Errorf("request name = %q, want alias-model", requests[0].Name)
-		}
-	})
-
 	t.Run("multiple_models_same_llmisvc", func(t *testing.T) {
 		svc := newLLMISvc("shared-svc", "default")
 		model1 := newMaaSModel("model-1", "default", "LLMInferenceService", "shared-svc", "")

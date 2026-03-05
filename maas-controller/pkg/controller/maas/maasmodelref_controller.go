@@ -367,7 +367,7 @@ func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModels(ctx context.Context, obj
 	var requests []reconcile.Request
 	for _, m := range models.Items {
 		kind := m.Spec.ModelRef.Kind
-		if kind != "LLMInferenceService" && kind != "llmisvc" {
+		if kind != "LLMInferenceService" {
 			continue
 		}
 		refNS := m.Spec.ModelRef.Namespace
