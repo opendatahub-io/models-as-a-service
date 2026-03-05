@@ -487,53 +487,62 @@ setup_test_user() {
 
 setup_test_tokens() {
     # Setup dual-token environment for admin + regular user tests
-    # This allows e2e tests to verify both admin and non-admin behaviors
-    #
-    # Strategy:
-    # - Try to use current user's token (works for htpasswd users)
-    # - Fallback to creating admin SA (for Prow's system:admin which is cert-based)
-    # - Always create a regular user SA for non-admin tests
+    # Admin token needs group memberships (htpasswd), regular user can use SA token
     
     echo "Setting up test tokens (admin + regular user)..."
     
-    local current_user
+    local current_user api_server
     current_user=$(oc whoami)
+    api_server=$(oc whoami --show-server)
     echo "Current user: $current_user"
     
-    # 1. Setup admin token - try existing user first, fallback to SA
-    export ADMIN_OC_TOKEN
-    ADMIN_OC_TOKEN=$(oc whoami -t 2>/dev/null || true)
+    export ADMIN_OC_TOKEN=""
+    export TOKEN=""
     
-    if [[ -n "$ADMIN_OC_TOKEN" ]]; then
-        # Current user has a token (htpasswd user) - add them to odh-admins
-        echo "Using current user token for admin..."
-        if oc get group odh-admins &>/dev/null; then
-            oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
-            echo "✅ Added $current_user to odh-admins group"
+    # 1. Try htpasswd users from idp-htpasswd step (Prow CI)
+    if [[ -f "${SHARED_DIR:-}/runtime_env" ]]; then
+        # shellcheck source=/dev/null
+        source "${SHARED_DIR}/runtime_env"
+        if [[ -n "${USERS:-}" ]]; then
+            echo "Found htpasswd users from idp-htpasswd step"
+            local admin_creds
+            admin_creds=$(echo "$USERS" | tr ',' '\n' | grep "^testuser-1:" | head -1)
+            if [[ -n "$admin_creds" ]]; then
+                local admin_user admin_pass
+                admin_user="${admin_creds%%:*}"
+                admin_pass="${admin_creds#*:}"
+                
+                # Add to odh-admins and get token
+                oc adm groups add-users odh-admins "$admin_user" 2>/dev/null || true
+                if oc login "$api_server" -u "$admin_user" -p "$admin_pass" --insecure-skip-tls-verify=true &>/dev/null; then
+                    ADMIN_OC_TOKEN=$(oc whoami -t)
+                    echo "✅ Admin token for $admin_user"
+                fi
+                # Restore kubeconfig
+                export KUBECONFIG="${SHARED_DIR}/kubeconfig"
+            fi
         fi
-    else
-        # No token available (system:admin uses cert auth) - create admin SA
-        echo "Current user uses cert auth, creating admin SA..."
-        setup_test_user "tester-admin-user" "cluster-admin"
-        
-        # Add admin SA to odh-admins group
-        local admin_sa="system:serviceaccount:default:tester-admin-user"
-        if oc get group odh-admins &>/dev/null; then
-            oc adm groups add-users odh-admins "$admin_sa" 2>/dev/null || true
-            echo "✅ Added $admin_sa to odh-admins group"
-        fi
-        
-        ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n default --duration=1h)
     fi
-    echo "✅ Admin token configured (ADMIN_OC_TOKEN)"
     
-    # 2. Create regular test user SA (not in odh-admins)
+    # 2. Fallback: use current user's token (local htpasswd user)
+    if [[ -z "$ADMIN_OC_TOKEN" ]]; then
+        ADMIN_OC_TOKEN=$(oc whoami -t 2>/dev/null || true)
+        if [[ -n "$ADMIN_OC_TOKEN" ]]; then
+            oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
+            echo "✅ Admin token for $current_user (added to odh-admins)"
+        else
+            echo "⚠️  No htpasswd token - admin tests may fail (SA tokens lack group memberships)"
+            setup_test_user "tester-admin-user" "cluster-admin"
+            ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n default --duration=1h)
+        fi
+    fi
+    
+    # Regular user: always use SA token (doesn't need group memberships)
     setup_test_user "tester-regular-user" "view"
-    export TOKEN
     TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
-    echo "✅ Regular user token created (TOKEN)"
+    echo "✅ Regular user token (SA: tester-regular-user)"
     
-    # Both ADMIN_OC_TOKEN and TOKEN are now exported
+    echo "Token setup complete"
 }
 
 # Main execution
