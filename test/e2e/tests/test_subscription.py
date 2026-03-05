@@ -40,6 +40,7 @@ import subprocess
 import time
 import uuid
 from typing import Optional
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -1110,7 +1111,7 @@ class TestE2ESubscriptionFlow:
     def test_e2e_with_both_access_and_subscription_gets_200(self):
         """
         Full E2E test: Create MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription from scratch.
-        Token with both access and subscription should get 200 OK.
+        API key with both access and subscription should get 200 OK.
 
         This is the comprehensive test that validates the complete E2E flow including
         MaaSModelRef creation and reconciliation. Other tests use existing models for speed.
@@ -1122,8 +1123,8 @@ class TestE2ESubscriptionFlow:
         sa_name = "e2e-sa-success"
 
         try:
-            # Create service account and get token
-            token = _create_sa_token(sa_name, namespace=ns)
+            # Create service account and get OC token for maas-api
+            oc_token = _create_sa_token(sa_name, namespace=ns)
             sa_user = _sa_to_user(sa_name, namespace=ns)
 
             # Create test resources
@@ -1138,9 +1139,12 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for inference
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
             # Test: Both access and subscription → 200
-            log.info("Testing: Token with both access and subscription")
-            r = _poll_status(token, 200, path=model_path, subscription=subscription_name, timeout=90)
+            log.info("Testing: API key with both access and subscription")
+            r = _poll_status(api_key, 200, path=model_path, subscription=subscription_name, timeout=90)
             log.info("✅ Both access and subscription → %s", r.status_code)
 
         finally:
@@ -1166,8 +1170,8 @@ class TestE2ESubscriptionFlow:
         original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
 
         try:
-            # Create service account and get token
-            token = _create_sa_token(sa_name, namespace=ns)
+            # Create service account and get OC token for maas-api
+            oc_token = _create_sa_token(sa_name, namespace=ns)
             sa_user = _sa_to_user(sa_name, namespace=ns)
 
             # Create auth policy for this specific user
@@ -1179,9 +1183,12 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for inference
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
             # Test: Auth passes but no subscription → 403 (not in any subscription)
-            log.info("Testing: Token with access but no subscription")
-            r = _poll_status(token, 403, path=MODEL_PATH, subscription=False, timeout=90)
+            log.info("Testing: API key with access but no subscription")
+            r = _poll_status(api_key, 403, path=MODEL_PATH, subscription=False, timeout=90)
             log.info("✅ Access but no subscription → %s", r.status_code)
 
         finally:
@@ -1214,7 +1221,7 @@ class TestE2ESubscriptionFlow:
             # - sa_with_auth: in auth policy (so the policy exists)
             # - sa_with_sub: in subscription but NOT in auth policy
             _ = _create_sa_token(sa_with_auth, namespace=ns)  # SA creation only - token unused
-            token_with_sub = _create_sa_token(sa_with_sub, namespace="default")  # Different namespace
+            oc_token_with_sub = _create_sa_token(sa_with_sub, namespace="default")  # Different namespace
 
             sa_with_auth_user = _sa_to_user(sa_with_auth, namespace=ns)
             sa_with_sub_user = _sa_to_user(sa_with_sub, namespace="default")
@@ -1228,9 +1235,12 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for the user with subscription but no auth
+            api_key_with_sub = _create_api_key(oc_token_with_sub, name=f"{sa_with_sub}-key")
+
             # Test: Subscription but no access → 403
-            log.info("Testing: Token with subscription but no access")
-            r = _poll_status(token_with_sub, 403, path=MODEL_PATH, subscription=subscription_name, timeout=90)
+            log.info("Testing: API key with subscription but no access")
+            r = _poll_status(api_key_with_sub, 403, path=MODEL_PATH, subscription=subscription_name, timeout=90)
             log.info("✅ Subscription but no access → %s", r.status_code)
 
         finally:
@@ -1260,7 +1270,7 @@ class TestE2ESubscriptionFlow:
         original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
 
         try:
-            token = _create_sa_token(sa_name, namespace=ns)
+            oc_token = _create_sa_token(sa_name, namespace=ns)
             sa_user = _sa_to_user(sa_name, namespace=ns)
 
             # Delete simulator-subscription so user has exactly ONE subscription
@@ -1272,9 +1282,12 @@ class TestE2ESubscriptionFlow:
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
             _wait_reconcile()
 
+            # Create API key for inference
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
             # Test: Single subscription + no header → auto-select → 200
             log.info("Testing: Single subscription auto-select")
-            r = _poll_status(token, 200, path=MODEL_PATH, subscription=False, timeout=90)
+            r = _poll_status(api_key, 200, path=MODEL_PATH, subscription=False, timeout=90)
             log.info("✅ Single subscription auto-select → %s", r.status_code)
 
         finally:
@@ -1303,8 +1316,8 @@ class TestE2ESubscriptionFlow:
         sa_name = "e2e-sa-multi-sub"
 
         try:
-            # Create service account and get token
-            token = _create_sa_token(sa_name, namespace=ns)
+            # Create service account and get OC token for maas-api
+            oc_token = _create_sa_token(sa_name, namespace=ns)
             sa_user = _sa_to_user(sa_name, namespace=ns)
 
             # Create test resources with 2 subscriptions for the same user
@@ -1314,9 +1327,12 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for inference
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
             # Test: Multiple subscriptions + no header → 403
             log.info("Testing: User with multiple subscriptions, no header")
-            r = _poll_status(token, 403, path=MODEL_PATH, subscription=False, timeout=90)
+            r = _poll_status(api_key, 403, path=MODEL_PATH, subscription=False, timeout=90)
             log.info("✅ Multiple subscriptions without header → %s", r.status_code)
 
             # Optionally verify error code in response or headers
@@ -1345,8 +1361,8 @@ class TestE2ESubscriptionFlow:
         sa_name = "e2e-sa-multi-sub-valid"
 
         try:
-            # Create service account and get token
-            token = _create_sa_token(sa_name, namespace=ns)
+            # Create service account and get OC token for maas-api
+            oc_token = _create_sa_token(sa_name, namespace=ns)
             sa_user = _sa_to_user(sa_name, namespace=ns)
 
             # Create test resources with 2 subscriptions for the same user
@@ -1356,14 +1372,17 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for inference
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
             # Test 1: Select subscription_1 via header → 200
             log.info("Testing: User with multiple subscriptions, selecting subscription 1")
-            r1 = _poll_status(token, 200, path=MODEL_PATH, subscription=subscription_1, timeout=90)
+            r1 = _poll_status(api_key, 200, path=MODEL_PATH, subscription=subscription_1, timeout=90)
             log.info("✅ Multiple subscriptions with valid header (tier 1) → %s", r1.status_code)
 
             # Test 2: Select subscription_2 via header → 200
             log.info("Testing: User with multiple subscriptions, selecting subscription 2")
-            r2 = _inference(token, path=MODEL_PATH, subscription=subscription_2)
+            r2 = _inference(api_key, path=MODEL_PATH, subscription=subscription_2)
             assert r2.status_code == 200, f"Expected 200 for valid subscription_2, got {r2.status_code}"
             log.info("✅ Multiple subscriptions with valid header (tier 2) → %s", r2.status_code)
 
@@ -1389,8 +1408,8 @@ class TestE2ESubscriptionFlow:
         sa_name = "e2e-sa-multi-sub-invalid"
 
         try:
-            # Create service account and get token
-            token = _create_sa_token(sa_name, namespace=ns)
+            # Create service account and get OC token for maas-api
+            oc_token = _create_sa_token(sa_name, namespace=ns)
             sa_user = _sa_to_user(sa_name, namespace=ns)
 
             # Create test resources
@@ -1399,9 +1418,12 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for inference
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
             # Test: Invalid/non-existent subscription header → 403
             log.info("Testing: User with invalid subscription header")
-            r = _inference(token, path=MODEL_PATH, subscription="nonexistent-subscription-xyz")
+            r = _inference(api_key, path=MODEL_PATH, subscription="nonexistent-subscription-xyz")
             assert r.status_code == 403, f"Expected 403 for invalid subscription, got {r.status_code}"
             log.info("✅ Invalid subscription header → %s", r.status_code)
 
@@ -1430,7 +1452,7 @@ class TestE2ESubscriptionFlow:
 
         try:
             # Create two service accounts
-            token_user = _create_sa_token(sa_user, namespace=ns)
+            oc_token_user = _create_sa_token(sa_user, namespace=ns)
             _ = _create_sa_token(sa_other, namespace=ns)  # SA creation only - token unused
 
             user_principal = _sa_to_user(sa_user, namespace=ns)
@@ -1445,9 +1467,12 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for user
+            api_key_user = _create_api_key(oc_token_user, name=f"{sa_user}-key")
+
             # Test: User tries to access another user's subscription → 403
             log.info("Testing: User requesting subscription they don't own")
-            r = _inference(token_user, path=MODEL_PATH, subscription=other_subscription)
+            r = _inference(api_key_user, path=MODEL_PATH, subscription=other_subscription)
             assert r.status_code == 403, f"Expected 403 for inaccessible subscription, got {r.status_code}"
             log.info("✅ Inaccessible subscription header → %s", r.status_code)
 
@@ -1475,8 +1500,8 @@ class TestE2ESubscriptionFlow:
         test_group = f"system:serviceaccounts:{ns}"
 
         try:
-            # Create service account
-            token = _create_sa_token(sa_name, namespace=ns)
+            # Create service account and get OC token for maas-api
+            oc_token = _create_sa_token(sa_name, namespace=ns)
 
             # Create auth policy using GROUP (not user)
             _create_test_auth_policy(auth_policy_name, MODEL_REF, groups=[test_group])
@@ -1486,9 +1511,12 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for inference
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
             # Test: User matches via group membership → 200
             log.info("Testing: Group-based auth and subscription")
-            r = _poll_status(token, 200, path=MODEL_PATH, subscription=subscription_name, timeout=90)
+            r = _poll_status(api_key, 200, path=MODEL_PATH, subscription=subscription_name, timeout=90)
             log.info("✅ Group-based access → %s", r.status_code)
 
         finally:
@@ -1515,8 +1543,8 @@ class TestE2ESubscriptionFlow:
         original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
 
         try:
-            # Create service account
-            token = _create_sa_token(sa_name, namespace=ns)
+            # Create service account and get OC token for maas-api
+            oc_token = _create_sa_token(sa_name, namespace=ns)
 
             # Create auth policy using group
             _create_test_auth_policy(auth_policy_name, MODEL_REF, groups=[test_group])
@@ -1526,9 +1554,12 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for inference
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
             # Test: Group auth passes but no subscription for that group → 403
             log.info("Testing: Group-based auth but no subscription")
-            r = _poll_status(token, 403, path=MODEL_PATH, subscription=False, timeout=90)
+            r = _poll_status(api_key, 403, path=MODEL_PATH, subscription=False, timeout=90)
             log.info("✅ Group auth but no subscription → %s", r.status_code)
 
         finally:
@@ -1561,8 +1592,8 @@ class TestE2ESubscriptionFlow:
         original_access = _snapshot_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
 
         try:
-            # Create service account
-            token = _create_sa_token(sa_name, namespace=ns)
+            # Create service account and get OC token for maas-api
+            oc_token = _create_sa_token(sa_name, namespace=ns)
 
             # Delete simulator-access so system:authenticated doesn't grant auth
             _delete_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
@@ -1575,9 +1606,12 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
+            # Create API key for inference
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
             # Test: Has subscription via group but no auth → 403
             log.info("Testing: Group-based subscription but no auth")
-            r = _poll_status(token, 403, path=MODEL_PATH, subscription=subscription_name, timeout=90)
+            r = _poll_status(api_key, 403, path=MODEL_PATH, subscription=subscription_name, timeout=90)
             log.info("✅ Group subscription but no auth → %s", r.status_code)
 
         finally:
