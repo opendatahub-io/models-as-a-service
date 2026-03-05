@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
@@ -15,6 +16,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
@@ -31,6 +33,9 @@ type ClusterConfig struct {
 
 	// MaaSSubscriptionLister lists MaaSSubscription CRs from the informer cache for subscription selection.
 	MaaSSubscriptionLister subscription.Lister
+
+	// AdminChecker checks if a user is an admin based on Auth CR (services.opendatahub.io/v1alpha1).
+	AdminChecker *auth.AdminChecker
 
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})
@@ -115,6 +120,16 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 	subscriptionInformer := maasDynamicFactory.ForResource(subscriptionGVR)
 	maasSubscriptionListerVal := &subscriptionLister{lister: subscriptionInformer.Lister()}
 
+	// Auth CR informer (cluster-scoped); used to determine admin groups from services.platform.opendatahub.io/v1alpha1/Auth.
+	// The Auth CR is a singleton named "auth" that defines adminGroups and allowedGroups.
+	authGVR := schema.GroupVersionResource{
+		Group:    "services.platform.opendatahub.io",
+		Version:  "v1alpha1",
+		Resource: "auths",
+	}
+	authInformer := maasDynamicFactory.ForResource(authGVR)
+	adminCheckerVal := auth.NewAdminChecker(authInformer.Lister())
+
 	return &ClusterConfig{
 		ClientSet: clientset,
 
@@ -124,6 +139,7 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 
 		MaaSModelRefLister:     maasModelRefListerVal,
 		MaaSSubscriptionLister: maasSubscriptionListerVal,
+		AdminChecker:           adminCheckerVal,
 
 		informersSynced: []cache.InformerSynced{
 			cmInformer.Informer().HasSynced,
@@ -131,6 +147,7 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 			saInformer.Informer().HasSynced,
 			maasInformer.Informer().HasSynced,
 			subscriptionInformer.Informer().HasSynced,
+			authInformer.Informer().HasSynced,
 		},
 		startFuncs: []func(<-chan struct{}){
 			coreFactory.Start,

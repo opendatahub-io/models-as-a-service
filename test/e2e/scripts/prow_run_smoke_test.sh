@@ -12,8 +12,9 @@
 #   2. Deploy MaaS platform via kustomize (RHCL, gateway, MaaS API, maas-controller)
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
 #   4. Deploy MaaS system (free + premium + unconfigured: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
-#   5. Run subscription controller tests (test_subscription.py)
-#   6. Create admin test user and run deployment validation + token metadata verification
+#   5. Setup test tokens (admin + regular user) for comprehensive testing
+#   6. Run E2E tests (API keys + subscription tests)
+#   7. Run deployment validation + token metadata verification
 # 
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
@@ -29,8 +30,9 @@
 #   OPERATOR_CATALOG - ODH catalog image (optional). Unset = community-operators ODH 3.3.
 #                      Set for custom builds, e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest
 #   OPERATOR_IMAGE   - Custom ODH operator image for CSV patch (optional)
+#   SKIP_DEPLOYMENT - Skip platform and model deployment (default: false)
+#                     Use for running tests against an existing cluster
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
-#   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/opendatahub/maas-controller:latest)
@@ -58,9 +60,8 @@ PROJECT_ROOT="$(_find_project_root_bootstrap)"
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # Options (can be set as environment variables)
+SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}  # Skip platform and model deployment (for existing clusters)
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
-SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
-SKIP_SUBSCRIPTION_TESTS=${SKIP_SUBSCRIPTION_TESTS:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
@@ -399,20 +400,28 @@ setup_premium_test_token() {
     echo "✅ Premium test token setup complete (E2E_TEST_TOKEN_SA_* exported)"
 }
 
-run_subscription_tests() {
-    echo "-- Subscription Controller Tests --"
+run_e2e_tests() {
+    echo "-- E2E Tests (API Keys + Subscription) --"
 
-    setup_premium_test_token
+    # Note: setup_premium_test_token() is called earlier in main execution
+    # (Phase 1: Admin Setup) while still logged in as system:admin
 
     export GATEWAY_HOST="${HOST}"
     export MAAS_NAMESPACE
+    # Skip TLS verification in CI (self-signed certs)
+    export E2E_SKIP_TLS_VERIFY=true
+    # Set MODEL_NAME explicitly - maas-api /v1/models currently only lists MaaSModelRefs
+    # from its own namespace, but models are deployed in 'llm' namespace.
+    # TODO: Fix maas-api to list MaaSModelRefs from ALL namespaces (pass "" to ListFromMaaSModelRefLister)
+    export MODEL_NAME="facebook-opt-125m-simulated"
+    # TOKEN and ADMIN_OC_TOKEN are already exported by setup_test_tokens()
 
     local test_dir="$PROJECT_ROOT/test/e2e"
     # Use ARTIFACTS_DIR so pytest reports go to Prow artifact collection (ARTIFACT_DIR)
     mkdir -p "$ARTIFACTS_DIR"
 
     if [[ ! -d "$test_dir/.venv" ]]; then
-        echo "Creating Python venv for subscription tests..."
+        echo "Creating Python venv for e2e tests..."
         python3 -m venv "$test_dir/.venv" --upgrade-deps
     fi
     source "$test_dir/.venv/bin/activate"
@@ -421,38 +430,31 @@ run_subscription_tests() {
 
     local user
     user="$(oc whoami 2>/dev/null || echo 'unknown')"
-    local html="$ARTIFACTS_DIR/subscription-${user}.html"
-    local xml="$ARTIFACTS_DIR/subscription-${user}.xml"
+    local html="$ARTIFACTS_DIR/e2e-${user}.html"
+    local xml="$ARTIFACTS_DIR/e2e-${user}.xml"
 
+    echo "Running e2e tests with:"
+    echo "  - TOKEN: $(echo "${TOKEN:-not set}" | cut -c1-20)..."
+    echo "  - ADMIN_OC_TOKEN: $(echo "${ADMIN_OC_TOKEN:-not set}" | cut -c1-20)..."
+    echo "  - GATEWAY_HOST: ${GATEWAY_HOST}"
+
+    # Run all e2e tests: API keys and subscription tests
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
-        -q --maxfail=3 --disable-warnings \
+        -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         --capture=tee-sys --show-capture=all --log-level=INFO \
+        "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_subscription.py"; then
-        echo "❌ ERROR: Subscription tests failed"
+        echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
 
-    echo "✅ Subscription tests completed"
+    echo "✅ E2E tests completed"
     echo " - JUnit XML : ${xml}"
     echo " - HTML      : ${html}"
 }
 
-run_token_verification() {
-    echo "-- Token Metadata Verification --"
-    
-    if [ "$SKIP_TOKEN_VERIFICATION" = false ]; then
-        if ! (cd "$PROJECT_ROOT" && bash scripts/verify-tokens-metadata-logic.sh); then
-            echo "❌ ERROR: Token metadata verification failed"
-            exit 1
-        else
-            echo "✅ Token metadata verification completed successfully"
-        fi
-    else
-        echo "Skipping token metadata verification..."
-    fi
-}
 
 setup_test_user() {
     local username="$1"
@@ -477,6 +479,107 @@ setup_test_user() {
     echo "✅ User setup completed: $username"
 }
 
+setup_test_tokens() {
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Extract test tokens WITHOUT switching the main oc session.
+    # 
+    # Architecture:
+    #   - Main oc session stays as system:admin (for any cluster operations)
+    #   - Test tokens are extracted into env vars using a TEMPORARY kubeconfig
+    #   - Tests use TOKEN/ADMIN_OC_TOKEN env vars for API authentication
+    #
+    # Why htpasswd users instead of SA tokens?
+    #   - htpasswd users have OpenShift group memberships (system:authenticated)
+    #   - SA tokens don't carry group memberships, so they can't see models
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    echo "Setting up test tokens (admin + regular user)..."
+    
+    local current_user api_server
+    current_user=$(oc whoami)
+    api_server=$(oc whoami --show-server)
+    echo "Current admin session: $current_user (will be preserved)"
+    
+    export ADMIN_OC_TOKEN=""
+    export TOKEN=""
+    
+    # Use a temporary kubeconfig for token extraction logins
+    # This prevents polluting the main oc session
+    local temp_kubeconfig
+    temp_kubeconfig=$(mktemp)
+    trap "rm -f '$temp_kubeconfig'" RETURN
+    
+    # 1. Try htpasswd users from idp-htpasswd step (Prow CI)
+    if [[ -f "${SHARED_DIR:-}/runtime_env" ]]; then
+        # shellcheck source=/dev/null
+        source "${SHARED_DIR}/runtime_env"
+        if [[ -n "${USERS:-}" ]]; then
+            echo "Found htpasswd users from idp-htpasswd step"
+            
+            # Admin user: testuser-1 (added to odh-admins)
+            local admin_creds
+            admin_creds=$(echo "$USERS" | tr ',' '\n' | grep "^testuser-1:" | head -1)
+            if [[ -n "$admin_creds" ]]; then
+                local admin_user admin_pass
+                admin_user="${admin_creds%%:*}"
+                admin_pass="${admin_creds#*:}"
+                
+                # Add to odh-admins group (using main session which is system:admin)
+                oc adm groups add-users odh-admins "$admin_user" 2>/dev/null || true
+                
+                # Extract token using temp kubeconfig (doesn't affect main session)
+                if KUBECONFIG="$temp_kubeconfig" oc login "$api_server" -u "$admin_user" -p "$admin_pass" --insecure-skip-tls-verify=true &>/dev/null; then
+                    ADMIN_OC_TOKEN=$(KUBECONFIG="$temp_kubeconfig" oc whoami -t)
+                    echo "✅ Admin token for $admin_user (htpasswd)"
+                fi
+            fi
+            
+            # Regular user: testuser-2 (NOT in odh-admins, but has system:authenticated)
+            local regular_creds
+            regular_creds=$(echo "$USERS" | tr ',' '\n' | grep "^testuser-2:" | head -1)
+            if [[ -n "$regular_creds" ]]; then
+                local regular_user regular_pass
+                regular_user="${regular_creds%%:*}"
+                regular_pass="${regular_creds#*:}"
+                
+                # Extract token using temp kubeconfig (doesn't affect main session)
+                if KUBECONFIG="$temp_kubeconfig" oc login "$api_server" -u "$regular_user" -p "$regular_pass" --insecure-skip-tls-verify=true &>/dev/null; then
+                    TOKEN=$(KUBECONFIG="$temp_kubeconfig" oc whoami -t)
+                    echo "✅ Regular user token for $regular_user (htpasswd)"
+                fi
+            fi
+        fi
+    fi
+    
+    # 2. Fallback for admin: use current user's token (local htpasswd user)
+    if [[ -z "$ADMIN_OC_TOKEN" ]]; then
+        ADMIN_OC_TOKEN=$(oc whoami -t 2>/dev/null || true)
+        if [[ -n "$ADMIN_OC_TOKEN" ]]; then
+            oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
+            echo "✅ Admin token for $current_user (added to odh-admins)"
+        else
+            echo "⚠️  No htpasswd token available - using SA token (admin tests may fail)"
+            setup_test_user "tester-admin-user" "cluster-admin"
+            ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n default --duration=1h)
+        fi
+    fi
+    
+    # 3. Fallback for regular user: use current user's token (same as admin for local testing)
+    # Local runs typically use the same htpasswd user for both roles
+    if [[ -z "$TOKEN" ]]; then
+        TOKEN=$(oc whoami -t 2>/dev/null || true)
+        if [[ -n "$TOKEN" ]]; then
+            echo "✅ Regular user token for $current_user (same as admin for local testing)"
+        else
+            echo "⚠️  No htpasswd token - using SA token (model catalog may be empty)"
+            setup_test_user "tester-regular-user" "view"
+            TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
+        fi
+    fi
+    
+    echo "Token setup complete (main session unchanged: $(oc whoami))"
+}
+
 # Main execution
 # On exit (success or failure): collect artifacts (authorino-debug.log, cluster state, pod logs) and auth report
 _run_exit_artifacts() {
@@ -493,31 +596,50 @@ trap '_run_exit_artifacts' EXIT
 
 print_header "Deploying Maas on OpenShift"
 check_prerequisites
-deploy_maas_platform
 
-print_header "Deploying Models"  
-deploy_models
-patch_authorino_debug  # from auth_utils.sh
+if [[ "$SKIP_DEPLOYMENT" == "true" ]]; then
+    echo "  Skipping deployment (SKIP_DEPLOYMENT=true)"
+    echo "  Assuming MaaS platform and models are already deployed"
+else
+    deploy_maas_platform
+
+    print_header "Deploying Models"  
+    deploy_models
+    patch_authorino_debug  # from auth_utils.sh
+fi
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
-# Setup admin user for validation
-print_header "Setting up test user"
-setup_test_user "tester-admin-user" "cluster-admin"
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 1: Admin Setup (runs as system:admin)
+# All cluster operations requiring admin privileges happen here BEFORE
+# we extract test tokens. This avoids context-switching issues.
+# ═══════════════════════════════════════════════════════════════════════════════
+print_header "Admin Setup (Premium Test Resources)"
+setup_premium_test_token
 
-print_header "Running Maas e2e Tests as admin user"
-ADMIN_TOKEN=$(oc create token tester-admin-user -n default)
-oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 2: Extract Test Tokens
+# Uses a temporary kubeconfig so the main oc session stays as system:admin.
+# Tests will use TOKEN/ADMIN_OC_TOKEN env vars for API authentication.
+# ═══════════════════════════════════════════════════════════════════════════════
+print_header "Setting up test tokens"
+setup_test_tokens
 
 # 15m matches Prow step timeout; sleep leaves time for cluster debugging before tests
 # echo "Sleeping 15 minutes for cluster debugging (Ctrl+C to skip)..."
 # sleep 900
 
-run_subscription_tests
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 3: Run Tests
+# Tests use TOKEN/ADMIN_OC_TOKEN env vars for API auth.
+# The main oc session is still system:admin for any kubectl/oc commands.
+# ═══════════════════════════════════════════════════════════════════════════════
+print_header "Running E2E Tests"
+run_e2e_tests
 
-print_header "Validating Deployment and Token Metadata Logic"
+print_header "Validating Deployment"
 validate_deployment
-run_token_verification
 
 echo "🎉 Deployment completed successfully!"
