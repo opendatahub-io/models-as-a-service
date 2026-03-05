@@ -6,5 +6,5 @@ metadata:
 
 resources:
   - ../../base/networking/maas
-  - ../../../maas-controller/config/default
+  - ../../base/maas-controller/default
   - ../../base/observability
