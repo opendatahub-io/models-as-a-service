@@ -268,10 +268,11 @@ def _get_auth_policies_for_model(model_ref):
         return []
     policies = json.loads(result.stdout).get("items", [])
     # Filter policies that reference this model
+    # MaaSAuthPolicy.spec.modelRefs is a list of strings
     return [
         p["metadata"]["name"]
         for p in policies
-        if model_ref in [ref.get("name", "") for ref in p.get("spec", {}).get("modelRefs", [])]
+        if model_ref in p.get("spec", {}).get("modelRefs", [])
     ]
 
 
@@ -286,6 +287,7 @@ def _get_subscriptions_for_model(model_ref):
         return []
     subscriptions = json.loads(result.stdout).get("items", [])
     # Filter subscriptions that reference this model
+    # MaaSSubscription.spec.modelRefs is a list of objects with 'name' field
     return [
         s["metadata"]["name"]
         for s in subscriptions
