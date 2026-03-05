@@ -47,26 +47,6 @@ type MaaSAuthPolicyReconciler struct {
 	// Used to construct the subscription selector endpoint URL.
 	MaaSAPINamespace string
 
-	// GatewayName is the name of the Gateway used for model HTTPRoutes (configurable via flags).
-	GatewayName string
-
-	// ClusterAudience is the OIDC audience of the cluster (configurable via flags).
-	// Standard clusters use "https://kubernetes.default.svc"; HyperShift/ROSA use a custom OIDC provider URL.
-	ClusterAudience string
-}
-
-func (r *MaaSAuthPolicyReconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return defaultGatewayName
-}
-
-func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
-	if r.ClusterAudience != "" {
-		return r.ClusterAudience
-	}
-	return defaultClusterAudience
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch;create;update;patch;delete
