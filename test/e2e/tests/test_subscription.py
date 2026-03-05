@@ -257,6 +257,42 @@ def _cr_exists(kind, name, namespace=None):
     return result.returncode == 0
 
 
+def _get_auth_policies_for_model(model_ref):
+    """Get all MaaSAuthPolicy CRs that reference the given model."""
+    namespace = _ns()
+    result = subprocess.run(
+        ["oc", "get", "maasauthpolicy", "-n", namespace, "-o", "json"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return []
+    policies = json.loads(result.stdout).get("items", [])
+    # Filter policies that reference this model
+    return [
+        p["metadata"]["name"]
+        for p in policies
+        if model_ref in [ref.get("name", "") for ref in p.get("spec", {}).get("modelRefs", [])]
+    ]
+
+
+def _get_subscriptions_for_model(model_ref):
+    """Get all MaaSSubscription CRs that reference the given model."""
+    namespace = _ns()
+    result = subprocess.run(
+        ["oc", "get", "maassubscription", "-n", namespace, "-o", "json"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return []
+    subscriptions = json.loads(result.stdout).get("items", [])
+    # Filter subscriptions that reference this model
+    return [
+        s["metadata"]["name"]
+        for s in subscriptions
+        if model_ref in [ref.get("name", "") for ref in s.get("spec", {}).get("modelRefs", [])]
+    ]
+
+
 def _subscription_for_path(path):
     """Return the X-MaaS-Subscription value for a given model path."""
     path = path or MODEL_PATH
