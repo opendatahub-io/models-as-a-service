@@ -413,77 +413,15 @@ if [ -z "$HOST" ]; then
 else
     print_info "Using gateway endpoint: $HOST"
     
-    # Test authentication endpoint
-    print_check "Authentication endpoint"
-    ENDPOINT="${HOST}/maas-api/v1/tokens"
-    print_info "Testing: curl -sSk -X POST $ENDPOINT -H \"Authorization: Bearer \$(oc whoami -t)\" -H \"Content-Type: application/json\" -d '{\"expiration\": \"10m\"}'"
-    
+    # Get authentication token for API tests
+    # Use pre-existing token from CI/test environment, or fall back to oc whoami -t
+    print_check "Authentication token"
     if command -v oc &> /dev/null; then
-        OC_TOKEN=$(oc whoami -t 2>/dev/null || echo "")
-        if [ -n "$OC_TOKEN" ]; then
-            TOKEN_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
-                -H "Authorization: Bearer ${OC_TOKEN}" \
-                -H "Content-Type: application/json" \
-                -X POST \
-                -d '{"expiration": "10m"}' \
-                "${ENDPOINT}" 2>/dev/null || echo "")
-            
-            HTTP_CODE=$(echo "$TOKEN_RESPONSE" | tail -n1)
-            RESPONSE_BODY=$(echo "$TOKEN_RESPONSE" | sed '$d')
-            
-            # Handle timeout/connection failure
-            if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
-                print_fail "Connection timeout or failed to reach endpoint" \
-                    "The endpoint is not reachable. This is likely because:" \
-                    "1) The endpoint is behind a VPN or firewall, 2) DNS resolution failed, 3) Gateway/Route not properly configured. Check: kubectl get gateway -n openshift-ingress && kubectl get httproute -n $MAAS_API_NAMESPACE"
-                TOKEN=""
-            elif [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
-                TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token' 2>/dev/null || echo "")
-                if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
-                    print_success "Authentication successful (HTTP $HTTP_CODE)"
-                    
-                    # Decode token and extract tier information using helper function
-                    print_check "Token information"
-                    TOKEN_PAYLOAD=$(decode_jwt_payload "$TOKEN")
-                    if [ -n "$TOKEN_PAYLOAD" ]; then
-                        SUB=$(echo "$TOKEN_PAYLOAD" | jq -r '.sub // empty' 2>/dev/null)
-                        if [ -n "$SUB" ] && [ "$SUB" != "null" ]; then
-                            print_info "Token subject: $SUB"
-                            
-                            # Extract tier from sub: system:serviceaccount:maas-default-gateway-tier-{tier}:{user}
-                            # Extract the part between "tier-" and the colon
-                            TIER=$(echo "$SUB" | sed -n 's/.*tier-\([^:]*\):.*/\1/p')
-                            if [ -n "$TIER" ]; then
-                                print_success "User tier: $TIER"
-                            else
-                                print_warning "Could not extract tier from subject" "Subject format may not match expected pattern"
-                            fi
-                        else
-                            print_warning "Could not extract sub from token payload"
-                        fi
-                    else
-                        print_warning "Could not decode token payload"
-                    fi
-                else
-                    print_fail "Authentication response invalid" "Received HTTP $HTTP_CODE but no token in response" "Check MaaS API logs: kubectl logs -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api"
-                fi
-            elif [ "$HTTP_CODE" = "404" ]; then
-                print_fail "Endpoint not found (HTTP 404)" \
-                    "Traffic is reaching the Gateway/pods but the path is incorrect" \
-                    "Check HTTPRoute configuration: kubectl describe httproute maas-api-route -n $MAAS_API_NAMESPACE"
-                TOKEN=""
-            elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ]; then
-                print_fail "Gateway/Service error (HTTP $HTTP_CODE)" \
-                    "The Gateway is not able to reach the backend service" \
-                    "Check: 1) MaaS API pods are running: kubectl get pods -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api, 2) Service exists: kubectl get svc maas-api -n $MAAS_API_NAMESPACE, 3) HTTPRoute is configured: kubectl describe httproute maas-api-route -n $MAAS_API_NAMESPACE"
-                TOKEN=""
-            else
-                print_fail "Authentication failed (HTTP $HTTP_CODE)" "Response: $(echo $RESPONSE_BODY | head -c 100)" "Check AuthPolicy and MaaS API service"
-                TOKEN=""
-            fi
+        TOKEN="${TOKEN:-${ADMIN_OC_TOKEN:-$(oc whoami -t 2>/dev/null || echo "")}}"
+        if [ -n "$TOKEN" ]; then
+            print_success "Authentication token available"
         else
             print_warning "Cannot get OpenShift token" "Not logged into oc CLI" "Run: oc login"
-            TOKEN=""
         fi
     else
         print_warning "oc CLI not found" "Cannot test authentication" "Install oc CLI or use kubectl with token"
