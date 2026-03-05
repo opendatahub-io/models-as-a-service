@@ -45,8 +45,8 @@ func init() {
 
 // --- Test helpers ---
 
-// newMaasModel is a helper function to create a MaasModel resource.
-func newMaaSModel(name, ns, kind, refName, refNS string) *maasv1alpha1.MaaSModelRef {
+// newMaasModelRef is a helper function to create a MaasModelRef resource.
+func newMaaSModelRef(name, ns, kind, refName, refNS string) *maasv1alpha1.MaaSModelRef {
 	m := &maasv1alpha1.MaaSModelRef{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: maasv1alpha1.MaaSModelSpec{
@@ -103,7 +103,7 @@ func newLLMISvcRoute(llmisvcName, ns string) *gatewayapiv1.HTTPRoute {
 }
 
 // newTestReconciler creates a MaaSModelReconciler with a fake client pre-configured
-// with the field index and status subresource for MaaSModel. LLMInferenceService is
+// with the field index and status subresource for MaaSModelRef. LLMInferenceService is
 // intentionally NOT a status subresource so that plain Update() can set its status.
 func newTestReconciler(objects ...client.Object) (*MaaSModelRefReconciler, client.Client) {
 	c := fake.NewClientBuilder().
@@ -166,7 +166,7 @@ func TestMaaSModelRefReconciler_gatewayNamespace(t *testing.T) {
 }
 
 // TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady verifies that when
-// a backing LLMInferenceService transitions from not-ready to ready, the MaaSModel
+// a backing LLMInferenceService transitions from not-ready to ready, the MaaSModelRef
 // is automatically re-reconciled and moves from Pending to Ready.
 func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing.T) {
 	ctx := context.Background()
@@ -178,7 +178,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 
 	route := newLLMISvcRoute(llmisvcName, ns)
 	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionFalse)
-	model := newMaaSModel(modelName, ns, "LLMInferenceService", llmisvcName, "")
+	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName, "")
 	r, c := newTestReconciler(model, route, llmisvc)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
@@ -209,7 +209,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 
 	requests := r.mapLLMISvcToMaaSModels(ctx, currentLLMISvc)
 	if len(requests) == 0 {
-		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModel referencing this LLMInferenceService should have been enqueued")
+		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModelRef referencing this LLMInferenceService should have been enqueued")
 	}
 	for _, watchReq := range requests {
 		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: watchReq.NamespacedName}); err != nil {
@@ -219,7 +219,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 
 	final := &maasv1alpha1.MaaSModelRef{}
 	if err := c.Get(ctx, req.NamespacedName, final); err != nil {
-		t.Fatalf("Get MaaSModel after llmisvc became ready: %v", err)
+		t.Fatalf("Get MaaSModelRef after llmisvc became ready: %v", err)
 	}
 	if final.Status.Phase != "Ready" {
 		t.Errorf("after llmisvc became ready: Phase = %q, want Ready", final.Status.Phase)
@@ -228,7 +228,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 }
 
 // TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending verifies that when
-// a backing LLMInferenceService transitions from ready to not-ready, the MaaSModel
+// a backing LLMInferenceService transitions from ready to not-ready, the MaaSModelRef
 // is automatically re-reconciled and moves from Ready back to Pending.
 func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testing.T) {
 	ctx := context.Background()
@@ -240,7 +240,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 
 	route := newLLMISvcRoute(llmisvcName, ns)
 	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionTrue)
-	model := newMaaSModel(modelName, ns, "LLMInferenceService", llmisvcName, "")
+	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName, "")
 	r, c := newTestReconciler(model, route, llmisvc)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
@@ -271,7 +271,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 
 	requests := r.mapLLMISvcToMaaSModels(ctx, currentLLMISvc)
 	if len(requests) == 0 {
-		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModel referencing this LLMInferenceService should have been enqueued")
+		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModelRef referencing this LLMInferenceService should have been enqueued")
 	}
 	for _, watchReq := range requests {
 		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: watchReq.NamespacedName}); err != nil {
@@ -281,7 +281,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 
 	final := &maasv1alpha1.MaaSModelRef{}
 	if err := c.Get(ctx, req.NamespacedName, final); err != nil {
-		t.Fatalf("Get MaaSModel after llmisvc became not-ready: %v", err)
+		t.Fatalf("Get MaaSModelRef after llmisvc became not-ready: %v", err)
 	}
 	if final.Status.Phase != "Pending" {
 		t.Errorf("after llmisvc became not-ready: Phase = %q, want Pending", final.Status.Phase)
@@ -294,7 +294,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 func TestMapLLMISvcToMaaSModels(t *testing.T) {
 	t.Run("different_kind_not_enqueued", func(t *testing.T) {
 		svc := newLLMISvc("my-svc", "default")
-		model := newMaaSModel("ext-model", "default", "ExternalModel", "my-svc", "")
+		model := newMaaSModelRef("ext-model", "default", "ExternalModel", "my-svc", "")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 0 {
@@ -304,7 +304,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 
 	t.Run("different_name_not_enqueued", func(t *testing.T) {
 		svc := newLLMISvc("svc-beta", "default")
-		model := newMaaSModel("my-model", "default", "LLMInferenceService", "svc-alpha", "")
+		model := newMaaSModelRef("my-model", "default", "LLMInferenceService", "svc-alpha", "")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 0 {
@@ -314,7 +314,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 
 	t.Run("cross_namespace_match", func(t *testing.T) {
 		svc := newLLMISvc("shared-svc", "ns-b")
-		model := newMaaSModel("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
+		model := newMaaSModelRef("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 1 {
@@ -327,7 +327,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 
 	t.Run("cross_namespace_no_match", func(t *testing.T) {
 		svc := newLLMISvc("shared-svc", "ns-c")
-		model := newMaaSModel("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
+		model := newMaaSModelRef("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 0 {
@@ -337,8 +337,8 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 
 	t.Run("multiple_models_same_llmisvc", func(t *testing.T) {
 		svc := newLLMISvc("shared-svc", "default")
-		model1 := newMaaSModel("model-1", "default", "LLMInferenceService", "shared-svc", "")
-		model2 := newMaaSModel("model-2", "default", "LLMInferenceService", "shared-svc", "")
+		model1 := newMaaSModelRef("model-1", "default", "LLMInferenceService", "shared-svc", "")
+		model2 := newMaaSModelRef("model-2", "default", "LLMInferenceService", "shared-svc", "")
 		r, _ := newTestReconciler(model1, model2, svc)
 		requests := r.mapLLMISvcToMaaSModels(context.Background(), svc)
 		if len(requests) != 2 {
@@ -447,7 +447,7 @@ func newPreexistingGeneratedPolicy(gvk schema.GroupVersionKind, name, namespace,
 
 // TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation verifies that
 // deleteGeneratedPoliciesByLabel respects the opt-out annotation on both
-// AuthPolicy and TokenRateLimitPolicy resources when a MaaSModel is deleted.
+// AuthPolicy and TokenRateLimitPolicy resources when a MaaSModelRef is deleted.
 func TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation(t *testing.T) {
 	const (
 		modelName  = "llm"
