@@ -85,9 +85,9 @@ kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || t
 if kubectl get namespace opendatahub &>/dev/null; then
     echo "   opendatahub stuck terminating, removing finalizers..."
     # Remove finalizers from MaaS CRs (common blockers)
-    for name in $(kubectl get maasmodels.maas.opendatahub.io -n opendatahub --no-headers 2>/dev/null | awk '{print $1}'); do
-        echo "   Removing finalizers from MaaSModel $name..."
-        kubectl patch maasmodels.maas.opendatahub.io "$name" -n opendatahub --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+    for name in $(kubectl get maasmodelrefs.maas.opendatahub.io -n opendatahub --no-headers 2>/dev/null | awk '{print $1}'); do
+        echo "   Removing finalizers from MaaSModelRef $name..."
+        kubectl patch maasmodelrefs.maas.opendatahub.io "$name" -n opendatahub --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
     done
     # Remove finalizers from namespace itself (requires jq)
     if kubectl get namespace opendatahub &>/dev/null && command -v jq &>/dev/null; then

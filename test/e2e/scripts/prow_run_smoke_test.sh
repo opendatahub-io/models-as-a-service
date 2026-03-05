@@ -421,6 +421,7 @@ run_e2e_tests() {
     # (Phase 1: Admin Setup) while still logged in as system:admin
 
     export GATEWAY_HOST="${HOST}"
+    export DEPLOYMENT_NAMESPACE
     export MAAS_SYSTEM_NAMESPACE
     # Skip TLS verification in CI (self-signed certs)
     export E2E_SKIP_TLS_VERIFY=true

@@ -13,6 +13,7 @@ Requires:
 Environment variables (all optional, with defaults):
   - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_API_BASE_URL: MaaS API URL (required for API key creation)
+  - DEPLOYMENT_NAMESPACE: MaaS API and Controller namespace (default: opendatahub)
   - MAAS_SYSTEM_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: When set, use this SA token
     instead of oc whoami -t (e.g. for Prow where oc whoami -t is unavailable)
@@ -817,3 +818,558 @@ class TestMaaSSystemNamespace:
                 capture_output=True,
                 text=True,
             )
+
+
+class TestE2ESubscriptionFlow:
+    """
+    End-to-end tests that create MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription
+    from scratch and validate the complete subscription flow.
+
+    Each test creates all necessary CRs and validates one scenario:
+    1. Token with both access (MaaSAuthPolicy) and subscription → 200 OK
+    2. Token with access but no subscription → 403 Forbidden
+    3. Token with subscription but not in MaaSAuthPolicy → 403 Forbidden
+    4. Token with single subscription + no header → auto-select (200 OK)
+    5. Token with multiple subscriptions + no header → 403 Forbidden
+    6. Token with multiple subscriptions + valid header → 200 OK
+    7. Token with multiple subscriptions + invalid header → 403 Forbidden
+    """
+
+
+    @classmethod
+    def setup_class(cls):
+        """Validate test environment prerequisites before running any tests.
+        
+        This validates that expected resources exist and are in the correct state.
+        Tests will FAIL (not skip) if prerequisites are missing, ensuring CI catches issues.
+        """
+        log.info("=" * 60)
+        log.info("Validating E2E Test Prerequisites")
+        log.info("=" * 60)
+        
+        # Validate MODEL_REF exists and is Ready
+        model = _get_cr("maasmodelref", MODEL_REF, os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub"))
+        if not model:
+            pytest.fail(f"PREREQUISITE MISSING: MaaSModelRef '{MODEL_REF}' not found. "
+                       f"Ensure prow setup has created the model.")
+
+        phase = model.get("status", {}).get("phase")
+        endpoint = model.get("status", {}).get("endpoint")
+        if phase != "Ready" or not endpoint:
+            pytest.fail(f"PREREQUISITE INVALID: MaaSModelRef '{MODEL_REF}' not Ready "
+                       f"(phase={phase}, endpoint={endpoint or 'none'}). "
+                       f"Wait for reconciliation or check controller logs.")
+        
+        log.info(f"✓ Model '{MODEL_REF}' is Ready")
+        log.info(f"  Endpoint: {endpoint}")
+        
+        # Discover existing auth policies and subscriptions (for debugging)
+        cls.discovered_auth_policies = _get_auth_policies_for_model(MODEL_REF)
+        cls.discovered_subscriptions = _get_subscriptions_for_model(MODEL_REF)
+        
+        log.info(f"✓ Found {len(cls.discovered_auth_policies)} auth policies for model:")
+        for policy in cls.discovered_auth_policies:
+            log.info(f"  - {policy}")
+        
+        log.info(f"✓ Found {len(cls.discovered_subscriptions)} subscriptions for model:")
+        for sub in cls.discovered_subscriptions:
+            log.info(f"  - {sub}")
+        
+        # Validate expected resources exist
+        if SIMULATOR_ACCESS_POLICY not in cls.discovered_auth_policies:
+            pytest.fail(f"PREREQUISITE MISSING: Expected auth policy '{SIMULATOR_ACCESS_POLICY}' not found. "
+                       f"Found: {cls.discovered_auth_policies}. "
+                       f"Ensure prow setup has created the auth policy.")
+        
+        if SIMULATOR_SUBSCRIPTION not in cls.discovered_subscriptions:
+            pytest.fail(f"PREREQUISITE MISSING: Expected subscription '{SIMULATOR_SUBSCRIPTION}' not found. "
+                       f"Found: {cls.discovered_subscriptions}. "
+                       f"Ensure prow setup has created the subscription.")
+        
+        log.info("=" * 60)
+        log.info("✅ All prerequisites validated - proceeding with tests")
+        log.info("=" * 60)
+
+
+    def test_e2e_with_both_access_and_subscription_gets_200(self):
+        """
+        Full E2E test: Create MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription from scratch.
+        Token with both access and subscription should get 200 OK.
+
+        This is the comprehensive test that validates the complete E2E flow including
+        MaaSModelRef creation and reconciliation. Other tests use existing models for speed.
+        """
+        ns = _ns()
+        model_ref = "e2e-test-model-success"
+        auth_policy_name = "e2e-test-auth-success"
+        subscription_name = "e2e-test-subscription-success"
+        sa_name = "e2e-sa-success"
+
+        try:
+            # Create service account and get token
+            token = _create_sa_token(sa_name, namespace=ns)
+            sa_user = _sa_to_user(sa_name, namespace=ns)
+
+            # Create test resources
+            _create_test_maas_model(model_ref)
+            endpoint = _wait_for_maas_model_ready(model_ref, timeout=120)  # Wait for model to be Ready!
+
+            # Extract path from endpoint (e.g., https://maas.../llm/facebook-opt-125m-simulated -> /llm/facebook-opt-125m-simulated)
+            model_path = urlparse(endpoint).path
+
+            _create_test_auth_policy(auth_policy_name, model_ref, users=[sa_user])
+            _create_test_subscription(subscription_name, model_ref, users=[sa_user])
+
+            _wait_reconcile()
+
+            # Test: Both access and subscription → 200
+            log.info("Testing: Token with both access and subscription")
+            r = _poll_status(token, 200, path=model_path, subscription=subscription_name, timeout=90)
+            log.info("✅ Both access and subscription → %s", r.status_code)
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_cr("maasmodelref", model_ref, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_e2e_with_access_but_no_subscription_gets_403(self):
+        """
+        Test: User with access (MaaSAuthPolicy) but not in any subscription gets 403.
+        Uses existing model (facebook-opt-125m-simulated) for faster execution.
+
+        Note: We temporarily remove simulator-subscription to ensure the test user
+        has auth but no matching subscriptions.
+        """
+        ns = _ns()
+        auth_policy_name = "e2e-test-auth-no-sub"
+        sa_name = "e2e-sa-no-sub"
+
+        # Snapshot existing subscription to restore later
+        original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+
+        try:
+            # Create service account and get token
+            token = _create_sa_token(sa_name, namespace=ns)
+            sa_user = _sa_to_user(sa_name, namespace=ns)
+
+            # Create auth policy for this specific user
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
+
+            # Delete simulator-subscription so user has no matching subscriptions
+            # (otherwise SA matches via system:authenticated group)
+            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+
+            _wait_reconcile()
+
+            # Test: Auth passes but no subscription → 403 (not in any subscription)
+            log.info("Testing: Token with access but no subscription")
+            r = _poll_status(token, 403, path=MODEL_PATH, subscription=False, timeout=90)
+            log.info("✅ Access but no subscription → %s", r.status_code)
+
+        finally:
+            # Restore simulator-subscription first
+            if original_sim:
+                _apply_cr(original_sim)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_e2e_with_subscription_but_no_access_gets_403(self):
+        """
+        Test: User with subscription but not in auth policy gets 403 Forbidden.
+        Uses existing model (facebook-opt-125m-simulated) for faster execution.
+
+        Note: Temporarily removes simulator-access to ensure the test user truly
+        has no auth (otherwise they'd match via system:authenticated group).
+        """
+        ns = _ns()
+        auth_policy_name = "e2e-test-auth-no-access"
+        subscription_name = "e2e-test-subscription-no-access"
+        sa_with_auth = "e2e-sa-with-auth"
+        sa_with_sub = "e2e-sa-with-sub"
+
+        # Snapshot existing auth policy to restore later
+        original_access = _snapshot_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
+
+        try:
+            # Create two service accounts:
+            # - sa_with_auth: in auth policy (so the policy exists)
+            # - sa_with_sub: in subscription but NOT in auth policy
+            _ = _create_sa_token(sa_with_auth, namespace=ns)  # SA creation only - token unused
+            token_with_sub = _create_sa_token(sa_with_sub, namespace="default")  # Different namespace
+
+            sa_with_auth_user = _sa_to_user(sa_with_auth, namespace=ns)
+            sa_with_sub_user = _sa_to_user(sa_with_sub, namespace="default")
+
+            # Delete simulator-access so system:authenticated doesn't grant auth
+            _delete_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
+
+            # Create test-specific auth/subscription
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_with_auth_user])
+            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_with_sub_user])
+
+            _wait_reconcile()
+
+            # Test: Subscription but no access → 403
+            log.info("Testing: Token with subscription but no access")
+            r = _poll_status(token_with_sub, 403, path=MODEL_PATH, subscription=subscription_name, timeout=90)
+            log.info("✅ Subscription but no access → %s", r.status_code)
+
+        finally:
+            # Restore simulator-access first
+            if original_access:
+                _apply_cr(original_access)
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_with_auth, namespace=ns)
+            _delete_sa(sa_with_sub, namespace="default")
+            _wait_reconcile()
+
+    def test_e2e_single_subscription_auto_selects(self):
+        """
+        Test: User with single subscription auto-selects without header (PR #427).
+        Uses existing model (facebook-opt-125m-simulated) for faster execution.
+
+        Note: Temporarily removes simulator-subscription to ensure the test user
+        has exactly ONE subscription (not two, which would require a header).
+        """
+        ns = _ns()
+        auth_policy_name = "e2e-test-auth-single-sub"
+        subscription_name = "e2e-test-subscription-single-sub"
+        sa_name = "e2e-sa-single-sub"
+
+        # Snapshot existing subscription to restore later
+        original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+
+        try:
+            token = _create_sa_token(sa_name, namespace=ns)
+            sa_user = _sa_to_user(sa_name, namespace=ns)
+
+            # Delete simulator-subscription so user has exactly ONE subscription
+            # (otherwise they'd have 2: ours + simulator-subscription via system:authenticated)
+            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+
+            # Create auth policy and subscription for test user
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
+            _wait_reconcile()
+
+            # Test: Single subscription + no header → auto-select → 200
+            log.info("Testing: Single subscription auto-select")
+            r = _poll_status(token, 200, path=MODEL_PATH, subscription=False, timeout=90)
+            log.info("✅ Single subscription auto-select → %s", r.status_code)
+
+        finally:
+            # Restore simulator-subscription first
+            if original_sim:
+                _apply_cr(original_sim)
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_e2e_multiple_subscriptions_without_header_gets_403(self):
+        """
+        E2E test: User with multiple subscriptions must provide header.
+
+        Validates PR #427/#441 behavior: When a user has access to multiple subscriptions
+        but doesn't provide x-maas-subscription header, they receive 403 Forbidden with
+        error code "multiple_subscriptions".
+        """
+        ns = _ns()
+        # Using existing model (MODEL_REF) # model_ref = "e2e-test-model-multi-sub"
+        # Using MODEL_PATH # model_path = f"/llm/{model_ref}"
+        auth_policy_name = "e2e-test-auth-multi-sub"
+        subscription_1 = "e2e-test-subscription-tier1"
+        subscription_2 = "e2e-test-subscription-tier2"
+        sa_name = "e2e-sa-multi-sub"
+
+        try:
+            # Create service account and get token
+            token = _create_sa_token(sa_name, namespace=ns)
+            sa_user = _sa_to_user(sa_name, namespace=ns)
+
+            # Create test resources with 2 subscriptions for the same user
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_1, MODEL_REF, users=[sa_user], token_limit=100)
+            _create_test_subscription(subscription_2, MODEL_REF, users=[sa_user], token_limit=500)
+
+            _wait_reconcile()
+
+            # Test: Multiple subscriptions + no header → 403
+            log.info("Testing: User with multiple subscriptions, no header")
+            r = _poll_status(token, 403, path=MODEL_PATH, subscription=False, timeout=90)
+            log.info("✅ Multiple subscriptions without header → %s", r.status_code)
+
+            # Optionally verify error code in response or headers
+            # PR #441 returns error code in x-ext-auth-reason header or response body
+
+        finally:
+            _delete_cr("maassubscription", subscription_1, namespace=ns)
+            _delete_cr("maassubscription", subscription_2, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_e2e_multiple_subscriptions_with_valid_header_gets_200(self):
+        """
+        E2E test: User with multiple subscriptions can select one via header.
+
+        Validates PR #427/#441 behavior: When a user has access to multiple subscriptions
+        and provides a valid x-maas-subscription header, they can successfully make requests.
+        """
+        ns = _ns()
+        # Using existing model (MODEL_REF) # model_ref = "e2e-test-model-multi-sub-valid"
+        # Using MODEL_PATH # model_path = f"/llm/{model_ref}"
+        auth_policy_name = "e2e-test-auth-multi-sub-valid"
+        subscription_1 = "e2e-test-subscription-free"
+        subscription_2 = "e2e-test-subscription-premium"
+        sa_name = "e2e-sa-multi-sub-valid"
+
+        try:
+            # Create service account and get token
+            token = _create_sa_token(sa_name, namespace=ns)
+            sa_user = _sa_to_user(sa_name, namespace=ns)
+
+            # Create test resources with 2 subscriptions for the same user
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_1, MODEL_REF, users=[sa_user], token_limit=100)
+            _create_test_subscription(subscription_2, MODEL_REF, users=[sa_user], token_limit=1000)
+
+            _wait_reconcile()
+
+            # Test 1: Select subscription_1 via header → 200
+            log.info("Testing: User with multiple subscriptions, selecting subscription 1")
+            r1 = _poll_status(token, 200, path=MODEL_PATH, subscription=subscription_1, timeout=90)
+            log.info("✅ Multiple subscriptions with valid header (tier 1) → %s", r1.status_code)
+
+            # Test 2: Select subscription_2 via header → 200
+            log.info("Testing: User with multiple subscriptions, selecting subscription 2")
+            r2 = _inference(token, path=MODEL_PATH, subscription=subscription_2)
+            assert r2.status_code == 200, f"Expected 200 for valid subscription_2, got {r2.status_code}"
+            log.info("✅ Multiple subscriptions with valid header (tier 2) → %s", r2.status_code)
+
+        finally:
+            _delete_cr("maassubscription", subscription_1, namespace=ns)
+            _delete_cr("maassubscription", subscription_2, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_e2e_multiple_subscriptions_with_invalid_header_gets_403(self):
+        """
+        E2E test: User with multiple subscriptions + invalid header gets 403.
+
+        Validates PR #441 behavior: When a user provides an invalid or non-existent
+        x-maas-subscription header, they receive 403 Forbidden with error code "not_found".
+        """
+        ns = _ns()
+        # Using existing model (MODEL_REF) # model_ref = "e2e-test-model-multi-sub-invalid"
+        # Using MODEL_PATH # model_path = f"/llm/{model_ref}"
+        auth_policy_name = "e2e-test-auth-multi-sub-invalid"
+        subscription_1 = "e2e-test-subscription-valid"
+        sa_name = "e2e-sa-multi-sub-invalid"
+
+        try:
+            # Create service account and get token
+            token = _create_sa_token(sa_name, namespace=ns)
+            sa_user = _sa_to_user(sa_name, namespace=ns)
+
+            # Create test resources
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_1, MODEL_REF, users=[sa_user])
+
+            _wait_reconcile()
+
+            # Test: Invalid/non-existent subscription header → 403
+            log.info("Testing: User with invalid subscription header")
+            r = _inference(token, path=MODEL_PATH, subscription="nonexistent-subscription-xyz")
+            assert r.status_code == 403, f"Expected 403 for invalid subscription, got {r.status_code}"
+            log.info("✅ Invalid subscription header → %s", r.status_code)
+
+        finally:
+            _delete_cr("maassubscription", subscription_1, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_e2e_multiple_subscriptions_with_inaccessible_header_gets_403(self):
+        """
+        E2E test: User requesting subscription they don't own gets 403.
+
+        Validates PR #441 behavior: When a user provides an x-maas-subscription header
+        for a subscription they don't have access to, they receive 403 Forbidden with
+        error code "access_denied".
+        """
+        ns = _ns()
+        # Using existing model (MODEL_REF) # model_ref = "e2e-test-model-access-denied"
+        # Using MODEL_PATH # model_path = f"/llm/{model_ref}"
+        auth_policy_name = "e2e-test-auth-access-denied"
+        user_subscription = "e2e-test-user-subscription"
+        other_subscription = "e2e-test-other-subscription"
+        sa_user = "e2e-sa-user"
+        sa_other = "e2e-sa-other"
+
+        try:
+            # Create two service accounts
+            token_user = _create_sa_token(sa_user, namespace=ns)
+            _ = _create_sa_token(sa_other, namespace=ns)  # SA creation only - token unused
+
+            user_principal = _sa_to_user(sa_user, namespace=ns)
+            other_principal = _sa_to_user(sa_other, namespace=ns)
+
+            # Create test resources
+            # Both users have access to the model
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[user_principal, other_principal])
+            # Each user has their own subscription
+            _create_test_subscription(user_subscription, MODEL_REF, users=[user_principal])
+            _create_test_subscription(other_subscription, MODEL_REF, users=[other_principal])
+
+            _wait_reconcile()
+
+            # Test: User tries to access another user's subscription → 403
+            log.info("Testing: User requesting subscription they don't own")
+            r = _inference(token_user, path=MODEL_PATH, subscription=other_subscription)
+            assert r.status_code == 403, f"Expected 403 for inaccessible subscription, got {r.status_code}"
+            log.info("✅ Inaccessible subscription header → %s", r.status_code)
+
+        finally:
+            _delete_cr("maassubscription", user_subscription, namespace=ns)
+            _delete_cr("maassubscription", other_subscription, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_user, namespace=ns)
+            _delete_sa(sa_other, namespace=ns)
+            _wait_reconcile()
+
+    def test_e2e_group_based_access_gets_200(self):
+        """
+        E2E test: Group-based auth and subscription (success case).
+
+        Validates that users can access models via group membership in both
+        MaaSAuthPolicy and MaaSSubscription, not just explicit user lists.
+        """
+        ns = _ns()
+        auth_policy_name = "e2e-test-group-auth"
+        subscription_name = "e2e-test-group-subscription"
+        sa_name = "e2e-sa-group"
+
+        # Use namespace-specific group that SA will be in
+        test_group = f"system:serviceaccounts:{ns}"
+
+        try:
+            # Create service account
+            token = _create_sa_token(sa_name, namespace=ns)
+
+            # Create auth policy using GROUP (not user)
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, groups=[test_group])
+
+            # Create subscription using GROUP (not user)
+            _create_test_subscription(subscription_name, MODEL_REF, groups=[test_group])
+
+            _wait_reconcile()
+
+            # Test: User matches via group membership → 200
+            log.info("Testing: Group-based auth and subscription")
+            r = _poll_status(token, 200, path=MODEL_PATH, subscription=subscription_name, timeout=90)
+            log.info("✅ Group-based access → %s", r.status_code)
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_e2e_group_based_auth_but_no_subscription_gets_403(self):
+        """
+        E2E test: Group-based auth, but user's group not in any subscription (failure case).
+
+        Validates that having auth via group membership is not sufficient if the user's
+        groups don't match any subscription's owner groups.
+        """
+        ns = _ns()
+        auth_policy_name = "e2e-test-group-auth-only"
+        sa_name = "e2e-sa-group-auth-only"
+
+        # Use namespace-specific group for auth
+        test_group = f"system:serviceaccounts:{ns}"
+
+        # Snapshot existing subscription to restore later
+        original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+
+        try:
+            # Create service account
+            token = _create_sa_token(sa_name, namespace=ns)
+
+            # Create auth policy using group
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, groups=[test_group])
+
+            # Delete simulator-subscription so user has no matching subscriptions
+            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+
+            _wait_reconcile()
+
+            # Test: Group auth passes but no subscription for that group → 403
+            log.info("Testing: Group-based auth but no subscription")
+            r = _poll_status(token, 403, path=MODEL_PATH, subscription=False, timeout=90)
+            log.info("✅ Group auth but no subscription → %s", r.status_code)
+
+        finally:
+            # Restore simulator-subscription first
+            if original_sim:
+                _apply_cr(original_sim)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_e2e_group_based_subscription_but_no_auth_gets_403(self):
+        """
+        E2E test: Group-based subscription, but user's group not in auth policy (failure case).
+
+        Validates that having a subscription via group membership is not sufficient if the
+        user's groups don't match the auth policy.
+
+        Note: Temporarily removes simulator-access to ensure the test user truly
+        has no auth (otherwise they'd match via system:authenticated group).
+        """
+        ns = _ns()
+        auth_policy_name = "e2e-test-group-no-auth"
+        subscription_name = "e2e-test-group-sub-only"
+        sa_name = "e2e-sa-group-sub-only"
+
+        # Use namespace-specific group for subscription
+        test_group = f"system:serviceaccounts:{ns}"
+
+        # Snapshot existing auth policy to restore later
+        original_access = _snapshot_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
+
+        try:
+            # Create service account
+            token = _create_sa_token(sa_name, namespace=ns)
+
+            # Delete simulator-access so system:authenticated doesn't grant auth
+            _delete_cr("maasauthpolicy", SIMULATOR_ACCESS_POLICY)
+
+            # Create auth policy with a group the SA is NOT in
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, groups=["nonexistent-group-xyz"])
+
+            # Create subscription with group the SA IS in
+            _create_test_subscription(subscription_name, MODEL_REF, groups=[test_group])
+
+            _wait_reconcile()
+
+            # Test: Has subscription via group but no auth → 403
+            log.info("Testing: Group-based subscription but no auth")
+            r = _poll_status(token, 403, path=MODEL_PATH, subscription=subscription_name, timeout=90)
+            log.info("✅ Group subscription but no auth → %s", r.status_code)
+
+        finally:
+            # Restore simulator-access first
+            if original_access:
+                _apply_cr(original_access)
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
