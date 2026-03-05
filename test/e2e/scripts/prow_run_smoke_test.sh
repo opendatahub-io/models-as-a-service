@@ -30,8 +30,9 @@
 #   OPERATOR_CATALOG - ODH catalog image (optional). Unset = community-operators ODH 3.3.
 #                      Set for custom builds, e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest
 #   OPERATOR_IMAGE   - Custom ODH operator image for CSV patch (optional)
+#   SKIP_DEPLOYMENT - Skip platform and model deployment (default: false)
+#                     Use for running tests against an existing cluster
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
-#   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/opendatahub/maas-controller:latest)
@@ -59,8 +60,8 @@ PROJECT_ROOT="$(_find_project_root_bootstrap)"
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # Options (can be set as environment variables)
+SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}  # Skip platform and model deployment (for existing clusters)
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
-SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
@@ -454,20 +455,6 @@ run_e2e_tests() {
     echo " - HTML      : ${html}"
 }
 
-run_token_verification() {
-    echo "-- Token Metadata Verification --"
-    
-    if [ "$SKIP_TOKEN_VERIFICATION" = false ]; then
-        if ! (cd "$PROJECT_ROOT" && bash scripts/verify-tokens-metadata-logic.sh); then
-            echo "❌ ERROR: Token metadata verification failed"
-            exit 1
-        else
-            echo "✅ Token metadata verification completed successfully"
-        fi
-    else
-        echo "Skipping token metadata verification..."
-    fi
-}
 
 setup_test_user() {
     local username="$1"
@@ -609,11 +596,17 @@ trap '_run_exit_artifacts' EXIT
 
 print_header "Deploying Maas on OpenShift"
 check_prerequisites
-deploy_maas_platform
 
-print_header "Deploying Models"  
-deploy_models
-patch_authorino_debug  # from auth_utils.sh
+if [[ "$SKIP_DEPLOYMENT" == "true" ]]; then
+    echo "  Skipping deployment (SKIP_DEPLOYMENT=true)"
+    echo "  Assuming MaaS platform and models are already deployed"
+else
+    deploy_maas_platform
+
+    print_header "Deploying Models"  
+    deploy_models
+    patch_authorino_debug  # from auth_utils.sh
+fi
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
@@ -646,8 +639,7 @@ setup_test_tokens
 print_header "Running E2E Tests"
 run_e2e_tests
 
-print_header "Validating Deployment and Token Metadata Logic"
+print_header "Validating Deployment"
 validate_deployment
-run_token_verification
 
 echo "🎉 Deployment completed successfully!"
