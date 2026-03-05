@@ -195,21 +195,23 @@ def _revoke_api_key(oc_token: str, key_id: str):
         log.warning(f"Failed to revoke API key {key_id}: {e}")
 
 
-# Cache for API keys to avoid creating too many during test runs
-_default_api_key_cache: str = None
+# Cache for API keys to avoid creating too many during test runs.
+# Keyed by process ID to ensure test isolation when running in parallel workers.
+_default_api_key_cache: dict = {}
 
 
 def _get_default_api_key() -> str:
     """Get or create an API key for the authenticated user.
     
     The key inherits the user's groups (typically includes system:authenticated).
-    Uses caching to avoid creating multiple keys during test runs.
+    Uses per-process caching to avoid creating multiple keys during test runs
+    while maintaining isolation between parallel test workers.
     """
-    global _default_api_key_cache
-    if _default_api_key_cache is None:
+    pid = os.getpid()
+    if pid not in _default_api_key_cache:
         oc_token = _get_cluster_token()
-        _default_api_key_cache = _create_api_key(oc_token, name="e2e-default-key")
-    return _default_api_key_cache
+        _default_api_key_cache[pid] = _create_api_key(oc_token, name="e2e-default-key")
+    return _default_api_key_cache[pid]
 
 
 def _delete_sa(sa_name, namespace=None):
@@ -318,7 +320,7 @@ def _poll_status(token, expected, path=None, extra_headers=None, subscription=No
     if last_err is not None:
         err_msg += f", last error: {last_err}"
     if last is None and last_err is None:
-        err_msg += f", no response (all requests may have raised non-RequestException)"
+        err_msg += ", no response (all requests may have raised non-RequestException)"
     raise AssertionError(err_msg)
 
 
@@ -502,7 +504,7 @@ class TestMultipleSubscriptionsPerModel:
             })
 
             api_key = _get_default_api_key()
-            r = _poll_status(api_key, 200, extra_headers={"x-maas-subscription": "e2e-high-tier"})
+            _poll_status(api_key, 200, extra_headers={"x-maas-subscription": "e2e-high-tier"})
 
             r2 = _inference(api_key)
             assert r2.status_code == 200, f"Expected 200 with auto-select, got {r2.status_code}"
@@ -599,7 +601,7 @@ class TestCascadeDeletion:
             _delete_cr("maassubscription", "e2e-temp-sub")
 
             api_key = _get_default_api_key()
-            r = _poll_status(api_key, 200)
+            _poll_status(api_key, 200)
         finally:
             _delete_cr("maassubscription", "e2e-temp-sub")
 

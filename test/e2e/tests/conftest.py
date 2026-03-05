@@ -1,4 +1,5 @@
 import os
+import subprocess
 import pytest
 import requests
 
@@ -64,7 +65,8 @@ def token() -> str:
         return tok
 
     # Fallback: get OC token directly
-    tok = os.popen("oc whoami -t").read().strip()
+    result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
+    tok = result.stdout.strip()
     if not tok:
         raise RuntimeError("Could not obtain cluster token via `oc whoami -t`. Set TOKEN env var or login to OpenShift.")
 

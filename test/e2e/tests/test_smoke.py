@@ -34,7 +34,8 @@ def test_tokens_endpoint_replaced_by_api_keys(maas_api_base_url: str):
     url = f"{maas_api_base_url}/v1/tokens"
     r = requests.post(url, json={"expiration": "1m"}, timeout=20, verify=TLS_VERIFY)
     msg = f"[token] POST {url} (no auth) -> {r.status_code}"
-    log.info(msg); print(msg)
+    log.info(msg)
+    print(msg)
 
     # 401/404/405 all indicate the old token minting endpoint is gone/protected
     assert r.status_code in (401, 404, 405), f"Expected 401/404/405 (endpoint replaced), got {r.status_code}: {r.text[:400]}"
@@ -81,7 +82,8 @@ def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict, mo
     """
     r = chat("Say 'hello' in one word.", model_v1, api_key_headers, model_name=model_name)
     msg = f"[chat] POST /chat/completions -> {r.status_code}"
-    log.info(msg); print(msg)
+    log.info(msg)
+    print(msg)
     assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
 
 def test_legacy_completions_optionally(model_v1: str, api_key_headers: dict, model_name: str):
@@ -91,5 +93,6 @@ def test_legacy_completions_optionally(model_v1: str, api_key_headers: dict, mod
     """
     r = completions("Say hello in one word.", model_v1, api_key_headers, model_name=model_name)
     msg = f"[legacy] POST /completions -> {r.status_code}"
-    log.info(msg); print(msg)
+    log.info(msg)
+    print(msg)
     assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"

@@ -408,6 +408,10 @@ run_e2e_tests() {
     export MAAS_NAMESPACE
     # Skip TLS verification in CI (self-signed certs)
     export E2E_SKIP_TLS_VERIFY=true
+    # Set MODEL_NAME explicitly - maas-api /v1/models currently only lists MaaSModelRefs
+    # from its own namespace, but models are deployed in 'llm' namespace.
+    # TODO: Fix maas-api to list MaaSModelRefs from ALL namespaces (pass "" to ListFromMaaSModelRefLister)
+    export MODEL_NAME="facebook-opt-125m-simulated"
     # TOKEN and ADMIN_OC_TOKEN are already exported by setup_test_tokens()
 
     local test_dir="$PROJECT_ROOT/test/e2e"
@@ -541,8 +545,12 @@ setup_test_tokens() {
                 fi
             fi
             
-            # Restore kubeconfig
-            export KUBECONFIG="${SHARED_DIR}/kubeconfig"
+            # Restore original kubeconfig
+            if [[ -n "$original_kubeconfig" ]]; then
+                export KUBECONFIG="$original_kubeconfig"
+            else
+                unset KUBECONFIG
+            fi
         fi
     fi
     

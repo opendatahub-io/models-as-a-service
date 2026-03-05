@@ -445,7 +445,7 @@ class TestAPIKeyModelInference:
         )
 
         assert r_revoked.status_code == 403, f"Expected 403 for revoked key, got {r_revoked.status_code}: {r_revoked.text}"
-        print(f"[inference] Revoked key correctly rejected with 403")
+        print("[inference] Revoked key correctly rejected with 403")
 
     def test_api_key_chat_completions(
         self,
@@ -514,7 +514,7 @@ class TestAPIKeyModelInference:
         )
 
         assert r.status_code == 200, f"Expected 200 with explicit subscription, got {r.status_code}: {r.text}"
-        print(f"[inference] API key with x-maas-subscription header succeeded")
+        print("[inference] API key with x-maas-subscription header succeeded")
 
     def test_api_key_with_invalid_subscription_header(
         self,
