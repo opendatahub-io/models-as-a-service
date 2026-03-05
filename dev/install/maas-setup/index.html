@@ -763,6 +763,39 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enable-maas-in-datasciencecluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enable MaaS in DataScienceCluster
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#manual-installation-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Installation Steps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#install-gateway-authpolicy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1380,34 +1413,6 @@
 
               
             
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../advanced-administration/storage-configuration/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Storage Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
           </ul>
         </nav>
       
@@ -1539,6 +1544,39 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enable-maas-in-datasciencecluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enable MaaS in DataScienceCluster
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#manual-installation-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Installation Steps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#install-gateway-authpolicy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1581,14 +1619,23 @@
 
 
 <h1 id="install-maas-components">Install MaaS Components</h1>
-<p>After enabling MaaS in your DataScienceCluster (set <code>modelsAsService.managementState: Managed</code>
+<h2 id="prerequisites">Prerequisites</h2>
+<div class="admonition warning">
+<p class="admonition-title">Database Required</p>
+<p>Before enabling MaaS, you <strong>must</strong> create the <code>maas-db-config</code> Secret with your PostgreSQL database connection URL.</p>
+<p>See the <a href="../prerequisites/#database-prerequisite">Database Prerequisites</a> for detailed setup instructions and database options.</p>
+</div>
+<h2 id="enable-maas-in-datasciencecluster">Enable MaaS in DataScienceCluster</h2>
+<p>After creating the database Secret, enable MaaS in your DataScienceCluster (set <code>modelsAsService.managementState: Managed</code>
 in the <code>spec.components.kserve</code> section - see <a href="../platform-setup/#install-platform-with-model-serving">platform setup guide</a>
-for the complete configuration), the operator will automatically deploy:</p>
+for the complete configuration).</p>
+<p>The operator will automatically deploy:</p>
 <ul>
 <li><strong>MaaS API</strong> (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)</li>
 <li><strong>MaaS API AuthPolicy</strong> (maas-api-auth-policy) - Protects the MaaS API endpoint</li>
 <li><strong>NetworkPolicy</strong> (maas-authorino-allow) - Allows Authorino to reach MaaS API</li>
 </ul>
+<h2 id="manual-installation-steps">Manual Installation Steps</h2>
 <p>You must manually install the following components after completing the <a href="../platform-setup/">platform setup</a>
 (which includes creating the required <code>maas-default-gateway</code>):</p>
 <p>The tools you will need:</p>
@@ -1638,7 +1685,7 @@ are applied automatically. For manual install:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 27, 2026 17:58:09 UTC">February 27, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 5, 2026 15:10:16 UTC">March 5, 2026</span>
   </span>
 
     
