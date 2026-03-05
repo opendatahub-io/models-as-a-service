@@ -295,6 +295,70 @@ def _get_subscriptions_for_model(model_ref):
     ]
 
 
+def _sa_to_user(sa_name, namespace):
+    """Convert service account name to full user principal."""
+    return f"system:serviceaccount:{namespace}:{sa_name}"
+
+
+def _create_test_maas_model(model_ref):
+    """Create a test MaaSModelRef CR."""
+    _apply_cr({
+        "apiVersion": "maas.opendatahub.io/v1alpha1",
+        "kind": "MaaSModelRef",
+        "metadata": {"name": model_ref, "namespace": "opendatahub"},
+        "spec": {
+            "modelRef": {
+                "kind": "LLMInferenceService",
+                "name": model_ref,
+                "namespace": "llm"
+            }
+        }
+    })
+
+
+def _create_test_auth_policy(name, model_ref, users=None, groups=None):
+    """Create a test MaaSAuthPolicy CR."""
+    ns = _ns()
+    subjects = {}
+    if users:
+        subjects["users"] = users
+    if groups:
+        subjects["groups"] = [{"name": g} for g in groups]
+
+    _apply_cr({
+        "apiVersion": "maas.opendatahub.io/v1alpha1",
+        "kind": "MaaSAuthPolicy",
+        "metadata": {"name": name, "namespace": ns},
+        "spec": {
+            "modelRefs": [model_ref],
+            "subjects": subjects
+        }
+    })
+
+
+def _create_test_subscription(name, model_ref, users=None, groups=None):
+    """Create a test MaaSSubscription CR."""
+    ns = _ns()
+    owner = {}
+    if users:
+        owner["users"] = users
+    if groups:
+        owner["groups"] = [{"name": g} for g in groups]
+
+    _apply_cr({
+        "apiVersion": "maas.opendatahub.io/v1alpha1",
+        "kind": "MaaSSubscription",
+        "metadata": {"name": name, "namespace": ns},
+        "spec": {
+            "owner": owner,
+            "modelRefs": [{
+                "name": model_ref,
+                "tokenRateLimits": [{"limit": 100, "window": "1m"}]
+            }]
+        }
+    })
+
+
 def _subscription_for_path(path):
     """Return the X-MaaS-Subscription value for a given model path."""
     path = path or MODEL_PATH
@@ -341,6 +405,22 @@ def _inference(api_key_or_token, path=None, extra_headers=None, subscription=Non
 
 def _wait_reconcile(seconds=None):
     time.sleep(seconds or RECONCILE_WAIT)
+
+
+def _wait_for_maas_model_ready(model_ref, timeout=120):
+    """Wait for MaaSModelRef to become Ready and return its endpoint."""
+    deployment_ns = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        model = _get_cr("maasmodelref", model_ref, deployment_ns)
+        if model:
+            phase = model.get("status", {}).get("phase")
+            endpoint = model.get("status", {}).get("endpoint")
+            if phase == "Ready" and endpoint:
+                log.info(f"MaaSModelRef {model_ref} is Ready: {endpoint}")
+                return endpoint
+        time.sleep(5)
+    raise TimeoutError(f"MaaSModelRef {model_ref} did not become Ready within {timeout}s")
 
 
 def _poll_status(token, expected, path=None, extra_headers=None, subscription=None, timeout=None, poll_interval=2):
