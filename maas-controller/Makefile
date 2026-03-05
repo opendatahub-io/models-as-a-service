@@ -12,7 +12,7 @@ help:
 	@echo "  make manifests    - generate CRD manifests"
 	@echo "  make install      - apply config/default (CRDs, RBAC, deployment)"
 	@echo "  make uninstall    - delete config/default resources"
-	@echo "  make image-build  - build container image (podman/buildah/docker); default IMAGE=quay.io/maas/maas-controller (temporary)"
+	@echo "  make image-build  - build container image (podman/buildah/docker); default IMAGE=quay.io/opendatahub/maas-controller"
 	@echo "  make image-push   - build and push image; override with IMAGE=... IMAGE_TAG=..."
 
 BINARY_NAME := manager
@@ -20,8 +20,8 @@ BUILD_DIR := bin
 
 # Container build: use podman, buildah, or docker (default: podman if available, else buildah, else docker)
 CONTAINER_RUNTIME := $(shell command -v podman 1>/dev/null 2>&1 && echo podman || (command -v buildah 1>/dev/null 2>&1 && echo buildah || echo docker))
-# Default image; for now you can use quay.io/maas/maas-controller (temporary – replace with your own registry when ready)
-IMAGE ?= quay.io/maas/maas-controller
+# Default image
+IMAGE ?= quay.io/opendatahub/maas-controller
 IMAGE_TAG ?= latest
 FULL_IMAGE := $(IMAGE):$(IMAGE_TAG)
 

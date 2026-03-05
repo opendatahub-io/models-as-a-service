@@ -80,7 +80,7 @@ To have models appear via the **MaaSModelRef** flow:
 
 4. The controller reconciles the MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API (in the same namespace) will then include this model in GET /v1/models when it lists MaaSModelRef CRs.
 
-You can use the [maas-system samples](../../samples/maas-system/README.md) as a template; the install script deploys LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly.
+You can use the [maas-system samples](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/maas-system/) as a template; the install script deploys LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly.
 
 ---
 

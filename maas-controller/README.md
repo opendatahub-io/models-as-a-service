@@ -15,7 +15,7 @@ User Request
 Gateway (maas-default-gateway)
     │
     ├── Default deny AuthPolicy ──── 401/403 for unconfigured models
-    ├── Default deny TRLP ──────── 429 safety net (defense-in-depth)
+    ├── Default deny TokenRateLimitPolicy ──────── 429 safety net (defense-in-depth)
     │
     ▼
 HTTPRoute (per model)
@@ -46,7 +46,7 @@ Relationships are many-to-many: multiple MaaSAuthPolicies/MaaSSubscriptions can 
 
 ### Model kinds and the provider pattern
 
-MaaSModelRef's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TRLP). These are registered in `pkg/controller/maas/providers.go`.
+MaaSModelRef's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TokenRateLimitPolicy). These are registered in `pkg/controller/maas/providers.go`.
 
 | Kind (CRD value) | Behaviour |
 |------------------|-----------|
@@ -98,7 +98,7 @@ The controller watches these resources and re-reconciles automatically:
 
 **MaaSModelRef deleted:** The controller uses a finalizer to cascade-delete all generated AuthPolicies and TokenRateLimitPolicies for that model. The parent MaaSAuthPolicy and MaaSSubscription CRs remain intact. The underlying LLMInferenceService is not affected.
 
-**MaaSSubscription deleted:** The aggregated TRLP for the model is deleted, then rebuilt from the remaining subscriptions. If no subscriptions remain, the model falls back to the gateway defaults (401/403 from auth if no MaaSAuthPolicy, or 429 from TRLP safety net if auth passes).
+**MaaSSubscription deleted:** The aggregated TokenRateLimitPolicy for the model is deleted, then rebuilt from the remaining subscriptions. If no subscriptions remain, the model falls back to the gateway defaults (401/403 from auth if no MaaSAuthPolicy, or 429 from TokenRateLimitPolicy safety net if auth passes).
 
 **MaaSAuthPolicy deleted:** Same pattern — the aggregated AuthPolicy is rebuilt from remaining auth policies.
 
@@ -187,7 +187,7 @@ kubectl get crd | grep maas.opendatahub.io
 |-----------|------|-------------|
 | CRDs | `config/crd/` | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription |
 | RBAC | `config/rbac/` | ClusterRole, ServiceAccount, bindings |
-| Controller | `config/manager/` | Deployment (`quay.io/maas/maas-controller:latest`) |
+| Controller | `config/manager/` | Deployment (`quay.io/opendatahub/maas-controller:latest`) |
 | Default auth policy | `config/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |
 | Default deny policy | `config/policies/` | Gateway-level TokenRateLimitPolicy with 0 tokens (deny unsubscribed, 429) |
 
@@ -202,11 +202,13 @@ maas-controller/scripts/install-examples.sh
 This creates:
 
 **Regular tier**
+
 - `LLMInferenceService/facebook-opt-125m-simulated` in `llm` namespace
 - `MaaSModelRef/facebook-opt-125m-simulated` in `opendatahub`
 - `MaaSAuthPolicy/simulator-access` (group: `free-user`) and `MaaSSubscription/simulator-subscription` (100 tokens/min)
 
 **Premium tier**
+
 - `LLMInferenceService/premium-simulated-simulated-premium` in `llm` namespace
 - `MaaSModelRef/premium-simulated-simulated-premium` in `opendatahub`
 - `MaaSAuthPolicy/premium-simulator-access` (group: `premium-user`) and `MaaSSubscription/premium-simulator-subscription` (1000 tokens/min)
@@ -245,25 +247,38 @@ See [docs/samples/maas-system/README.md](../docs/samples/maas-system/README.md) 
 
 ## Opting out of controller management
 
-By default, the controller overwrites manual edits to generated AuthPolicies and TokenRateLimitPolicies. To prevent this for a specific policy, annotate it:
+By default, the controller owns generated AuthPolicies and TokenRateLimitPolicies: it overwrites manual edits on reconciliation and deletes them when the owning MaaS resource is removed. To opt a specific policy out of both behaviours, annotate it:
 
 ```bash
-kubectl annotate authpolicy <name> -n <namespace> maas.opendatahub.io/managed=false
+# AuthPolicy
+kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed=false
+
+# TokenRateLimitPolicy
+kubectl annotate tokenratelimitpolicy <name> -n <namespace> opendatahub.io/managed=false
 ```
 
 Remove the annotation to re-enable controller management:
 
 ```bash
-kubectl annotate authpolicy <name> -n <namespace> maas.opendatahub.io/managed-
+kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed-
+kubectl annotate tokenratelimitpolicy <name> -n <namespace> opendatahub.io/managed-
 ```
+
+> **Warning: orphaned resources.** An opted-out policy can become permanently orphaned (no longer reconciled and not deleted) in the following situations:
+>
+> - **Last owner deleted.** When the last `MaaSAuthPolicy` or `MaaSSubscription` that references a model is deleted, the controller skips deletion of any opted-out generated policy for that model. The policy will persist until it is manually deleted.
+> - **Model reference removed.** When a model is removed from a `MaaSAuthPolicy.spec.modelRefs` or `MaaSSubscription.spec.modelRefs` (edit rather than deletion), the controller does not clean up the generated policy for that model regardless of the opt-out annotation.
+> - **MaasModel deleted.** When a MaaSModel is deleted, the controller's finalizer skips deletion of any opted-out generated policy for that model. The policy will persist until it is manually deleted.
+>
+> In all cases, manually delete the orphaned resource when it is no longer needed.
 
 ## Build and push image
 
-The default deployment uses `quay.io/maas/maas-controller:latest` (temporary).
+The default deployment uses `quay.io/opendatahub/maas-controller:latest`.
 
 ```bash
 make -C maas-controller image-build                    # build with podman/buildah/docker
-make -C maas-controller image-push                     # push to quay.io/maas/maas-controller:latest
+make -C maas-controller image-push                     # push to quay.io/opendatahub/maas-controller:latest (this image is created automatically on main branch, so preferably push images with different tag and/or to your temp registry if you are doing some testing and verification)
 
 # Custom image/tag
 make -C maas-controller image-build IMAGE=quay.io/myorg/maas-controller IMAGE_TAG=v0.1.0
@@ -286,6 +301,7 @@ make -C maas-controller uninstall # remove everything
 
 **MaaS CRs stuck in `Failed` state:**
 The controller retries with exponential backoff. If the HTTPRoute doesn't exist yet (KServe still deploying), the CRs will auto-recover when it appears. If they stay stuck, check controller logs:
+
 ```bash
 kubectl logs deployment/maas-controller -n opendatahub --tail=20
 ```
@@ -302,5 +318,5 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 ## Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build maas-controller/config/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
-- **Image**: Default is `quay.io/maas/maas-controller:latest`. Override in the deployment or via Kustomize.
+- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override in the deployment or via Kustomize.
 - **Gateway name**: The default auth policy targets `maas-default-gateway` in `openshift-ingress`. Edit `config/policies/gateway-default-auth.yaml` if your gateway has a different name.
