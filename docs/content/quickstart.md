@@ -36,27 +36,50 @@ For step-by-step commands, see [TLS Configuration: Authorino TLS Configuration](
 
 ## Quick Start
 
-### Automated OpenShift Deployment (Recommended)
+### Automated OpenShift Deployment
 
-For OpenShift clusters, use the unified automated deployment script:
+For OpenShift clusters, use the unified automated deployment script. Choose your deployment method:
 
-```bash
-export MAAS_REF="main"  # Use the latest release tag, or "main" for development
+=== "Operator (Recommended)"
 
-# Deploy using RHOAI operator (default)
-./scripts/deploy.sh
+    Deploy MaaS through the RHOAI or ODH operator. This is the recommended approach for production deployments.
 
-# Or deploy using ODH operator
-./scripts/deploy.sh --operator-type odh
+    ```bash
+    export MAAS_REF="main"  # Use the latest release tag, or "main" for development
 
-# Or deploy using kustomize
-./scripts/deploy.sh --deployment-mode kustomize
-```
+    # Deploy using RHOAI operator (default)
+    ./scripts/deploy.sh
 
-!!! note "Using Release Tags"
-    The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
-    The release workflow automatically updates all `MAAS_REF="main"` references in documentation and scripts
-    to use the new release tag when a release is created. Use `"main"` only for development/testing.
+    # Or deploy using ODH operator
+    ./scripts/deploy.sh --operator-type odh
+    ```
+
+    !!! note "Using Release Tags"
+        The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
+        The release workflow automatically updates all `MAAS_REF="main"` references in documentation and scripts
+        to use the new release tag when a release is created. Use `"main"` only for development/testing.
+
+=== "Kustomize (Development Only)"
+
+    !!! warning "Development Use Only"
+        Kustomize deployment is intended for **development and testing purposes only**. For production deployments, use the Operator install tab above instead.
+
+    !!! note "Prerequisites: Run hack scripts first"
+        Before deploying with kustomize, you must run the two hack scripts to install cert-manager, LeaderWorkerSet (LWS), and the ODH operator. Run them in order:
+
+        1. **cert-manager and LWS**: `./.github/hack/install-cert-manager-and-lws.sh`
+        2. **ODH operator**: `./.github/hack/install-odh.sh`
+
+    ```bash
+    export MAAS_REF="main"  # Use the latest release tag, or "main" for development
+
+    ./scripts/deploy.sh --deployment-mode kustomize
+    ```
+
+    !!! note "Using Release Tags"
+        The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
+        The release workflow automatically updates all `MAAS_REF="main"` references in documentation and scripts
+        to use the new release tag when a release is created. Use `"main"` only for development/testing.
 
 
 ### Verify Deployment
@@ -108,15 +131,22 @@ For detailed validation and troubleshooting, see the [Validation Guide](install/
 !!! note
     At least one model must be deployed to validate the installation using the [Validation Guide](install/validation.md).
 
+!!! tip "Create llm namespace (optional)"
+    Models deploy to the `llm` namespace. If it does not exist, create it first (idempotent—safe to run even if it already exists):
+
+    ```bash
+    kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
+    ```
+
 ### Deploy Sample Models
 
 #### Simulator Model (CPU)
 
-A lightweight mock service for testing that generates responses without running an actual language model.
+A lightweight mock service for testing that generates responses without running an actual language model. This deploys the simulator with MaaS policies (MaaSModelRef, MaaSAuthPolicy, MaaSSubscription) so it is discoverable and usable through the MaaS API.
 
 ```bash
 PROJECT_DIR=$(git rev-parse --show-toplevel)
-kustomize build ${PROJECT_DIR}/docs/samples/models/simulator/ | kubectl apply -f -
+kustomize build ${PROJECT_DIR}/docs/samples/maas-system/free/ | kubectl apply -f -
 ```
 
 #### Facebook OPT-125M Model (CPU)

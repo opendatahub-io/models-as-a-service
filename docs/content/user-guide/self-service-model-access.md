@@ -6,10 +6,10 @@ This guide is for **end users** who want to use AI models through the MaaS platf
 
 The Models-as-a-Service (MaaS) platform provides access to AI models through a simple API. Your organization's administrator has set up the platform and configured access for your team.
 
-## Getting Your Access Token
+## Getting Your API Key
 
 !!! tip
-    For a detailed explanation of how token authentication works, including the underlying service account architecture and security model, see [Understanding Token Management](../configuration-and-management/token-management.md).
+    For a detailed explanation of how API key authentication works, including the underlying architecture and security model, see [Understanding Token Management](../configuration-and-management/token-management.md).
 
 ### Step 1: Get Your OpenShift Authentication Token
 
@@ -23,32 +23,34 @@ oc login ...
 OC_TOKEN=$(oc whoami -t)
 ```
 
-### Step 2: Request an Access Token from the API
+### Step 2: Create an API Key
 
-Next, use that OpenShift token to call the maas-api `/v1/tokens` endpoint. You can specify the desired expiration time; the default is 4 hours.
+Use your OpenShift token to create an API key via the maas-api `/v1/api-keys` endpoint. You can create permanent keys (omit `expiresIn`) or expiring keys.
 
 ```bash
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 MAAS_API_URL="https://maas.${CLUSTER_DOMAIN}"
 
-TOKEN_RESPONSE=$(curl -sSk \
+API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer ${OC_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST \
-  -d '{"expiration": "15m"}' \
-  "${MAAS_API_URL}/maas-api/v1/tokens")
+  -d '{"name": "my-api-key", "description": "Key for model access", "expiresIn": "90d"}' \
+  "${MAAS_API_URL}/maas-api/v1/api-keys")
 
-ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token)
+API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 
-echo $ACCESS_TOKEN
+echo $API_KEY
 ```
 
-### Token Lifecycle
+!!! warning "API key shown only once"
+    The plaintext API key is returned **only at creation time**. Store it securely—it cannot be retrieved again.
 
-- **Default lifetime**: 4 hours (configurable when requesting)
-- **Maximum lifetime**: Determined by cluster configuration
-- **Refresh**: Request a new token before expiration
-- **Revocation**: Tokens can be revoked if compromised
+### API Key Lifecycle
+
+- **Permanent keys**: Omit `expiresIn` in the request body
+- **Expiring keys**: Set `expiresIn` (e.g., `"90d"`, `"1h"`, `"30d"`)
+- **Revocation**: Revoke via `DELETE /v1/api-keys/{id}` if compromised
 
 ## Discovering Models
 
@@ -59,7 +61,7 @@ Get a list of models available to your tier:
 ```bash
 MODELS=$(curl "${MAAS_API_URL}/v1/models" \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ACCESS_TOKEN}")
+    -H "Authorization: Bearer ${API_KEY}")
 
 echo $MODELS | jq .
 ```
@@ -92,7 +94,7 @@ Get detailed information about a specific model:
 ```bash
 MODEL_ID="simulator"
 MODEL_INFO=$(curl "${MAAS_API_URL}/v1/models" \
-    -H "Authorization: Bearer ${ACCESS_TOKEN}" | \
+    -H "Authorization: Bearer ${API_KEY}" | \
     jq --arg model "$MODEL_ID" '.data[] | select(.id == $model)')
 
 echo $MODEL_INFO | jq .
@@ -108,12 +110,12 @@ Make a simple chat completion request:
 # First, get the model URL from the models endpoint
 MODELS=$(curl "${MAAS_API_URL}/v1/models" \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${ACCESS_TOKEN}")
+    -H "Authorization: Bearer ${API_KEY}")
 MODEL_URL=$(echo $MODELS | jq -r '.data[0].url')
 MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id')
 
 curl -sSk \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
         \"model\": \"${MODEL_NAME}\",
@@ -134,7 +136,7 @@ For streaming responses, add `"stream": true` to the request and use `--no-buffe
 
 ```bash
 curl -sSk --no-buffer \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
         \"model\": \"${MODEL_NAME}\",
@@ -214,7 +216,7 @@ Check your current usage through response headers:
 ```bash
 # Make a request and check headers
 curl -I -sSk \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"model": "simulator", "messages": [{"role": "user", "content": "test"}]}' \
   "${MODEL_URL}/v1/chat/completions" | grep -i "x-ratelimit"
@@ -226,14 +228,14 @@ curl -I -sSk \
 
 **Problem**: `401 Unauthorized`
 
-**Solution**: Check your token and ensure it's correctly formatted:
+**Solution**: Check your API key and ensure it's correctly formatted:
 
 ```bash
 # Correct format
--H "Authorization: Bearer YOUR_TOKEN"
+-H "Authorization: Bearer YOUR_API_KEY"
 
 # Wrong format
--H "Authorization: YOUR_TOKEN"
+-H "Authorization: YOUR_API_KEY"
 ```
 
 ### Rate Limit Exceeded
@@ -250,5 +252,5 @@ curl -I -sSk \
 
 ```bash
 curl -X GET "${MAAS_API_URL}/v1/models" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}"
+  -H "Authorization: Bearer ${API_KEY}"
 ```
