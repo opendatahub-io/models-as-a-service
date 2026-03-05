@@ -190,9 +190,11 @@ def _create_sa_token(sa_name, namespace=None, duration="10m"):
         ["oc", "create", "token", sa_name, "-n", namespace, f"--duration={duration}"],
         capture_output=True, text=True, timeout=30,
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to create token for SA {sa_name}: {result.stderr.strip()}")
     token = result.stdout.strip()
     if not token:
-        raise RuntimeError(f"Could not create token for SA {sa_name}: {result.stderr}")
+        raise RuntimeError(f"oc create token returned empty output for SA {sa_name} in namespace {namespace}")
     return token
 
 
