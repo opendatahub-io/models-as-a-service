@@ -21,17 +21,13 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"knative.dev/pkg/apis"
@@ -446,19 +442,6 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 	})
 }
 
-// modelDeleteTestRESTMapper builds a REST mapper for the Kuadrant GVKs exercised by
-// deleteGeneratedPoliciesByLabel. Neither AuthPolicy nor TokenRateLimitPolicy is
-// registered in the scheme, so a custom mapper is required.
-func modelDeleteTestRESTMapper() apimeta.RESTMapper {
-	m := apimeta.NewDefaultRESTMapper(nil)
-	ns := nsRestScope{}
-	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"}, ns)
-	return m
-}
-
 // newPreexistingGeneratedPolicy builds an unstructured Kuadrant policy with the labels
 // that deleteGeneratedPoliciesByLabel selects on. The name and GVK are caller-supplied
 // so the same helper covers both AuthPolicy and TokenRateLimitPolicy.
@@ -525,7 +508,7 @@ func TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation(t *testin
 
 					c := fake.NewClientBuilder().
 						WithScheme(scheme).
-						WithRESTMapper(modelDeleteTestRESTMapper()).
+						WithRESTMapper(testRESTMapper()).
 						WithObjects(existing).
 						Build()
 
