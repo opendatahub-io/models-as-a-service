@@ -4,6 +4,8 @@ import subprocess
 import pytest
 import requests
 
+TLS_VERIFY = os.environ.get("E2E_TLS_VERIFY", "false").lower() not in ("false", "0", "no")
+
 
 def _obtain_token(maas_api_base_url: str) -> str:
     """Obtain a bearer token using the best available method.
@@ -54,7 +56,7 @@ def _obtain_token(maas_api_base_url: str) -> str:
         headers={"Authorization": f"Bearer {cluster_token}", "Content-Type": "application/json"},
         json={"expiration": "10m"},
         timeout=30,
-        verify=False,
+        verify=TLS_VERIFY,
     )
     r.raise_for_status()
     data = r.json()
@@ -78,7 +80,7 @@ def headers(token: str):
 
 @pytest.fixture(scope="session")
 def model_catalog(maas_api_base_url: str, headers: dict):
-    r = requests.get(f"{maas_api_base_url}/v1/models", headers=headers, timeout=45, verify=False)
+    r = requests.get(f"{maas_api_base_url}/v1/models", headers=headers, timeout=45, verify=TLS_VERIFY)
     r.raise_for_status()
     return r.json()
 
