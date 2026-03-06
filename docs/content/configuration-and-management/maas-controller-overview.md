@@ -187,9 +187,9 @@ erDiagram
     HTTPRoute }o--|| Gateway : "parentRef"
 ```
 
-- **MaaSModelRef**: `spec.modelRef` = llmisvc or ExternalModel (name, namespace).
-- **MaaSAuthPolicy**: `spec.modelRefs` (list of model names), `spec.subjects` (groups, users).
-- **MaaSSubscription**: `spec.owner` (groups, users), `spec.modelRefs` (model name + token rate limits per model).
+- **MaaSModelRef**: `spec.modelRef` = llmisvc or ExternalModel (kind, name).
+- **MaaSAuthPolicy**: `spec.modelRefs` (list of ModelRef objects with name and namespace), `spec.subjects` (groups, users).
+- **MaaSSubscription**: `spec.owner` (groups, users), `spec.modelRefs` (list of ModelRef objects with name, namespace, and token rate limits).
 
 ---
 

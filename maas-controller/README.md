@@ -46,6 +46,59 @@ As MaaS API and controller are conventionally deployed in the operator namespace
 
 Relationships are many-to-many: multiple MaaSAuthPolicies/MaaSSubscriptions can reference the same model — the controller aggregates them into a single Kuadrant policy per model. Multiple subscriptions for one model use mutually exclusive predicates with priority based on token limit (highest wins).
 
+### Namespace scoping
+
+**MaaSModelRef** resources can exist in any namespace. **MaaSAuthPolicy** and **MaaSSubscription** resources explicitly specify which namespace(s) their referenced models are in via `modelRefs[].namespace`.
+
+Generated Kuadrant policies (AuthPolicy, TokenRateLimitPolicy) are always created **in the model's namespace**, not in the namespace of the MaaSAuthPolicy/MaaSSubscription that references it.
+
+**Cross-namespace example:**
+
+```yaml
+# MaaSModelRef in the llm namespace
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: my-model
+  namespace: llm
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: my-llmisvc
+---
+# MaaSAuthPolicy in opendatahub namespace references model in llm namespace
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: my-policy
+  namespace: opendatahub
+spec:
+  modelRefs:
+    - name: my-model
+      namespace: llm    # Required: explicitly specify model's namespace
+  subjects:
+    groups:
+      - name: my-group
+```
+
+The controller creates a Kuadrant **AuthPolicy** in the `llm` namespace (where the model and HTTPRoute exist), not in `opendatahub` (where the MaaSAuthPolicy lives).
+
+**Same model name, different namespaces:**
+
+Models with identical names in different namespaces are isolated. Each gets its own generated policies:
+
+```yaml
+# team-a/my-model and team-b/my-model are separate models
+spec:
+  modelRefs:
+    - name: my-model
+      namespace: team-a
+    - name: my-model
+      namespace: team-b
+```
+
+This creates two separate AuthPolicies: one in `team-a`, one in `team-b`.
+
 **Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModelRef** CRs (in the API's namespace). Each MaaSModelRef's `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModelRef objects is the source of truth for "which models are available" in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
 
 ### Model kinds and the provider pattern
