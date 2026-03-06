@@ -55,6 +55,7 @@ PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simu
 MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
+MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
 UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
 UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
@@ -438,7 +439,7 @@ class TestSubscriptionEnforcement:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-auth-pass-sub-fail", "namespace": ns},
                 "spec": {
-                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {
                         "groups": [{"name": "system:authenticated"}],  # Auth will pass
                     },
@@ -490,7 +491,7 @@ class TestMultipleSubscriptionsPerModel:
                 "metadata": {"name": "e2e-extra-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "nonexistent-group-xyz"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
                 },
             })
 
@@ -513,7 +514,7 @@ class TestMultipleSubscriptionsPerModel:
                 "metadata": {"name": "e2e-high-tier", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
                 },
             })
 
@@ -540,7 +541,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-premium-sa-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -551,7 +552,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "metadata": {"name": "e2e-premium-sa-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -575,7 +576,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-extra-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [MODEL_REF],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -607,7 +608,7 @@ class TestCascadeDeletion:
                 "metadata": {"name": "e2e-temp-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -667,7 +668,7 @@ class TestOrderingEdgeCases:
                 "metadata": {"name": "e2e-ordering-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -683,7 +684,7 @@ class TestOrderingEdgeCases:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-ordering-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })

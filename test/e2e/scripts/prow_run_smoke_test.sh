@@ -438,14 +438,15 @@ run_e2e_tests() {
     echo "  - ADMIN_OC_TOKEN: $(echo "${ADMIN_OC_TOKEN:-not set}" | cut -c1-20)..."
     echo "  - GATEWAY_HOST: ${GATEWAY_HOST}"
 
-    # Run all e2e tests: API keys and subscription tests
+    # Run all e2e tests: API keys, subscription, and namespace scoping tests
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
-        "$test_dir/tests/test_subscription.py"; then
+        "$test_dir/tests/test_subscription.py" \
+        "$test_dir/tests/test_namespace_scoping.py"; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
