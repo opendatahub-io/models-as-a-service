@@ -17,7 +17,9 @@ limitations under the License.
 package maas
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -310,6 +312,14 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			if !isManaged(existing) {
 				log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
 			} else {
+				// Snapshot the existing object before modifications so we can detect
+				// no-op updates. We use JSON marshaling (rather than reflect.DeepEqual)
+				// because unstructured maps read from the API server deserialize JSON
+				// numbers as float64, while the controller builds them as int64.
+				// json.Marshal normalizes both to the same representation and sorts
+				// map keys deterministically, making byte comparison reliable.
+				snapshot, _ := json.Marshal(existing.Object)
+
 				mergedAnnotations := existing.GetAnnotations()
 				if mergedAnnotations == nil {
 					mergedAnnotations = make(map[string]string)
@@ -330,10 +340,16 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
 					return fmt.Errorf("failed to update spec: %w", err)
 				}
-				if err := r.Update(ctx, existing); err != nil {
-					return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s: %w", modelRef.Name, err)
+
+				modified, _ := json.Marshal(existing.Object)
+				if bytes.Equal(snapshot, modified) {
+					log.Info("TokenRateLimitPolicy unchanged, skipping update", "name", policyName, "model", modelRef.Name)
+				} else {
+					if err := r.Update(ctx, existing); err != nil {
+						return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s: %w", modelRef.Name, err)
+					}
+					log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Name, "subscriptions", subNames)
 				}
-				log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Name, "subscriptions", subNames)
 			}
 		}
 	}

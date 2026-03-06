@@ -20,11 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	equality "k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -257,6 +257,14 @@ func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, mod
 		Reason:  condReason,
 		Message: message,
 	})
+
+	// Compare with server-side status to avoid redundant writes.
+	current := &maasv1alpha1.MaaSModelRef{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(model), current); err == nil {
+		if equality.Semantic.DeepEqual(current.Status, model.Status) {
+			return
+		}
+	}
 
 	if err := r.Status().Update(ctx, model); err != nil {
 		log := logr.FromContextOrDiscard(ctx)

@@ -17,7 +17,9 @@ limitations under the License.
 package maas
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -414,6 +416,14 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			if !isManaged(existing) {
 				log.Info("AuthPolicy opted out, skipping", "name", authPolicyName)
 			} else {
+				// Snapshot the existing object before modifications so we can detect
+				// no-op updates. We use JSON marshaling (rather than reflect.DeepEqual)
+				// because unstructured maps read from the API server deserialize JSON
+				// numbers as float64, while the controller builds them as int64.
+				// json.Marshal normalizes both to the same representation and sorts
+				// map keys deterministically, making byte comparison reliable.
+				snapshot, _ := json.Marshal(existing.Object)
+
 				mergedAnnotations := existing.GetAnnotations()
 				if mergedAnnotations == nil {
 					mergedAnnotations = make(map[string]string)
@@ -434,10 +444,16 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 				if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
 					return nil, fmt.Errorf("failed to update spec: %w", err)
 				}
-				if err := r.Update(ctx, existing); err != nil {
-					return nil, fmt.Errorf("failed to update AuthPolicy for model %s: %w", modelName, err)
+
+				modified, _ := json.Marshal(existing.Object)
+				if bytes.Equal(snapshot, modified) {
+					log.Info("AuthPolicy unchanged, skipping update", "name", authPolicyName, "model", modelName)
+				} else {
+					if err := r.Update(ctx, existing); err != nil {
+						return nil, fmt.Errorf("failed to update AuthPolicy for model %s: %w", modelName, err)
+					}
+					log.Info("AuthPolicy updated", "name", authPolicyName, "model", modelName, "policies", policyNames)
 				}
-				log.Info("AuthPolicy updated", "name", authPolicyName, "model", modelName, "policies", policyNames)
 			}
 		}
 	}
