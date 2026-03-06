@@ -10,6 +10,7 @@ spec:
     users: []
   modelRefs:
     - name: facebook-opt-125m-simulated
+      namespace: llm
       tokenRateLimits:
         - limit: 100
           window: 1m

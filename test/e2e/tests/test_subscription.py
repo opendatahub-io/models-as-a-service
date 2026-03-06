@@ -55,6 +55,7 @@ PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simu
 MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
+MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
 UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
 UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
@@ -438,7 +439,7 @@ class TestSubscriptionEnforcement:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-auth-pass-sub-fail", "namespace": ns},
                 "spec": {
-                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {
                         "groups": [{"name": "system:authenticated"}],  # Auth will pass
                     },
@@ -490,7 +491,7 @@ class TestMultipleSubscriptionsPerModel:
                 "metadata": {"name": "e2e-extra-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "nonexistent-group-xyz"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
                 },
             })
 
@@ -513,7 +514,7 @@ class TestMultipleSubscriptionsPerModel:
                 "metadata": {"name": "e2e-high-tier", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
                 },
             })
 
@@ -540,7 +541,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-premium-sa-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -551,7 +552,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "metadata": {"name": "e2e-premium-sa-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -575,7 +576,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-extra-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [MODEL_REF],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -607,7 +608,7 @@ class TestCascadeDeletion:
                 "metadata": {"name": "e2e-temp-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -667,7 +668,7 @@ class TestOrderingEdgeCases:
                 "metadata": {"name": "e2e-ordering-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -683,7 +684,7 @@ class TestOrderingEdgeCases:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-ordering-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -694,4 +695,85 @@ class TestOrderingEdgeCases:
         finally:
             _delete_cr("maassubscription", "e2e-ordering-sub")
             _delete_cr("maasauthpolicy", "e2e-ordering-auth")
+            _wait_reconcile()
+
+    def test_authpolicy_deletion_cleanup(self):
+        """
+        Verify that deleting a MaaSAuthPolicy properly removes its subjects
+        from the aggregated AuthPolicy.
+
+        Regression test for bug where deleted policy subjects remained in
+        the aggregated AuthPolicy, causing incorrect authorization.
+        """
+        import uuid
+
+        ns = _ns()
+        test_group = f"test-cleanup-group-{uuid.uuid4().hex[:8]}"
+        policy_name = f"test-cleanup-policy-{uuid.uuid4().hex[:6]}"
+
+        # Use the standard model for testing
+        model_ref = MODEL_REF
+        auth_policy_name = f"maas-auth-{model_ref}"
+
+        try:
+            log.info(f"Creating MaaSAuthPolicy with unique group '{test_group}'")
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": policy_name, "namespace": ns},
+                "spec": {
+                    "modelRefs": [{"name": model_ref, "namespace": MODEL_NAMESPACE}],
+                    "subjects": {"groups": [{"name": test_group}]},
+                },
+            })
+            _wait_reconcile(15)  # Wait for controller reconciliation
+
+            # Verify the test group appears in the aggregated AuthPolicy
+            log.info(f"Verifying AuthPolicy contains '{test_group}'")
+            auth_policy = _get_cr("authpolicy", auth_policy_name, MODEL_NAMESPACE)
+            assert auth_policy is not None, f"AuthPolicy {auth_policy_name} not found"
+
+            auth_policy_yaml = json.dumps(auth_policy)
+            assert test_group in auth_policy_yaml, \
+                f"Test group {test_group} not found in AuthPolicy after creation - MaaSAuthPolicy may not have reconciled"
+
+            log.info(f"✓ Confirmed: AuthPolicy contains '{test_group}'")
+
+            # Get the authorization patterns before deletion for debugging
+            patterns = auth_policy.get("spec", {}).get("rules", {}).get("authorization", {}).get("require-group-membership", {}).get("patternMatching", {}).get("patterns", [])
+            log.info(f"Authorization patterns before deletion: {patterns}")
+
+            # Delete the MaaSAuthPolicy
+            log.info(f"Deleting MaaSAuthPolicy '{policy_name}'")
+            _delete_cr("maasauthpolicy", policy_name, ns)
+            _wait_reconcile(15)  # Wait for controller to process deletion
+
+            # Verify the test group is REMOVED from the aggregated AuthPolicy
+            log.info(f"Verifying AuthPolicy NO LONGER contains '{test_group}'")
+            auth_policy_after = _get_cr("authpolicy", auth_policy_name, MODEL_NAMESPACE)
+            assert auth_policy_after is not None, f"AuthPolicy {auth_policy_name} should still exist (other policies reference this model)"
+
+            auth_policy_after_yaml = json.dumps(auth_policy_after)
+
+            if test_group in auth_policy_after_yaml:
+                # Bug detected - provide detailed diagnostics
+                patterns_after = auth_policy_after.get("spec", {}).get("rules", {}).get("authorization", {}).get("require-group-membership", {}).get("patternMatching", {}).get("patterns", [])
+                annotation = auth_policy_after.get("metadata", {}).get("annotations", {}).get("maas.opendatahub.io/auth-policies", "")
+
+                log.error(f"BUG DETECTED: Test group '{test_group}' is STILL in AuthPolicy after deletion")
+                log.error(f"Authorization patterns after deletion: {patterns_after}")
+                log.error(f"AuthPolicy annotation (should not include deleted policy): {annotation}")
+
+                assert False, \
+                    f"BUG: Deleted MaaSAuthPolicy's subjects remain in aggregated AuthPolicy. " \
+                    f"Group '{test_group}' from deleted policy '{policy_name}' is still present. " \
+                    f"This indicates the controller is not properly rebuilding the AuthPolicy when a MaaSAuthPolicy is deleted."
+
+            log.info(f"✓ SUCCESS: Test group properly removed from AuthPolicy")
+            log.info(f"✓ Controller correctly cleaned up deleted policy's subjects")
+
+        finally:
+            # Cleanup - ensure the test policy is deleted
+            log.info("Cleaning up test resources")
+            _delete_cr("maasauthpolicy", policy_name, ns)
             _wait_reconcile()

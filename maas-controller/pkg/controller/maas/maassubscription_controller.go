@@ -98,22 +98,22 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 	// find ALL subscriptions for that model and build a single aggregated TokenRateLimitPolicy.
 	// Kuadrant only allows one TokenRateLimitPolicy per HTTPRoute target.
 	for _, modelRef := range subscription.Spec.ModelRefs {
-		httpRouteName, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, subscription.Namespace, modelRef.Name)
+		httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, modelRef.Namespace, modelRef.Name)
 		if err != nil {
 			if errors.Is(err, ErrModelNotFound) {
-				log.Info("model not found, cleaning up generated TokenRateLimitPolicy", "model", modelRef.Name)
-				if delErr := r.deleteModelTRLP(ctx, log, modelRef.Name); delErr != nil {
-					return fmt.Errorf("failed to clean up TokenRateLimitPolicy for missing model %s: %w", modelRef.Name, delErr)
+				log.Info("model not found, cleaning up generated TokenRateLimitPolicy", "model", modelRef.Namespace+"/"+modelRef.Name)
+				if delErr := r.deleteModelTRLP(ctx, log, modelRef.Namespace, modelRef.Name); delErr != nil {
+					return fmt.Errorf("failed to clean up TokenRateLimitPolicy for missing model %s/%s: %w", modelRef.Namespace, modelRef.Name, delErr)
 				}
 				continue
 			}
-			return fmt.Errorf("failed to resolve HTTPRoute for model %s: %w", modelRef.Name, err)
+			return fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", modelRef.Namespace, modelRef.Name, err)
 		}
 
 		// Find ALL subscriptions for this model (not just the current one)
-		allSubs, err := findAllSubscriptionsForModel(ctx, r.Client, modelRef.Name)
+		allSubs, err := findAllSubscriptionsForModel(ctx, r.Client, modelRef.Namespace, modelRef.Name)
 		if err != nil {
-			return fmt.Errorf("failed to list subscriptions for model %s: %w", modelRef.Name, err)
+			return fmt.Errorf("failed to list subscriptions for model %s/%s: %w", modelRef.Namespace, modelRef.Name, err)
 		}
 
 		limitsMap := map[string]interface{}{}
@@ -131,7 +131,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 		var subs []subInfo
 		for _, sub := range allSubs {
 			for _, mRef := range sub.Spec.ModelRefs {
-				if mRef.Name != modelRef.Name {
+				if mRef.Namespace != modelRef.Namespace || mRef.Name != modelRef.Name {
 					continue
 				}
 				var groupNames []string
@@ -338,8 +338,21 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 	return nil
 }
 
-// deleteModelTRLP deletes the aggregated TokenRateLimitPolicy for a model by label.
-func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log logr.Logger, modelName string) error {
+// deleteModelTRLP deletes the aggregated TokenRateLimitPolicy for a model in the given namespace.
+func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
+	// Check if there are any remaining (non-deleted) MaaSSubscriptions that reference this model.
+	// If yes, don't delete the aggregated TokenRateLimitPolicy - they will rebuild it.
+	remainingSubs, err := findAllSubscriptionsForModel(ctx, r.Client, modelNamespace, modelName)
+	if err != nil {
+		return fmt.Errorf("failed to check for remaining MaaSSubscriptions: %w", err)
+	}
+	if len(remainingSubs) > 0 {
+		log.Info("Skipping deletion of aggregated TokenRateLimitPolicy because other MaaSSubscriptions still reference this model",
+			"model", modelNamespace+"/"+modelName, "remainingCount", len(remainingSubs))
+		return nil
+	}
+
+	// No remaining parent subscriptions - safe to delete the aggregated TokenRateLimitPolicy
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"})
 	labelSelector := client.MatchingLabels{
@@ -347,7 +360,7 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 		"app.kubernetes.io/managed-by": "maas-controller",
 		"app.kubernetes.io/part-of":    "maas-subscription",
 	}
-	if err := r.List(ctx, policyList, labelSelector); err != nil {
+	if err := r.List(ctx, policyList, client.InNamespace(modelNamespace), labelSelector); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
@@ -356,10 +369,10 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
 		if !isManaged(p) {
-			log.Info("TokenRateLimitPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+			log.Info("TokenRateLimitPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 			continue
 		}
-		log.Info("Deleting TokenRateLimitPolicy", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+		log.Info("Deleting TokenRateLimitPolicy (no remaining parent subscriptions)", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete TokenRateLimitPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
 		}
@@ -367,17 +380,12 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 	return nil
 }
 
-// findHTTPRouteForModel delegates to the shared helper in helpers.go.
-func (r *MaaSSubscriptionReconciler) findHTTPRouteForModel(ctx context.Context, log logr.Logger, defaultNS, modelName string) (string, string, error) {
-	return findHTTPRouteForModel(ctx, r.Client, defaultNS, modelName)
-}
-
 func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
 		for _, modelRef := range subscription.Spec.ModelRefs {
-			log.Info("Deleting model TokenRateLimitPolicy so remaining subscriptions can rebuild it", "model", modelRef.Name)
-			if err := r.deleteModelTRLP(ctx, log, modelRef.Name); err != nil {
-				log.Error(err, "failed to clean up TokenRateLimitPolicy, will retry", "model", modelRef.Name)
+			log.Info("Deleting model TokenRateLimitPolicy so remaining subscriptions can rebuild it", "model", modelRef.Namespace+"/"+modelRef.Name)
+			if err := r.deleteModelTRLP(ctx, log, modelRef.Namespace, modelRef.Name); err != nil {
+				log.Error(err, "failed to clean up TokenRateLimitPolicy, will retry", "model", modelRef.Namespace+"/"+modelRef.Name)
 				return ctrl.Result{}, err
 			}
 		}
@@ -460,7 +468,8 @@ func (r *MaaSSubscriptionReconciler) mapGeneratedTRLPToParent(ctx context.Contex
 	if modelName == "" {
 		return nil
 	}
-	sub := findAnySubscriptionForModel(ctx, r.Client, modelName)
+	modelNamespace := obj.GetNamespace()
+	sub := findAnySubscriptionForModel(ctx, r.Client, modelNamespace, modelName)
 	if sub == nil {
 		return nil
 	}
@@ -477,13 +486,13 @@ func (r *MaaSSubscriptionReconciler) mapMaaSModelRefToMaaSSubscriptions(ctx cont
 		return nil
 	}
 	var subscriptions maasv1alpha1.MaaSSubscriptionList
-	if err := r.List(ctx, &subscriptions, client.InNamespace(model.Namespace)); err != nil {
+	if err := r.List(ctx, &subscriptions); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
 	for _, s := range subscriptions.Items {
 		for _, ref := range s.Spec.ModelRefs {
-			if ref.Name == model.Name {
+			if ref.Namespace == model.Namespace && ref.Name == model.Name {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{Name: s.Name, Namespace: s.Namespace},
 				})
@@ -495,7 +504,7 @@ func (r *MaaSSubscriptionReconciler) mapMaaSModelRefToMaaSSubscriptions(ctx cont
 }
 
 // mapHTTPRouteToMaaSSubscriptions returns reconcile requests for all MaaSSubscriptions
-// that reference models whose LLMInferenceService lives in the HTTPRoute's namespace.
+// that reference models in the HTTPRoute's namespace.
 func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {
 	route, ok := obj.(*gatewayapiv1.HTTPRoute)
 	if !ok {
@@ -503,20 +512,13 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 	}
 	// Find MaaSModelRefs in this namespace
 	var models maasv1alpha1.MaaSModelRefList
-	if err := r.List(ctx, &models); err != nil {
+	if err := r.List(ctx, &models, client.InNamespace(route.Namespace)); err != nil {
 		return nil
 	}
 	// Use namespace-qualified keys to prevent cross-namespace matches
 	modelKeysInNS := map[string]bool{}
 	for _, m := range models.Items {
-		ns := m.Spec.ModelRef.Namespace
-		if ns == "" {
-			ns = m.Namespace
-		}
-		if ns == route.Namespace {
-			key := m.Namespace + "/" + m.Name
-			modelKeysInNS[key] = true
-		}
+		modelKeysInNS[m.Namespace+"/"+m.Name] = true
 	}
 	if len(modelKeysInNS) == 0 {
 		return nil
@@ -529,8 +531,7 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 	var requests []reconcile.Request
 	for _, s := range subscriptions.Items {
 		for _, ref := range s.Spec.ModelRefs {
-			key := s.Namespace + "/" + ref.Name
-			if modelKeysInNS[key] {
+			if modelKeysInNS[ref.Namespace+"/"+ref.Name] {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{Name: s.Name, Namespace: s.Namespace},
 				})

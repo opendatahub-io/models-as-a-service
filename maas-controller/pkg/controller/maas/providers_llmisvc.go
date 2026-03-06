@@ -42,9 +42,6 @@ func (h *llmisvcHandler) ReconcileRoute(ctx context.Context, log logr.Logger, mo
 // populates MaaSModelRef status from the HTTPRoute and gateway ref.
 func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	routeNS := model.Namespace
-	if model.Spec.ModelRef.Namespace != "" {
-		routeNS = model.Spec.ModelRef.Namespace
-	}
 	routeList := &gatewayapiv1.HTTPRouteList{}
 	labelSelector := client.MatchingLabels{
 		"app.kubernetes.io/name":      model.Spec.ModelRef.Name,
@@ -107,9 +104,6 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 
 func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error) {
 	llmisvcNS := model.Namespace
-	if model.Spec.ModelRef.Namespace != "" {
-		llmisvcNS = model.Spec.ModelRef.Namespace
-	}
 	llmisvc := &kservev1alpha1.LLMInferenceService{}
 	key := client.ObjectKey{Name: model.Spec.ModelRef.Name, Namespace: llmisvcNS}
 	if err := h.r.Get(ctx, key, llmisvc); err != nil {
@@ -206,9 +200,6 @@ type llmisvcRouteResolver struct{}
 
 func (llmisvcRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error) {
 	llmisvcNS := model.Namespace
-	if model.Spec.ModelRef.Namespace != "" {
-		llmisvcNS = model.Spec.ModelRef.Namespace
-	}
 	routeList := &gatewayapiv1.HTTPRouteList{}
 	labelSelector := client.MatchingLabels{
 		"app.kubernetes.io/name":      model.Spec.ModelRef.Name,

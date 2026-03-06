@@ -46,27 +46,6 @@ type MaaSAuthPolicyReconciler struct {
 	// MaaSAPINamespace is the namespace where maas-api service is deployed.
 	// Used to construct the subscription selector endpoint URL.
 	MaaSAPINamespace string
-
-	// GatewayName is the name of the Gateway used for model HTTPRoutes (configurable via flags).
-	GatewayName string
-
-	// ClusterAudience is the OIDC audience of the cluster (configurable via flags).
-	// Standard clusters use "https://kubernetes.default.svc"; HyperShift/ROSA use a custom OIDC provider URL.
-	ClusterAudience string
-}
-
-func (r *MaaSAuthPolicyReconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return defaultGatewayName
-}
-
-func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
-	if r.ClusterAudience != "" {
-		return r.ClusterAudience
-	}
-	return defaultClusterAudience
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -116,9 +95,10 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 type authPolicyRef struct {
-	Name      string
-	Namespace string
-	Model     string
+	Name           string
+	Namespace      string
+	Model          string
+	ModelNamespace string
 }
 
 func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) ([]authPolicyRef, error) {
@@ -126,329 +106,367 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 	// Model-centric approach: for each model referenced by this auth policy,
 	// find ALL auth policies for that model and build a single aggregated AuthPolicy.
 	// Kuadrant only allows one AuthPolicy per HTTPRoute target.
-	for _, modelName := range policy.Spec.ModelRefs {
-		httpRouteName, httpRouteNS, err := r.findHTTPRouteForModel(ctx, log, policy.Namespace, modelName)
+	for _, ref := range policy.Spec.ModelRefs {
+		httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, ref.Namespace, ref.Name)
 		if err != nil {
 			if errors.Is(err, ErrModelNotFound) {
-				log.Info("model not found, cleaning up generated AuthPolicy", "model", modelName)
-				if delErr := r.deleteModelAuthPolicy(ctx, log, modelName); delErr != nil {
-					return nil, fmt.Errorf("failed to clean up AuthPolicy for missing model %s: %w", modelName, delErr)
+				log.Info("model not found, cleaning up generated AuthPolicy", "model", ref.Namespace+"/"+ref.Name)
+				if delErr := r.deleteModelAuthPolicy(ctx, log, ref.Namespace, ref.Name); delErr != nil {
+					return nil, fmt.Errorf("failed to clean up AuthPolicy for missing model %s/%s: %w", ref.Namespace, ref.Name, delErr)
 				}
 				continue
 			}
-			return nil, fmt.Errorf("failed to resolve HTTPRoute for model %s: %w", modelName, err)
+			return nil, fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", ref.Namespace, ref.Name, err)
 		}
 
 		// Find ALL auth policies for this model (not just the current one)
-		allPolicies, err := findAllAuthPoliciesForModel(ctx, r.Client, modelName)
+		allPolicies, err := findAllAuthPoliciesForModel(ctx, r.Client, ref.Namespace, ref.Name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list auth policies for model %s: %w", modelName, err)
+			return nil, fmt.Errorf("failed to list auth policies for model %s/%s: %w", ref.Namespace, ref.Name, err)
 		}
 
-		// Aggregate membership conditions from ALL auth policies
-		// Using API key validation selectors (auth.metadata.apiKeyValidation.*)
-		var membershipConditions []interface{}
-		var policyNames []string
-		for _, ap := range allPolicies {
-			policyNames = append(policyNames, ap.Name)
-			for _, group := range ap.Spec.Subjects.Groups {
-				if err := validateCELValue(group.Name, "group name"); err != nil {
-					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s: %w", ap.Name, err)
-				}
-				membershipConditions = append(membershipConditions, map[string]interface{}{
-					"operator": "incl", "selector": "auth.metadata.apiKeyValidation.groups", "value": group.Name,
-				})
-			}
-			for _, user := range ap.Spec.Subjects.Users {
-				if err := validateCELValue(user, "username"); err != nil {
-					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s: %w", ap.Name, err)
-				}
-				membershipConditions = append(membershipConditions, map[string]interface{}{
-					"operator": "eq", "selector": "auth.metadata.apiKeyValidation.username", "value": user,
-				})
-			}
+		// Build or update the aggregated AuthPolicy for this model
+		policyRef, err := r.buildAggregatedAuthPolicyForModel(ctx, log, ref.Namespace, ref.Name, httpRouteName, httpRouteNS, allPolicies)
+		if err != nil {
+			return nil, err
 		}
-
-		// Construct API URLs using configured namespace
-		apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
-		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/v1/subscriptions/select", r.MaaSAPINamespace)
-
-		rule := map[string]interface{}{
-			"metadata": map[string]interface{}{
-				// API Key Validation - validates the API key and returns user identity + groups
-				"apiKeyValidation": map[string]interface{}{
-					"http": map[string]interface{}{
-						"url":         apiKeyValidationURL,
-						"contentType": "application/json",
-						"method":      "POST",
-						"body": map[string]interface{}{
-							"expression": `{"key": request.headers.authorization.replace("Bearer ", "")}`,
-						},
-					},
-					"metrics":  false,
-					"priority": int64(0),
-				},
-				// Call subscription selector endpoint to determine user's subscription
-				// Priority 1 ensures this runs after apiKeyValidation (priority 0)
-				"subscription-info": map[string]interface{}{
-					"http": map[string]interface{}{
-						"url":         subscriptionSelectorURL,
-						"contentType": "application/json",
-						"method":      "POST",
-						"body": map[string]interface{}{
-							"expression": `{
-  "groups": auth.metadata.apiKeyValidation.groups,
-  "username": auth.metadata.apiKeyValidation.username,
-  "requestedSubscription": "x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""
-}`,
-						},
-					},
-					// Cache subscription selection results keyed by username, groups, and requested subscription.
-					// Key format: "username|groups-hash|requested-subscription" ensures different cache entries
-					// when the same user has different groups or requests different subscriptions.
-					// Groups are joined with commas to create a stable string representation.
-					"cache": map[string]interface{}{
-						"key": map[string]interface{}{
-							"selector": `auth.metadata.apiKeyValidation.username + "|" + auth.metadata.apiKeyValidation.groups.join(",") + "|" + ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`,
-						},
-						"ttl": int64(60),
-					},
-					"metrics":  false,
-					"priority": int64(1),
-				},
-			},
-			"authentication": map[string]interface{}{
-				// API Keys - plain authentication, actual validation in metadata layer
-				"api-keys": map[string]interface{}{
-					"plain": map[string]interface{}{
-						"selector": "request.headers.authorization",
-					},
-					"metrics":  false,
-					"priority": int64(0),
-				},
-			},
-		}
-
-		// Build authorization rules
-		authRules := make(map[string]interface{})
-
-		// Validate that API key is valid
-		authRules["api-key-valid"] = map[string]interface{}{
-			"metrics":  false,
-			"priority": int64(0),
-			"patternMatching": map[string]interface{}{
-				"patterns": []interface{}{
-					map[string]interface{}{
-						"selector": "auth.metadata.apiKeyValidation.valid",
-						"operator": "eq",
-						"value":    "true",
-					},
-				},
-			},
-		}
-
-		// Check for subscription selection errors and deny if present
-		authRules["subscription-error-check"] = map[string]interface{}{
-			"metrics":  false,
-			"priority": int64(0),
-			"opa": map[string]interface{}{
-				"rego": `allow { not object.get(input.auth.metadata["subscription-info"], "error", false) }`,
-			},
-		}
-
-		// Build aggregated authorization rule from ALL auth policies' subjects
-		if len(membershipConditions) > 0 {
-			var patterns []interface{}
-			if len(membershipConditions) == 1 {
-				patterns = membershipConditions
-			} else {
-				patterns = []interface{}{map[string]interface{}{"any": membershipConditions}}
-			}
-			authRules["require-group-membership"] = map[string]interface{}{
-				"metrics": false, "priority": int64(0),
-				"patternMatching": map[string]interface{}{"patterns": patterns},
-			}
-		}
-
-		if len(authRules) > 0 {
-			rule["authorization"] = authRules
-		}
-
-		// Pass ALL user groups unfiltered in the response so TokenRateLimitPolicy predicates can
-		// match against subscription groups (which may differ from auth policy groups).
-		// Also inject subscription metadata from subscription-info for Limitador metrics.
-		// Groups and username come from API key validation.
-		rule["response"] = map[string]interface{}{
-			"success": map[string]interface{}{
-				"headers": map[string]interface{}{
-					// Username from API key validation
-					"X-MaaS-Username": map[string]interface{}{
-						"plain": map[string]interface{}{
-							"selector": "auth.metadata.apiKeyValidation.username",
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					// Groups - construct JSON array string from API key validation groups
-					"X-MaaS-Group": map[string]interface{}{
-						"plain": map[string]interface{}{
-							"expression": `'["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'`,
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					// Key ID for tracking
-					"X-MaaS-Key-Id": map[string]interface{}{
-						"plain": map[string]interface{}{
-							"selector": "auth.metadata.apiKeyValidation.keyId",
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-				},
-				"filters": map[string]interface{}{
-					"identity": map[string]interface{}{
-						"json": map[string]interface{}{
-							"properties": map[string]interface{}{
-								"groups":     map[string]interface{}{"expression": "auth.metadata.apiKeyValidation.groups"},
-								"groups_str": map[string]interface{}{"expression": `auth.metadata.apiKeyValidation.groups.join(",")`},
-								"userid": map[string]interface{}{
-									"selector": "auth.metadata.apiKeyValidation.username",
-								},
-								"keyId": map[string]interface{}{
-									"selector": "auth.metadata.apiKeyValidation.keyId",
-								},
-								// Subscription metadata from /v1/subscriptions/select endpoint
-								"selected_subscription": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
-								},
-								"organizationId": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].organizationId) ? auth.metadata["subscription-info"].organizationId : ""`,
-								},
-								"costCenter": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].costCenter) ? auth.metadata["subscription-info"].costCenter : ""`,
-								},
-								"subscription_labels": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].labels) ? auth.metadata["subscription-info"].labels : {}`,
-								},
-								// Error information (for debugging - only populated when selection fails)
-								"subscription_error": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ""`,
-								},
-								"subscription_error_message": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : ""`,
-								},
-							},
-						},
-						"metrics": true, "priority": int64(0),
-					},
-				},
-			},
-			// Custom denial responses that include subscription error details
-			"unauthenticated": map[string]interface{}{
-				"code": int64(401),
-				"message": map[string]interface{}{
-					"value": "Authentication required",
-				},
-			},
-			"unauthorized": map[string]interface{}{
-				"code": int64(403),
-				"body": map[string]interface{}{
-					"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied"`,
-				},
-				"headers": map[string]interface{}{
-					"x-ext-auth-reason": map[string]interface{}{
-						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
-					},
-					"content-type": map[string]interface{}{
-						"value": "text/plain",
-					},
-				},
-			},
-		}
-
-		// Build the aggregated AuthPolicy (one per model, covering all MaaSAuthPolicies)
-		authPolicyName := fmt.Sprintf("maas-auth-%s", modelName)
-		authPolicy := &unstructured.Unstructured{}
-		authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-		authPolicy.SetName(authPolicyName)
-		authPolicy.SetNamespace(httpRouteNS)
-		authPolicy.SetLabels(map[string]string{
-			"maas.opendatahub.io/model":    modelName,
-			"app.kubernetes.io/managed-by": "maas-controller",
-			"app.kubernetes.io/part-of":    "maas-auth-policy",
-			"app.kubernetes.io/component":  "auth-policy",
-		})
-		authPolicy.SetAnnotations(map[string]string{
-			"maas.opendatahub.io/auth-policies": strings.Join(policyNames, ","),
-		})
-
-		refs = append(refs, authPolicyRef{Name: authPolicyName, Namespace: httpRouteNS, Model: modelName})
-
-		spec := map[string]interface{}{
-			"targetRef": map[string]interface{}{
-				"group": "gateway.networking.k8s.io",
-				"kind":  "HTTPRoute",
-				"name":  httpRouteName,
-			},
-			"rules": rule,
-		}
-		if err := unstructured.SetNestedMap(authPolicy.Object, spec, "spec"); err != nil {
-			return nil, fmt.Errorf("failed to set spec: %w", err)
-		}
-
-		// Create or update AuthPolicy
-		existing := &unstructured.Unstructured{}
-		existing.SetGroupVersionKind(authPolicy.GroupVersionKind())
-		err = r.Get(ctx, client.ObjectKeyFromObject(authPolicy), existing)
-		if apierrors.IsNotFound(err) {
-			if err := r.Create(ctx, authPolicy); err != nil {
-				return nil, fmt.Errorf("failed to create AuthPolicy for model %s: %w", modelName, err)
-			}
-			log.Info("AuthPolicy created", "name", authPolicyName, "model", modelName, "policies", policyNames)
-		} else if err != nil {
-			return nil, fmt.Errorf("failed to get existing AuthPolicy: %w", err)
-		} else {
-			if !isManaged(existing) {
-				log.Info("AuthPolicy opted out, skipping", "name", authPolicyName)
-			} else {
-				mergedAnnotations := existing.GetAnnotations()
-				if mergedAnnotations == nil {
-					mergedAnnotations = make(map[string]string)
-				}
-				for k, v := range authPolicy.GetAnnotations() {
-					mergedAnnotations[k] = v
-				}
-				existing.SetAnnotations(mergedAnnotations)
-
-				mergedLabels := existing.GetLabels()
-				if mergedLabels == nil {
-					mergedLabels = make(map[string]string)
-				}
-				for k, v := range authPolicy.GetLabels() {
-					mergedLabels[k] = v
-				}
-				existing.SetLabels(mergedLabels)
-				if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
-					return nil, fmt.Errorf("failed to update spec: %w", err)
-				}
-				if err := r.Update(ctx, existing); err != nil {
-					return nil, fmt.Errorf("failed to update AuthPolicy for model %s: %w", modelName, err)
-				}
-				log.Info("AuthPolicy updated", "name", authPolicyName, "model", modelName, "policies", policyNames)
-			}
-		}
+		refs = append(refs, *policyRef)
 	}
 	return refs, nil
 }
 
-// findHTTPRouteForModel delegates to the shared helper in helpers.go.
-func (r *MaaSAuthPolicyReconciler) findHTTPRouteForModel(ctx context.Context, log logr.Logger, defaultNS, modelName string) (string, string, error) {
-	return findHTTPRouteForModel(ctx, r.Client, defaultNS, modelName)
+// buildAggregatedAuthPolicyForModel builds or updates the aggregated AuthPolicy for a model.
+// It aggregates subjects from all provided MaaSAuthPolicies and creates/updates the Kuadrant AuthPolicy.
+func (r *MaaSAuthPolicyReconciler) buildAggregatedAuthPolicyForModel(
+	ctx context.Context,
+	log logr.Logger,
+	modelNamespace, modelName string,
+	httpRouteName, httpRouteNS string,
+	allPolicies []maasv1alpha1.MaaSAuthPolicy,
+) (*authPolicyRef, error) {
+
+	// Aggregate membership conditions from ALL auth policies
+	// Using API key validation selectors (auth.metadata.apiKeyValidation.*)
+	var membershipConditions []interface{}
+	var policyNames []string
+	for _, ap := range allPolicies {
+		policyNames = append(policyNames, ap.Name)
+		for _, group := range ap.Spec.Subjects.Groups {
+			if err := validateCELValue(group.Name, "group name"); err != nil {
+				return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s: %w", ap.Name, err)
+			}
+			membershipConditions = append(membershipConditions, map[string]interface{}{
+				"operator": "incl", "selector": "auth.metadata.apiKeyValidation.groups", "value": group.Name,
+			})
+		}
+		for _, user := range ap.Spec.Subjects.Users {
+			if err := validateCELValue(user, "username"); err != nil {
+				return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s: %w", ap.Name, err)
+			}
+			membershipConditions = append(membershipConditions, map[string]interface{}{
+				"operator": "eq", "selector": "auth.metadata.apiKeyValidation.username", "value": user,
+			})
+		}
+	}
+
+	// Construct API URLs using configured namespace
+	apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
+	subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/v1/subscriptions/select", r.MaaSAPINamespace)
+
+	rule := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			// API Key Validation - validates the API key and returns user identity + groups
+			"apiKeyValidation": map[string]interface{}{
+				"http": map[string]interface{}{
+					"url":         apiKeyValidationURL,
+					"contentType": "application/json",
+					"method":      "POST",
+					"body": map[string]interface{}{
+						"expression": `{"key": request.headers.authorization.replace("Bearer ", "")}`,
+					},
+				},
+				"metrics":  false,
+				"priority": int64(0),
+			},
+			// Call subscription selector endpoint to determine user's subscription
+			// Priority 1 ensures this runs after apiKeyValidation (priority 0)
+			"subscription-info": map[string]interface{}{
+				"http": map[string]interface{}{
+					"url":         subscriptionSelectorURL,
+					"contentType": "application/json",
+					"method":      "POST",
+					"body": map[string]interface{}{
+						"expression": `{
+  "groups": auth.metadata.apiKeyValidation.groups,
+  "username": auth.metadata.apiKeyValidation.username,
+  "requestedSubscription": "x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""
+}`,
+					},
+				},
+				// Cache subscription selection results keyed by username, groups, and requested subscription.
+				// Key format: "username|groups-hash|requested-subscription" ensures different cache entries
+				// when the same user has different groups or requests different subscriptions.
+				// Groups are joined with commas to create a stable string representation.
+				"cache": map[string]interface{}{
+					"key": map[string]interface{}{
+						"selector": `auth.metadata.apiKeyValidation.username + "|" + auth.metadata.apiKeyValidation.groups.join(",") + "|" + ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`,
+					},
+					"ttl": int64(60),
+				},
+				"metrics":  false,
+				"priority": int64(1),
+			},
+		},
+		"authentication": map[string]interface{}{
+			// API Keys - plain authentication, actual validation in metadata layer
+			"api-keys": map[string]interface{}{
+				"plain": map[string]interface{}{
+					"selector": "request.headers.authorization",
+				},
+				"metrics":  false,
+				"priority": int64(0),
+			},
+		},
+	}
+
+	// Build authorization rules
+	authRules := make(map[string]interface{})
+
+	// Validate that API key is valid
+	authRules["api-key-valid"] = map[string]interface{}{
+		"metrics":  false,
+		"priority": int64(0),
+		"patternMatching": map[string]interface{}{
+			"patterns": []interface{}{
+				map[string]interface{}{
+					"selector": "auth.metadata.apiKeyValidation.valid",
+					"operator": "eq",
+					"value":    "true",
+				},
+			},
+		},
+	}
+
+	// Check for subscription selection errors and deny if present
+	authRules["subscription-error-check"] = map[string]interface{}{
+		"metrics":  false,
+		"priority": int64(0),
+		"opa": map[string]interface{}{
+			"rego": `allow { not object.get(input.auth.metadata["subscription-info"], "error", false) }`,
+		},
+	}
+
+	// Build aggregated authorization rule from ALL auth policies' subjects
+	if len(membershipConditions) > 0 {
+		var patterns []interface{}
+		if len(membershipConditions) == 1 {
+			patterns = membershipConditions
+		} else {
+			patterns = []interface{}{map[string]interface{}{"any": membershipConditions}}
+		}
+		authRules["require-group-membership"] = map[string]interface{}{
+			"metrics": false, "priority": int64(0),
+			"patternMatching": map[string]interface{}{"patterns": patterns},
+		}
+	}
+
+	if len(authRules) > 0 {
+		rule["authorization"] = authRules
+	}
+
+	// Pass ALL user groups unfiltered in the response so TokenRateLimitPolicy predicates can
+	// match against subscription groups (which may differ from auth policy groups).
+	// Also inject subscription metadata from subscription-info for Limitador metrics.
+	// Groups and username come from API key validation.
+	rule["response"] = map[string]interface{}{
+		"success": map[string]interface{}{
+			"headers": map[string]interface{}{
+				// Username from API key validation
+				"X-MaaS-Username": map[string]interface{}{
+					"plain": map[string]interface{}{
+						"selector": "auth.metadata.apiKeyValidation.username",
+					},
+					"metrics":  false,
+					"priority": int64(0),
+				},
+				// Groups - construct JSON array string from API key validation groups
+				"X-MaaS-Group": map[string]interface{}{
+					"plain": map[string]interface{}{
+						"expression": `'["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'`,
+					},
+					"metrics":  false,
+					"priority": int64(0),
+				},
+				// Key ID for tracking
+				"X-MaaS-Key-Id": map[string]interface{}{
+					"plain": map[string]interface{}{
+						"selector": "auth.metadata.apiKeyValidation.keyId",
+					},
+					"metrics":  false,
+					"priority": int64(0),
+				},
+			},
+			"filters": map[string]interface{}{
+				"identity": map[string]interface{}{
+					"json": map[string]interface{}{
+						"properties": map[string]interface{}{
+							"groups":     map[string]interface{}{"expression": "auth.metadata.apiKeyValidation.groups"},
+							"groups_str": map[string]interface{}{"expression": `auth.metadata.apiKeyValidation.groups.join(",")`},
+							"userid": map[string]interface{}{
+								"selector": "auth.metadata.apiKeyValidation.username",
+							},
+							"keyId": map[string]interface{}{
+								"selector": "auth.metadata.apiKeyValidation.keyId",
+							},
+							// Subscription metadata from /v1/subscriptions/select endpoint
+							"selected_subscription": map[string]interface{}{
+								"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
+							},
+							"organizationId": map[string]interface{}{
+								"expression": `has(auth.metadata["subscription-info"].organizationId) ? auth.metadata["subscription-info"].organizationId : ""`,
+							},
+							"costCenter": map[string]interface{}{
+								"expression": `has(auth.metadata["subscription-info"].costCenter) ? auth.metadata["subscription-info"].costCenter : ""`,
+							},
+							"subscription_labels": map[string]interface{}{
+								"expression": `has(auth.metadata["subscription-info"].labels) ? auth.metadata["subscription-info"].labels : {}`,
+							},
+							// Error information (for debugging - only populated when selection fails)
+							"subscription_error": map[string]interface{}{
+								"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ""`,
+							},
+							"subscription_error_message": map[string]interface{}{
+								"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : ""`,
+							},
+						},
+					},
+					"metrics": true, "priority": int64(0),
+				},
+			},
+		},
+		// Custom denial responses that include subscription error details
+		"unauthenticated": map[string]interface{}{
+			"code": int64(401),
+			"message": map[string]interface{}{
+				"value": "Authentication required",
+			},
+		},
+		"unauthorized": map[string]interface{}{
+			"code": int64(403),
+			"body": map[string]interface{}{
+				"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied"`,
+			},
+			"headers": map[string]interface{}{
+				"x-ext-auth-reason": map[string]interface{}{
+					"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
+				},
+				"content-type": map[string]interface{}{
+					"value": "text/plain",
+				},
+			},
+		},
+	}
+
+	// Build the aggregated AuthPolicy (one per model, covering all MaaSAuthPolicies)
+	authPolicyName := fmt.Sprintf("maas-auth-%s", modelName)
+	authPolicy := &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	authPolicy.SetName(authPolicyName)
+	authPolicy.SetNamespace(httpRouteNS)
+	authPolicy.SetLabels(map[string]string{
+		"maas.opendatahub.io/model":    modelName,
+		"app.kubernetes.io/managed-by": "maas-controller",
+		"app.kubernetes.io/part-of":    "maas-auth-policy",
+		"app.kubernetes.io/component":  "auth-policy",
+	})
+	authPolicy.SetAnnotations(map[string]string{
+		"maas.opendatahub.io/auth-policies": strings.Join(policyNames, ","),
+	})
+
+	spec := map[string]interface{}{
+		"targetRef": map[string]interface{}{
+			"group": "gateway.networking.k8s.io",
+			"kind":  "HTTPRoute",
+			"name":  httpRouteName,
+		},
+		"rules": rule,
+	}
+	if err := unstructured.SetNestedMap(authPolicy.Object, spec, "spec"); err != nil {
+		return nil, fmt.Errorf("failed to set spec: %w", err)
+	}
+
+	// Create or update AuthPolicy
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(authPolicy.GroupVersionKind())
+	err := r.Get(ctx, client.ObjectKeyFromObject(authPolicy), existing)
+	if apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, authPolicy); err != nil {
+			return nil, fmt.Errorf("failed to create AuthPolicy for model %s/%s: %w", modelNamespace, modelName, err)
+		}
+		log.Info("AuthPolicy created", "name", authPolicyName, "model", modelNamespace+"/"+modelName, "policies", policyNames)
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to get existing AuthPolicy: %w", err)
+	} else {
+		if !isManaged(existing) {
+			log.Info("AuthPolicy opted out, skipping", "name", authPolicyName)
+		} else {
+			mergedAnnotations := existing.GetAnnotations()
+			if mergedAnnotations == nil {
+				mergedAnnotations = make(map[string]string)
+			}
+			for k, v := range authPolicy.GetAnnotations() {
+				mergedAnnotations[k] = v
+			}
+			existing.SetAnnotations(mergedAnnotations)
+
+			mergedLabels := existing.GetLabels()
+			if mergedLabels == nil {
+				mergedLabels = make(map[string]string)
+			}
+			for k, v := range authPolicy.GetLabels() {
+				mergedLabels[k] = v
+			}
+			existing.SetLabels(mergedLabels)
+			if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
+				return nil, fmt.Errorf("failed to update spec: %w", err)
+			}
+			if err := r.Update(ctx, existing); err != nil {
+				return nil, fmt.Errorf("failed to update AuthPolicy for model %s/%s: %w", modelNamespace, modelName, err)
+			}
+			log.Info("AuthPolicy updated", "name", authPolicyName, "model", modelNamespace+"/"+modelName, "policies", policyNames)
+		}
+	}
+
+	return &authPolicyRef{Name: authPolicyName, Namespace: httpRouteNS, Model: modelName, ModelNamespace: modelNamespace}, nil
 }
 
-// deleteModelAuthPolicy deletes the aggregated AuthPolicy for a model by label.
-func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelName string) error {
+// deleteModelAuthPolicy deletes or rebuilds the aggregated AuthPolicy for a model.
+// If there are remaining (non-deleted) MaaSAuthPolicies for this model, it rebuilds
+// the aggregated AuthPolicy without the deleted policy's subjects.
+// If there are no remaining policies, it deletes the aggregated AuthPolicy.
+func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
+	// Check if there are any remaining (non-deleted) MaaSAuthPolicies that reference this model.
+	remainingPolicies, err := findAllAuthPoliciesForModel(ctx, r.Client, modelNamespace, modelName)
+	if err != nil {
+		return fmt.Errorf("failed to check for remaining MaaSAuthPolicies: %w", err)
+	}
+	if len(remainingPolicies) > 0 {
+		// There are remaining policies - rebuild the aggregated AuthPolicy without the deleted policy
+		log.Info("Rebuilding aggregated AuthPolicy with remaining policies (deleted policy's subjects will be removed)",
+			"model", modelNamespace+"/"+modelName, "remainingCount", len(remainingPolicies))
+
+		// Find HTTPRoute for the model
+		httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, modelNamespace, modelName)
+		if err != nil {
+			return fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", modelNamespace, modelName, err)
+		}
+
+		// Rebuild the aggregated AuthPolicy with only the remaining policies
+		_, err = r.buildAggregatedAuthPolicyForModel(ctx, log, modelNamespace, modelName, httpRouteName, httpRouteNS, remainingPolicies)
+		return err
+	}
+
+	// No remaining parent policies - safe to delete the aggregated AuthPolicy
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"})
 	labelSelector := client.MatchingLabels{
@@ -456,7 +474,7 @@ func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, lo
 		"app.kubernetes.io/managed-by": "maas-controller",
 		"app.kubernetes.io/part-of":    "maas-auth-policy",
 	}
-	if err := r.List(ctx, policyList, labelSelector); err != nil {
+	if err := r.List(ctx, policyList, client.InNamespace(modelNamespace), labelSelector); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
@@ -465,10 +483,10 @@ func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, lo
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
 		if !isManaged(p) {
-			log.Info("AuthPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+			log.Info("AuthPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 			continue
 		}
-		log.Info("Deleting AuthPolicy", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+		log.Info("Deleting AuthPolicy (no remaining parent policies)", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete AuthPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
 		}
@@ -478,10 +496,10 @@ func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, lo
 
 func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(policy, maasAuthPolicyFinalizer) {
-		for _, modelName := range policy.Spec.ModelRefs {
-			log.Info("Deleting model AuthPolicy so remaining policies can rebuild it", "model", modelName)
-			if err := r.deleteModelAuthPolicy(ctx, log, modelName); err != nil {
-				log.Error(err, "failed to clean up AuthPolicy, will retry", "model", modelName)
+		for _, ref := range policy.Spec.ModelRefs {
+			log.Info("Deleting model AuthPolicy so remaining policies can rebuild it", "model", ref.Namespace+"/"+ref.Name)
+			if err := r.deleteModelAuthPolicy(ctx, log, ref.Namespace, ref.Name); err != nil {
+				log.Error(err, "failed to clean up AuthPolicy, will retry", "model", ref.Namespace+"/"+ref.Name)
 				return ctrl.Result{}, err
 			}
 		}
@@ -503,13 +521,13 @@ func (r *MaaSAuthPolicyReconciler) updateAuthPolicyRefStatus(ctx context.Context
 		if err := r.Get(ctx, client.ObjectKeyFromObject(ap), ap); err != nil {
 			log.Info("could not get AuthPolicy for status", "name", ref.Name, "namespace", ref.Namespace, "error", err)
 			policy.Status.AuthPolicies = append(policy.Status.AuthPolicies, maasv1alpha1.AuthPolicyRefStatus{
-				Name: ref.Name, Namespace: ref.Namespace, Model: ref.Model, Accepted: "Unknown", Enforced: "Unknown",
+				Name: ref.Name, Namespace: ref.Namespace, Model: ref.Model, ModelNamespace: ref.ModelNamespace, Accepted: "Unknown", Enforced: "Unknown",
 			})
 			continue
 		}
 		accepted, enforced := getAuthPolicyConditionState(ap)
 		policy.Status.AuthPolicies = append(policy.Status.AuthPolicies, maasv1alpha1.AuthPolicyRefStatus{
-			Name: ref.Name, Namespace: ref.Namespace, Model: ref.Model, Accepted: accepted, Enforced: enforced,
+			Name: ref.Name, Namespace: ref.Namespace, Model: ref.Model, ModelNamespace: ref.ModelNamespace, Accepted: accepted, Enforced: enforced,
 		})
 	}
 }
@@ -598,7 +616,8 @@ func (r *MaaSAuthPolicyReconciler) mapGeneratedAuthPolicyToParent(ctx context.Co
 	if modelName == "" {
 		return nil
 	}
-	ap := findAnyAuthPolicyForModel(ctx, r.Client, modelName)
+	modelNamespace := obj.GetNamespace()
+	ap := findAnyAuthPolicyForModel(ctx, r.Client, modelNamespace, modelName)
 	if ap == nil {
 		return nil
 	}
@@ -615,13 +634,13 @@ func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context
 		return nil
 	}
 	var policies maasv1alpha1.MaaSAuthPolicyList
-	if err := r.List(ctx, &policies, client.InNamespace(model.Namespace)); err != nil {
+	if err := r.List(ctx, &policies); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
 	for _, p := range policies.Items {
 		for _, ref := range p.Spec.ModelRefs {
-			if ref == model.Name {
+			if ref.Namespace == model.Namespace && ref.Name == model.Name {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
 				})
@@ -633,7 +652,7 @@ func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context
 }
 
 // mapHTTPRouteToMaaSAuthPolicies returns reconcile requests for all MaaSAuthPolicies
-// that reference models whose LLMInferenceService lives in the HTTPRoute's namespace.
+// that reference models in the HTTPRoute's namespace.
 func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
 	route, ok := obj.(*gatewayapiv1.HTTPRoute)
 	if !ok {
@@ -641,20 +660,13 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 	}
 	// Find MaaSModelRefs in this namespace
 	var models maasv1alpha1.MaaSModelRefList
-	if err := r.List(ctx, &models); err != nil {
+	if err := r.List(ctx, &models, client.InNamespace(route.Namespace)); err != nil {
 		return nil
 	}
 	// Use namespace-qualified keys to prevent cross-namespace matches
 	modelKeysInNS := map[string]bool{}
 	for _, m := range models.Items {
-		ns := m.Spec.ModelRef.Namespace
-		if ns == "" {
-			ns = m.Namespace
-		}
-		if ns == route.Namespace {
-			key := m.Namespace + "/" + m.Name
-			modelKeysInNS[key] = true
-		}
+		modelKeysInNS[m.Namespace+"/"+m.Name] = true
 	}
 	if len(modelKeysInNS) == 0 {
 		return nil
@@ -667,8 +679,7 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 	var requests []reconcile.Request
 	for _, p := range policies.Items {
 		for _, ref := range p.Spec.ModelRefs {
-			key := p.Namespace + "/" + ref
-			if modelKeysInNS[key] {
+			if modelKeysInNS[ref.Namespace+"/"+ref.Name] {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
 				})
