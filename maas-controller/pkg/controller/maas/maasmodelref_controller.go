@@ -20,11 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	equality "k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -237,36 +237,33 @@ func (r *MaaSModelRefReconciler) updateStatus(ctx context.Context, model *maasv1
 // updateStatusWithReason sets Phase and Ready condition; when phase is "Failed", reason overrides the default "ReconcileFailed" (e.g. "Unsupported" for unimplemented kinds).
 func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message, reason string) {
 	model.Status.Phase = phase
-	condition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}
+
+	status := metav1.ConditionTrue
+	condReason := "Reconciled"
 	if phase != "Ready" {
-		condition.Status = metav1.ConditionFalse
+		status = metav1.ConditionFalse
 		if reason != "" {
-			// Use provided reason when available (e.g., "Unsupported" for unimplemented kinds)
-			condition.Reason = reason
+			condReason = reason
 		} else if phase == "Failed" {
-			condition.Reason = "ReconcileFailed"
+			condReason = "ReconcileFailed"
 		} else {
-			condition.Reason = "BackendNotReady"
+			condReason = "BackendNotReady"
 		}
 	}
 
-	// Update condition
-	found := false
-	for i, c := range model.Status.Conditions {
-		if c.Type == condition.Type {
-			model.Status.Conditions[i] = condition
-			found = true
-			break
+	apimeta.SetStatusCondition(&model.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  status,
+		Reason:  condReason,
+		Message: message,
+	})
+
+	// Compare with server-side status to avoid redundant writes.
+	current := &maasv1alpha1.MaaSModelRef{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(model), current); err == nil {
+		if equality.Semantic.DeepEqual(current.Status, model.Status) {
+			return
 		}
-	}
-	if !found {
-		model.Status.Conditions = append(model.Status.Conditions, condition)
 	}
 
 	if err := r.Status().Update(ctx, model); err != nil {
@@ -311,7 +308,7 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaaSModelRef{}).
+		For(&maasv1alpha1.MaaSModelRef{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
 		// (fixes race condition where MaaSModelRef is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.mapHTTPRouteToMaaSModelRefs)).

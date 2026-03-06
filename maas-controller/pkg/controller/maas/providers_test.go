@@ -63,6 +63,41 @@ func testRESTMapper() apimeta.RESTMapper {
 	return m
 }
 
+// newHTTPRoute creates a plain HTTPRoute (no labels or parent refs).
+// Used by ExternalModel tests where KServe labels are not expected.
+func newHTTPRoute(name, ns string) *gatewayapiv1.HTTPRoute {
+	return &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+	}
+}
+
+// newMaaSSubscription creates a MaaSSubscription with a single owner group and a single
+// model ref with the given token rate limit.
+func newMaaSSubscription(name, ns, group, modelName string, limit int64) *maasv1alpha1.MaaSSubscription {
+	return &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			Owner: maasv1alpha1.OwnerSpec{
+				Groups: []maasv1alpha1.GroupReference{{Name: group}},
+			},
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+				{Name: modelName, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: limit, Window: "1m"}}},
+			},
+		},
+	}
+}
+
+// newMaaSAuthPolicy creates a MaaSAuthPolicy with a single subject group and the given model refs.
+func newMaaSAuthPolicy(name, ns, group string, modelRefs ...string) *maasv1alpha1.MaaSAuthPolicy {
+	return &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: modelRefs,
+			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: group}}},
+		},
+	}
+}
+
 func TestGetBackendHandler_UnknownKind_ReturnsNil(t *testing.T) {
 	r := &MaaSModelRefReconciler{}
 	if got := GetBackendHandler("unknown", r); got != nil {

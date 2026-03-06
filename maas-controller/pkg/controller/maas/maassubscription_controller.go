@@ -17,7 +17,9 @@ limitations under the License.
 package maas
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -33,9 +35,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -308,6 +312,14 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			if !isManaged(existing) {
 				log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
 			} else {
+				// Snapshot the existing object before modifications so we can detect
+				// no-op updates. We use JSON marshaling (rather than reflect.DeepEqual)
+				// because unstructured maps read from the API server deserialize JSON
+				// numbers as float64, while the controller builds them as int64.
+				// json.Marshal normalizes both to the same representation and sorts
+				// map keys deterministically, making byte comparison reliable.
+				snapshot, _ := json.Marshal(existing.Object)
+
 				mergedAnnotations := existing.GetAnnotations()
 				if mergedAnnotations == nil {
 					mergedAnnotations = make(map[string]string)
@@ -328,10 +340,16 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
 					return fmt.Errorf("failed to update spec: %w", err)
 				}
-				if err := r.Update(ctx, existing); err != nil {
-					return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s: %w", modelRef.Name, err)
+
+				modified, _ := json.Marshal(existing.Object)
+				if bytes.Equal(snapshot, modified) {
+					log.Info("TokenRateLimitPolicy unchanged, skipping update", "name", policyName, "model", modelRef.Name)
+				} else {
+					if err := r.Update(ctx, existing); err != nil {
+						return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s: %w", modelRef.Name, err)
+					}
+					log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Name, "subscriptions", subNames)
 				}
-				log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Name, "subscriptions", subNames)
 			}
 		}
 	}
@@ -393,30 +411,20 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 
 func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase, message string) {
 	subscription.Status.Phase = phase
-	condition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}
+
+	status := metav1.ConditionTrue
+	reason := "Reconciled"
 	if phase == "Failed" {
-		condition.Status = metav1.ConditionFalse
-		condition.Reason = "ReconcileFailed"
+		status = metav1.ConditionFalse
+		reason = "ReconcileFailed"
 	}
 
-	// Update condition
-	found := false
-	for i, c := range subscription.Status.Conditions {
-		if c.Type == condition.Type {
-			subscription.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		subscription.Status.Conditions = append(subscription.Status.Conditions, condition)
-	}
+	apimeta.SetStatusCondition(&subscription.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  status,
+		Reason:  reason,
+		Message: message,
+	})
 
 	if err := r.Status().Update(ctx, subscription); err != nil {
 		log := logr.FromContextOrDiscard(ctx)
@@ -431,7 +439,7 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	generatedTRLP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaaSSubscription{}).
+		For(&maasv1alpha1.MaaSSubscription{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
 		// (fixes race condition where MaaSSubscription is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
