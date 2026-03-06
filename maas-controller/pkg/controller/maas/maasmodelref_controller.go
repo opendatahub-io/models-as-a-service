@@ -237,37 +237,26 @@ func (r *MaaSModelRefReconciler) updateStatus(ctx context.Context, model *maasv1
 // updateStatusWithReason sets Phase and Ready condition; when phase is "Failed", reason overrides the default "ReconcileFailed" (e.g. "Unsupported" for unimplemented kinds).
 func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message, reason string) {
 	model.Status.Phase = phase
-	condition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}
+
+	status := metav1.ConditionTrue
+	condReason := "Reconciled"
 	if phase != "Ready" {
-		condition.Status = metav1.ConditionFalse
+		status = metav1.ConditionFalse
 		if reason != "" {
-			// Use provided reason when available (e.g., "Unsupported" for unimplemented kinds)
-			condition.Reason = reason
+			condReason = reason
 		} else if phase == "Failed" {
-			condition.Reason = "ReconcileFailed"
+			condReason = "ReconcileFailed"
 		} else {
-			condition.Reason = "BackendNotReady"
+			condReason = "BackendNotReady"
 		}
 	}
 
-	// Update condition
-	found := false
-	for i, c := range model.Status.Conditions {
-		if c.Type == condition.Type {
-			model.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		model.Status.Conditions = append(model.Status.Conditions, condition)
-	}
+	apimeta.SetStatusCondition(&model.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  status,
+		Reason:  condReason,
+		Message: message,
+	})
 
 	if err := r.Status().Update(ctx, model); err != nil {
 		log := logr.FromContextOrDiscard(ctx)

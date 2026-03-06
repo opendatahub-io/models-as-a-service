@@ -393,30 +393,20 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 
 func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase, message string) {
 	subscription.Status.Phase = phase
-	condition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}
+
+	status := metav1.ConditionTrue
+	reason := "Reconciled"
 	if phase == "Failed" {
-		condition.Status = metav1.ConditionFalse
-		condition.Reason = "ReconcileFailed"
+		status = metav1.ConditionFalse
+		reason = "ReconcileFailed"
 	}
 
-	// Update condition
-	found := false
-	for i, c := range subscription.Status.Conditions {
-		if c.Type == condition.Type {
-			subscription.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		subscription.Status.Conditions = append(subscription.Status.Conditions, condition)
-	}
+	apimeta.SetStatusCondition(&subscription.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  status,
+		Reason:  reason,
+		Message: message,
+	})
 
 	if err := r.Status().Update(ctx, subscription); err != nil {
 		log := logr.FromContextOrDiscard(ctx)

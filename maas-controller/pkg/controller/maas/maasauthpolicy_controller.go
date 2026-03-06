@@ -539,24 +539,21 @@ func getAuthPolicyConditionState(ap *unstructured.Unstructured) (accepted, enfor
 
 func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, phase, message string) {
 	policy.Status.Phase = phase
-	condition := metav1.Condition{
-		Type: "Ready", Status: metav1.ConditionTrue, Reason: "Reconciled", Message: message, LastTransitionTime: metav1.Now(),
-	}
+
+	status := metav1.ConditionTrue
+	reason := "Reconciled"
 	if phase == "Failed" {
-		condition.Status = metav1.ConditionFalse
-		condition.Reason = "ReconcileFailed"
+		status = metav1.ConditionFalse
+		reason = "ReconcileFailed"
 	}
-	found := false
-	for i, c := range policy.Status.Conditions {
-		if c.Type == condition.Type {
-			policy.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		policy.Status.Conditions = append(policy.Status.Conditions, condition)
-	}
+
+	apimeta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  status,
+		Reason:  reason,
+		Message: message,
+	})
+
 	if err := r.Status().Update(ctx, policy); err != nil {
 		log := logr.FromContextOrDiscard(ctx)
 		log.Error(err, "failed to update MaaSAuthPolicy status", "name", policy.Name)
