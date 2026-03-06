@@ -49,7 +49,7 @@ The MaaS (Models as a Service) API provides a tier-based token management system
   - Ephemeral token generation via Kubernetes Service Account TokenRequest API
   - Tier-based namespace and Service Account management
   - Model list from MaaSModelRef CRs only
-  - Health checks and CORS support (debug mode)
+  - Health checks and CORS support (debug mode, localhost origins only)
 
 **Key Components**:
 - **Token Manager**: Creates/revokes Service Account tokens
@@ -591,7 +591,7 @@ Example tier-based access pattern:
 **MaaS API Deployment**:
 - `NAMESPACE`: Namespace where MaaS API is deployed (from fieldRef)
 - `PORT`: HTTP server port (default: `8080`)
-- `DEBUG_MODE`: Enable CORS and debug logging (default: `false`)
+- `DEBUG_MODE`: Enable debug logging and CORS for localhost origins only (default: `false`)
 
 ### Tier Configuration
 
