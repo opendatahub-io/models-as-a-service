@@ -61,7 +61,9 @@ Tests for the API Key Management endpoints (`/v1/api-keys`):
 
 ```bash
 cd test/e2e
-./run_api_key_tests.sh
+source .venv/bin/activate
+pytest tests/test_api_keys.py -v \
+    --html=reports/api-keys-report.html --self-contained-html
 ```
 
 **Environment Variables:**

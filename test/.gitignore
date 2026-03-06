@@ -1,0 +1,8 @@
+# Test run artifacts — keep directories, ignore contents
+reports/
+**/artifacts/*
+!**/artifacts/.gitkeep
+
+# Certs kept out of Git (billing tests)
+ingress-ca.crt
+tests/ingress-ca.crt
