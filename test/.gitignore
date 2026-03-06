@@ -5,4 +5,3 @@ reports/
 
 # Certs kept out of Git (billing tests)
 ingress-ca.crt
-tests/ingress-ca.crt
