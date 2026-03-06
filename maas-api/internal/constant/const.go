@@ -14,6 +14,11 @@ const (
 	HeaderUsername = "X-MaaS-Username"
 	HeaderGroup    = "X-MaaS-Group"
 
+	// API Key configuration defaults.
+	// DefaultAPIKeyMaxExpirationDays is the default maximum allowed expiration for API keys.
+	// Set API_KEY_MAX_EXPIRATION_DAYS=0 to disable the limit.
+	DefaultAPIKeyMaxExpirationDays = 30
+
 	// LLMInferenceService annotation keys for model metadata.
 	AnnotationGenAIUseCase = "opendatahub.io/genai-use-case"
 	AnnotationDescription  = "openshift.io/description"
