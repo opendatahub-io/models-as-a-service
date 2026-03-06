@@ -152,7 +152,11 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to update model status: %v", err))
 		return ctrl.Result{}, err
 	}
-	model.Status.Endpoint = endpoint
+	if model.Spec.EndpointOverride != "" {
+		model.Status.Endpoint = model.Spec.EndpointOverride
+	} else {
+		model.Status.Endpoint = endpoint
+	}
 	if ready {
 		model.Status.Phase = "Ready"
 		r.updateStatus(ctx, model, "Ready", "Successfully reconciled")

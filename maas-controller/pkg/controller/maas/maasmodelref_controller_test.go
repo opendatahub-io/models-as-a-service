@@ -39,6 +39,25 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+// fakeHandler is a test-only BackendHandler that returns preconfigured values.
+type fakeHandler struct {
+	endpoint string
+	ready    bool
+}
+
+func (f *fakeHandler) ReconcileRoute(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
+	return nil
+}
+func (f *fakeHandler) Status(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, bool, error) {
+	return f.endpoint, f.ready, nil
+}
+func (f *fakeHandler) GetModelEndpoint(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, error) {
+	return f.endpoint, nil
+}
+func (f *fakeHandler) CleanupOnDelete(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
+	return nil
+}
+
 func init() {
 	utilruntime.Must(kservev1alpha1.AddToScheme(scheme))
 }
@@ -148,6 +167,72 @@ func TestMaaSModelRefReconciler_gatewayName(t *testing.T) {
 			t.Errorf("gatewayName() = %q, want %q", got, "my-gateway")
 		}
 	})
+}
+
+func TestReconcile_EndpointOverride(t *testing.T) {
+	const testKind = "_test_fake_kind"
+	discoveredEndpoint := "https://discovered.example.com/model"
+	overrideEndpoint := "https://override.example.com/model"
+
+	tests := []struct {
+		name             string
+		endpointOverride string
+		wantEndpoint     string
+	}{
+		{
+			name:             "uses_discovered_endpoint_when_no_override",
+			endpointOverride: "",
+			wantEndpoint:     discoveredEndpoint,
+		},
+		{
+			name:             "uses_override_when_set",
+			endpointOverride: overrideEndpoint,
+			wantEndpoint:     overrideEndpoint,
+		},
+	}
+
+	// Register a fake handler kind for testing.
+	backendHandlerFactories[testKind] = func(_ *MaaSModelRefReconciler) BackendHandler {
+		return &fakeHandler{endpoint: discoveredEndpoint, ready: true}
+	}
+	defer delete(backendHandlerFactories, testKind)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := &maasv1alpha1.MaaSModelRef{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-model", Namespace: "default"},
+				Spec: maasv1alpha1.MaaSModelSpec{
+					ModelRef:         maasv1alpha1.ModelReference{Kind: testKind, Name: "backend"},
+					EndpointOverride: tt.endpointOverride,
+				},
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(model).
+				WithStatusSubresource(model).
+				Build()
+
+			r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-model", Namespace: "default"}}
+
+			if _, err := r.Reconcile(context.Background(), req); err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+
+			updated := &maasv1alpha1.MaaSModelRef{}
+			if err := c.Get(context.Background(), req.NamespacedName, updated); err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+
+			if updated.Status.Endpoint != tt.wantEndpoint {
+				t.Errorf("Status.Endpoint = %q, want %q", updated.Status.Endpoint, tt.wantEndpoint)
+			}
+			if updated.Status.Phase != "Ready" {
+				t.Errorf("Status.Phase = %q, want %q", updated.Status.Phase, "Ready")
+			}
+		})
+	}
 }
 
 func TestMaaSModelRefReconciler_gatewayNamespace(t *testing.T) {

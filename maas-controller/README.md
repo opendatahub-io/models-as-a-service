@@ -55,6 +55,8 @@ MaaSModelRef's `spec.modelRef.kind` selects how the controller discovers and exp
 
 The CRD enum for `kind` is `LLMInferenceService` and `ExternalModel` (see `api/maas/v1alpha1/maasmodelref_types.go`). The registry accepts **LLMInferenceService** (and the alias **llmisvc** for backwards compatibility). Use `kind: LLMInferenceService` in MaaSModelRef specs.
 
+**Endpoint override:** MaaSModel supports an optional `spec.endpointOverride` field. When set, the controller uses this value for `status.endpoint` instead of the auto-discovered endpoint. This applies to all kinds and is useful when the discovered endpoint is wrong (e.g. wrong gateway or hostname). The controller still validates the backend normally — only the final endpoint URL is overridden.
+
 **Status for unimplemented kinds:** If a kind returns `ErrKindNotImplemented` (e.g. ExternalModel), the controller updates status with Phase=Failed and Ready condition Reason=**Unsupported** (instead of ReconcileFailed), so UIs can distinguish "not implemented" from other failures.
 
 ### Adding a new provider
