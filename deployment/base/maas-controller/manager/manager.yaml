@@ -31,6 +31,7 @@ spec:
           - --gateway-name=$(GATEWAY_NAME)
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
           - --maas-api-namespace=$(MAAS_API_NAMESPACE)
+          - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
           - --cluster-audience=$(CLUSTER_AUDIENCE)
         env:
           - name: GATEWAY_NAME
@@ -41,6 +42,8 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
+          - name: MAAS_SUBSCRIPTION_NAMESPACE
+            value: "models-as-a-service"
           - name: CLUSTER_AUDIENCE
             value: "https://kubernetes.default.svc"
         image: maas-controller

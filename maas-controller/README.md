@@ -34,6 +34,10 @@ Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway leve
 
 ### CRDs and what they generate
 
+As MaaS API and controller are conventionally deployed in the operator namespace (e.g., `opendatahub`), MaaS CRs need to be separated so that they can be managed with lower cluster privileges. Therefore,
+- **MaasModelRef** is located in the same namespace as the **HTTPRoute** and **LLMInderenceService** it refers to; and
+- **MaaSAuthPolicy** and **MaaSSubscription** are located in a dedicated subscription namespace (default: `models-as-a-service`). Set `--maas-subscription-namespace` or the `MAAS_SUBSCRIPTION_NAMESPACE` env var in `maas-controller` deployment to use another namespace. MaaS controller will only watch and reconcile those CRs this configured namespace.
+
 | You create | Controller generates | Per | Targets |
 | ---------- | -------------------- | --- | ------- |
 | **MaaSModelRef** | (validates HTTPRoute) | 1 per model | References LLMInferenceService |
@@ -197,7 +201,9 @@ kubectl get crd | grep maas.opendatahub.io
 Install both **regular** and **premium** simulator models and their MaaS policies/subscriptions (from the repository root):
 
 ```bash
-maas-controller/scripts/install-examples.sh
+kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace models-as-a-service --dry-run=client -o yaml | kubectl apply -f -
+kustomize build docs/samples/maas-system | kubectl apply -f -
 ```
 
 This creates:
@@ -206,13 +212,13 @@ This creates:
 
 - `LLMInferenceService/facebook-opt-125m-simulated` in `llm` namespace
 - `MaaSModelRef/facebook-opt-125m-simulated` in `opendatahub`
-- `MaaSAuthPolicy/simulator-access` (group: `free-user`) and `MaaSSubscription/simulator-subscription` (100 tokens/min)
+- `MaaSAuthPolicy/simulator-access` (group: `free-user`) and `MaaSSubscription/simulator-subscription` (100 tokens/min) in `models-as-a-service`
 
 ### Premium tier
 
 - `LLMInferenceService/premium-simulated-simulated-premium` in `llm` namespace
 - `MaaSModelRef/premium-simulated-simulated-premium` in `opendatahub`
-- `MaaSAuthPolicy/premium-simulator-access` (group: `premium-user`) and `MaaSSubscription/premium-simulator-subscription` (1000 tokens/min)
+- `MaaSAuthPolicy/premium-simulator-access` (group: `premium-user`) and `MaaSSubscription/premium-simulator-subscription` (1000 tokens/min) in `models-as-a-service`
 
 Replace `free-user` and `premium-user` in the example CRs with groups from your identity provider.
 
@@ -220,7 +226,8 @@ Then verify:
 
 ```bash
 # Check CRs
-kubectl get maasmodelref,maasauthpolicy,maassubscription -n opendatahub
+kubectl get maasmodelref -n opendatahub
+kubectl get maasauthpolicy,maassubscription -n models-as-a-service
 
 # Check generated Kuadrant policies
 kubectl get authpolicy,tokenratelimitpolicy -n llm
@@ -234,6 +241,7 @@ curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
+  -H "x-maas-subscription: simulator-subscription" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 
 # Premium model: 401 without auth, 200 with auth (user must be in premium-user)
@@ -241,6 +249,7 @@ curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
+  -H "x-maas-subscription: premium-simulator-subscription" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 ```
 
@@ -319,5 +328,6 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 ## Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
+- **MaaS subscription namespace**: Default is `models-as-a-service`. Override in the deployment or via Kustomize.
 - **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override in the deployment or via Kustomize.
 - **Gateway name**: The default auth policy targets `maas-default-gateway` in `openshift-ingress`. Edit `deployment/base/maas-controller/policies/gateway-default-auth.yaml` if your gateway has a different name.
