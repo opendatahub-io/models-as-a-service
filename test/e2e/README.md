@@ -27,7 +27,6 @@ If MaaS is already deployed and you just want to run tests:
 ### Run All Subscription Tests
 ```bash
 export GATEWAY_HOST="maas.apps.your-cluster.example.com"
-export MAAS_NAMESPACE="opendatahub"
 
 # Activate virtual environment
 cd test/e2e
@@ -50,7 +49,6 @@ pytest tests/test_subscription.py::TestE2ESubscriptionFlow::test_e2e_with_both_a
 See `tests/test_subscription.py` docstring for all available environment variables. Key ones:
 
 - `GATEWAY_HOST`: Gateway hostname (required)
-- `MAAS_NAMESPACE`: MaaS namespace (default: opendatahub)
 - `E2E_TEST_TOKEN_SA_NAMESPACE`, `E2E_TEST_TOKEN_SA_NAME`: Service account for token generation
 - `E2E_TIMEOUT`: Request timeout in seconds (default: 30)
 - `E2E_RECONCILE_WAIT`: Wait time for reconciliation in seconds (default: 8)

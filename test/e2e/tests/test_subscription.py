@@ -14,7 +14,7 @@ Environment variables (all optional, with defaults):
   - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_API_BASE_URL: MaaS API URL (required for API key creation)
   - DEPLOYMENT_NAMESPACE: MaaS API and Controller namespace (default: opendatahub)
-  - MAAS_SYSTEM_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
+  - MAAS_SUBSCRIPTION_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: When set, use this SA token
     instead of oc whoami -t (e.g. for Prow where oc whoami -t is unavailable)
   - E2E_TIMEOUT: Request timeout in seconds (default: 30)
@@ -74,7 +74,7 @@ MANAGED_ANNOTATION = "opendatahub.io/managed"
 
 
 def _ns():
-    return os.environ.get("MAAS_SYSTEM_NAMESPACE", "models-as-a-service")
+    return os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 
 
 def _gateway_url():
@@ -1151,11 +1151,11 @@ class TestManagedAnnotation:
             _wait_reconcile()
 
 
-class TestMaaSSystemNamespace:
-    """Verifies MaaS Controller only reconciles CRs in the configured MaaS System Namespace."""
+class TestMaasSubscriptionNamespace:
+    """Verifies MaaS controller only reconciles CRs in the configured MaaS subscription namespace."""
 
-    def test_authpolicy_and_subscription_in_maas_system_namespace(self):
-        """MaaSAuthPolicy and MaaSSubscription in MaaS System Namespace should be reconciled
+    def test_authpolicy_and_subscription_in_maas_subscription_namespace(self):
+        """MaaSAuthPolicy and MaaSSubscription in MaaS subscription namespace should be reconciled
         and should appear in the AuthPolicy and TRLP annotations for the model."""
         ns = _ns()
         try:

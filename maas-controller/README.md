@@ -34,6 +34,10 @@ Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway leve
 
 ### CRDs and what they generate
 
+As MaaS API and controller are conventionally deployed in the operator namespace (e.g., `opendatahub`), MaaS CRs need to be separated so that they can be managed with lower cluster privileges. Therefore,
+- **MaasModelRef** is located in the same namespace as the **HTTPRoute** and **LLMInderenceService** it refers to; and
+- **MaaSAuthPolicy** and **MaaSSubscription** are located in a dedicated subscription namespace (default: `models-as-a-service`). Set `--maas-subscription-namespace` or the `MAAS_SUBSCRIPTION_NAMESPACE` env var in `maas-controller` deployment to use another namespace. MaaS controller will only watch and reconcile those CRs this configured namespace.
+
 | You create | Controller generates | Per | Targets |
 |------------|---------------------|-----|---------|
 | **MaaSModelRef** | (validates HTTPRoute) | 1 per model | References LLMInferenceService |
@@ -43,8 +47,6 @@ Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway leve
 Relationships are many-to-many: multiple MaaSAuthPolicies/MaaSSubscriptions can reference the same model — the controller aggregates them into a single Kuadrant policy per model. Multiple subscriptions for one model use mutually exclusive predicates with priority based on token limit (highest wins).
 
 **Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModelRef** CRs (in the API's namespace). Each MaaSModelRef's `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModelRef objects is the source of truth for "which models are available" in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
-
-**MaaS System namespace:** The MaaS controller watches a single configurable namespace only (default: `models-as-a-service`) for **MaaSAuthPolicy** and **MaaSSubscription**. Create those two CR types in that namespace. Set `--maas-system-namespace` or the `MAAS_SYSTEM_NAMESPACE` env var to use another namespace. The controller still watches **MaaSModelRef** in all namespaces. HTTPRoutes, Gateways, and LLMInferenceServices can still live in other namespaces too; the controller reaches them via refs.
 
 ### Model kinds and the provider pattern
 
@@ -325,6 +327,6 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 ## Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
-- **MaaS System namespace**: Default is `models-as-a-service`. Override in the deployment or via Kustomize.
+- **MaaS subscription namespace**: Default is `models-as-a-service`. Override in the deployment or via Kustomize.
 - **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override in the deployment or via Kustomize.
 - **Gateway name**: The default auth policy targets `maas-default-gateway` in `openshift-ingress`. Edit `deployment/base/maas-controller/policies/gateway-default-auth.yaml` if your gateway has a different name.

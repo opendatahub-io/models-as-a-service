@@ -16,8 +16,8 @@
 #   ./test/e2e/scripts/auth_utils.sh
 #
 # Environment:
-#   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and Controller (default: opendatahub)
-#   MAAS_SYSTEM_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
+#   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
+#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 #   AUTHORINO_NAMESPACE - Namespace for Authorino (default: kuadrant-system)
 #   ARTIFACT_DIR       - Prow artifact dir; also ARTIFACTS, LOG_DIR (default: test/e2e/reports)
 #
@@ -36,7 +36,7 @@ _find_root() {
 
 PROJECT_ROOT="$(_find_root)"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
-MAAS_SYSTEM_NAMESPACE="${MAAS_SYSTEM_NAMESPACE:-models-as-a-service}"
+MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-kuadrant-system}"
 # OpenShift CI/Prow use ARTIFACT_DIR; respect ARTIFACTS_DIR if already set by caller
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}}"
@@ -119,7 +119,7 @@ collect_cluster_state() {
     echo ""
     echo "--- MaaS CRs ---"
     kubectl get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
-    kubectl get maasauthpolicies,maassubscriptions -n "$MAAS_SYSTEM_NAMESPACE" 2>/dev/null || true
+    kubectl get maasauthpolicies,maassubscriptions -n "$MAAS_SUBSCRIPTION_NAMESPACE" 2>/dev/null || true
     echo ""
     echo "--- HTTPRoutes ---"
     kubectl get httproutes -A 2>/dev/null | head -30 || true
@@ -192,7 +192,7 @@ run_auth_debug_report() {
   _run "Logged-in user" "oc whoami 2>/dev/null || echo 'Not logged in'"
   _run "Cluster domain" "oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo 'N/A'"
   _append "DEPLOYMENT_NAMESPACE: $DEPLOYMENT_NAMESPACE"
-  _append "MAAS_SYSTEM_NAMESPACE: $MAAS_SYSTEM_NAMESPACE"
+  _append "MAAS_SUBSCRIPTION_NAMESPACE: $MAAS_SUBSCRIPTION_NAMESPACE"
   _append "AUTHORINO_NAMESPACE: $AUTHORINO_NAMESPACE"
   _append ""
 
@@ -212,8 +212,8 @@ run_auth_debug_report() {
   _append ""
 
   _section "MaaS CRs"
-  _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n $MAAS_SYSTEM_NAMESPACE -o wide 2>/dev/null || true"
-  _run "MaaSSubscriptions" "kubectl get maassubscriptions -n $MAAS_SYSTEM_NAMESPACE -o wide 2>/dev/null || true"
+  _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
+  _run "MaaSSubscriptions" "kubectl get maassubscriptions -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
   _run "MaaSModelRefs" "kubectl get maasmodelrefs -n $DEPLOYMENT_NAMESPACE -o wide 2>/dev/null || true"
   _append ""
 

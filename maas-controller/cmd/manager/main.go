@@ -55,7 +55,7 @@ func main() {
 	var gatewayName string
 	var gatewayNamespace string
 	var maasAPINamespace string
-	var maasSystemNamespace string
+	var maasSubscriptionNamespace string
 	var clusterAudience string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
@@ -65,7 +65,7 @@ func main() {
 	flag.StringVar(&gatewayName, "gateway-name", "maas-default-gateway", "The name of the Gateway resource to use for model HTTPRoutes.")
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "The namespace of the Gateway resource.")
 	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "opendatahub", "The namespace where maas-api service is deployed.")
-	flag.StringVar(&maasSystemNamespace, "maas-system-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
+	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
 	flag.StringVar(&clusterAudience, "cluster-audience", "https://kubernetes.default.svc", "The OIDC audience of the cluster for TokenReview. HyperShift/ROSA clusters use a custom OIDC provider URL.")
 
 	opts := zap.Options{Development: false}
@@ -74,11 +74,11 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSystemNamespace)
+	setupLog.Info("watching namespace for MaaS AuthPolicy and MaaSSubscription", "namespace", maasSubscriptionNamespace)
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
-			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: map[string]cache.Config{maasSystemNamespace: {}}},
-			&maasv1alpha1.MaaSSubscription{}: {Namespaces: map[string]cache.Config{maasSystemNamespace: {}}},
+			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: map[string]cache.Config{maasSubscriptionNamespace: {}}},
+			&maasv1alpha1.MaaSSubscription{}: {Namespaces: map[string]cache.Config{maasSubscriptionNamespace: {}}},
 		},
 	}
 

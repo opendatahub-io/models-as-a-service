@@ -8,7 +8,7 @@
 # - Custom CatalogSource (odh-custom-catalog)
 # - ODH operator namespace (odh-operator)
 # - OpenDataHub application namespace (opendatahub)
-# - MaaS system namespace (models-as-a-service)
+# - MaaS subscription namespace (models-as-a-service)
 # - ODH CRDs (optional)
 #
 # Usage: ./cleanup-odh.sh [--include-crds]
@@ -77,127 +77,55 @@ kubectl delete operatorgroup odh-operator-group -n odh-operator --ignore-not-fou
 echo "7. Deleting odh-operator namespace..."
 kubectl delete ns odh-operator --ignore-not-found --timeout=120s 2>/dev/null || true
 
+force_delete_namespace() {
+    local ns=$1
+    shift
+    local cr_types=("$@")
+    
+    if ! kubectl get namespace "$ns" &>/dev/null; then
+        echo "   $ns not found, skipping"
+        return 0
+    fi
+    
+    # Remove finalizers from CRs first (controller likely gone)
+    for cr_type in "${cr_types[@]}"; do
+        for name in $(kubectl get "$cr_type" -n "$ns" -o name 2>/dev/null); do
+            kubectl patch "$name" -n "$ns" --type=json \
+                -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+        done
+    done
+    
+    # Delete namespace
+    kubectl delete ns "$ns" --ignore-not-found --timeout=30s 2>/dev/null || true
+    
+    # If still stuck, remove namespace finalizers
+    if kubectl get namespace "$ns" &>/dev/null && command -v jq &>/dev/null; then
+        kubectl get namespace "$ns" -o json | jq '.spec.finalizers = []' | \
+            kubectl replace --raw "/api/v1/namespaces/$ns/finalize" -f - 2>/dev/null || true
+    fi
+    
+    kubectl wait --for=delete namespace/"$ns" --timeout=30s 2>/dev/null || true
+}
+
 # 8. Delete opendatahub namespace (contains deployed components)
 echo "8. Deleting opendatahub namespace..."
-kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || true
-
-# 8b. Force-remove opendatahub if stuck terminating (MaaS CRs often have finalizers)
-if kubectl get namespace opendatahub &>/dev/null; then
-    echo "   opendatahub stuck terminating, removing finalizers..."
-    # Remove finalizers from MaaS CRs (common blockers)
-    for name in $(kubectl get maasmodelrefs.maas.opendatahub.io -n opendatahub --no-headers 2>/dev/null | awk '{print $1}'); do
-        echo "   Removing finalizers from MaaSModelRef $name..."
-        kubectl patch maasmodelrefs.maas.opendatahub.io "$name" -n opendatahub --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-    done
-    # Remove finalizers from namespace itself (requires jq)
-    if kubectl get namespace opendatahub &>/dev/null && command -v jq &>/dev/null; then
-        echo "   Removing finalizers from opendatahub namespace..."
-        kubectl get namespace opendatahub -o json | jq '.spec.finalizers = []' | \
-            kubectl replace --raw "/api/v1/namespaces/opendatahub/finalize" -f -
-    elif kubectl get namespace opendatahub &>/dev/null; then
-        echo "   WARNING: Install 'jq' to force-remove namespace finalizers. Namespace may remain terminating."
-    fi
-    echo "   Waiting for opendatahub namespace to be removed..."
-    for i in {1..30}; do
-        if ! kubectl get namespace opendatahub &>/dev/null; then
-            echo "   opendatahub namespace removed."
-            break
-        fi
-        sleep 2
-    done
-fi
+force_delete_namespace "opendatahub" "maasmodelrefs.maas.opendatahub.io"
 
 # 9. Delete models-as-a-service namespace (contains MaaS CRs)
 echo "9. Deleting models-as-a-service namespace..."
-kubectl delete ns models-as-a-service --ignore-not-found --timeout=120s 2>/dev/null || true
-
-# 9b. Force-remove models-as-a-service if stuck terminating (MaaS CRs often have finalizers)
-if kubectl get namespace models-as-a-service &>/dev/null; then
-    echo "   models-as-a-service stuck terminating, removing finalizers..."
-    # Remove finalizers from MaaS CRs (common blockers)
-    for name in $(kubectl get maasauthpolicies.maas.opendatahub.io -n models-as-a-service --no-headers 2>/dev/null | awk '{print $1}'); do
-        echo "   Removing finalizers from MaaSAuthPolicy $name..."
-        kubectl patch maasauthpolicies.maas.opendatahub.io "$name" -n models-as-a-service --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-    done
-    for name in $(kubectl get maassubscriptions.maas.opendatahub.io -n models-as-a-service --no-headers 2>/dev/null | awk '{print $1}'); do
-        echo "   Removing finalizers from MaaSSubscription $name..."
-        kubectl patch maassubscriptions.maas.opendatahub.io "$name" -n models-as-a-service --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-    done
-    # Remove finalizers from namespace itself (requires jq)
-    if kubectl get namespace models-as-a-service &>/dev/null && command -v jq &>/dev/null; then
-        echo "   Removing finalizers from models-as-a-service namespace..."
-        kubectl get namespace models-as-a-service -o json | jq '.spec.finalizers = []' | \
-            kubectl replace --raw "/api/v1/namespaces/models-as-a-service/finalize" -f -
-    elif kubectl get namespace models-as-a-service &>/dev/null; then
-        echo "   WARNING: Install 'jq' to force-remove namespace finalizers. Namespace may remain terminating."
-    fi
-    echo "   Waiting for models-as-a-service namespace to be removed..."
-    for i in {1..30}; do
-        if ! kubectl get namespace models-as-a-service &>/dev/null; then
-            echo "   models-as-a-service namespace removed."
-            break
-        fi
-        sleep 2
-    done
-fi
+force_delete_namespace "models-as-a-service" \
+    "maasauthpolicies.maas.opendatahub.io" "maassubscriptions.maas.opendatahub.io"
 
 # 10. Delete policy engine namespaces (Kuadrant or RHCL)
 for policy_ns in kuadrant-system rh-connectivity-link; do
-  echo "10. Deleting $policy_ns namespace (if installed)..."
-  kubectl delete ns "$policy_ns" --ignore-not-found --timeout=60s 2>/dev/null || true
-
-  # Force-remove if stuck terminating
-  if kubectl get namespace "$policy_ns" &>/dev/null; then
-    echo "   $policy_ns stuck terminating, removing finalizers..."
-    for name in $(kubectl get authorinos.operator.authorino.kuadrant.io -n "$policy_ns" --no-headers 2>/dev/null | awk '{print $1}'); do
-      kubectl patch authorinos.operator.authorino.kuadrant.io "$name" -n "$policy_ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-    done
-    for name in $(kubectl get kuadrants.kuadrant.io -n "$policy_ns" --no-headers 2>/dev/null | awk '{print $1}'); do
-      kubectl patch kuadrants.kuadrant.io "$name" -n "$policy_ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-    done
-    for name in $(kubectl get limitadors.limitador.kuadrant.io -n "$policy_ns" --no-headers 2>/dev/null | awk '{print $1}'); do
-      kubectl patch limitadors.limitador.kuadrant.io "$name" -n "$policy_ns" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-    done
-    # Re-check namespace exists (it may have been deleted after patching CRs above)
-    if kubectl get namespace "$policy_ns" &>/dev/null && command -v jq &>/dev/null; then
-      ns_json=$(kubectl get namespace "$policy_ns" -o json 2>/dev/null || true)
-      if [[ -n "$ns_json" ]]; then
-        echo "$ns_json" | jq '.spec.finalizers = []' | \
-          kubectl replace --raw "/api/v1/namespaces/$policy_ns/finalize" -f - 2>/dev/null || true
-      fi
-    fi
-  fi
+    echo "10. Deleting $policy_ns namespace (if installed)..."
+    force_delete_namespace "$policy_ns" \
+    "authorinos.operator.authorino.kuadrat.io" "kuadrants.kuadrant.io" "limitadors.limitador.kuadrant.io"
 done
 
 # 11. Delete llm namespace and model resources
 echo "11. Deleting LLM models and namespace..."
-if kubectl get ns llm &>/dev/null; then
-    # Delete LLMInferenceService resources first (they have finalizers)
-    echo "   Deleting LLMInferenceService resources..."
-    kubectl delete llminferenceservice --all -n llm --ignore-not-found --timeout=30s 2>/dev/null || true
-    
-    # If deletion timed out, force remove finalizers
-    for resource in $(kubectl get llminferenceservice -n llm -o name 2>/dev/null || true); do
-        echo "   Removing finalizers from $resource..."
-        kubectl patch "$resource" -n llm --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-    done
-    
-    # Delete KServe InferenceService resources (also have finalizers)
-    echo "   Deleting InferenceService resources..."
-    kubectl delete inferenceservice --all -n llm --ignore-not-found --timeout=30s 2>/dev/null || true
-    
-    # If deletion timed out, force remove finalizers
-    for resource in $(kubectl get inferenceservice -n llm -o name 2>/dev/null || true); do
-        echo "   Removing finalizers from $resource..."
-        kubectl patch "$resource" -n llm --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
-    done
-    
-    # Now delete the namespace
-    echo "   Deleting llm namespace..."
-    kubectl delete ns llm --ignore-not-found --timeout=120s 2>/dev/null || true
-else
-    echo "   llm namespace not found, skipping"
-fi
+force_delete_namespace "llm" "llminferenceservice" "inferenceservice"
 
 # 12. Delete gateway resources in openshift-ingress
 echo "12. Deleting gateway resources..."

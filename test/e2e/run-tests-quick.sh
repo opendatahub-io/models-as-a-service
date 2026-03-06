@@ -29,7 +29,7 @@ HOST="maas.${CLUSTER_DOMAIN}"
 # Set required environment variables
 export GATEWAY_HOST="${HOST}"
 export DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
-export MAAS_SYSTEM_NAMESPACE="${MAAS_SYSTEM_NAMESPACE:-models-as-a-service}"
+export MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 export E2E_SKIP_TLS_VERIFY=true
 export MODEL_NAME="facebook-opt-125m-simulated"
 
@@ -50,7 +50,7 @@ echo ""
 echo "Environment:"
 echo "  GATEWAY_HOST: ${GATEWAY_HOST}"
 echo "  DEPLOYMENT_NAMESPACE: ${DEPLOYMENT_NAMESPACE}"
-echo "  MAAS_SYSTEM_NAMESPACE: ${MAAS_SYSTEM_NAMESPACE}"
+echo "  MAAS_SUBSCRIPTION_NAMESPACE: ${MAAS_SUBSCRIPTION_NAMESPACE}"
 echo "  MAAS_API_BASE_URL: ${MAAS_API_BASE_URL}"
 echo "  TOKEN: ${TOKEN:0:20}..."
 echo ""

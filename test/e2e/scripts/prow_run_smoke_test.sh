@@ -39,8 +39,8 @@
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
-#   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and Controller (default: opendatahub)
-#   MAAS_SYSTEM_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
+#   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
+#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 # =============================================================================
 
 set -euo pipefail
@@ -74,7 +74,7 @@ export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 AUTHORINO_NAMESPACE="kuadrant-system"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
-MAAS_SYSTEM_NAMESPACE="${MAAS_SYSTEM_NAMESPACE:-models-as-a-service}"
+MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 
 # Artifact collection: OpenShift CI provides ARTIFACT_DIR (docs.ci.openshift.org/docs/architecture/step-registry).
 # Files written here are collected to artifacts/<job>/<step>/ in Prow. Fallbacks: ARTIFACTS, LOG_DIR, or local reports.
@@ -203,21 +203,21 @@ deploy_models() {
     fi
 
     # Create MaaS CRs namespace if it does not exist
-    if ! kubectl get namespace "$MAAS_SYSTEM_NAMESPACE" >/dev/null 2>&1; then
-        echo "Creating '$MAAS_SYSTEM_NAMESPACE' namespace..."
-        if ! kubectl create namespace "$MAAS_SYSTEM_NAMESPACE"; then
-            echo "❌ ERROR: Failed to create '$MAAS_SYSTEM_NAMESPACE' namespace"
+    if ! kubectl get namespace "$MAAS_SUBSCRIPTION_NAMESPACE" >/dev/null 2>&1; then
+        echo "Creating '$MAAS_SUBSCRIPTION_NAMESPACE' namespace..."
+        if ! kubectl create namespace "$MAAS_SUBSCRIPTION_NAMESPACE"; then
+            echo "❌ ERROR: Failed to create '$MAAS_SUBSCRIPTION_NAMESPACE' namespace"
             exit 1
         fi
     else
-        echo "'$MAAS_SYSTEM_NAMESPACE' namespace already exists"
+        echo "'$MAAS_SUBSCRIPTION_NAMESPACE' namespace already exists"
     fi
 
     # Deploy all at once so dependencies resolve correctly
-    # Sample kustomizations hardcode namespace: models-as-a-service; override to $MAAS_SYSTEM_NAMESPACE
+    # Sample kustomizations hardcode namespace: models-as-a-service; override to $MAAS_SUBSCRIPTION_NAMESPACE
     # so CRs land in the correct namespace.
     if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/maas-system/ | \
-            sed "s/namespace: models-as-a-service/namespace: $MAAS_SYSTEM_NAMESPACE/g" | \
+            sed "s/namespace: models-as-a-service/namespace: $MAAS_SUBSCRIPTION_NAMESPACE/g" | \
             kubectl apply -f -); then
         echo "❌ ERROR: Failed to deploy MaaS system"
         exit 1
@@ -403,10 +403,10 @@ setup_premium_test_token() {
     # Add premium SA as user (not group) so it gets premium access.
     local sa_user="system:serviceaccount:${PREMIUM_USERS_NS}:${PREMIUM_SA}"
     echo "Patching MaaSAuthPolicy premium-simulator-access to include $sa_user..."
-    oc patch maasauthpolicy premium-simulator-access -n "$MAAS_SYSTEM_NAMESPACE" --type=merge -p="{\"spec\": {\"subjects\": {\"groups\": [{\"name\": \"premium-user\"}], \"users\": [\"$sa_user\"]}}}"
+    oc patch maasauthpolicy premium-simulator-access -n "$MAAS_SUBSCRIPTION_NAMESPACE" --type=merge -p="{\"spec\": {\"subjects\": {\"groups\": [{\"name\": \"premium-user\"}], \"users\": [\"$sa_user\"]}}}"
 
     echo "Patching MaaSSubscription premium-simulator-subscription to include $sa_user..."
-    oc patch maassubscription premium-simulator-subscription -n "$MAAS_SYSTEM_NAMESPACE" --type=merge -p="{\"spec\": {\"owner\": {\"groups\": [{\"name\": \"premium-user\"}], \"users\": [\"$sa_user\"]}}}"
+    oc patch maassubscription premium-simulator-subscription -n "$MAAS_SUBSCRIPTION_NAMESPACE" --type=merge -p="{\"spec\": {\"owner\": {\"groups\": [{\"name\": \"premium-user\"}], \"users\": [\"$sa_user\"]}}}"
 
     export E2E_TEST_TOKEN_SA_NAMESPACE="$PREMIUM_USERS_NS"
     export E2E_TEST_TOKEN_SA_NAME="$PREMIUM_SA"
@@ -422,7 +422,7 @@ run_e2e_tests() {
 
     export GATEWAY_HOST="${HOST}"
     export DEPLOYMENT_NAMESPACE
-    export MAAS_SYSTEM_NAMESPACE
+    export MAAS_SUBSCRIPTION_NAMESPACE
     # Skip TLS verification in CI (self-signed certs)
     export E2E_SKIP_TLS_VERIFY=true
     # Set MODEL_NAME explicitly - maas-api /v1/models currently only lists MaaSModelRefs
@@ -598,12 +598,12 @@ setup_test_tokens() {
 # Main execution
 # On exit (success or failure): collect artifacts (authorino-debug.log, cluster state, pod logs) and auth report
 _run_exit_artifacts() {
-    DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SYSTEM_NAMESPACE="$MAAS_SYSTEM_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" ARTIFACTS_DIR="$ARTIFACTS_DIR" \
+    DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" ARTIFACTS_DIR="$ARTIFACTS_DIR" \
         collect_e2e_artifacts
     echo ""
     echo "========== Auth Debug Report =========="
     mkdir -p "$ARTIFACTS_DIR"
-    DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SYSTEM_NAMESPACE="$MAAS_SYSTEM_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" \
+    DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" \
         run_auth_debug_report 2>&1 | tee "$ARTIFACTS_DIR/auth-debug.log" || true
     echo "======================================"
 }
