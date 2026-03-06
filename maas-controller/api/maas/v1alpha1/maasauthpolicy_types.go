@@ -38,9 +38,13 @@ type MaaSAuthPolicySpec struct {
 // ModelRef references a MaaSModelRef by name and namespace.
 type ModelRef struct {
 	// Name is the name of the MaaSModelRef
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
 
 	// Namespace is the namespace where the MaaSModelRef lives
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`
 }
 

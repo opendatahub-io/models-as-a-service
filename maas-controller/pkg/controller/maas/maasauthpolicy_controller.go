@@ -424,6 +424,19 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 
 // deleteModelAuthPolicy deletes the aggregated AuthPolicy for a model in the given namespace.
 func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
+	// Check if there are any remaining (non-deleted) MaaSAuthPolicies that reference this model.
+	// If yes, don't delete the aggregated AuthPolicy - they will rebuild it.
+	remainingPolicies, err := findAllAuthPoliciesForModel(ctx, r.Client, modelNamespace, modelName)
+	if err != nil {
+		return fmt.Errorf("failed to check for remaining MaaSAuthPolicies: %w", err)
+	}
+	if len(remainingPolicies) > 0 {
+		log.Info("Skipping deletion of aggregated AuthPolicy because other MaaSAuthPolicies still reference this model",
+			"model", modelNamespace+"/"+modelName, "remainingCount", len(remainingPolicies))
+		return nil
+	}
+
+	// No remaining parent policies - safe to delete the aggregated AuthPolicy
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"})
 	labelSelector := client.MatchingLabels{
@@ -443,7 +456,7 @@ func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, lo
 			log.Info("AuthPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 			continue
 		}
-		log.Info("Deleting AuthPolicy", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
+		log.Info("Deleting AuthPolicy (no remaining parent policies)", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete AuthPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
 		}

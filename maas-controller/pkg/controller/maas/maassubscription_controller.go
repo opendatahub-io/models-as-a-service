@@ -340,6 +340,19 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 
 // deleteModelTRLP deletes the aggregated TokenRateLimitPolicy for a model in the given namespace.
 func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
+	// Check if there are any remaining (non-deleted) MaaSSubscriptions that reference this model.
+	// If yes, don't delete the aggregated TokenRateLimitPolicy - they will rebuild it.
+	remainingSubs, err := findAllSubscriptionsForModel(ctx, r.Client, modelNamespace, modelName)
+	if err != nil {
+		return fmt.Errorf("failed to check for remaining MaaSSubscriptions: %w", err)
+	}
+	if len(remainingSubs) > 0 {
+		log.Info("Skipping deletion of aggregated TokenRateLimitPolicy because other MaaSSubscriptions still reference this model",
+			"model", modelNamespace+"/"+modelName, "remainingCount", len(remainingSubs))
+		return nil
+	}
+
+	// No remaining parent subscriptions - safe to delete the aggregated TokenRateLimitPolicy
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"})
 	labelSelector := client.MatchingLabels{
@@ -359,7 +372,7 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 			log.Info("TokenRateLimitPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 			continue
 		}
-		log.Info("Deleting TokenRateLimitPolicy", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
+		log.Info("Deleting TokenRateLimitPolicy (no remaining parent subscriptions)", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete TokenRateLimitPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
 		}
