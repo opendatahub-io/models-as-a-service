@@ -107,7 +107,7 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 						Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
 					},
 					ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
-						{Name: modelName, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+						{Name: modelName, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
 					},
 				},
 			}
@@ -201,7 +201,7 @@ func TestMaaSSubscriptionReconciler_DeleteAnnotation(t *testing.T) {
 						Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
 					},
 					ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
-						{Name: modelName, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+						{Name: modelName, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
 					},
 				},
 			}

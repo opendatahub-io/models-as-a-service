@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.4
+    controller-gen.kubebuilder.io/version: v0.20.1
   name: maasauthpolicies.maas.opendatahub.io
 spec:
   group: maas.opendatahub.io
@@ -67,10 +67,22 @@ spec:
                     type: string
                 type: object
               modelRefs:
-                description: ModelRefs is a list of model names that this policy grants
-                  access to
+                description: ModelRefs is a list of models (by name and namespace)
+                  that this policy grants access to
                 items:
-                  type: string
+                  description: ModelRef references a MaaSModelRef by name and namespace.
+                  properties:
+                    name:
+                      description: Name is the name of the MaaSModelRef
+                      type: string
+                    namespace:
+                      description: Namespace is the namespace where the MaaSModelRef
+                        lives
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  type: object
                 minItems: 1
                 type: array
               subjects:
@@ -121,7 +133,11 @@ spec:
                         (e.g. status.conditions type=Enforced).
                       type: string
                     model:
-                      description: Model is the model name this AuthPolicy targets.
+                      description: Model is the MaaSModelRef name this AuthPolicy
+                        targets.
+                      type: string
+                    modelNamespace:
+                      description: ModelNamespace is the namespace of the MaaSModelRef.
                       type: string
                     name:
                       description: Name is the name of the AuthPolicy resource.
@@ -131,6 +147,7 @@ spec:
                       type: string
                   required:
                   - model
+                  - modelNamespace
                   - name
                   - namespace
                   type: object

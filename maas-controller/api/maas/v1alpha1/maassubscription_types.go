@@ -53,8 +53,11 @@ type OwnerSpec struct {
 
 // ModelSubscriptionRef defines a model reference with rate limits
 type ModelSubscriptionRef struct {
-	// Name is the name of the model
+	// Name is the name of the MaaSModelRef
 	Name string `json:"name"`
+
+	// Namespace is the namespace where the MaaSModelRef lives
+	Namespace string `json:"namespace"`
 
 	// TokenRateLimits defines token-based rate limits for this model
 	// +optional

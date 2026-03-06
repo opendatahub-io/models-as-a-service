@@ -101,7 +101,7 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 			maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
 				ObjectMeta: metav1.ObjectMeta{Name: maasPolicyName, Namespace: namespace},
 				Spec: maasv1alpha1.MaaSAuthPolicySpec{
-					ModelRefs: []string{modelName},
+					ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: namespace}},
 					Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
 				},
 			}
@@ -190,7 +190,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 					Finalizers: []string{maasAuthPolicyFinalizer},
 				},
 				Spec: maasv1alpha1.MaaSAuthPolicySpec{
-					ModelRefs: []string{modelName},
+					ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: namespace}},
 					Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
 				},
 			}

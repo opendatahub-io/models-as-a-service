@@ -47,7 +47,6 @@ import (
 const (
 	defaultGatewayName      = "maas-default-gateway"
 	defaultGatewayNamespace = "openshift-ingress"
-	defaultClusterAudience  = "https://kubernetes.default.svc"
 )
 
 const modelRefNameIndex = "spec.modelRef.name"
@@ -167,12 +166,12 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 func (r *MaaSModelRefReconciler) handleDeletion(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(model, maasModelFinalizer) {
 		// Clean up generated AuthPolicies for this model
-		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Name, "AuthPolicy", "kuadrant.io", "v1"); err != nil {
+		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Namespace, model.Name, "AuthPolicy", "kuadrant.io", "v1"); err != nil {
 			return ctrl.Result{}, err
 		}
 
 		// Clean up generated TokenRateLimitPolicies for this model
-		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Name, "TokenRateLimitPolicy", "kuadrant.io", "v1alpha1"); err != nil {
+		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Namespace, model.Name, "TokenRateLimitPolicy", "kuadrant.io", "v1alpha1"); err != nil {
 			return ctrl.Result{}, err
 		}
 
@@ -194,9 +193,9 @@ func (r *MaaSModelRefReconciler) handleDeletion(ctx context.Context, log logr.Lo
 	return ctrl.Result{}, nil
 }
 
-// deleteGeneratedPoliciesByLabel finds and deletes all generated policies
+// deleteGeneratedPoliciesByLabel finds and deletes generated policies in the model's namespace
 // (AuthPolicy or TokenRateLimitPolicy) labeled with the given model name.
-func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context, log logr.Logger, modelName, kind, group, version string) error {
+func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context, log logr.Logger, modelNamespace, modelName, kind, group, version string) error {
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: version, Kind: kind + "List"})
 
@@ -205,7 +204,7 @@ func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Cont
 		"app.kubernetes.io/managed-by": "maas-controller",
 	}
 
-	if err := r.List(ctx, policyList, labelSelector); err != nil {
+	if err := r.List(ctx, policyList, client.InNamespace(modelNamespace), labelSelector); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
@@ -326,28 +325,21 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// mapHTTPRouteToMaaSModelRefs returns reconcile requests for all MaaSModelRefs whose
-// route namespace (ModelRef.Namespace or MaaSModelRef.Namespace) matches the HTTPRoute's namespace.
+// mapHTTPRouteToMaaSModelRefs returns reconcile requests for all MaaSModelRefs in the HTTPRoute's namespace.
 func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
 	route, ok := obj.(*gatewayapiv1.HTTPRoute)
 	if !ok {
 		return nil
 	}
 	var models maasv1alpha1.MaaSModelRefList
-	if err := r.List(ctx, &models); err != nil {
+	if err := r.List(ctx, &models, client.InNamespace(route.Namespace)); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
 	for _, m := range models.Items {
-		ns := m.Spec.ModelRef.Namespace
-		if ns == "" {
-			ns = m.Namespace
-		}
-		if ns == route.Namespace {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
-			})
-		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
+		})
 	}
 	return requests
 }
