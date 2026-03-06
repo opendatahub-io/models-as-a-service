@@ -22,7 +22,6 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -31,19 +30,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
-
-// authPolicyTestRESTMapper builds a REST mapper that covers all GVKs exercised in
-// these tests, including the Kuadrant AuthPolicy which is not registered in the scheme.
-func authPolicyTestRESTMapper() apimeta.RESTMapper {
-	m := apimeta.NewDefaultRESTMapper(nil)
-	ns := nsRestScope{}
-	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSModel"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSAuthPolicy"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"}, ns)
-	return m
-}
 
 // newPreexistingAuthPolicy builds a Kuadrant AuthPolicy as an unstructured object
 // with a sentinel value in spec.targetRef.name. Tests use this to detect whether
@@ -125,7 +111,7 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
-				WithRESTMapper(authPolicyTestRESTMapper()).
+				WithRESTMapper(testRESTMapper()).
 				WithObjects(model, route, maasPolicy, existingAP).
 				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 				Build()
@@ -211,7 +197,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
-				WithRESTMapper(authPolicyTestRESTMapper()).
+				WithRESTMapper(testRESTMapper()).
 				WithObjects(maasPolicy, existingAP).
 				Build()
 

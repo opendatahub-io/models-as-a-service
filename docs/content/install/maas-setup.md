@@ -33,12 +33,12 @@ The tools you will need:
 ## Install Gateway AuthPolicy
 
 The maas-controller deploys gateway-level AuthPolicy and TokenRateLimitPolicy from
-`maas-controller/config/policies`. When using the ODH overlay or deploy script, these
+`deployment/base/maas-controller/policies`. When using the ODH overlay or deploy script, these
 are applied automatically. For manual install:
 
 ```shell
 kubectl apply --server-side=true \
-  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/maas-controller/config/policies?ref=main")
+  -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/maas-controller/policies?ref=main")
 ```
 
 !!! note "Custom Token Review Audience"
