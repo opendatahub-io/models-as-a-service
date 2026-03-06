@@ -29,30 +29,43 @@ echo "Gateway endpoint: $HOST"
     echo "Using fallback gateway endpoint: $HOST"
     ```
 
-### 2. Get Authentication Token
+### 2. Get API Key
 
-For OpenShift:
+For OpenShift, create an API key (authenticate with your OpenShift token):
 
 ```bash
-TOKEN_RESPONSE=$(curl -sSk \
+API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
-  -d '{"expiration": "10m"}' \
-  "${HOST}/maas-api/v1/tokens") && \
-TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token) && \
-echo "Token obtained: ${TOKEN:0:20}..."
+  -d '{"name": "validation-key", "description": "Key for validation", "expiresIn": "1h"}' \
+  "${HOST}/maas-api/v1/api-keys") && \
+API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key) && \
+echo "API key obtained: ${API_KEY:0:20}..."
 ```
 
+!!! warning "API key shown only once"
+    The plaintext API key is returned **only at creation time**. Store it securely—it cannot be retrieved again.
+
 !!! note
-    For more information about how tokens work, see [Understanding Token Management](../configuration-and-management/token-management.md).
+    For more information about API keys, see [Understanding Token Management](../configuration-and-management/token-management.md).
 
 ### 3. List Available Models
+
+!!! warning "Known issue"
+    The list models endpoint is currently experiencing issues. If you encounter problems, see [Troubleshooting](#troubleshooting) below.
+
+Set the subscription name (required when your API key matches multiple subscriptions; use the name from your MaaSSubscription CR):
+
+```bash
+export MaaS_SUBSCRIPTION="simulator-subscription"  # or your subscription name
+```
 
 ```bash
 MODELS=$(curl -sSk ${HOST}/maas-api/v1/models \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $TOKEN" | jq -r .) && \
+    -H "Authorization: Bearer $API_KEY" \
+    -H "X-MaaS-Subscription: ${MaaS_SUBSCRIPTION}" | jq -r .) && \
 echo $MODELS | jq . && \
 MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id') && \
 MODEL_URL=$(echo $MODELS | jq -r '.data[0].url') && \
@@ -64,7 +77,8 @@ echo "Model URL: $MODEL_URL"
 Send a request to the model endpoint (should get a 200 OK response):
 
 ```bash
-curl -sSk -H "Authorization: Bearer $TOKEN" \
+curl -sSk -H "Authorization: Bearer $API_KEY" \
+  -H "X-MaaS-Subscription: ${MaaS_SUBSCRIPTION}" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
   "${MODEL_URL}/v1/completions" | jq
@@ -87,7 +101,8 @@ Send multiple requests to trigger rate limit (should get 200 OK followed by 429 
 ```bash
 for i in {1..16}; do
   curl -sSk -o /dev/null -w "%{http_code}\n" \
-    -H "Authorization: Bearer $TOKEN" \
+    -H "Authorization: Bearer $API_KEY" \
+    -H "X-MaaS-Subscription: ${MaaS_SUBSCRIPTION}" \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
     "${MODEL_URL}/v1/completions"
@@ -162,7 +177,7 @@ For detailed TLS configuration options, see [TLS Configuration](../configuration
 
 1. **Getting `501` Not Implemented errors**: Traffic is not making it to the Gateway.
       - [ ] Verify Gateway status and HTTPRoute configuration
-2. **Getting `401` Unauthorized errors when trying to get a token**: Authentication maas-api is not working.
+2. **Getting `401` Unauthorized errors when trying to create an API key**: Authentication to maas-api is not working.
       - [ ] Verify `maas-api-auth-policy` AuthPolicy is applied
       - [ ] Check if your cluster uses a custom token review audience:
 
@@ -191,7 +206,7 @@ For detailed TLS configuration options, see [TLS Configuration](../configuration
 
       For ODH, use namespace `opendatahub` instead of `redhat-ods-applications`.
 3. **Getting `401` errors when trying to get models**: Authentication is not working for the models endpoint.
-      - [ ] Create a new token (default expiration is 10 minutes)
+      - [ ] Create a new API key and use it in the Authorization header
       - [ ] Verify `gateway-auth-policy` AuthPolicy is applied
       - [ ] Validate that `system:serviceaccounts:maas-default-gateway-tier-{TIER}` has `post` access to the `llminferenceservices` resource
         - Note: this should be automated by the ODH Controller

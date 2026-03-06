@@ -41,6 +41,9 @@ theme:
         name: Switch to dark mode
 
 plugins:
+  - swagger-ui-tag:
+      docExpansion: list
+      tryItOutEnabled: true
   - search:
       lang: en
       separator: '[\s\u200b\-_,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
@@ -51,6 +54,12 @@ nav:
   - Home: index.md
   - Quick Start: quickstart.md
   - Architecture: architecture.md
+  - API & Reference:
+    - MaaS API (Swagger): reference/api-reference.md
+    - MaaS CRDs:
+      - MaaSModelRef: reference/crds/maas-model-ref.md
+      - MaaSAuthPolicy: reference/crds/maas-auth-policy.md
+      - MaaSSubscription: reference/crds/maas-subscription.md
   - Administrator Guide:
     - Prerequisites:
       - Overview: install/prerequisites.md
