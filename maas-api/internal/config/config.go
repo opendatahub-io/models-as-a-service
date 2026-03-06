@@ -41,6 +41,11 @@ type Config struct {
 	// Values: "optional" (default) or "required"
 	APIKeyExpirationPolicy string
 
+	// APIKeyMaxExpirationDays is the maximum allowed expiration in days for API keys.
+	// Users cannot create API keys with expiration longer than this value.
+	// Default: 30 days. Minimum: 1 day.
+	APIKeyMaxExpirationDays int
+
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
 }
@@ -50,18 +55,20 @@ func Load() *Config {
 	debugMode, _ := env.GetBool("DEBUG_MODE", false)
 	gatewayName := env.GetString("GATEWAY_NAME", constant.DefaultGatewayName)
 	secure, _ := env.GetBool("SECURE", false)
+	maxExpirationDays, _ := env.GetInt("API_KEY_MAX_EXPIRATION_DAYS", constant.DefaultAPIKeyMaxExpirationDays)
 
 	c := &Config{
-		Name:                   env.GetString("INSTANCE_NAME", gatewayName),
-		Namespace:              env.GetString("NAMESPACE", constant.DefaultNamespace),
-		GatewayName:            gatewayName,
-		GatewayNamespace:       env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
-		Address:                env.GetString("ADDRESS", ""),
-		Secure:                 secure,
-		TLS:                    loadTLSConfig(),
-		DebugMode:              debugMode,
-		DBConnectionURL:        "", // Loaded from K8s secret via LoadDatabaseURL()
-		APIKeyExpirationPolicy: env.GetString("API_KEY_EXPIRATION_POLICY", "optional"),
+		Name:                    env.GetString("INSTANCE_NAME", gatewayName),
+		Namespace:               env.GetString("NAMESPACE", constant.DefaultNamespace),
+		GatewayName:             gatewayName,
+		GatewayNamespace:        env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
+		Address:                 env.GetString("ADDRESS", ""),
+		Secure:                  secure,
+		TLS:                     loadTLSConfig(),
+		DebugMode:               debugMode,
+		DBConnectionURL:         "", // Loaded from K8s secret via LoadDatabaseURL()
+		APIKeyExpirationPolicy:  env.GetString("API_KEY_EXPIRATION_POLICY", "optional"),
+		APIKeyMaxExpirationDays: maxExpirationDays,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}
@@ -124,6 +131,11 @@ func (c *Config) Validate() error {
 	// Validate API key expiration policy
 	if c.APIKeyExpirationPolicy != "optional" && c.APIKeyExpirationPolicy != "required" {
 		return errors.New("API_KEY_EXPIRATION_POLICY must be 'optional' or 'required'")
+	}
+
+	// Validate API key max expiration days
+	if c.APIKeyMaxExpirationDays < 1 {
+		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
 	}
 
 	return nil
