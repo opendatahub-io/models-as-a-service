@@ -5,10 +5,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -183,12 +184,21 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 // isLocalhostOrigin reports whether the origin is a localhost address,
 // used by the debug-mode CORS policy to restrict cross-origin access to
-// local development only.
+// local development only. Accepts both ported (http://localhost:3000)
+// and default-port (http://localhost) forms.
 func isLocalhostOrigin(origin string) bool {
-	return strings.HasPrefix(origin, "http://localhost:") ||
-		strings.HasPrefix(origin, "https://localhost:") ||
-		strings.HasPrefix(origin, "http://127.0.0.1:") ||
-		strings.HasPrefix(origin, "https://127.0.0.1:")
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Hostname() == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(u.Hostname())
+	return ip != nil && ip.IsLoopback()
 }
 
 func debugCORSConfig() cors.Config {
