@@ -91,6 +91,7 @@ The controller watches these resources and re-reconciles automatically:
 |-------|---------------------------|---------|
 | MaaSModelRef changes | MaaSAuthPolicy, MaaSSubscription | Re-reconcile when model created/deleted |
 | HTTPRoute changes | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription | Re-reconcile when KServe creates a route (fixes startup race) |
+| LLMInferenceService changes | MaaSModelRef | Re-reconcile when backend LLMInferenceService Ready condition changes (fixes race where backend becomes ready after MaaSModelRef creation) |
 | Generated AuthPolicy changes | Parent MaaSAuthPolicy | Overwrite manual edits (unless opted out) |
 | Generated TokenRateLimitPolicy changes | Parent MaaSSubscription | Overwrite manual edits (unless opted out) |
 
