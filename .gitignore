@@ -45,6 +45,9 @@ coverage.xml
 .tox/
 htmlcov/
 
+# Test / build reports
+reports/
+
 # OS / editor cruft
 .DS_Store
 .vscode/
