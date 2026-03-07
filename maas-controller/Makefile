@@ -1,13 +1,16 @@
 # MaaS Controller Makefile
 # Build and deploy the MaaS control plane (MaaSModel, MaaSAuthPolicy, MaaSSubscription)
 
-.PHONY: build run test tidy install uninstall image-build image-push docker-build generate manifests help
+include tools.mk
+
+.PHONY: build run test tidy lint install uninstall image-build image-push docker-build generate manifests help
 
 help:
 	@echo "MaaS Controller make targets:"
 	@echo "  make build        - build manager binary to bin/manager"
 	@echo "  make run          - build and run manager locally"
 	@echo "  make test         - run tests"
+	@echo "  make lint         - run golangci-lint"
 	@echo "  make generate     - generate deepcopy code for API types"
 	@echo "  make manifests    - generate CRD manifests"
 	@echo "  make install      - apply deployment/base/maas-controller/default (CRDs, RBAC, deployment)"
@@ -39,6 +42,12 @@ test: tidy
 
 tidy:
 	go mod tidy
+
+LINT_FIX ?= false
+.PHONY: lint
+lint: $(GOLANGCI_LINT) ## Run golangci-lint (use LINT_FIX=true to fix lint issues)
+	$(GOLANGCI_LINT) fmt
+	$(GOLANGCI_LINT) run $(if $(filter true,$(LINT_FIX)),--fix)
 
 # Generate deepcopy code for API types
 generate:

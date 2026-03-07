@@ -95,7 +95,7 @@ func main() {
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		MaaSAPINamespace: maasAPINamespace,
-    GatewayName:      gatewayName,
+		GatewayName:      gatewayName,
 		ClusterAudience:  clusterAudience,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
