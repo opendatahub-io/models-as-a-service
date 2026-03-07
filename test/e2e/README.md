@@ -61,7 +61,16 @@ Tests for the API Key Management endpoints (`/v1/api-keys`):
 
 ```bash
 cd test/e2e
-./run_api_key_tests.sh
+# Set up venv if not already done (see "Run All Subscription Tests" above)
+source .venv/bin/activate
+
+export GATEWAY_HOST="maas.apps.your-cluster.example.com"
+# Or: export MAAS_API_BASE_URL="https://maas.apps.your-cluster.example.com/maas-api"
+
+# Ensure that you are logged into your openshift cluster prior to execution
+# export E2E_SKIP_TLS_VERIFY=true # Disables TLS verification
+pytest tests/test_api_keys.py -v \
+    --html=reports/api-keys-report.html --self-contained-html
 ```
 
 **Environment Variables:**
