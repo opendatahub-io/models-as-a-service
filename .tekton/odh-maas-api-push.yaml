@@ -8,7 +8,7 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      in ["konflux-its", "stable", "rhoai", "v0.0.x"]
+      in ["konflux-its"]
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
