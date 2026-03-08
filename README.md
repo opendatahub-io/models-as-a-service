@@ -17,6 +17,14 @@ Our goal is to create a comprehensive platform for **Models as a Service** with 
 ## 📋 Prerequisites
 
 - **Openshift cluster** (4.19.9+) with kubectl/oc access
+- **PostgreSQL database** (for production ODH/RHOAI deployments)
+
+!!! warning "Database Required for Production"
+    MaaS requires a PostgreSQL database for API key management. For production ODH/RHOAI deployments, you must create a Secret with the database connection URL **before** enabling modelsAsService.
+
+    See [Database Prerequisites](docs/content/install/prerequisites.md#database-prerequisite) for details.
+
+    Note: The `scripts/deploy.sh` script creates a development PostgreSQL instance automatically.
 
 ## 🚀 Quick Start
 

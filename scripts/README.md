@@ -234,7 +234,7 @@ oc login
 ```bash
 # Check TokenRateLimitPolicy
 kubectl get tokenratelimitpolicy -A
-kubectl describe tokenratelimitpolicy gateway-token-rate-limits -n openshift-ingress
+kubectl describe tokenratelimitpolicy -n openshift-ingress
 
 # Check Limitador pods
 kubectl get pods -n kuadrant-system -l app.kubernetes.io/name=limitador

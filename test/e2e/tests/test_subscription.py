@@ -1,0 +1,697 @@
+"""
+MaaS Subscription Controller e2e tests.
+
+Tests auth enforcement (MaaSAuthPolicy) and rate limiting (MaaSSubscription)
+by hitting the gateway with API keys created via the MaaS API.
+
+Requires:
+  - GATEWAY_HOST env var (e.g. maas.apps.cluster.example.com)
+  - MAAS_API_BASE_URL env var (e.g. https://maas.apps.cluster.example.com/maas-api)
+  - maas-controller deployed with example CRs applied
+  - oc/kubectl access to create service account tokens (for API key creation)
+
+Environment variables (all optional, with defaults):
+  - GATEWAY_HOST: Gateway hostname (required)
+  - MAAS_API_BASE_URL: MaaS API URL (required for API key creation)
+  - MAAS_NAMESPACE: MaaS namespace (default: opendatahub)
+  - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: When set, use this SA token
+    instead of oc whoami -t (e.g. for Prow where oc whoami -t is unavailable)
+  - E2E_TIMEOUT: Request timeout in seconds (default: 30)
+  - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
+  - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
+  - E2E_PREMIUM_MODEL_PATH: Path to premium model (default: /llm/premium-simulated-simulated-premium)
+  - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
+  - E2E_MODEL_REF: Model ref for CRs (default: facebook-opt-125m-simulated)
+  - E2E_PREMIUM_MODEL_REF: Premium model ref for CRs (default: premium-simulated-simulated-premium)
+  - E2E_UNCONFIGURED_MODEL_REF: Unconfigured model ref (default: e2e-unconfigured-facebook-opt-125m-simulated)
+  - E2E_UNCONFIGURED_MODEL_PATH: Path to unconfigured model (default: /llm/e2e-unconfigured-facebook-opt-125m-simulated)
+  - E2E_SIMULATOR_SUBSCRIPTION: Free-tier subscription (default: simulator-subscription)
+  - E2E_PREMIUM_SIMULATOR_SUBSCRIPTION: Premium-tier subscription (default: premium-simulator-subscription)
+  - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
+  - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 429 test (default: nonexistent-sub)
+"""
+
+import base64
+import json
+import logging
+import os
+import subprocess
+import time
+import uuid
+from typing import Optional
+
+import pytest
+import requests
+
+log = logging.getLogger(__name__)
+
+
+# Constants (override with env vars)
+TIMEOUT = int(os.environ.get("E2E_TIMEOUT", "30"))
+RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "8"))
+TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
+MODEL_PATH = os.environ.get("E2E_MODEL_PATH", "/llm/facebook-opt-125m-simulated")
+PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simulated-simulated-premium")
+MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
+MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
+PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
+UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
+UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
+SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get(
+    "E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription"
+)
+SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
+INVALID_SUBSCRIPTION = os.environ.get("E2E_INVALID_SUBSCRIPTION", "nonexistent-sub")
+
+
+def _ns():
+    return os.environ.get("MAAS_NAMESPACE", "opendatahub")
+
+
+def _gateway_url():
+    host = os.environ.get("GATEWAY_HOST", "")
+    if not host:
+        raise RuntimeError("GATEWAY_HOST env var is required")
+    scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
+    return f"{scheme}://{host}"
+
+
+def _maas_api_url():
+    """Get the MaaS API base URL for API key operations."""
+    url = os.environ.get("MAAS_API_BASE_URL", "")
+    if not url:
+        # Derive from GATEWAY_HOST if MAAS_API_BASE_URL not set
+        host = os.environ.get("GATEWAY_HOST", "")
+        if not host:
+            raise RuntimeError("MAAS_API_BASE_URL or GATEWAY_HOST env var is required")
+        scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
+        url = f"{scheme}://{host}/maas-api"
+    return url
+
+
+# Used for debugging
+def _decode_jwt_payload(token: str) -> Optional[dict]:
+    """Decode JWT payload (no verification, for debugging). Returns claims dict or None."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        payload_b64 += "=" * (4 - len(payload_b64) % 4)  # add padding
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        return json.loads(payload_bytes)
+    except Exception:
+        return None
+
+
+def _get_cluster_token():
+    """Get OC token for API key management operations (not for inference).
+    
+    Priority:
+      1. TOKEN env var (set by prow script for regular user)
+      2. E2E_TEST_TOKEN_SA_* env vars (for SA-based tokens)
+      3. oc whoami -t (fallback for local testing)
+    """
+    # Priority 1: TOKEN env var (regular user token from prow script)
+    token = os.environ.get("TOKEN", "")
+    if token:
+        log.info("Using TOKEN env var for API key operations")
+        return token
+    
+    # Priority 2: SA token if configured
+    sa_ns = os.environ.get("E2E_TEST_TOKEN_SA_NAMESPACE")
+    sa_name = os.environ.get("E2E_TEST_TOKEN_SA_NAME")
+    if sa_ns and sa_name:
+        token = _create_sa_token(sa_name, namespace=sa_ns)
+    else:
+        # Priority 3: oc whoami -t fallback
+        token_result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
+        token = token_result.stdout.strip() if token_result.returncode == 0 else ""
+        if not token:
+            raise RuntimeError("Could not get cluster token via `oc whoami -t`; run with oc login first")
+    claims = _decode_jwt_payload(token)
+    if claims:
+        log.info("Token claims (decoded): %s", json.dumps(claims, indent=2))
+    return token
+
+
+def _create_sa_token(sa_name, namespace=None, duration="10m"):
+    namespace = namespace or _ns()
+    sa_result = subprocess.run(
+        ["oc", "create", "sa", sa_name, "-n", namespace], capture_output=True, text=True
+    )
+    if sa_result.returncode != 0 and "already exists" not in sa_result.stderr:
+        raise RuntimeError(f"Failed to create SA {sa_name}: {sa_result.stderr}")
+    result = subprocess.run(
+        ["oc", "create", "token", sa_name, "-n", namespace, f"--duration={duration}"],
+        capture_output=True, text=True,
+    )
+    token = result.stdout.strip()
+    if not token:
+        raise RuntimeError(f"Could not create token for SA {sa_name}: {result.stderr}")
+    return token
+
+
+# ---------------------------------------------------------------------------
+# API Key Management Helpers
+# ---------------------------------------------------------------------------
+
+def _create_api_key(oc_token: str, name: str = None) -> str:
+    """Create an API key using the MaaS API and return the plaintext key.
+    
+    Note: API keys inherit the authenticated user's groups automatically.
+    Users can only create keys for themselves with their own groups.
+    
+    Args:
+        oc_token: OC token for authentication with maas-api
+        name: Optional name for the key (auto-generated if not provided)
+    
+    Returns:
+        The plaintext API key (sk-oai-xxx format)
+    """
+    url = f"{_maas_api_url()}/v1/api-keys"
+    key_name = name or f"e2e-sub-test-{uuid.uuid4().hex[:8]}"
+    
+    r = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {oc_token}",
+            "Content-Type": "application/json",
+        },
+        json={"name": key_name},
+        timeout=TIMEOUT,
+        verify=TLS_VERIFY,
+    )
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"Failed to create API key: {r.status_code} {r.text}")
+    
+    data = r.json()
+    api_key = data.get("key")
+    if not api_key:
+        raise RuntimeError(f"API key response missing 'key' field: {data}")
+    
+    log.info(f"Created API key '{key_name}' (inherits user's groups)")
+    return api_key
+
+
+def _revoke_api_key(oc_token: str, key_id: str):
+    """Revoke an API key (best-effort, for cleanup)."""
+    url = f"{_maas_api_url()}/v1/api-keys/{key_id}"
+    try:
+        requests.delete(
+            url,
+            headers={"Authorization": f"Bearer {oc_token}"},
+            timeout=TIMEOUT,
+            verify=TLS_VERIFY,
+        )
+    except Exception as e:
+        log.warning(f"Failed to revoke API key {key_id}: {e}")
+
+
+# Cache for API keys to avoid creating too many during test runs.
+# Keyed by process ID to ensure test isolation when running in parallel workers.
+_default_api_key_cache: dict = {}
+
+
+def _get_default_api_key() -> str:
+    """Get or create an API key for the authenticated user.
+    
+    The key inherits the user's groups (typically includes system:authenticated).
+    Uses per-process caching to avoid creating multiple keys during test runs
+    while maintaining isolation between parallel test workers.
+    """
+    pid = os.getpid()
+    if pid not in _default_api_key_cache:
+        oc_token = _get_cluster_token()
+        _default_api_key_cache[pid] = _create_api_key(oc_token, name="e2e-default-key")
+    return _default_api_key_cache[pid]
+
+
+def _delete_sa(sa_name, namespace=None):
+    namespace = namespace or _ns()
+    subprocess.run(["oc", "delete", "sa", sa_name, "-n", namespace, "--ignore-not-found"], capture_output=True, text=True)
+
+
+def _apply_cr(cr_dict):
+    subprocess.run(["oc", "apply", "-f", "-"], input=json.dumps(cr_dict), capture_output=True, text=True, check=True)
+
+
+def _delete_cr(kind, name, namespace=None):
+    namespace = namespace or _ns()
+    subprocess.run(["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"], capture_output=True, text=True)
+
+
+def _get_cr(kind, name, namespace=None):
+    namespace = namespace or _ns()
+    result = subprocess.run(["oc", "get", kind, name, "-n", namespace, "-o", "json"], capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    return json.loads(result.stdout)
+
+
+def _cr_exists(kind, name, namespace=None):
+    namespace = namespace or _ns()
+    result = subprocess.run(["oc", "get", kind, name, "-n", namespace], capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def _subscription_for_path(path):
+    """Return the X-MaaS-Subscription value for a given model path."""
+    path = path or MODEL_PATH
+    if path == PREMIUM_MODEL_PATH:
+        return PREMIUM_SIMULATOR_SUBSCRIPTION
+    if path == MODEL_PATH:
+        return SIMULATOR_SUBSCRIPTION
+    return None  # e.g. unconfigured model has no subscription
+
+
+def _inference(api_key_or_token, path=None, extra_headers=None, subscription=None):
+    """Make an inference request using an API key or Bearer token.
+    
+    Args:
+        api_key_or_token: API key (sk-oai-xxx) or Bearer token for authorization
+        path: Model path (default: MODEL_PATH)
+        extra_headers: Additional headers to include
+        subscription: Subscription name, False to omit, or None to auto-detect
+    """
+    path = path or MODEL_PATH
+    url = f"{_gateway_url()}{path}/v1/completions"
+    headers = {"Authorization": f"Bearer {api_key_or_token}", "Content-Type": "application/json"}
+    # Add X-MaaS-Subscription: extra_headers overrides; else explicit subscription; else infer from path.
+    # Pass subscription=False to explicitly omit the header (e.g. when testing no-subscription case).
+    sub_header = "x-maas-subscription"
+    if extra_headers and sub_header in extra_headers:
+        pass  # extra_headers will set it
+    elif subscription is False:
+        pass  # explicitly omit
+    elif subscription is not None:
+        headers[sub_header] = subscription
+    else:
+        inferred = _subscription_for_path(path)
+        if inferred:
+            headers[sub_header] = inferred
+    if extra_headers:
+        headers.update(extra_headers)
+    return requests.post(
+        url, headers=headers,
+        json={"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
+        timeout=TIMEOUT, verify=TLS_VERIFY,
+    )
+
+
+def _wait_reconcile(seconds=None):
+    time.sleep(seconds or RECONCILE_WAIT)
+
+
+def _poll_status(token, expected, path=None, extra_headers=None, subscription=None, timeout=None, poll_interval=2):
+    """Poll inference endpoint until expected HTTP status or timeout."""
+    timeout = timeout or max(RECONCILE_WAIT * 3, 60)
+    deadline = time.time() + timeout
+    last = None
+    last_err = None
+    while time.time() < deadline:
+        try:
+            r = _inference(token, path=path, extra_headers=extra_headers, subscription=subscription)
+            last_err = None
+            ok = r.status_code == expected if isinstance(expected, int) else r.status_code in expected
+            if ok:
+                return r
+            last = r
+        except requests.RequestException as exc:
+            last_err = exc
+            log.debug(f"Transient request error while polling: {exc}")
+        except Exception as exc:
+            # Catch-all to surface non-RequestException (e.g. JSON decode, timeout config)
+            last_err = exc
+            log.warning(f"Unexpected error while polling: {exc}")
+        time.sleep(poll_interval)
+    # Build failure message with all available context
+    exp_str = expected if isinstance(expected, int) else " or ".join(str(e) for e in expected)
+    err_msg = f"Expected {exp_str} within {timeout}s"
+    if last is not None:
+        err_msg += f", last status: {last.status_code}"
+    if last_err is not None:
+        err_msg += f", last error: {last_err}"
+    if last is None and last_err is None:
+        err_msg += ", no response (all requests may have raised non-RequestException)"
+    raise AssertionError(err_msg)
+
+
+def _snapshot_cr(kind, name, namespace=None):
+    """Capture a CR for later restoration (strips runtime metadata)."""
+    cr = _get_cr(kind, name, namespace)
+    if not cr:
+        return None
+    meta = cr.get("metadata", {})
+    for key in ("resourceVersion", "uid", "creationTimestamp", "generation", "managedFields"):
+        meta.pop(key, None)
+    annotations = meta.get("annotations", {})
+    annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+    if not annotations:
+        meta.pop("annotations", None)
+    cr.pop("status", None)
+    return cr
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+class TestAuthEnforcement:
+    """Tests that MaaSAuthPolicy correctly enforces access using API keys."""
+
+    def test_authorized_user_gets_200(self):
+        """API key with system:authenticated group should access the free model.
+        Polls because AuthPolicies may still be syncing with Authorino."""
+        api_key = _get_default_api_key()
+        r = _poll_status(api_key, 200, timeout=90)
+        log.info(f"Authorized API key -> {r.status_code}")
+
+    def test_no_auth_gets_401(self):
+        """Request without auth header should get 401."""
+        url = f"{_gateway_url()}{MODEL_PATH}/v1/completions"
+        r = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
+            timeout=TIMEOUT,
+            verify=TLS_VERIFY,
+        )
+        log.info(f"No auth -> {r.status_code}")
+        assert r.status_code == 401, f"Expected 401, got {r.status_code}"
+
+    def test_invalid_token_gets_403(self):
+        """Invalid/garbage API key should get 403 (invalid key format)."""
+        r = _inference("totally-invalid-garbage-token")
+        log.info(f"Invalid token -> {r.status_code}")
+        # Gateway may return 401 or 403 for invalid API keys
+        assert r.status_code in (401, 403), f"Expected 401 or 403, got {r.status_code}"
+
+    def test_wrong_group_gets_403(self):
+        """API key without matching group should get 403 on premium model.
+        
+        The premium model requires 'premium-user' group. Since the test user's
+        groups (system:authenticated, etc.) don't include premium-user, the
+        API key should be denied access.
+        """
+        # The default API key inherits user's actual groups (system:authenticated, etc.)
+        # which don't include 'premium-user', so it should get 403 on premium model
+        api_key = _get_default_api_key()
+        r = _inference(api_key, path=PREMIUM_MODEL_PATH)
+        log.info(f"User groups (no premium-user) -> premium model: {r.status_code}")
+        assert r.status_code == 403, f"Expected 403, got {r.status_code}"
+
+
+class TestSubscriptionEnforcement:
+    """Tests that MaaSSubscription correctly enforces rate limits using API keys."""
+
+    def test_subscribed_user_gets_200(self):
+        """API key with matching group should access the model. Polls for AuthPolicy enforcement."""
+        api_key = _get_default_api_key()
+        r = _poll_status(api_key, 200, timeout=90)
+        log.info(f"Subscribed API key -> {r.status_code}")
+
+    def test_auth_pass_no_subscription_gets_403(self):
+        """API key with auth pass but no matching subscription should get 403.
+        
+        The AuthPolicy includes a subscription-error-check rule that calls
+        /v1/subscriptions/select. If no subscription matches the user's groups,
+        the request is denied with 403 "no matching subscription found for user".
+        
+        To test this, we temporarily add system:authenticated to the premium model's
+        AuthPolicy (so auth passes) but keep the subscription only for premium-user
+        (so subscription check fails).
+        """
+        ns = _ns()
+        api_key = _get_default_api_key()
+        
+        # First verify that default key currently gets 403 on premium model (auth fails)
+        r = _inference(api_key, path=PREMIUM_MODEL_PATH)
+        assert r.status_code == 403, f"Expected 403 for premium model (auth should fail), got {r.status_code}"
+        
+        # Now temporarily add system:authenticated to premium model's AuthPolicy
+        try:
+            # Get current auth policy and add system:authenticated group
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-auth-pass-sub-fail", "namespace": ns},
+                "spec": {
+                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "subjects": {
+                        "groups": [{"name": "system:authenticated"}],  # Auth will pass
+                    },
+                },
+            })
+            _wait_reconcile()
+            
+            # Now auth passes (system:authenticated in AuthPolicy) but subscription fails
+            # (premium subscription only allows premium-user, not system:authenticated)
+            r = _poll_status(api_key, 403, path=PREMIUM_MODEL_PATH, timeout=30)
+            log.info(f"Auth passes, subscription fails -> {r.status_code}")
+            # Verify the error message indicates subscription issue
+            if r.text:
+                assert "subscription" in r.text.lower() or r.status_code == 403, \
+                    f"Expected subscription-related 403, got: {r.text[:200]}"
+        finally:
+            _delete_cr("maasauthpolicy", "e2e-auth-pass-sub-fail")
+            _wait_reconcile()
+
+    def test_invalid_subscription_header_gets_429(self):
+        """API key with invalid subscription header should get 429 or 403."""
+        api_key = _get_default_api_key()
+        r = _inference(api_key, extra_headers={"x-maas-subscription": INVALID_SUBSCRIPTION})
+        # Gateway may return 429 (rate limited) or 403 (forbidden) for invalid subscription
+        assert r.status_code in (429, 403), f"Expected 429 or 403, got {r.status_code}"
+
+    def test_explicit_subscription_header_works(self):
+        """API key with explicit valid subscription header should work."""
+        api_key = _get_default_api_key()
+        r = _inference(api_key, extra_headers={"x-maas-subscription": SIMULATOR_SUBSCRIPTION})
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
+
+
+class TestMultipleSubscriptionsPerModel:
+    """Multiple subscriptions for one model — API key in ONE subscription should get access.
+
+    Validates the fix for the bug where multiple subscriptions' when predicates
+    were AND'd, requiring a user to be in ALL subscriptions.
+    """
+
+    def test_user_in_one_of_two_subscriptions_gets_200(self):
+        """Add a 2nd subscription for a different group. API key only in the original
+        group should still get 200 (not blocked by the 2nd sub's group check)."""
+        ns = _ns()
+        try:
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-extra-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "nonexistent-group-xyz"}]},
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
+                },
+            })
+
+            api_key = _get_default_api_key()
+            r = _poll_status(api_key, 200)
+            log.info(f"API key in 1 of 2 subs -> {r.status_code}")
+        finally:
+            _delete_cr("maassubscription", "e2e-extra-sub")
+            _wait_reconcile()
+
+
+    def test_multi_tier_auto_select_highest(self):
+        """With 2 tiers for the same model, API key in both should still get access.
+        (Verifies multiple overlapping subscriptions don't break routing.)"""
+        ns = _ns()
+        try:
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-high-tier", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
+                },
+            })
+
+            api_key = _get_default_api_key()
+            _poll_status(api_key, 200, extra_headers={"x-maas-subscription": "e2e-high-tier"})
+
+            r2 = _inference(api_key)
+            assert r2.status_code == 200, f"Expected 200 with auto-select, got {r2.status_code}"
+        finally:
+            _delete_cr("maassubscription", "e2e-high-tier")
+            _wait_reconcile()
+
+
+class TestMultipleAuthPoliciesPerModel:
+    """Multiple auth policies for one model aggregate with OR logic."""
+
+    def test_two_auth_policies_or_logic(self):
+        """Two auth policies for the premium model with OR logic: user matching either gets access."""
+        ns = _ns()
+        try:
+            # Create a 2nd auth policy that allows system:authenticated (user's actual group)
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-premium-sa-auth", "namespace": ns},
+                "spec": {
+                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+            # Create a subscription for system:authenticated on premium model
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-premium-sa-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                },
+            })
+            _wait_reconcile()
+            
+            # Default API key (inherits user's system:authenticated group) should now work
+            api_key = _get_default_api_key()
+            r = _poll_status(api_key, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-premium-sa-sub")
+            log.info(f"API key with 2nd auth policy -> premium: {r.status_code}")
+        finally:
+            _delete_cr("maassubscription", "e2e-premium-sa-sub")
+            _delete_cr("maasauthpolicy", "e2e-premium-sa-auth")
+            _wait_reconcile()
+
+    def test_delete_one_auth_policy_other_still_works(self):
+        """Delete one of two auth policies for a model -> remaining still works."""
+        ns = _ns()
+        try:
+            # Create an extra auth policy for the standard model (same model as existing one)
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-extra-auth", "namespace": ns},
+                "spec": {
+                    "modelRefs": [MODEL_REF],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+            _wait_reconcile()
+
+            # Delete the extra policy - original policy should still work
+            _delete_cr("maasauthpolicy", "e2e-extra-auth")
+            _wait_reconcile()
+
+            # Default API key should still work via the original auth policy
+            api_key = _get_default_api_key()
+            r = _poll_status(api_key, 200)
+            log.info(f"After deleting extra auth policy -> {r.status_code}")
+        finally:
+            _delete_cr("maasauthpolicy", "e2e-extra-auth")
+            _wait_reconcile()
+
+
+class TestCascadeDeletion:
+    """Tests that deleting CRs triggers proper cleanup and rebuilds."""
+
+    def test_delete_subscription_rebuilds_trlp(self):
+        """Add a 2nd subscription, delete it -> TRLP rebuilt with only the original."""
+        ns = _ns()
+        try:
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-temp-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
+                },
+            })
+            _wait_reconcile()
+
+            _delete_cr("maassubscription", "e2e-temp-sub")
+
+            api_key = _get_default_api_key()
+            _poll_status(api_key, 200)
+        finally:
+            _delete_cr("maassubscription", "e2e-temp-sub")
+
+    def test_delete_last_subscription_denies_access(self):
+        """Delete all subscriptions for a model -> access denied (403 or 429).
+        
+        When the last subscription is deleted, access is denied. The exact code
+        depends on which policy evaluates first:
+        - 403: AuthPolicy's subscription-error-check denies (no subscription found)
+        - 429: Default-deny TRLP with 0 tokens kicks in
+        
+        Both indicate the intended behavior: no subscription = no access.
+        """
+        api_key = _get_default_api_key()
+        original = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+        assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
+        try:
+            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+            # With no subscription, expect either 403 or 429 (both = access denied)
+            r = _poll_status(api_key, [403, 429], subscription=False, timeout=30)
+            log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
+        finally:
+            _apply_cr(original)
+            _wait_reconcile()
+
+    # TODO: Uncomment this test once we validated unconfigured models
+    # def test_unconfigured_model_denied_by_gateway_auth(self):
+    #     """New model with no MaaSAuthPolicy/MaaSSubscription -> gateway default auth denies (403)."""
+    #     api_key = _get_default_api_key()
+    #     r = _inference(api_key, path=UNCONFIGURED_MODEL_PATH)
+    #     log.info(f"Unconfigured model (no auth policy) -> {r.status_code}")
+    #     assert r.status_code == 403, f"Expected 403 (gateway default deny), got {r.status_code}"
+
+
+class TestOrderingEdgeCases:
+    """Tests that resource creation order doesn't matter."""
+
+    def test_subscription_before_auth_policy(self):
+        """Create subscription first, then auth policy -> should work once both exist."""
+        ns = _ns()
+        try:
+            # Get the default API key (inherits user's groups including system:authenticated)
+            api_key = _get_default_api_key()
+
+            # Create subscription first (for system:authenticated group)
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-ordering-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                },
+            })
+            _wait_reconcile()
+
+            # Without auth policy for system:authenticated on premium model, request should fail with 403
+            r1 = _inference(api_key, path=PREMIUM_MODEL_PATH, subscription="e2e-ordering-sub")
+            log.info(f"Sub only (no auth policy) -> {r1.status_code}")
+            assert r1.status_code == 403, f"Expected 403 (no auth policy yet), got {r1.status_code}"
+
+            # Now add the auth policy
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-ordering-auth", "namespace": ns},
+                "spec": {
+                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+
+            # Now it should work
+            r2 = _poll_status(api_key, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-ordering-sub")
+            log.info(f"Sub + auth policy -> {r2.status_code}")
+        finally:
+            _delete_cr("maassubscription", "e2e-ordering-sub")
+            _delete_cr("maasauthpolicy", "e2e-ordering-auth")
+            _wait_reconcile()

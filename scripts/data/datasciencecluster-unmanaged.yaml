@@ -1,0 +1,15 @@
+---
+# DataScienceCluster for ODH with modelsAsService Unmanaged (hack script / kustomize flow).
+# Use this when MaaS is deployed separately via deploy.sh --deployment-mode kustomize.
+# Compatible with ODH versions that do not yet support modelsAsService in DSC.
+apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    kserve:
+      managementState: Managed
+      rawDeploymentServiceConfig: Headed
+    dashboard:
+      managementState: Removed

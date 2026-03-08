@@ -2,10 +2,6 @@ apiVersion: serving.kserve.io/v1alpha1
 kind: LLMInferenceService
 metadata:
   name: simulated-premium
-  annotations:
-    # This model is restricted to premium tier users only
-    # Only users with premium tier access can use this model
-    alpha.maas.opendatahub.io/tiers: '["premium"]'
 spec:
   model:
     uri: hf://facebook/opt-125m

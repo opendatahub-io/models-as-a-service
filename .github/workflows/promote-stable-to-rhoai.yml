@@ -1,0 +1,81 @@
+# Promote Stable to RHOAI Workflow
+#
+# Creates a promotional PR to sync the rhoai branch with stable.
+# Triggered on-demand only via workflow_dispatch.
+#
+# To enable scheduled promotions in the future, uncomment the schedule block below.
+#
+# This workflow:
+#   1. Checks if rhoai is behind stable
+#   2. Creates a PR from stable -> rhoai if there are new changes
+#   3. Reuses an existing open PR if one already exists
+
+name: Promote Stable to RHOAI
+
+on:
+  # schedule:
+  #   - cron: '0 0 * * 2'  # Every Tuesday at midnight UTC (disabled for now)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  GH_USER_NAME: github-actions[bot]
+  GH_USER_EMAIL: github-actions[bot]@users.noreply.github.com
+
+jobs:
+  promote:
+    name: Create Promotion PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "${{ env.GH_USER_NAME }}"
+          git config user.email "${{ env.GH_USER_EMAIL }}"
+
+      - name: Promote stable to rhoai
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin stable rhoai
+
+          DIFF_COUNT=$(git rev-list --count origin/rhoai..origin/stable)
+          if [ "$DIFF_COUNT" -eq 0 ]; then
+            echo "rhoai is already up to date with stable. Nothing to promote."
+            echo "## Promote Stable to RHOAI" >> "$GITHUB_STEP_SUMMARY"
+            echo "rhoai is already up to date with stable. No PR needed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "Found $DIFF_COUNT commit(s) to promote from stable to rhoai."
+
+          COMMIT_LOG=$(git log --oneline origin/rhoai..origin/stable --no-merges | head -30)
+          BODY="Automated promotion of **${DIFF_COUNT} commit(s)** from \`stable\` to \`rhoai\`."
+          BODY="${BODY}"$'\n\n'"\`\`\`"$'\n'"${COMMIT_LOG}"$'\n'"\`\`\`"
+
+          EXISTING_PR=$(gh pr list --base rhoai --head stable --state open --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING_PR" ]; then
+            if ! echo "$BODY" | gh pr edit "$EXISTING_PR" --body-file -; then
+              echo "::error::Failed to update existing promotion PR #${EXISTING_PR}"
+              exit 1
+            fi
+            echo "Updated existing promotion PR #${EXISTING_PR}"
+          else
+            if ! echo "$BODY" | gh pr create --base rhoai --head stable \
+              --title "chore: promote stable to rhoai" \
+              --body-file -; then
+              echo "::error::Failed to create promotion PR"
+              exit 1
+            fi
+            echo "Created new promotion PR"
+          fi

@@ -6,6 +6,8 @@ dist/
 build/
 .idea/
 .claude
+.cursor/
+AGENTS.md
 
 *.pid
 
@@ -40,6 +42,7 @@ htmlcov/
 apps/frontend/.env.local
 apps/backend/.env
 CLAUDE.md
+.cursor/
 
 # Docs build and site directories
 docs/build/

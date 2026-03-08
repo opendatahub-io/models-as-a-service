@@ -65,6 +65,8 @@ nav:
       - Token Management: configuration-and-management/token-management.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
     - Model Setup: configuration-and-management/model-setup.md
+    - Model Listing Flow: configuration-and-management/model-listing-flow.md
+    - MaaSModelRef Kinds (future): configuration-and-management/maas-model-kinds.md
     - Known Issues:
       - Group Membership: configuration-and-management/group-membership-known-issues.md
       - Tier Modification: configuration-and-management/tier-modification-known-issues.md
@@ -72,7 +74,6 @@ nav:
     - Advanced Administration:
       - Observability: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
-      - Storage Configuration: advanced-administration/storage-configuration.md
   - End User Guide:
     - Self Service Model Access: user-guide/self-service-model-access.md
 
@@ -92,7 +93,6 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
-  - pymdownx.superfences
   - pymdownx.tasklist:
       clickable_checkbox: true
   - pymdownx.tilde
@@ -104,9 +104,6 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
-  - pymdownx.tabbed:
-      alternate_style: true
   - tables
   - attr_list
   - md_in_html

@@ -25,7 +25,7 @@ echo ""
 
 # Step 1: Install ODH Operator
 if [[ "$DEV_INSTALL" == true ]]; then
-    ODH_OPERATOR_NS="opendatahub-operator-system"
+    ODH_OPERATOR_NS="opendatahub"
     echo "1️⃣ Installing ODH Operator from repository manifests..."
     echo "   Using operator image: $ODH_OPERATOR_IMAGE"
     cat <<EOF | kubectl apply -f -

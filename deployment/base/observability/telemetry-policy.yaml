@@ -10,6 +10,10 @@ spec:
         model: responseBodyJSON("/model")
         tier: auth.identity.tier
         user: auth.identity.userid
+        # Subscription metadata for usage attribution and billing
+        subscription: auth.identity.selected_subscription
+        organization_id: auth.identity.organizationId
+        cost_center: auth.identity.costCenter
   targetRef:
     group: gateway.networking.k8s.io
     kind: Gateway

@@ -1,0 +1,384 @@
+/*
+Copyright 2025.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package maas
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/go-logr/logr"
+	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"knative.dev/pkg/apis"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+)
+
+// Default gateway name and namespace when not set via flags.
+const (
+	defaultGatewayName      = "maas-default-gateway"
+	defaultGatewayNamespace = "openshift-ingress"
+	defaultClusterAudience  = "https://kubernetes.default.svc"
+)
+
+const modelRefNameIndex = "spec.modelRef.name"
+
+func modelRefNameIndexer(obj client.Object) []string {
+	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
+	if !ok || model.Spec.ModelRef.Name == "" {
+		return nil
+	}
+	return []string{model.Spec.ModelRef.Name}
+}
+
+// MaaSModelRefReconciler reconciles a MaaSModelRef object
+type MaaSModelRefReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+
+	// GatewayName and GatewayNamespace identify the Gateway used for model HTTPRoutes (configurable via flags).
+	GatewayName      string
+	GatewayNamespace string
+}
+
+func (r *MaaSModelRefReconciler) gatewayName() string {
+	if r.GatewayName != "" {
+		return r.GatewayName
+	}
+	return defaultGatewayName
+}
+
+func (r *MaaSModelRefReconciler) gatewayNamespace() string {
+	if r.GatewayNamespace != "" {
+		return r.GatewayNamespace
+	}
+	return defaultGatewayNamespace
+}
+
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs/finalizers,verbs=update
+//+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+//+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
+
+const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
+
+// Reconcile is part of the main kubernetes reconciliation loop
+func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSModelRef", req.NamespacedName)
+
+	model := &maasv1alpha1.MaaSModelRef{}
+	if err := r.Get(ctx, req.NamespacedName, model); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		log.Error(err, "unable to fetch MaaSModelRef")
+		return ctrl.Result{}, err
+	}
+
+	// Handle deletion
+	if !model.GetDeletionTimestamp().IsZero() {
+		return r.handleDeletion(ctx, log, model)
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(model, maasModelFinalizer) {
+		controllerutil.AddFinalizer(model, maasModelFinalizer)
+		if err := r.Update(ctx, model); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	kind := model.Spec.ModelRef.Kind
+	handler := GetBackendHandler(kind, r)
+	if handler == nil {
+		log.Error(nil, "unknown modelRef kind", "kind", kind)
+		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("unknown kind: %s", kind))
+		return ctrl.Result{}, nil
+	}
+
+	if err := handler.ReconcileRoute(ctx, log, model); err != nil {
+		if errors.Is(err, ErrKindNotImplemented) {
+			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported")
+			return ctrl.Result{}, nil
+		}
+		log.Error(err, "failed to reconcile HTTPRoute")
+		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to reconcile HTTPRoute: %v", err))
+		return ctrl.Result{}, err
+	}
+
+	endpoint, ready, err := handler.Status(ctx, log, model)
+	if err != nil {
+		if errors.Is(err, ErrKindNotImplemented) {
+			model.Status.Endpoint = ""
+			model.Status.Phase = "Failed"
+			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported")
+			return ctrl.Result{}, nil
+		}
+		log.Error(err, "failed to update model status")
+		model.Status.Endpoint = ""
+		model.Status.Phase = "Failed"
+		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to update model status: %v", err))
+		return ctrl.Result{}, err
+	}
+	model.Status.Endpoint = endpoint
+	if ready {
+		model.Status.Phase = "Ready"
+		r.updateStatus(ctx, model, "Ready", "Successfully reconciled")
+	} else {
+		model.Status.Phase = "Pending"
+		model.Status.Endpoint = ""
+		r.updateStatus(ctx, model, "Pending", "Waiting for backend to become ready")
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *MaaSModelRefReconciler) handleDeletion(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (ctrl.Result, error) {
+	if controllerutil.ContainsFinalizer(model, maasModelFinalizer) {
+		// Clean up generated AuthPolicies for this model
+		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Name, "AuthPolicy", "kuadrant.io", "v1"); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Clean up generated TokenRateLimitPolicies for this model
+		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Name, "TokenRateLimitPolicy", "kuadrant.io", "v1alpha1"); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Kind-specific cleanup (e.g. delete HTTPRoute for ExternalModel; no-op for llmisvc)
+		if handler := GetBackendHandler(model.Spec.ModelRef.Kind, r); handler != nil {
+			if err := handler.CleanupOnDelete(ctx, log, model); err != nil {
+				log.Error(err, "failed to clean up backend resources")
+				return ctrl.Result{}, err
+			}
+		}
+
+		// Remove finalizer so the MaaSModelRef can be deleted
+		controllerutil.RemoveFinalizer(model, maasModelFinalizer)
+		if err := r.Update(ctx, model); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// deleteGeneratedPoliciesByLabel finds and deletes all generated policies
+// (AuthPolicy or TokenRateLimitPolicy) labeled with the given model name.
+func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context, log logr.Logger, modelName, kind, group, version string) error {
+	policyList := &unstructured.UnstructuredList{}
+	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: version, Kind: kind + "List"})
+
+	labelSelector := client.MatchingLabels{
+		"maas.opendatahub.io/model":    modelName,
+		"app.kubernetes.io/managed-by": "maas-controller",
+	}
+
+	if err := r.List(ctx, policyList, labelSelector); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to list %s resources for model %s: %w", kind, modelName, err)
+	}
+
+	for i := range policyList.Items {
+		p := &policyList.Items[i]
+		if !isManaged(p) {
+			// Respect the opendatahub.io/managed=false annotation even though it can lead to orphaned/stale Kuadrant resources
+			log.Info(fmt.Sprintf("Generated %s opted out, skipping deletion", kind),
+				"name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+			continue
+		}
+		log.Info(fmt.Sprintf("Deleting generated %s on MaaSModelRef deletion", kind),
+			"name", p.GetName(), "namespace", p.GetNamespace(), "model", modelName)
+		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete %s %s/%s: %w", kind, p.GetNamespace(), p.GetName(), err)
+		}
+	}
+
+	return nil
+}
+
+func (r *MaaSModelRefReconciler) updateStatus(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message string) {
+	r.updateStatusWithReason(ctx, model, phase, message, "")
+}
+
+// updateStatusWithReason sets Phase and Ready condition; when phase is "Failed", reason overrides the default "ReconcileFailed" (e.g. "Unsupported" for unimplemented kinds).
+func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message, reason string) {
+	model.Status.Phase = phase
+	condition := metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionTrue,
+		Reason:             "Reconciled",
+		Message:            message,
+		LastTransitionTime: metav1.Now(),
+	}
+	if phase != "Ready" {
+		condition.Status = metav1.ConditionFalse
+		if reason != "" {
+			// Use provided reason when available (e.g., "Unsupported" for unimplemented kinds)
+			condition.Reason = reason
+		} else if phase == "Failed" {
+			condition.Reason = "ReconcileFailed"
+		} else {
+			condition.Reason = "BackendNotReady"
+		}
+	}
+
+	// Update condition
+	found := false
+	for i, c := range model.Status.Conditions {
+		if c.Type == condition.Type {
+			model.Status.Conditions[i] = condition
+			found = true
+			break
+		}
+	}
+	if !found {
+		model.Status.Conditions = append(model.Status.Conditions, condition)
+	}
+
+	if err := r.Status().Update(ctx, model); err != nil {
+		log := logr.FromContextOrDiscard(ctx)
+		log.Error(err, "failed to update MaaSModelRef status", "name", model.Name)
+		// Intentionally do not return the error so we do not re-queue on status update conflict/failure.
+	}
+}
+
+// llmisvcReadyChangedPredicate passes Create/Delete events and Update events
+// where the LLMInferenceService's Ready condition status changed.
+type llmisvcReadyChangedPredicate struct {
+	predicate.Funcs
+}
+
+func (llmisvcReadyChangedPredicate) Update(e event.UpdateEvent) bool {
+	oldObj, ok := e.ObjectOld.(*kservev1alpha1.LLMInferenceService)
+	if !ok {
+		return true
+	}
+	newObj, ok := e.ObjectNew.(*kservev1alpha1.LLMInferenceService)
+	if !ok {
+		return true
+	}
+	return llmisvcReadyStatus(oldObj) != llmisvcReadyStatus(newObj)
+}
+
+func llmisvcReadyStatus(obj *kservev1alpha1.LLMInferenceService) string {
+	for _, c := range obj.Status.Conditions {
+		if c.Type == apis.ConditionReady {
+			return string(c.Status)
+		}
+	}
+	return ""
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	ctx := context.Background()
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer); err != nil {
+		return fmt.Errorf("failed to create field index %s: %w", modelRefNameIndex, err)
+	}
+
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&maasv1alpha1.MaaSModelRef{}).
+		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
+		// (fixes race condition where MaaSModelRef is created before HTTPRoute exists).
+		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.mapHTTPRouteToMaaSModelRefs)).
+		// Watch LLMInferenceServices so we re-reconcile when the backend becomes
+		// ready (or transitions away from ready). The predicate filters to spec
+		// changes (generation) and Ready-condition status changes, skipping
+		// metadata-only updates.
+		Watches(&kservev1alpha1.LLMInferenceService{},
+			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
+			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
+		).
+		Complete(r)
+}
+
+// mapHTTPRouteToMaaSModelRefs returns reconcile requests for all MaaSModelRefs whose
+// route namespace (ModelRef.Namespace or MaaSModelRef.Namespace) matches the HTTPRoute's namespace.
+func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
+	route, ok := obj.(*gatewayapiv1.HTTPRoute)
+	if !ok {
+		return nil
+	}
+	var models maasv1alpha1.MaaSModelRefList
+	if err := r.List(ctx, &models); err != nil {
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, m := range models.Items {
+		ns := m.Spec.ModelRef.Namespace
+		if ns == "" {
+			ns = m.Namespace
+		}
+		if ns == route.Namespace {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
+			})
+		}
+	}
+	return requests
+}
+
+// mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
+// reference the given LLMInferenceService by name and namespace.
+func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
+	llmisvc, ok := obj.(*kservev1alpha1.LLMInferenceService)
+	if !ok {
+		return nil
+	}
+	var models maasv1alpha1.MaaSModelRefList
+	if err := r.List(ctx, &models, client.MatchingFields{modelRefNameIndex: llmisvc.Name}); err != nil {
+		logr.FromContextOrDiscard(ctx).Error(err, "failed to list MaaSModels by modelRef.name index", "llmisvcName", llmisvc.Name)
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, m := range models.Items {
+		kind := m.Spec.ModelRef.Kind
+		if kind != "LLMInferenceService" {
+			continue
+		}
+		refNS := m.Spec.ModelRef.Namespace
+		if refNS == "" {
+			refNS = m.Namespace
+		}
+		if refNS == llmisvc.Namespace {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
+			})
+		}
+	}
+	return requests
+}

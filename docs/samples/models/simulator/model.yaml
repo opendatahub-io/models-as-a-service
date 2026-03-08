@@ -2,8 +2,6 @@ apiVersion: serving.kserve.io/v1alpha1
 kind: LLMInferenceService
 metadata:
   name: simulated
-  annotations:
-    alpha.maas.opendatahub.io/tiers: '[]'
 spec:
   model:
     uri: hf://sshleifer/tiny-gpt2 # ~2MB test model, simulator ignores it anyway

@@ -9,7 +9,7 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
-      == "main"
+      in ["konflux-its"]
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
@@ -21,7 +21,7 @@ spec:
   params:
   - name: git-url
     value: '{{source_url}}'
-  - name: revision
+  - name: git-rev
     value: '{{revision}}'
   - name: output-image
     value: quay.io/opendatahub/maas-api:odh-pr
