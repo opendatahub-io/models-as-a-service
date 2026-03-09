@@ -47,6 +47,7 @@ import (
 const (
 	defaultGatewayName      = "maas-default-gateway"
 	defaultGatewayNamespace = "openshift-ingress"
+	defaultClusterAudience  = "https://kubernetes.default.svc"
 )
 
 // MaaSModelRefReconciler reconciles a MaaSModelRef object
