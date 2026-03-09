@@ -22,7 +22,9 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
+	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"knative.dev/pkg/apis"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,9 +33,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -77,6 +82,18 @@ func (r *MaaSModelRefReconciler) gatewayNamespace() string {
 //+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
 
 const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
+
+// Field index for efficiently finding MaaSModelRefs by their modelRef.name
+const modelRefNameIndex = "spec.modelRef.name"
+
+// modelRefNameIndexer returns the modelRef.name for indexing
+func modelRefNameIndexer(obj client.Object) []string {
+	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
+	if !ok || model.Spec.ModelRef.Name == "" {
+		return nil
+	}
+	return []string{model.Spec.ModelRef.Name}
+}
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -260,8 +277,40 @@ func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, mod
 	}
 }
 
+// llmisvcReadyChangedPredicate passes Create/Delete events and Update events
+// where the LLMInferenceService's Ready condition status changed.
+type llmisvcReadyChangedPredicate struct {
+	predicate.Funcs
+}
+
+func (llmisvcReadyChangedPredicate) Update(e event.UpdateEvent) bool {
+	oldObj, ok := e.ObjectOld.(*kservev1alpha1.LLMInferenceService)
+	if !ok {
+		return true
+	}
+	newObj, ok := e.ObjectNew.(*kservev1alpha1.LLMInferenceService)
+	if !ok {
+		return true
+	}
+	return llmisvcReadyStatus(oldObj) != llmisvcReadyStatus(newObj)
+}
+
+func llmisvcReadyStatus(obj *kservev1alpha1.LLMInferenceService) string {
+	for _, c := range obj.Status.Conditions {
+		if c.Type == apis.ConditionReady {
+			return string(c.Status)
+		}
+	}
+	return ""
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	ctx := context.Background()
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer); err != nil {
+		return fmt.Errorf("failed to create field index %s: %w", modelRefNameIndex, err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaaSModelRef{}).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
@@ -269,6 +318,12 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSModelRefs,
 		)).
+		// Watch LLMInferenceServices so we re-reconcile when the backing service's Ready status changes
+		// (automatically updates MaaSModelRef status from Pending -> Ready and vice versa).
+		Watches(&kservev1alpha1.LLMInferenceService{},
+			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
+			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
+		).
 		Complete(r)
 }
 
@@ -287,6 +342,34 @@ func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context
 		requests = append(requests, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
 		})
+	}
+	return requests
+}
+
+// mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
+// reference the given LLMInferenceService by name in the same namespace.
+func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
+	llmisvc, ok := obj.(*kservev1alpha1.LLMInferenceService)
+	if !ok {
+		return nil
+	}
+	var models maasv1alpha1.MaaSModelRefList
+	if err := r.List(ctx, &models, client.MatchingFields{modelRefNameIndex: llmisvc.Name}); err != nil {
+		logr.FromContextOrDiscard(ctx).Error(err, "failed to list MaaSModels by modelRef.name index", "llmisvcName", llmisvc.Name)
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, m := range models.Items {
+		kind := m.Spec.ModelRef.Kind
+		if kind != "LLMInferenceService" {
+			continue
+		}
+		// MaaSModelRef references models in the same namespace
+		if m.Namespace == llmisvc.Namespace {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
+			})
+		}
 	}
 	return requests
 }
