@@ -25,6 +25,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -45,6 +46,22 @@ var scheme = runtime.NewScheme()
 type nsRestScope struct{}
 
 func (nsRestScope) Name() apimeta.RESTScopeName { return apimeta.RESTScopeNameNamespace }
+
+// testRESTMapper builds a REST mapper covering all GVKs exercised across
+// controller tests, including Kuadrant types that are not registered in the scheme.
+func testRESTMapper() apimeta.RESTMapper {
+	m := apimeta.NewDefaultRESTMapper(nil)
+	ns := nsRestScope{}
+	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSModel"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSAuthPolicy"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"}, ns)
+	return m
+}
 
 func TestGetBackendHandler_UnknownKind_ReturnsNil(t *testing.T) {
 	r := &MaaSModelRefReconciler{}
