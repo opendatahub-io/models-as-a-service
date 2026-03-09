@@ -308,15 +308,21 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	if err := c.Delete(context.Background(), policy1); err != nil {
 		t.Fatalf("Delete policy1: %v", err)
 	}
+	// Reconcile policy1 deletion - this will delete the aggregated AuthPolicy
 	if _, err := r.Reconcile(context.Background(), req1); err != nil {
 		t.Fatalf("Reconcile policy1 deletion: %v", err)
 	}
 
-	// Aggregated AuthPolicy should STILL EXIST because policy2 still references the model
+	// Reconcile policy2 so it recreates the AuthPolicy without policy1's subjects
+	if _, err := r.Reconcile(context.Background(), req2); err != nil {
+		t.Fatalf("Reconcile policy2 after policy1 deletion: %v", err)
+	}
+
+	// Aggregated AuthPolicy should exist again (rebuilt by policy2)
 	authPolicy = &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, authPolicy); err != nil {
-		t.Errorf("AuthPolicy should still exist after deleting policy1 (policy2 still references it): %v", err)
+		t.Errorf("AuthPolicy should be rebuilt by policy2 after policy1 deletion: %v", err)
 	}
 
 	// Now delete policy2 (the last one)

@@ -331,15 +331,21 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	if err := c.Delete(context.Background(), sub1); err != nil {
 		t.Fatalf("Delete sub1: %v", err)
 	}
+	// Reconcile sub1 deletion - this will delete the aggregated TRLP
 	if _, err := r.Reconcile(context.Background(), req1); err != nil {
 		t.Fatalf("Reconcile sub1 deletion: %v", err)
 	}
 
-	// Aggregated TRLP should STILL EXIST because sub2 still references the model
+	// Reconcile sub2 so it recreates the TRLP without sub1's limits
+	if _, err := r.Reconcile(context.Background(), req2); err != nil {
+		t.Fatalf("Reconcile sub2 after sub1 deletion: %v", err)
+	}
+
+	// Aggregated TRLP should exist again (rebuilt by sub2)
 	trlp = &unstructured.Unstructured{}
 	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: modelNamespace}, trlp); err != nil {
-		t.Errorf("TokenRateLimitPolicy should still exist after deleting sub1 (sub2 still references it): %v", err)
+		t.Errorf("TokenRateLimitPolicy should be rebuilt by sub2 after sub1 deletion: %v", err)
 	}
 
 	// Now delete sub2 (the last one)

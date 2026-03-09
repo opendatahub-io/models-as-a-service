@@ -447,17 +447,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
 	// Check if there are any remaining (non-deleted) MaaSAuthPolicies that reference this model.
 	// If yes, don't delete the aggregated AuthPolicy - they will rebuild it.
-	remainingPolicies, err := findAllAuthPoliciesForModel(ctx, r.Client, modelNamespace, modelName)
-	if err != nil {
-		return fmt.Errorf("failed to check for remaining MaaSAuthPolicies: %w", err)
-	}
-	if len(remainingPolicies) > 0 {
-		log.Info("Skipping deletion of aggregated AuthPolicy because other MaaSAuthPolicies still reference this model",
-			"model", modelNamespace+"/"+modelName, "remainingCount", len(remainingPolicies))
-		return nil
-	}
-
-	// No remaining parent policies - safe to delete the aggregated AuthPolicy
+	// Always delete the aggregated AuthPolicy so remaining MaaSAuthPolicies rebuild it
+	// without the subjects from the deleted policy. If we skip deletion, the aggregated
+	// AuthPolicy will contain stale subjects from the deleted MaaSAuthPolicy.
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"})
 	labelSelector := client.MatchingLabels{

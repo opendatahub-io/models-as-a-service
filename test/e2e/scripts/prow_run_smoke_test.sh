@@ -250,8 +250,8 @@ deploy_models() {
                 all_ready=false
                 break
             fi
-        done < <(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-        if $all_ready && [[ -n "$(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o name 2>/dev/null)" ]]; then
+        done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
             break
         fi
         retries=$((retries + 1))
@@ -273,8 +273,8 @@ deploy_models() {
                     all_ready=false
                     break
                 fi
-            done < <(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-            if $all_ready && [[ -n "$(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o name 2>/dev/null)" ]]; then
+            done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+            if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
                 break
             fi
             retries=$((retries + 1))
