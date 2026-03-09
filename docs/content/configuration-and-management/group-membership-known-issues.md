@@ -10,10 +10,10 @@ When a user is removed from a group (e.g., removed from `premium-users` group) w
 
 ### How Group Membership Affects Access
 
-1. **Token Request**: When a user requests a MaaS token, their group memberships are evaluated to determine their tier.
-2. **Service Account Creation**: A Service Account is created in the tier-specific namespace (e.g., `maas-default-gateway-tier-premium`).
+1. **Token Request**: When a user requests a MaaS token, their group memberships are evaluated to determine their subscription(s).
+2. **Service Account Creation**: A Service Account is created in the subscription-specific namespace (e.g., `maas-default-gateway-tier-premium` for the premium subscription).
 3. **Token Issuance**: The token is issued for the Service Account, not the original user.
-4. **Request Authorization**: Requests are authorized based on the Service Account's identity and the tier metadata cached in the AuthPolicy.
+4. **Request Authorization**: Requests are authorized based on the Service Account's identity and the subscription metadata cached in the AuthPolicy.
 
 ### Side Effects
 
@@ -26,19 +26,19 @@ When a user is removed from a group (e.g., removed from `premium-users` group) w
 When a user is removed from a group, their existing MaaS tokens remain valid until expiration because:
 
 - The token is a Kubernetes Service Account token, not a user token.
-- The Service Account continues to exist in the tier namespace.
+- The Service Account continues to exist in the subscription namespace.
 - Kubernetes TokenReview validates the Service Account, not the original user's group membership.
 
 **Example Scenario**:
 
 ```text
 T+0h:   User "alice" is in "premium-users" group
-T+0h:   Alice requests a token -> Gets SA token in maas-default-gateway-tier-premium namespace
+T+0h:   Alice requests a token -> Gets SA token in premium subscription namespace
 T+1h:   Admin removes Alice from "premium-users" group
 T+1h:   Alice's token is STILL VALID (expires at T+24h)
 T+1h:   Alice can still make requests using the existing token
 T+24h:  Token expires, Alice must request a new one
-T+24h:  New token request -> Alice gets "free" tier (or fails if no tier matches)
+T+24h:  New token request -> Alice gets "free" subscription (or fails if no subscription matches)
 ```
 
 **Workaround**:
@@ -53,25 +53,25 @@ curl -X DELETE "${HOST}/maas-api/v1/tokens" \
 
 Note: The user must authenticate with their own token to revoke their tokens. Administrators cannot revoke tokens on behalf of other users in the current implementation.
 
-#### 2. Rate Limiting Continues at Old Tier
+#### 2. Rate Limiting Continues at Old Subscription
 
 **Impact**: Medium
 
 **Description**:
 
-The AuthPolicy caches the tier lookup result (default TTL: 5 minutes). After a user is removed from a group:
+The AuthPolicy caches the subscription lookup result (default TTL: 5 minutes). After a user is removed from a group:
 
-- Requests within the cache window continue to use the old tier's rate limits.
-- After cache expiry, the tier is re-evaluated based on current group membership.
-- If the user still has a valid token but no longer belongs to any tier group, requests may fail.
+- Requests within the cache window continue to use the old subscription's rate limits.
+- After cache expiry, the subscription is re-evaluated based on current group membership.
+- If the user still has a valid token but no longer belongs to any subscription group, requests may fail.
 
 **Example Timeline**:
 
 ```text
 T+0m:   User removed from "premium-users" group
-T+1m:   Request made -> Cached tier "premium" used -> Rate limit: 1000 tokens/min
+T+1m:   Request made -> Cached subscription "premium" used -> Rate limit: 1000 tokens/min
 T+5m:   Cache expires
-T+6m:   Request made -> Tier lookup fails (no matching group) -> Request may fail with 403
+T+6m:   Request made -> Subscription lookup fails (no matching group) -> Request may fail with 403
 ```
 
 **Workaround**:
@@ -85,10 +85,10 @@ T+6m:   Request made -> Tier lookup fails (no matching group) -> Request may fai
 
 **Description**:
 
-When a user is removed from a group, their Service Account in the tier namespace is not automatically deleted:
+When a user is removed from a group, their Service Account in the subscription namespace is not automatically deleted:
 
-- The Service Account remains in the tier namespace.
-- No new tokens can be issued for the old tier (tier lookup fails).
+- The Service Account remains in the subscription namespace.
+- No new tokens can be issued for the old subscription (subscription lookup fails).
 - Old tokens continue to work until expiration.
 - This is a cleanup artifact, not a security issue (access is controlled by RBAC and rate limiting).
 
@@ -99,14 +99,14 @@ When a user is removed from a group, their Service Account in the tier namespace
 - To find the Service Account for a specific user, list and filter by the username pattern:
 
 ```bash
-# List all Service Accounts in the tier namespace
-kubectl get serviceaccount -n maas-default-gateway-tier-<old-tier>
+# List all Service Accounts in the subscription namespace
+kubectl get serviceaccount -n maas-default-gateway-tier-<old-subscription>
 
 # Filter by username pattern (e.g., for user "alice@example.com")
-kubectl get serviceaccount -n maas-default-gateway-tier-<old-tier> | grep alice
+kubectl get serviceaccount -n maas-default-gateway-tier-<old-subscription> | grep alice
 
 # Delete the identified Service Account
-kubectl delete serviceaccount <sa-name> -n maas-default-gateway-tier-<old-tier>
+kubectl delete serviceaccount <sa-name> -n maas-default-gateway-tier-<old-subscription>
 ```
 
 #### 4. User Downgrade Creates New Service Account
@@ -115,27 +115,27 @@ kubectl delete serviceaccount <sa-name> -n maas-default-gateway-tier-<old-tier>
 
 **Description**:
 
-When a user is moved to a lower tier (e.g., removed from `premium-users`, now only matching the `free` tier group, such as `system:authenticated` in the default configuration):
+When a user is moved to a lower subscription (e.g., removed from `premium-users`, now only matching the `free` subscription group, such as `system:authenticated` in the default configuration):
 
-- A new Service Account is created in the new tier namespace (e.g., `maas-default-gateway-tier-free`).
-- The old Service Account in the premium tier namespace remains.
+- A new Service Account is created in the new subscription namespace (e.g., `maas-default-gateway-tier-free`).
+- The old Service Account in the premium subscription namespace remains.
 - Old premium tokens continue to work until expiration.
-- New token requests create tokens in the free tier namespace.
+- New token requests create tokens in the free subscription namespace.
 
 **Example**:
 
 ```text
-Before: Alice in "premium-users" -> SA in maas-default-gateway-tier-premium
-After:  Alice removed from "premium-users" (still matches "free" tier group)
+Before: Alice in "premium-users" -> SA in premium subscription namespace
+After:  Alice removed from "premium-users" (still matches "free" subscription group)
         -> Old SA still exists in premium namespace
-        -> New token request creates SA in maas-default-gateway-tier-free
+        -> New token request creates SA in free subscription namespace
         -> Alice now has SAs in both namespaces
 ```
 
 **Workaround**:
 
 - Revoke tokens before changing group membership to ensure clean transition.
-- Delete the user's Service Account manually from the old tier namespace when they change groups.
+- Delete the user's Service Account manually from the old subscription namespace when they change groups.
 
 #### 5. Monitoring Shows Split Metrics
 
@@ -143,16 +143,16 @@ After:  Alice removed from "premium-users" (still matches "free" tier group)
 
 **Description**:
 
-If a user has tokens from multiple tiers (before and after group change):
+If a user has tokens from multiple subscriptions (before and after group change):
 
 - Metrics are attributed to the Service Account's namespace.
-- Usage appears split across tier namespaces.
+- Usage appears split across subscription namespaces.
 - This is a reporting artifact and does not affect access control.
 
 **Workaround**:
 
 - Aggregate metrics by username label if available.
-- Encourage users to revoke old tokens after tier changes.
+- Encourage users to revoke old tokens after subscription changes.
 
 ### Recommended Practices
 
@@ -162,9 +162,9 @@ If a user has tokens from multiple tiers (before and after group change):
 
 3. **Use Short Token Expiration**: Shorter token lifetimes reduce the window of continued access after group removal.
 
-4. **Clean Up Service Accounts**: When a user changes groups, manually delete their Service Account from the old tier namespace to prevent orphaned resources.
+4. **Clean Up Service Accounts**: When a user changes groups, manually delete their Service Account from the old subscription namespace to prevent orphaned resources.
 
 ### Related Documentation
 
-- [Tier Configuration](./tier-configuration.md) - How to configure tier-to-group mappings
+- [Subscription Configuration](./subscription-configuration.md) - How to configure subscription-to-group mappings
 - [Token Management](./token-management.md) - Understanding token lifecycle and revocation

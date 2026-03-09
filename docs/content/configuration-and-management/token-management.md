@@ -1,11 +1,13 @@
 # Understanding Token Management
 
-This guide explains the token-based authentication system used to access models in the tier-based access control system. 
-It covers how token issuance works, the underlying service account architecture, and token lifecycle management.
+This guide explains the authentication and credential management used to access models in the MaaS Platform.
 
-!!! note
-    **Prerequisites**: This document assumes you have already configured tiers, RBAC, and rate limits. 
-    See [Configuring Subscription Tiers](tier-configuration.md) for setup instructions.
+!!! tip "Subscription model (current)"
+    The **subscription-based** architecture uses **API keys** (`sk-oai-*`) for programmatic access. Create keys via `POST /v1/api-keys` and use them with the `Authorization: Bearer` header. When users have multiple subscriptions, include the `X-MaaS-Subscription` header. See [Subscription Configuration](subscription-configuration.md).
+
+!!! note "Prerequisites"
+    This document assumes you have configured subscriptions (MaaSAuthPolicy, MaaSSubscription).
+    See [Subscription Configuration](subscription-configuration.md) for setup.
 
 ---
 
@@ -27,7 +29,7 @@ The platform uses a secure, token-based authentication system. Instead of using 
 access models directly, you first exchange them for a temporary, specialized access token. This approach provides several key benefits:
 
 - **Enhanced Security**: Tokens are short-lived, reducing the risk of compromised credentials. They are also narrowly scoped for model access only.
-- **Tier-Based Access Control**: The token you receive is automatically associated with your subscription tier (e.g., free, premium), ensuring you get the correct permissions and rate limits.
+- **Subscription-Based Access Control**: The token you receive is associated with your subscription(s), ensuring you get the correct permissions and rate limits.
 - **Auditability**: Every request made with a token is tied to a specific identity and can be audited.
 - **Kubernetes-Native Integration**: The system leverages standard, Kubernetes authentication and authorization mechanisms.
 
@@ -46,9 +48,9 @@ purpose-built identity in the form of a Kubernetes Service Account.
 
 ### Key Concepts
 
-- **Tier Namespace**: The platform maintains a separate Kubernetes namespace for each subscription tier (e.g., `...-tier-free`, `...-tier-premium`). These namespaces isolate users based on their access level. 
-- **Service Account (SA)**: When you request a token for the first time, the system creates a Service Account that represents you inside your designated tier namespace. This SA inherits all the permissions assigned to that tier.
-- **Access Token**: The token you receive is a standard JSON Web Token (JWT) that authenticates you as that specific Service Account. When you present this token to the gateway, the system knows your identity, your tier, and what permissions you have.
+- **Subscription**: Your access is determined by MaaSAuthPolicy and MaaSSubscription, which map groups to models and rate limits.
+- **Service Account (SA)**: For OpenShift token exchange, the system may create a Service Account that represents you. This SA inherits permissions from your subscription.
+- **Access Token**: The token you receive is a standard JSON Web Token (JWT). When you present this token to the gateway, the system knows your identity and what permissions you have.
 - **Token Audience**: The intended recipient of your token. This is validated during authentication and must match the gateway's configuration.
 - **Token Expiration**: The time after which the token expires. Tokens are short-lived to reduce the risk of compromised credentials.
 
@@ -61,7 +63,7 @@ sequenceDiagram
     participant User as OpenShift User
     participant MaaS as maas-api
     participant K8s as Kubernetes API
-    participant TierNS as Tier Namespace<br/>(e.g., *-tier-premium)
+    participant SubNS as Subscription Namespace
     participant Gateway
     participant Model as Model Backend
 
@@ -69,11 +71,11 @@ sequenceDiagram
     User->>MaaS: 1. Authenticate with OpenShift token
     MaaS->>K8s: Validate token (TokenReview)
     K8s-->>MaaS: username, groups
-    Note right of MaaS: Determine tier from<br/>tier-to-group-mapping
-    MaaS->>K8s: Ensure tier namespace exists
-    K8s->>TierNS: Create if needed
-    MaaS->>TierNS: Create/get Service Account for user
-    TierNS-->>MaaS: SA ready
+    Note right of MaaS: Determine subscription from<br/>group membership
+    MaaS->>K8s: Ensure namespace exists
+    K8s->>SubNS: Create if needed
+    MaaS->>SubNS: Create/get Service Account for user
+    SubNS-->>MaaS: SA ready
     MaaS->>K8s: Request SA token (TokenRequest)
     K8s-->>MaaS: Issued token
     MaaS-->>User: Return issued token
@@ -81,9 +83,9 @@ sequenceDiagram
     Note over User,Model: Model Access
     User->>Gateway: 3. Request with issued token
     Gateway->>K8s: Validate token (TokenReview)
-    Note right of K8s: Token from SA in<br/>tier namespace
+    Note right of K8s: Token from SA
     K8s-->>Gateway: Valid, with groups
-    Note right of Gateway: Tier lookup,<br/>SAR check,<br/>Rate limits
+    Note right of Gateway: Subscription lookup,<br/>SAR check,<br/>Rate limits
     Gateway->>Model: 4. Authorized request
     Model-->>Gateway: Response
     Gateway-->>User: Response
@@ -163,17 +165,16 @@ The Service Account will be automatically recreated the next time you request a 
 
 !!! warning "Important"
     **For Platform Administrators**: Admins can manually revoke a user's tokens by finding and deleting their Service Account 
-    in the appropriate tier namespace (e.g., `<instance-name>-tier-premium`). This is an effective way to immediately cut 
+    in the appropriate namespace. This is an effective way to immediately cut 
     off access for a specific user in response to a security event.
 
 ---
 
 ## Frequently Asked Questions (FAQ)
 
-**Q: My tier is wrong or shows as "free". How do I fix it?**
+**Q: My subscription access is wrong. How do I fix it?**
 
-A: Your tier is determined by your group membership in OpenShift. Contact your platform administrator to ensure you 
-are in the correct user group, which should be mapped to your desired tier in the [tier mapping configuration](tier-configuration.md).
+A: Your access is determined by your group membership in OpenShift and how those groups are mapped in MaaSAuthPolicy and MaaSSubscription. Contact your platform administrator to ensure you are in the correct user group and that it is mapped in [Subscription Configuration](subscription-configuration.md).
 
 ---
 
@@ -197,7 +198,7 @@ A: You will not be able to issue *new* tokens. However, any existing, non-expire
 
 **Q: Can I use one token to access multiple different models?**
 
-A: Yes. Your token grants you access based on your tier's RBAC permissions. If your tier is authorized to use multiple models, a single token will work for all of them.
+A: Yes. Your token grants you access based on your subscription permissions. If your subscription is authorized to use multiple models, a single token will work for all of them.
 
 ---
 
@@ -221,6 +222,6 @@ A: Token audience identifies the intended recipient of a token. Some gateways ex
 
 ## Related Documentation
 
-- **[Configuring Subscription Tiers](tier-configuration.md)**: For operators - tier setup, RBAC, and rate limiting configuration
+- **[Subscription Configuration](subscription-configuration.md)**: For operators - subscription setup, access control, and rate limiting
 
 ---

@@ -2,12 +2,12 @@
 
 This directory contains `LLMInferenceService`s for deploying sample models. Please refer to the [deployment guide](../../content/quickstart.md) for more details on how to test the MaaS Platform with these models.
 
-> **TODO (ODH model controller):** Update the ODH model controller to remove or modify the existing webhook that validates tier annotations (`alpha.maas.opendatahub.io/tiers`). The webhook currently blocks HTTPRoutes when AuthPolicy is not enforced (e.g., Kuadrant not installed), requiring `security.opendatahub.io/enable-auth=false`. For MaaS-managed models, tier/access control is handled by MaaSAuthPolicy and MaaSSubscription rather than LLMInferenceService annotations. The webhook should not apply automation or block models that are managed by MaaS. See JIRA: [TBD]
+> **TODO (ODH model controller):** Update the ODH model controller to remove or modify the existing webhook that validates access annotations (`alpha.maas.opendatahub.io/tiers`). The webhook currently blocks HTTPRoutes when AuthPolicy is not enforced (e.g., Kuadrant not installed), requiring `security.opendatahub.io/enable-auth=false`. For MaaS-managed models, access control is handled by MaaSAuthPolicy and MaaSSubscription rather than LLMInferenceService annotations. The webhook should not apply automation or block models that are managed by MaaS. See JIRA: [TBD]
 
 ## Available Models
 
 - **simulator** - Simple simulator for testing
-- **simulator-premium** - Premium simulator for testing tier-based access (configured via MaaSAuthPolicy)
+- **simulator-premium** - Premium simulator for testing subscription-based access (configured via MaaSAuthPolicy)
 - **facebook-opt-125m-cpu** - Facebook OPT 125M model (CPU-based)
 - **qwen3** - Qwen3 model (GPU-based with autoscaling)
 - **ibm-granite-2b-gpu** - IBM Granite 2B Instruct model (GPU-based, supports instructions)
@@ -49,7 +49,7 @@ The two simulator models can be distinguished by:
   - Standard: `facebook-opt-125m-simulated`
   - Premium: `premium-simulated-simulated-premium`
 
-Tier-based access is configured via MaaSAuthPolicy and MaaSSubscription (see [docs/samples/maas-system/](../maas-system/)), not via LLMInferenceService annotations.
+Subscription-based access is configured via MaaSAuthPolicy and MaaSSubscription (see [docs/samples/maas-system/](../maas-system/)), not via LLMInferenceService annotations.
 
 ### Verifying Deployment
 

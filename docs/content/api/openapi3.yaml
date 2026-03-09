@@ -77,99 +77,6 @@ paths:
                                 $ref: '#/components/schemas/ErrorResponse'
                             example:
                                 error: Failed to retrieve LLM models
-    /v1/tiers/lookup:
-        post:
-            tags:
-                - tiers
-            summary: Determines the highest subscription tier based on user group memberships
-            description: Finds the highest subscription tier based on user groups. Checks group memberships against tier mappings and returns the best match.
-            operationId: tiers#lookup
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/TierLookupRequest'
-                        examples:
-                            basic_user:
-                                summary: Basic authenticated user
-                                value:
-                                    groups:
-                                        - system:authenticated
-                            premium_user:
-                                summary: Premium user with multiple groups
-                                value:
-                                    groups:
-                                        - system:authenticated
-                                        - premium-users
-                                        - beta-testers
-                            enterprise_user:
-                                summary: Enterprise user
-                                value:
-                                    groups:
-                                        - system:authenticated
-                                        - enterprise-users
-                                        - admin-users
-            responses:
-                "200":
-                    description: OK response.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/TierLookupResponse'
-                            examples:
-                                basic_tier:
-                                    summary: Basic tier response
-                                    value:
-                                        tier: basic
-                                premium_tier:
-                                    summary: Premium tier response
-                                    value:
-                                        tier: premium
-                                enterprise_tier:
-                                    summary: Enterprise tier response
-                                    value:
-                                        tier: enterprise
-                "400":
-                    description: Bad Request response.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/TierErrorResponse'
-                            examples:
-                                invalid_json:
-                                    summary: Invalid JSON body
-                                    value:
-                                        error: bad_request
-                                        message: "invalid request body: invalid character '}' looking for beginning of value"
-                                missing_groups:
-                                    summary: Missing groups field
-                                    value:
-                                        error: bad_request
-                                        message: "invalid request body: Key: 'LookupRequest.Groups' Error:Tag: 'required'"
-                                empty_groups:
-                                    summary: Empty groups array
-                                    value:
-                                        error: bad_request
-                                        message: "invalid request body: Key: 'LookupRequest.Groups' Error:Tag: 'min'"
-                "404":
-                    description: Not Found response.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/TierErrorResponse'
-                            example:
-                                error: not_found
-                                message: "no tier found for groups: [unknown-group]"
-                "500":
-                    description: Internal Server Error response.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/TierErrorResponse'
-                            example:
-                                error: internal_error
-                                message: "failed to lookup tier: connection to configmap failed"
     /v1/api-keys:
         post:
             tags:
@@ -575,49 +482,6 @@ components:
                 - owned_by
                 - ready
         
-        # Tier lookup
-        TierLookupRequest:
-            type: object
-            properties:
-                groups:
-                    type: array
-                    items:
-                        type: string
-                    description: Array of user groups to lookup
-                    example:
-                        - system:authenticated
-                        - premium-users
-                    minItems: 1
-            required:
-                - groups
-        
-        # Tier lookup response
-        TierLookupResponse:
-            type: object
-            properties:
-                tier:
-                    type: string
-                    description: Matched tier name
-                    example: premium
-            required:
-                - tier
-        
-        # Tier error response
-        TierErrorResponse:
-            type: object
-            properties:
-                error:
-                    type: string
-                    description: Error code
-                    example: bad_request
-                message:
-                    type: string
-                    description: Human-readable error message
-                    example: invalid request body
-            required:
-                - error
-                - message
-
         # API Key metadata
         ApiKey:
             type: object
@@ -687,7 +551,5 @@ tags:
       description: "\U0001F5DD️ Named API Key Management service. Long-lived, trackable tokens for applications."
     - name: models
       description: "\U0001F916 Model management service"
-    - name: tiers
-      description: "\U0001F3F7️Tier lookup service"
     - name: health
       description: ❤️ Health check service

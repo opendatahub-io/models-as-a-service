@@ -1,7 +1,9 @@
 # Bundled MaaS system: LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription
-# per tier. Deploy all at once so dependencies resolve correctly.
+# per subscription. Deploy all at once so dependencies resolve correctly.
 # - free: system:authenticated, 100 tokens/min
 # - premium: premium-user, 1000 tokens/min
+# - facebook-opt-125m-cpu: system:authenticated, 100 tokens/min
+# - qwen3: system:authenticated, 100 tokens/min (GPU required)
 # - unconfigured: no auth/subscription (e2e tests validate 403)
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -9,4 +11,6 @@ kind: Kustomization
 resources:
   - free
   - premium
+  - facebook-opt-125m-cpu
+  - qwen3
   - unconfigured

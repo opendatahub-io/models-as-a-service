@@ -87,5 +87,5 @@ You can use the [maas-system samples](https://github.com/opendatahub-io/models-a
 ## Related documentation
 
 - [MaaS Controller README](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) — install and MaaSModelRef/MaaSAuthPolicy/MaaSSubscription
-- [Model setup](./model-setup.md) — configuring LLMInferenceServices (gateway reference, tier annotation) as backends for MaaSModelRef
+- [Model setup](./model-setup.md) — configuring LLMInferenceServices (gateway reference) as backends for MaaSModelRef
 - [Architecture](../architecture.md) — overall MaaS architecture

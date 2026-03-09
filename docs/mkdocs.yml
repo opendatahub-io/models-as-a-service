@@ -41,6 +41,9 @@ theme:
         name: Switch to dark mode
 
 plugins:
+  - swagger-ui-tag:
+      docExpansion: list
+      tryItOutEnabled: true
   - search:
       lang: en
       separator: '[\s\u200b\-_,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
@@ -48,34 +51,45 @@ plugins:
       enable_creation_date: true
 
 nav:
-  - Home: index.md
-  - Quick Start: quickstart.md
+  - Home:
+    - index.md
+    - Release Notes:
+      - Overview: release-notes/index.md
   - Architecture: architecture.md
-  - Administrator Guide:
+  - Install Guide:
+    - Quick Start: quickstart.md
     - Prerequisites:
       - Overview: install/prerequisites.md
       - Operator Setup: install/platform-setup.md
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
+      - Model Setup: install/model-setup.md
       - Validation: install/validation.md
+      - Troubleshooting: install/troubleshooting.md
+  - Administration Guide:
     - Configuration & Management:
-      - Tier Management: configuration-and-management/tier-overview.md
-      - Tier Configuration: configuration-and-management/tier-configuration.md
-      - Tier Concepts: configuration-and-management/tier-concepts.md
+      - Subscription Management: configuration-and-management/subscription-overview.md
+      - Subscription Configuration: configuration-and-management/subscription-configuration.md
+      - Subscription Concepts: configuration-and-management/subscription-concepts.md
       - Token Management: configuration-and-management/token-management.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
     - Model Setup: configuration-and-management/model-setup.md
     - Model Listing Flow: configuration-and-management/model-listing-flow.md
     - MaaSModelRef Kinds (future): configuration-and-management/maas-model-kinds.md
     - Known Issues:
-      - Group Membership: configuration-and-management/group-membership-known-issues.md
-      - Tier Modification: configuration-and-management/tier-modification-known-issues.md
+      - Subscription: configuration-and-management/subscription-known-issues.md
       - Model Access: configuration-and-management/model-access-behavior.md
     - Advanced Administration:
       - Observability: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
   - End User Guide:
     - Self Service Model Access: user-guide/self-service-model-access.md
+  - API & Reference:
+    - MaaS API (Swagger): reference/api-reference.md
+    - MaaS CRDs:
+      - MaaSModelRef: reference/crds/maas-model-ref.md
+      - MaaSAuthPolicy: reference/crds/maas-auth-policy.md
+      - MaaSSubscription: reference/crds/maas-subscription.md
 
 extra:
   version:

@@ -8,27 +8,27 @@ This directory contains Grafana dashboard samples for the MaaS platform.
 
 ### 📋 Overview
 
-This dashboard provides comprehensive monitoring of token usage, rate limiting, and tier-based analytics for the MaaS platform using Kuadrant/Limitador metrics.
+This dashboard provides comprehensive monitoring of token usage, rate limiting, and subscription-based analytics for the MaaS platform using Kuadrant/Limitador metrics.
 
 ### 🎯 Key Metrics
 
-- **`authorized_hits`** - Total successful API calls with tier/user/model information
+- **`authorized_hits`** - Total successful API calls with subscription/user/model information
 - **`authorized_calls`** - Rate limiting success metrics  
 - **`limited_calls`** - Rate limiting block metrics
-- **`tier` labels** - Free/Premium/Enterprise tier information
+- **`subscription` labels** - Free/Premium/Enterprise subscription information
 - **`model` labels** - Model-specific usage tracking
 - **`limitador_namespace`** - Namespace filtering
 
 ### 📊 Dashboard Panels
 
 1. **🎯 Total Authorized Hits** - Main success metric
-2. **📈 Authorized Hits Rate by Tier** - Tier-based performance
-3. **👥 Authorized Hits by User & Tier** - User activity
+2. **📈 Authorized Hits Rate by Subscription** - Subscription-based performance
+3. **👥 Authorized Hits by User & Subscription** - User activity
 4. **🏆 Top 10 Users by Hits** - Usage leaders
 5. **⏰ Hourly Authorized Hits by User** - Time-based analysis
-6. **📊 Total Authorized Hits by Tier** - Tier comparison
+6. **📊 Total Authorized Hits by Subscription** - Subscription comparison
 7. **👥 Active Users** - User count
-8. **💰 Top 5 Users by Cost** - Cost analysis with tier pricing
+8. **💰 Top 5 Users by Cost** - Cost analysis with subscription pricing
 9. **📋 Detailed Metrics Table** - Complete data view
 
 ### 🔧 How to Use
@@ -44,24 +44,24 @@ This dashboard provides comprehensive monitoring of token usage, rate limiting, 
    - Kuadrant policies generating metrics
 
 3. **Features:**
-   - **Tier-based filtering** - Free vs Premium vs Enterprise
+   - **Subscription-based filtering** - Free vs Premium vs Enterprise
    - **User activity tracking** - Individual user usage patterns
    - **Model usage analytics** - Which models are used most
    - **Rate limiting monitoring** - Success vs blocked requests
-   - **Cost analysis** - Revenue tracking by tier and user
+   - **Cost analysis** - Revenue tracking by subscription and user
    - **Namespace filtering** - Multi-tenant scenarios
 
 ### 💰 Cost Analysis
 
 The dashboard includes cost calculations:
-- **Free Tier:** $0.005 per authorized hit
-- **Premium Tier:** $0.008 per authorized hit
-- **Enterprise Tier:** Custom pricing (configurable)
+- **Free subscription:** $0.005 per authorized hit
+- **Premium subscription:** $0.008 per authorized hit
+- **Enterprise subscription:** Custom pricing (configurable)
 
 ### 🎨 Visual Features
 
 - **Emojis** for better visual appeal
-- **Color coding** by tier (Free=Green, Premium=Blue, Enterprise=Gold)
+- **Color coding** by subscription (Free=Green, Premium=Blue, Enterprise=Gold)
 - **Modern layout** with better spacing
 - **Interactive filtering** and grouping
 - **Real-time updates** (30s refresh)
@@ -70,10 +70,10 @@ The dashboard includes cost calculations:
 
 Monitor these important metrics:
 - **Success Rate:** `authorized_calls / (authorized_calls + limited_calls)`
-- **Tier Distribution:** Usage by Free/Premium/Enterprise
+- **Subscription Distribution:** Usage by Free/Premium/Enterprise
 - **Model Popularity:** Which models are used most
-- **User Activity:** Top users and their tier usage
-- **Cost Analysis:** Revenue by tier and user
+- **User Activity:** Top users and their subscription usage
+- **Cost Analysis:** Revenue by subscription and user
 
 ### 🔗 Related Documentation
 

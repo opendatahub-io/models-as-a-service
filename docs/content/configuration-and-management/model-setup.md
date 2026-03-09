@@ -2,14 +2,14 @@
 
 This guide explains how to configure models so they appear in the MaaS platform and are subject to authentication, rate limiting, and token-based consumption tracking.
 
+!!! tip "Subscription model (recommended)"
+    When using the **MaaS controller**, model access and rate limits are controlled by **MaaSModelRef**, **MaaSAuthPolicy**, and **MaaSSubscription** CRDs. See [Subscription Configuration](subscription-configuration.md) and [Model Listing Flow](model-listing-flow.md).
+
 ## How the model list is built
 
-The **GET /v1/models** endpoint (and thus "which models are available") can be built in two ways:
+When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed, you register models by creating **MaaSModelRef** CRs that reference an LLMInferenceService. The controller reconciles each MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API lists these MaaSModelRef CRs and returns them as the model list. Access and quotas are controlled by **MaaSAuthPolicy** and **MaaSSubscription**. See [Model listing flow](model-listing-flow.md) for details.
 
-1. **MaaSModelRef (recommended when using the MaaS controller)**  
-   When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed, you register models by creating **MaaSModelRef** CRs that reference an LLMInferenceService. The controller reconciles each MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API lists these MaaSModelRef CRs and returns them as the model list. Access and quotas are controlled by **MaaSAuthPolicy** and **MaaSSubscription**. See [Model listing flow](model-listing-flow.md) for details.
-
-Model listing is from MaaSModelRef CRs (cached via informer). The sections below focus on **LLMInferenceService** configuration (gateway reference, tier annotation) for use as the backend referenced by MaaSModelRef.
+The sections below focus on **LLMInferenceService** configuration (gateway reference) for use as the backend referenced by MaaSModelRef.
 
 ## Gateway Architecture
 
@@ -21,7 +21,7 @@ graph TB
     subgraph cluster["OpenShift/K8s Cluster"]
         subgraph gateways["Gateway Layer"]
             defaultGW["Default Gateway<br/>(ODH/KServe)<br/><br/>✓ Existing auth model<br/>✓ No rate limits<br/>"]
-            maasGW["MaaS Gateway<br/>(maas-default-gateway)<br/><br/>✓ Token authentication<br/>✓ Tier-based rate limits<br/>✓ Token consumption "]
+            maasGW["MaaS Gateway<br/>(maas-default-gateway)<br/><br/>✓ Token authentication<br/>✓ Subscription-based rate limits<br/>✓ Token consumption "]
         end
 
         subgraph models["Model Deployments"]
@@ -66,12 +66,9 @@ Before configuring a model for MaaS, ensure you have:
 
 ## Configuring Models for MaaS
 
-To make your model available through the MaaS platform, you need to:
+To make your model available through the MaaS platform, **reference the maas-default-gateway** in your `LLMInferenceService` spec.
 
-1. **Reference the maas-default-gateway** in your `LLMInferenceService` spec
-2. **Add the tier annotation** to enable automatic RBAC setup
-
-### Step 1: Add Gateway Reference
+### Add Gateway Reference
 
 Configure your `LLMInferenceService` to use the `maas-default-gateway` by adding the gateway reference in the `router` section:
 
@@ -105,54 +102,6 @@ spec:
 - Use `name: maas-default-gateway` and `namespace: openshift-ingress`
 - **Without this specification**, the model uses the default KServe gateway and **is not subject to MaaS policies**
 
-### Step 2: Configure Tier Access with Annotation
-
-Add the `alpha.maas.opendatahub.io/tiers` annotation to enable automatic RBAC setup for tier-based access:
-
-```yaml
-apiVersion: serving.kserve.io/v1alpha1
-kind: LLMInferenceService
-metadata:
-  name: my-production-model
-  namespace: llm
-  annotations:
-    alpha.maas.opendatahub.io/tiers: '[]'
-spec:
-  # ... rest of spec ...
-```
-
-**Annotation Values:**
-
-- **Empty list `[]`**: Grants access to **all tiers** (recommended for most models)
-- **List of tier names**: Grants access to specific tiers only
-  - Example: `'["premium","enterprise"]'` - only premium and enterprise tiers can access
-- **Missing annotation**: **No tiers** have access by default (model won't be accessible via MaaS)
-
-**Examples:**
-
-Allow all tiers:
-
-```yaml
-annotations:
-  alpha.maas.opendatahub.io/tiers: '[]'
-```
-
-Allow specific tiers:
-
-```yaml
-annotations:
-  alpha.maas.opendatahub.io/tiers: '["premium","enterprise"]'
-```
-
-### What the Annotation Does
-
-This annotation automatically creates the necessary RBAC resources (Roles and RoleBindings) that allow tier-specific service accounts to POST to your `LLMInferenceService`. The ODH Controller handles this automatically when the annotation is present.
-
-Behind the scenes, it creates:
-
-- **Role**: Grants `POST` permission on `llminferenceservices` resource
-- **RoleBinding**: Binds tier service account groups (e.g., `system:serviceaccounts:maas-default-gateway-tier-premium`) to the role
-
 ### Complete Example
 
 Here's a complete example of a MaaS-enabled model:
@@ -163,8 +112,6 @@ kind: LLMInferenceService
 metadata:
   name: qwen3-model
   namespace: llm
-  annotations:
-    alpha.maas.opendatahub.io/tiers: '[]'
 spec:
   model:
     uri: hf://Qwen/Qwen3-0.6B
@@ -207,10 +154,6 @@ kubectl patch llminferenceservice my-production-model -n llm --type='json' -p='[
   }
 ]'
 
-# Add the tier annotation
-kubectl annotate llminferenceservice my-production-model -n llm \
-  alpha.maas.opendatahub.io/tiers='[]' \
-  --overwrite
 ```
 
 ### Method 2: Edit the Resource
@@ -219,10 +162,7 @@ kubectl annotate llminferenceservice my-production-model -n llm \
 kubectl edit llminferenceservice my-production-model -n llm
 ```
 
-Then add:
-
-- Gateway reference in `spec.router.gateway.refs`
-- Annotation `alpha.maas.opendatahub.io/tiers` in `metadata.annotations`
+Then add the gateway reference in `spec.router.gateway.refs`.
 
 ## Verification
 
@@ -243,13 +183,7 @@ curl -sSk ${HOST}/maas-api/v1/models \
 kubectl get llminferenceservice my-production-model -n llm
 ```
 
-**3. Check RBAC was created (if using tier annotation):**
-
-```bash
-kubectl get roles,rolebindings -n llm | grep my-production-model
-```
-
-**4. Test inference request:**
+**3. Test inference request:**
 
 ```bash
 # Use the MODEL_URL from the models list
@@ -269,23 +203,20 @@ curl -sSk -H "Authorization: Bearer $TOKEN" \
 
 ### 401 Unauthorized When Accessing Model
 
-- Verify the tier annotation is set: `alpha.maas.opendatahub.io/tiers: '[]'` (or specific tiers)
-- Check that your token's tier matches one of the tiers allowed in the annotation
-- Verify RBAC resources were created: `kubectl get roles,rolebindings -n <model-namespace>`
+- Verify your subscription (MaaSAuthPolicy, MaaSSubscription) grants access to the model
+- Check that your API key or token is valid and has the correct permissions
+- Ensure the model's MaaSModelRef and AuthPolicy are correctly configured
 
 ### 403 Forbidden When Accessing Model
 
-- Ensure the tier annotation includes your tier
-- Check that RBAC was properly created for your tier
-- Verify the service account in your token has the correct tier namespace
-
-!!!Warning "Removing Models from Tiers During Active Usage"
-    When updating the `alpha.maas.opendatahub.io/tiers` annotation to remove a tier, be aware that active requests may be affected. See [Model Tier Access Behavior](./model-access-behavior.md#model-tier-access-changes-during-active-usage) for details on expected behaviors and recommended practices.
+- Ensure your subscription includes access to the model
+- Verify MaaSAuthPolicy grants your group access
+- Check that the maas-controller has reconciled the AuthPolicy
 
 ## References
 
-- [Tier Management](./tier-overview.md) - Learn about configuring tier access
-- [Tier Configuration](./tier-configuration.md) - Detailed tier setup instructions
-- [Model Tier Access Behavior](./model-access-behavior.md) - Expected behaviors and operational considerations
+- [Subscription Management](subscription-overview.md) - Configure subscriptions and access control
+- [Subscription Configuration](subscription-configuration.md) - Detailed subscription setup
+- [Model Access Behavior](model-access-behavior.md) - Expected behaviors when modifying model access
 - [Architecture Overview](../architecture.md) - Understand the overall MaaS architecture
 - [KServe LLMInferenceService Documentation](https://kserve.github.io/website/) - Official KServe documentation

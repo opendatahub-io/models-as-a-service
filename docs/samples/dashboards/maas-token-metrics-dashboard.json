@@ -218,13 +218,13 @@
       "pluginVersion": "11.3.0",
       "targets": [
         {
-          "expr": "sum by (tier) (rate(authorized_hits{user=~\"$user\",model=~\"$model\"}[$__rate_interval]))",
-          "legendFormat": "{{tier}} tier",
+          "expr": "sum by (subscription) (rate(authorized_hits{user=~\"$user\",model=~\"$model\"}[$__rate_interval]))",
+          "legendFormat": "{{subscription}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "📈 Authorized Hits Rate by Tier",
+      "title": "📈 Authorized Hits Rate by Subscription",
       "type": "timeseries"
     },
     {
@@ -317,12 +317,12 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "expr": "authorized_hits{user=~\"$user\",model=~\"$model\"}",
-          "legendFormat": "{{user}} ({{tier}})",
+          "legendFormat": "{{user}} ({{subscription}})",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "👥 Authorized Hits by User & Tier",
+      "title": "👥 Authorized Hits by User & Subscription",
       "type": "timeseries"
     },
     {
@@ -573,13 +573,13 @@
       "pluginVersion": "11.3.0",
       "targets": [
         {
-          "expr": "sum by (tier) (increase(authorized_hits{user=~\"$user\",model=~\"$model\"}[$__range]))",
-          "legendFormat": "{{tier}} tier",
+          "expr": "sum by (subscription) (increase(authorized_hits{user=~\"$user\",model=~\"$model\"}[$__range]))",
+          "legendFormat": "{{subscription}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "📊 Total Authorized Hits by Tier (Time Range)",
+      "title": "📊 Total Authorized Hits by Subscription (Time Range)",
       "type": "timeseries"
     },
     {
@@ -641,7 +641,7 @@
       "pluginVersion": "11.3.0",
       "targets": [
         {
-          "expr": "(sum(authorized_hits{tier=\"free\",user=~\"$user\",model=~\"$model\"}) * 0.005) + (sum(authorized_hits{tier=\"premium\",user=~\"$user\",model=~\"$model\"}) * 0.008)",
+          "expr": "(sum(authorized_hits{subscription=\"free\",user=~\"$user\",model=~\"$model\"}) * 0.005) + (sum(authorized_hits{subscription=\"premium\",user=~\"$user\",model=~\"$model\"}) * 0.008)",
           "instant": true,
           "refId": "A"
         }
@@ -774,9 +774,9 @@
       "pluginVersion": "11.3.0",
       "targets": [
         {
-          "expr": "topk(5, sum by (user, tier) (authorized_hits{tier=\"free\",user=~\"$user\",model=~\"$model\"}) * 0.005 or sum by (user, tier) (authorized_hits{tier=\"premium\",user=~\"$user\",model=~\"$model\"}) * 0.008)",
+          "expr": "topk(5, sum by (user, subscription) (authorized_hits{subscription=\"free\",user=~\"$user\",model=~\"$model\"}) * 0.005 or sum by (user, subscription) (authorized_hits{subscription=\"premium\",user=~\"$user\",model=~\"$model\"}) * 0.008)",
           "instant": true,
-          "legendFormat": "{{user}} ({{tier}})",
+          "legendFormat": "{{user}} ({{subscription}})",
           "refId": "A"
         }
       ],
@@ -838,7 +838,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "Tier"
+                "value": "Subscription"
               }
             ]
           },
@@ -926,19 +926,19 @@
       "pluginVersion": "11.3.0",
       "targets": [
         {
-          "expr": "sum by (user, tier) (authorized_hits{user=~\"$user\",model=~\"$model\"})",
+          "expr": "sum by (user, subscription) (authorized_hits{user=~\"$user\",model=~\"$model\"})",
           "format": "table",
           "instant": true,
           "refId": "A"
         },
         {
-          "expr": "sum by (user, tier) ((authorized_hits{tier=\"free\",user=~\"$user\",model=~\"$model\"} * 0.005) or (authorized_hits{tier=\"premium\",user=~\"$user\",model=~\"$model\"} * 0.008))",
+          "expr": "sum by (user, subscription) ((authorized_hits{subscription=\"free\",user=~\"$user\",model=~\"$model\"} * 0.005) or (authorized_hits{subscription=\"premium\",user=~\"$user\",model=~\"$model\"} * 0.008))",
           "format": "table",
           "instant": true,
           "refId": "B"
         },
         {
-          "expr": "sum by (user, tier) ((authorized_hits{tier=\"free\",user=~\"$user\",model=~\"$model\"} * 0) + 0.5) or (sum by (user, tier) ((authorized_hits{tier=\"premium\",user=~\"$user\",model=~\"$model\"} * 0) + 0.8))",
+          "expr": "sum by (user, subscription) ((authorized_hits{subscription=\"free\",user=~\"$user\",model=~\"$model\"} * 0) + 0.5) or (sum by (user, subscription) ((authorized_hits{subscription=\"premium\",user=~\"$user\",model=~\"$model\"} * 0) + 0.8))",
           "format": "table",
           "instant": true,
           "refId": "C"
@@ -1045,13 +1045,13 @@
       "pluginVersion": "11.3.0",
       "targets": [
         {
-          "expr": "sum by (tier) (authorized_hits{user=~\"$user\",model=~\"$model\"})",
+          "expr": "sum by (subscription) (authorized_hits{user=~\"$user\",model=~\"$model\"})",
           "instant": true,
-          "legendFormat": "{{tier}}",
+          "legendFormat": "{{subscription}}",
           "refId": "A"
         }
       ],
-      "title": "📊 Authorized Hits by Tier",
+      "title": "📊 Authorized Hits by Subscription",
       "type": "stat"
     },
     {
@@ -1101,7 +1101,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "🏷️ Tier"
+                "value": "🏷️ Subscription"
               }
             ]
           },
@@ -1159,7 +1159,7 @@
       "pluginVersion": "11.3.0",
       "targets": [
         {
-          "expr": "sum by (user, tier, limitador_namespace) (authorized_hits{user=~\"$user\",model=~\"$model\"})",
+          "expr": "sum by (user, subscription, limitador_namespace) (authorized_hits{user=~\"$user\",model=~\"$model\"})",
           "format": "table",
           "instant": true,
           "refId": "A"
