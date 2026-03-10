@@ -128,6 +128,82 @@ func TestMaaSAuthPolicyReconciler_CrossNamespace(t *testing.T) {
 	}
 }
 
+// TestMaaSAuthPolicyReconciler_SelectiveModelManagement verifies that when a
+// MaaSAuthPolicy references only specific models, AuthPolicies are created only
+// for those models, and not for unreferenced models in other namespaces.
+func TestMaaSAuthPolicyReconciler_SelectiveModelManagement(t *testing.T) {
+	const (
+		policyNamespace = "policy-ns"
+		modelNamespaceA = "model-ns-a"
+		modelNamespaceB = "model-ns-b"
+		modelName       = "test-model"
+		httpRouteName   = "maas-model-" + modelName
+		authPolicyName  = "maas-auth-" + modelName
+		maasPolicyName  = "selective-policy"
+	)
+
+	// Model and HTTPRoute in namespace-a (referenced by policy)
+	modelA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: modelNamespaceA},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
+		},
+	}
+	routeA := &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: modelNamespaceA},
+	}
+
+	// Model and HTTPRoute in namespace-b (NOT referenced by policy)
+	modelB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: modelNamespaceB},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
+		},
+	}
+	routeB := &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: modelNamespaceB},
+	}
+
+	// MaaSAuthPolicy in policy-ns referencing ONLY modelA (not modelB)
+	maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: maasPolicyName, Namespace: policyNamespace},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: []maasv1alpha1.ModelRef{
+				{Name: modelName, Namespace: modelNamespaceA}, // Only modelA
+			},
+			Subjects: maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(modelA, routeA, modelB, routeB, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: policyNamespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	// Verify AuthPolicy created in modelNamespaceA (referenced model)
+	authPolicyA := &unstructured.Unstructured{}
+	authPolicyA.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespaceA}, authPolicyA); err != nil {
+		t.Errorf("AuthPolicy should exist in namespace %q (referenced model): %v", modelNamespaceA, err)
+	}
+
+	// Verify NO AuthPolicy created in modelNamespaceB (unreferenced model)
+	authPolicyB := &unstructured.Unstructured{}
+	authPolicyB.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespaceB}, authPolicyB)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("AuthPolicy should NOT exist in namespace %q (unreferenced model), but got: %v", modelNamespaceB, err)
+	}
+}
+
 // TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces verifies that
 // models with the same name in different namespaces are properly isolated.
 func TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces(t *testing.T) {

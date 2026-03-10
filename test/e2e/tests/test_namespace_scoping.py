@@ -660,16 +660,26 @@ class TestAuthorizationBoundary:
         # models explicitly listed in spec.modelRefs[]
 
         policy_name = f"isolated-policy-{uuid.uuid4().hex[:6]}"
-        isolated_group = f"isolated-group-{uuid.uuid4().hex[:4]}"
+        unmanaged_model_name = f"unmanaged-model-{uuid.uuid4().hex[:6]}"
 
-        # Create a policy that only targets MODEL_REF in MODEL_NAMESPACE
+        # Create a temporary test model that won't be referenced by the policy
+        _apply_cr({
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "MaaSModelRef",
+            "metadata": {"name": unmanaged_model_name, "namespace": MODEL_NAMESPACE},
+            "spec": {
+                "modelRef": {"kind": "ExternalModel", "name": "test-backend"}
+            }
+        })
+
+        # Create a policy that only targets MODEL_REF (not the temporary model)
         _apply_cr({
             "apiVersion": "maas.opendatahub.io/v1alpha1",
             "kind": "MaaSAuthPolicy",
             "metadata": {"name": policy_name, "namespace": policy_namespace},
             "spec": {
                 "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                "subjects": {"groups": [{"name": isolated_group}]},
+                "subjects": {"groups": [{"name": "system:authenticated"}]},
             },
         })
 
@@ -677,26 +687,18 @@ class TestAuthorizationBoundary:
             time.sleep(RECONCILE_WAIT)
 
             # Verify that this policy ONLY created AuthPolicy for the specified model
-            # and not for any other models that might exist
             auth_policy_name = f"maas-auth-{MODEL_REF}"
             auth_policy = _get_cr("AuthPolicy", auth_policy_name, MODEL_NAMESPACE)
             assert auth_policy is not None, "AuthPolicy should exist for specified model"
 
-            # Negative test: Verify the policy did NOT affect other models
-            # Check that the premium model (which exists but wasn't in spec.modelRefs) was not affected
-            premium_model_ref = "premium-simulated-simulated-premium"
-            premium_auth_policy = _get_cr("AuthPolicy", f"maas-auth-{premium_model_ref}", MODEL_NAMESPACE)
-            if premium_auth_policy:
-                # If the AuthPolicy exists (from other policies), verify our group is NOT in it
-                premium_policy_yaml = subprocess.run(
-                    ["oc", "get", "authpolicy", f"maas-auth-{premium_model_ref}", "-n", MODEL_NAMESPACE, "-o", "yaml"],
-                    capture_output=True, text=True
-                )
-                assert isolated_group not in premium_policy_yaml.stdout, \
-                    f"Isolated group should NOT be in premium model's AuthPolicy"
-                log.info(f"✓ Verified isolated group not in premium model AuthPolicy")
+            # Negative test: Verify NO Kuadrant resources created for unmanaged model
+            unmanaged_auth_policy = _get_cr("AuthPolicy", f"maas-auth-{unmanaged_model_name}", MODEL_NAMESPACE)
+            assert unmanaged_auth_policy is None, \
+                f"AuthPolicy should NOT exist for unmanaged model {unmanaged_model_name}"
 
+            log.info(f"✓ Verified no AuthPolicy created for unmanaged model {unmanaged_model_name}")
             log.info("✓ Authorization boundary test passed - policies only affect listed models")
 
         finally:
             _delete_cr("MaaSAuthPolicy", policy_name, policy_namespace)
+            _delete_cr("MaaSModelRef", unmanaged_model_name, MODEL_NAMESPACE)
