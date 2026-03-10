@@ -27,7 +27,7 @@ spec:
   - name: dockerfile
     value: maas-controller/Dockerfile
   - name: path-context
-    value: maas-contoroller
+    value: maas-controller
   pipelineRef:
     resolver: git
     params:
