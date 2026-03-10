@@ -103,7 +103,7 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 				Build()
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -248,7 +248,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 				t.Fatalf("Delete MaaSAuthPolicy: %v", err)
 			}
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -326,7 +326,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 
 	// Reconcile both policies to create the aggregated AuthPolicy
 	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: policy1Name, Namespace: policyNS}}

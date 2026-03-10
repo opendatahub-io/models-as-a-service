@@ -27,6 +27,7 @@ import (
 	"github.com/go-logr/logr"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	equality "k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -572,6 +573,14 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 		Reason:  reason,
 		Message: message,
 	})
+
+	// Compare with server-side status to avoid redundant writes.
+	current := &maasv1alpha1.MaaSAuthPolicy{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(policy), current); err == nil {
+		if equality.Semantic.DeepEqual(current.Status, policy.Status) {
+			return
+		}
+	}
 
 	if err := r.Status().Update(ctx, policy); err != nil {
 		log := logr.FromContextOrDiscard(ctx)
