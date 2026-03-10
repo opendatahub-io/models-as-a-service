@@ -75,7 +75,7 @@ esac
 DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
 OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
-NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
+NAMESPACE="${DEPLOYMENT_NAMESPACE:-}"  # Auto-determined based on operator type
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -366,7 +366,6 @@ validate_configuration() {
     # Operator mode: ALWAYS use fixed namespace based on operator type
     # This matches upstream deploy-rhoai-stable.sh behavior where the
     # applications namespace is determined by DSCInitialization, not env vars.
-    # The $NAMESPACE env var (e.g., from Prow CI) is intentionally ignored.
     case "$OPERATOR_TYPE" in
       rhoai)
         NAMESPACE="redhat-ods-applications"
@@ -423,17 +422,6 @@ main() {
       deploy_via_kustomize
       ;;
   esac
-
-  # TODO: Move to kustomize overlay once deployment structure is finalized.
-  # NetworkPolicy to allow Authorino (Kuadrant) to reach MaaS API for AuthPolicy evaluation.
-  if [[ "$POLICY_ENGINE" == "kuadrant" ]]; then
-    local data_dir="${SCRIPT_DIR}/data"
-    if [[ -f "${data_dir}/maas-authorino-networkpolicy.yaml" ]]; then
-      log_info "Applying maas-authorino-allow NetworkPolicy..."
-      kubectl apply -f "${data_dir}/maas-authorino-networkpolicy.yaml" -n "$NAMESPACE" 2>/dev/null || \
-        log_warn "Failed to apply maas-authorino-allow NetworkPolicy (may already exist)"
-    fi
-  fi
 
   # Install subscription controller (always deployed)
   # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script.
