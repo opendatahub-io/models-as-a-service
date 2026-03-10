@@ -75,7 +75,7 @@ esac
 DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
 OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
-NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
+NAMESPACE="${DEPLOYMENT_NAMESPACE:-}"  # Auto-determined based on operator type
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -366,7 +366,6 @@ validate_configuration() {
     # Operator mode: ALWAYS use fixed namespace based on operator type
     # This matches upstream deploy-rhoai-stable.sh behavior where the
     # applications namespace is determined by DSCInitialization, not env vars.
-    # The $NAMESPACE env var (e.g., from Prow CI) is intentionally ignored.
     case "$OPERATOR_TYPE" in
       rhoai)
         NAMESPACE="redhat-ods-applications"

@@ -96,6 +96,9 @@ linters:
       - linters:
           - containedctx
         path: pkg/utils/test/testf/(.+)\.go
+      - linters:
+          - ireturn
+        path: _test\.go
 formatters:
   enable:
     - gci
