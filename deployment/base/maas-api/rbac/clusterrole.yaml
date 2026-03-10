@@ -7,6 +7,12 @@ rules:
   resources: ["configmaps"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
+# Database configuration secret
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["maas-db-config"]
+  verbs: ["get"]
+
 # SA token provider resources
 - apiGroups: [""]
   resources: ["namespaces"]

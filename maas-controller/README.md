@@ -8,14 +8,14 @@ For a comparison of the old tier-based flow vs the new subscription flow, see [d
 
 The controller implements a **dual-gate** model where both gates must pass for a request to succeed:
 
-```
+```text
 User Request
     │
     ▼
 Gateway (maas-default-gateway)
     │
     ├── Default deny AuthPolicy ──── 401/403 for unconfigured models
-    ├── Default deny TRLP ──────── 429 safety net (defense-in-depth)
+    ├── Default deny TokenRateLimitPolicy ──────── 429 safety net (defense-in-depth)
     │
     ▼
 HTTPRoute (per model)
@@ -34,26 +34,85 @@ Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway leve
 
 ### CRDs and what they generate
 
+As MaaS API and controller are conventionally deployed in the operator namespace (e.g., `opendatahub`), MaaS CRs need to be separated so that they can be managed with lower cluster privileges. Therefore,
+- **MaasModelRef** is located in the same namespace as the **HTTPRoute** and **LLMInderenceService** it refers to; and
+- **MaaSAuthPolicy** and **MaaSSubscription** are located in a dedicated subscription namespace (default: `models-as-a-service`). Set `--maas-subscription-namespace` or the `MAAS_SUBSCRIPTION_NAMESPACE` env var in `maas-controller` deployment to use another namespace. MaaS controller will only watch and reconcile those CRs this configured namespace.
+
 | You create | Controller generates | Per | Targets |
-|------------|---------------------|-----|---------|
+| ---------- | -------------------- | --- | ------- |
 | **MaaSModelRef** | (validates HTTPRoute) | 1 per model | References LLMInferenceService |
 | **MaaSAuthPolicy** | Kuadrant **AuthPolicy** | 1 per model (aggregated from all auth policies) | Model's HTTPRoute |
 | **MaaSSubscription** | Kuadrant **TokenRateLimitPolicy** | 1 per model (aggregated from all subscriptions) | Model's HTTPRoute |
 
 Relationships are many-to-many: multiple MaaSAuthPolicies/MaaSSubscriptions can reference the same model — the controller aggregates them into a single Kuadrant policy per model. Multiple subscriptions for one model use mutually exclusive predicates with priority based on token limit (highest wins).
 
+### Namespace scoping
+
+**MaaSModelRef** resources can exist in any namespace. **MaaSAuthPolicy** and **MaaSSubscription** resources explicitly specify which namespace(s) their referenced models are in via `modelRefs[].namespace`.
+
+Generated Kuadrant policies (AuthPolicy, TokenRateLimitPolicy) are always created **in the model's namespace**, not in the namespace of the MaaSAuthPolicy/MaaSSubscription that references it.
+
+**Cross-namespace example:**
+
+```yaml
+# MaaSModelRef in the llm namespace
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: my-model
+  namespace: llm
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: my-llmisvc
+---
+# MaaSAuthPolicy in opendatahub namespace references model in llm namespace
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: my-policy
+  namespace: opendatahub
+spec:
+  modelRefs:
+    - name: my-model
+      namespace: llm    # Required: explicitly specify model's namespace
+  subjects:
+    groups:
+      - name: my-group
+```
+
+The controller creates a Kuadrant **AuthPolicy** in the `llm` namespace (where the model and HTTPRoute exist), not in `opendatahub` (where the MaaSAuthPolicy lives).
+
+**Same model name, different namespaces:**
+
+Models with identical names in different namespaces are isolated. Each gets its own generated policies:
+
+```yaml
+# team-a/my-model and team-b/my-model are separate models
+spec:
+  modelRefs:
+    - name: my-model
+      namespace: team-a
+    - name: my-model
+      namespace: team-b
+```
+
+This creates two separate AuthPolicies: one in `team-a`, one in `team-b`.
+
 **Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModelRef** CRs (in the API's namespace). Each MaaSModelRef's `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModelRef objects is the source of truth for "which models are available" in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
 
 ### Model kinds and the provider pattern
 
-MaaSModelRef's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TRLP). These are registered in `pkg/controller/maas/providers.go`.
+MaaSModelRef's `spec.modelRef.kind` selects how the controller discovers and exposes the model. The controller uses a **provider pattern**: each kind has a **BackendHandler** (route reconciliation, status, endpoint resolution, cleanup) and a **RouteResolver** (HTTPRoute name/namespace for attaching AuthPolicy/TokenRateLimitPolicy). These are registered in `pkg/controller/maas/providers.go`.
 
 | Kind (CRD value) | Behaviour |
-|------------------|-----------|
+| ---------------- | --------- |
 | **LLMInferenceService** | Validates that an HTTPRoute exists for the referenced LLMInferenceService (created by KServe). Reads endpoint and readiness from the LLMInferenceService/HTTPRoute. |
 | **ExternalModel** | Stub: not yet implemented. Controller sets status **Phase=Failed** and condition **Reason=Unsupported**. When implemented, users supply the HTTPRoute (controller does not create it); see `providers_external.go`. |
 
 The CRD enum for `kind` is `LLMInferenceService` and `ExternalModel` (see `api/maas/v1alpha1/maasmodelref_types.go`). The registry accepts **LLMInferenceService** (and the alias **llmisvc** for backwards compatibility). Use `kind: LLMInferenceService` in MaaSModelRef specs.
+
+**Endpoint override:** MaaSModel supports an optional `spec.endpointOverride` field. When set, the controller uses this value for `status.endpoint` instead of the auto-discovered endpoint. This applies to all kinds and is useful when the discovered endpoint is wrong (e.g. wrong gateway or hostname). The controller still validates the backend normally — only the final endpoint URL is overridden.
 
 **Status for unimplemented kinds:** If a kind returns `ErrKindNotImplemented` (e.g. ExternalModel), the controller updates status with Phase=Failed and Ready condition Reason=**Unsupported** (instead of ReconcileFailed), so UIs can distinguish "not implemented" from other failures.
 
@@ -88,9 +147,10 @@ The controller will then route MaaSModelRefs with `spec.modelRef.kind: MyNewKind
 The controller watches these resources and re-reconciles automatically:
 
 | Watch | Triggers reconciliation of | Purpose |
-|-------|---------------------------|---------|
+| ----- | -------------------------- | ------- |
 | MaaSModelRef changes | MaaSAuthPolicy, MaaSSubscription | Re-reconcile when model created/deleted |
 | HTTPRoute changes | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription | Re-reconcile when KServe creates a route (fixes startup race) |
+| LLMInferenceService changes | MaaSModelRef | Re-reconcile when backend LLMInferenceService spec changes or Ready condition changes (fixes race where backend becomes ready after MaaSModelRef creation) |
 | Generated AuthPolicy changes | Parent MaaSAuthPolicy | Overwrite manual edits (unless opted out) |
 | Generated TokenRateLimitPolicy changes | Parent MaaSSubscription | Overwrite manual edits (unless opted out) |
 
@@ -98,7 +158,7 @@ The controller watches these resources and re-reconciles automatically:
 
 **MaaSModelRef deleted:** The controller uses a finalizer to cascade-delete all generated AuthPolicies and TokenRateLimitPolicies for that model. The parent MaaSAuthPolicy and MaaSSubscription CRs remain intact. The underlying LLMInferenceService is not affected.
 
-**MaaSSubscription deleted:** The aggregated TRLP for the model is deleted, then rebuilt from the remaining subscriptions. If no subscriptions remain, the model falls back to the gateway defaults (401/403 from auth if no MaaSAuthPolicy, or 429 from TRLP safety net if auth passes).
+**MaaSSubscription deleted:** The aggregated TokenRateLimitPolicy for the model is deleted, then rebuilt from the remaining subscriptions. If no subscriptions remain, the model falls back to the gateway defaults (401/403 from auth if no MaaSAuthPolicy, or 429 from TokenRateLimitPolicy safety net if auth passes).
 
 **MaaSAuthPolicy deleted:** Same pattern — the aggregated AuthPolicy is rebuilt from remaining auth policies.
 
@@ -106,7 +166,7 @@ The controller watches these resources and re-reconciles automatically:
 
 When multiple subscriptions target the same model, the controller sorts them by token limit (highest first) and builds mutually exclusive predicates. A user matching multiple subscription groups hits only the highest-limit rule:
 
-```
+```text
 premium-user (50000 tkn/min): matches "in premium-user"
 free-user    (100 tkn/min):   matches "in free-user AND NOT in premium-user"
 deny-unsubscribed (0):        matches "NOT in premium-user AND NOT in free-user"
@@ -165,13 +225,13 @@ plus the subscription controller.
 If MaaS infrastructure is already deployed, install just the controller:
 
 ```bash
-kubectl apply -k maas-controller/config/default
+kubectl apply -k deployment/base/maas-controller/default
 ```
 
 To install into another namespace:
 
 ```bash
-kustomize build maas-controller/config/default | sed "s/namespace: opendatahub/namespace: my-namespace/g" | kubectl apply -f -
+kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: my-namespace/g" | kubectl apply -f -
 ```
 
 ### Verify
@@ -184,32 +244,36 @@ kubectl get crd | grep maas.opendatahub.io
 ### What gets installed
 
 | Component | Path | Description |
-|-----------|------|-------------|
-| CRDs | `config/crd/` | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription |
-| RBAC | `config/rbac/` | ClusterRole, ServiceAccount, bindings |
-| Controller | `config/manager/` | Deployment (`quay.io/opendatahub/maas-controller:latest`) |
-| Default auth policy | `config/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |
-| Default deny policy | `config/policies/` | Gateway-level TokenRateLimitPolicy with 0 tokens (deny unsubscribed, 429) |
+| --------- | ---- | ----------- |
+| CRDs | `deployment/base/maas-controller/crd/` | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription |
+| RBAC | `deployment/base/maas-controller/rbac/` | ClusterRole, ServiceAccount, bindings |
+| Controller | `deployment/base/maas-controller/manager/` | Deployment (`quay.io/opendatahub/maas-controller:latest`) |
+| Default auth policy | `deployment/base/maas-controller/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |
+| Default deny policy | `deployment/base/maas-controller/policies/` | Gateway-level TokenRateLimitPolicy with 0 tokens (deny unsubscribed, 429) |
 
 ## Examples
 
 Install both **regular** and **premium** simulator models and their MaaS policies/subscriptions (from the repository root):
 
 ```bash
-maas-controller/scripts/install-examples.sh
+kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace models-as-a-service --dry-run=client -o yaml | kubectl apply -f -
+kustomize build docs/samples/maas-system | kubectl apply -f -
 ```
 
 This creates:
 
-**Regular tier**
+### Regular tier
+
 - `LLMInferenceService/facebook-opt-125m-simulated` in `llm` namespace
 - `MaaSModelRef/facebook-opt-125m-simulated` in `opendatahub`
-- `MaaSAuthPolicy/simulator-access` (group: `free-user`) and `MaaSSubscription/simulator-subscription` (100 tokens/min)
+- `MaaSAuthPolicy/simulator-access` (group: `free-user`) and `MaaSSubscription/simulator-subscription` (100 tokens/min) in `models-as-a-service`
 
-**Premium tier**
+### Premium tier
+
 - `LLMInferenceService/premium-simulated-simulated-premium` in `llm` namespace
 - `MaaSModelRef/premium-simulated-simulated-premium` in `opendatahub`
-- `MaaSAuthPolicy/premium-simulator-access` (group: `premium-user`) and `MaaSSubscription/premium-simulator-subscription` (1000 tokens/min)
+- `MaaSAuthPolicy/premium-simulator-access` (group: `premium-user`) and `MaaSSubscription/premium-simulator-subscription` (1000 tokens/min) in `models-as-a-service`
 
 Replace `free-user` and `premium-user` in the example CRs with groups from your identity provider.
 
@@ -217,7 +281,8 @@ Then verify:
 
 ```bash
 # Check CRs
-kubectl get maasmodelref,maasauthpolicy,maassubscription -n opendatahub
+kubectl get maasmodelref -n opendatahub
+kubectl get maasauthpolicy,maassubscription -n models-as-a-service
 
 # Check generated Kuadrant policies
 kubectl get authpolicy,tokenratelimitpolicy -n llm
@@ -231,6 +296,7 @@ curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
+  -H "x-maas-subscription: simulator-subscription" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 
 # Premium model: 401 without auth, 200 with auth (user must be in premium-user)
@@ -238,6 +304,7 @@ curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
+  -H "x-maas-subscription: premium-simulator-subscription" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 ```
 
@@ -245,17 +312,30 @@ See [docs/samples/maas-system/README.md](../docs/samples/maas-system/README.md) 
 
 ## Opting out of controller management
 
-By default, the controller overwrites manual edits to generated AuthPolicies and TokenRateLimitPolicies. To prevent this for a specific policy, annotate it:
+By default, the controller owns generated AuthPolicies and TokenRateLimitPolicies: it overwrites manual edits on reconciliation and deletes them when the owning MaaS resource is removed. To opt a specific policy out of both behaviours, annotate it:
 
 ```bash
-kubectl annotate authpolicy <name> -n <namespace> maas.opendatahub.io/managed=false
+# AuthPolicy
+kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed=false
+
+# TokenRateLimitPolicy
+kubectl annotate tokenratelimitpolicy <name> -n <namespace> opendatahub.io/managed=false
 ```
 
 Remove the annotation to re-enable controller management:
 
 ```bash
-kubectl annotate authpolicy <name> -n <namespace> maas.opendatahub.io/managed-
+kubectl annotate authpolicy <name> -n <namespace> opendatahub.io/managed-
+kubectl annotate tokenratelimitpolicy <name> -n <namespace> opendatahub.io/managed-
 ```
+
+> **Warning: orphaned resources.** An opted-out policy can become permanently orphaned (no longer reconciled and not deleted) in the following situations:
+>
+> - **Last owner deleted.** When the last `MaaSAuthPolicy` or `MaaSSubscription` that references a model is deleted, the controller skips deletion of any opted-out generated policy for that model. The policy will persist until it is manually deleted.
+> - **Model reference removed.** When a model is removed from a `MaaSAuthPolicy.spec.modelRefs` or `MaaSSubscription.spec.modelRefs` (edit rather than deletion), the controller does not clean up the generated policy for that model regardless of the opt-out annotation.
+> - **MaasModel deleted.** When a MaaSModel is deleted, the controller's finalizer skips deletion of any opted-out generated policy for that model. The policy will persist until it is manually deleted.
+>
+> In all cases, manually delete the orphaned resource when it is no longer needed.
 
 ## Build and push image
 
@@ -278,7 +358,7 @@ From the repository root:
 make -C maas-controller build      # build binary to maas-controller/bin/manager
 make -C maas-controller run        # run locally (uses kubeconfig)
 make -C maas-controller test       # run tests
-make -C maas-controller install    # apply config/default to cluster
+make -C maas-controller install    # apply deployment/base/maas-controller/default to cluster
 make -C maas-controller uninstall # remove everything
 ```
 
@@ -286,6 +366,7 @@ make -C maas-controller uninstall # remove everything
 
 **MaaS CRs stuck in `Failed` state:**
 The controller retries with exponential backoff. If the HTTPRoute doesn't exist yet (KServe still deploying), the CRs will auto-recover when it appears. If they stay stuck, check controller logs:
+
 ```bash
 kubectl logs deployment/maas-controller -n opendatahub --tail=20
 ```
@@ -301,6 +382,7 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 ## Configuration
 
-- **Controller namespace**: Default is `opendatahub`. Override via `kustomize build maas-controller/config/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
+- **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
+- **MaaS subscription namespace**: Default is `models-as-a-service`. Override in the deployment or via Kustomize.
 - **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override in the deployment or via Kustomize.
-- **Gateway name**: The default auth policy targets `maas-default-gateway` in `openshift-ingress`. Edit `config/policies/gateway-default-auth.yaml` if your gateway has a different name.
+- **Gateway name**: The default auth policy targets `maas-default-gateway` in `openshift-ingress`. Edit `deployment/base/maas-controller/policies/gateway-default-auth.yaml` if your gateway has a different name.

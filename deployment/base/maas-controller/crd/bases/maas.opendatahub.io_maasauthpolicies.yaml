@@ -4,30 +4,31 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: maassubscriptions.maas.opendatahub.io
+  name: maasauthpolicies.maas.opendatahub.io
 spec:
   group: maas.opendatahub.io
   names:
-    kind: MaaSSubscription
-    listKind: MaaSSubscriptionList
-    plural: maassubscriptions
-    singular: maassubscription
+    kind: MaaSAuthPolicy
+    listKind: MaaSAuthPolicyList
+    plural: maasauthpolicies
+    singular: maasauthpolicy
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .spec.priority
-      name: Priority
-      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - jsonPath: .status.authPolicies[*].name
+      name: AuthPolicies
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: MaaSSubscription is the Schema for the maassubscriptions API
+        description: MaaSAuthPolicy is the Schema for the maasauthpolicies API
         properties:
           apiVersion:
             description: |-
@@ -47,62 +48,53 @@ spec:
           metadata:
             type: object
           spec:
-            description: MaaSSubscriptionSpec defines the desired state of MaaSSubscription
+            description: MaaSAuthPolicySpec defines the desired state of MaaSAuthPolicy
             properties:
+              meteringMetadata:
+                description: MeteringMetadata contains billing and tracking information
+                properties:
+                  costCenter:
+                    description: CostCenter is the cost center for billing attribution
+                    type: string
+                  labels:
+                    additionalProperties:
+                      type: string
+                    description: Labels are additional labels for tracking
+                    type: object
+                  organizationId:
+                    description: OrganizationID is the organization identifier for
+                      billing
+                    type: string
+                type: object
               modelRefs:
-                description: ModelRefs defines which models are included with per-model
-                  token rate limits
+                description: ModelRefs is a list of models (by name and namespace)
+                  that this policy grants access to
                 items:
-                  description: ModelSubscriptionRef defines a model reference with
-                    rate limits
+                  description: ModelRef references a MaaSModelRef by name and namespace.
                   properties:
-                    billingRate:
-                      description: BillingRate defines the cost per token
-                      properties:
-                        perToken:
-                          description: PerToken is the cost per token
-                          type: string
-                      required:
-                      - perToken
-                      type: object
                     name:
-                      description: Name is the name of the model
+                      description: Name is the name of the MaaSModelRef
+                      maxLength: 63
+                      minLength: 1
                       type: string
-                    tokenRateLimitRef:
-                      description: TokenRateLimitRef references an existing TokenRateLimit
-                        resource
+                    namespace:
+                      description: Namespace is the namespace where the MaaSModelRef
+                        lives
+                      maxLength: 63
+                      minLength: 1
                       type: string
-                    tokenRateLimits:
-                      description: TokenRateLimits defines token-based rate limits
-                        for this model
-                      items:
-                        description: TokenRateLimit defines a token rate limit
-                        properties:
-                          limit:
-                            description: Limit is the maximum number of tokens allowed
-                            format: int64
-                            type: integer
-                          window:
-                            description: Window is the time window (e.g., "1m", "1h",
-                              "24h")
-                            pattern: ^(\d+)(s|m|h|d)$
-                            type: string
-                        required:
-                        - limit
-                        - window
-                        type: object
-                      type: array
                   required:
                   - name
+                  - namespace
                   type: object
                 minItems: 1
                 type: array
-              owner:
-                description: Owner defines who owns this subscription
+              subjects:
+                description: Subjects defines who has access (OR logic - any match
+                  grants access)
                 properties:
                   groups:
-                    description: Groups is a list of Kubernetes group names that own
-                      this subscription
+                    description: Groups is a list of Kubernetes group names
                     items:
                       description: GroupReference references a Kubernetes group
                       properties:
@@ -114,46 +106,59 @@ spec:
                       type: object
                     type: array
                   users:
-                    description: Users is a list of Kubernetes user names that own
-                      this subscription
+                    description: Users is a list of Kubernetes user names
                     items:
                       type: string
                     type: array
                 type: object
-              priority:
-                default: 0
-                description: |-
-                  Priority determines subscription priority when user has multiple subscriptions
-                  Higher numbers have higher priority. Defaults to 0.
-                format: int32
-                type: integer
-              tokenMetadata:
-                description: TokenMetadata contains metadata for token attribution
-                  and metering
-                properties:
-                  costCenter:
-                    description: CostCenter is the cost center for usage attribution
-                    type: string
-                  labels:
-                    additionalProperties:
-                      type: string
-                    description: Labels are additional labels for tracking and metrics
-                    type: object
-                  organizationId:
-                    description: OrganizationID is the organization identifier for
-                      metering and billing
-                    type: string
-                type: object
+                x-kubernetes-validations:
+                - message: at least one group or user must be specified in subjects
+                  rule: size(self.groups) > 0 || size(self.users) > 0
             required:
             - modelRefs
-            - owner
+            - subjects
             type: object
           status:
-            description: MaaSSubscriptionStatus defines the observed state of MaaSSubscription
+            description: MaaSAuthPolicyStatus defines the observed state of MaaSAuthPolicy
             properties:
+              authPolicies:
+                description: AuthPolicies lists the underlying Kuadrant AuthPolicies
+                  and their Accepted/Enforced state.
+                items:
+                  description: AuthPolicyRefStatus reports the status of one underlying
+                    Kuadrant AuthPolicy created by this MaaSAuthPolicy.
+                  properties:
+                    accepted:
+                      description: Accepted reports whether the AuthPolicy has been
+                        accepted (e.g. status.conditions type=Accepted).
+                      type: string
+                    enforced:
+                      description: Enforced reports whether the AuthPolicy is enforced
+                        (e.g. status.conditions type=Enforced).
+                      type: string
+                    model:
+                      description: Model is the MaaSModelRef name this AuthPolicy
+                        targets.
+                      type: string
+                    modelNamespace:
+                      description: ModelNamespace is the namespace of the MaaSModelRef.
+                      type: string
+                    name:
+                      description: Name is the name of the AuthPolicy resource.
+                      type: string
+                    namespace:
+                      description: Namespace is the namespace of the AuthPolicy resource.
+                      type: string
+                  required:
+                  - model
+                  - modelNamespace
+                  - name
+                  - namespace
+                  type: object
+                type: array
               conditions:
                 description: Conditions represent the latest available observations
-                  of the subscription's state
+                  of the policy's state
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -210,7 +215,7 @@ spec:
                   type: object
                 type: array
               phase:
-                description: Phase represents the current phase of the subscription
+                description: Phase represents the current phase of the policy
                 enum:
                 - Pending
                 - Active

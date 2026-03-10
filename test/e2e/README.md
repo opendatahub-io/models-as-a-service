@@ -27,7 +27,6 @@ If MaaS is already deployed and you just want to run tests:
 ### Run All Subscription Tests
 ```bash
 export GATEWAY_HOST="maas.apps.your-cluster.example.com"
-export MAAS_NAMESPACE="opendatahub"
 
 # Activate virtual environment
 cd test/e2e
@@ -50,10 +49,31 @@ pytest tests/test_subscription.py::TestE2ESubscriptionFlow::test_e2e_with_both_a
 See `tests/test_subscription.py` docstring for all available environment variables. Key ones:
 
 - `GATEWAY_HOST`: Gateway hostname (required)
-- `MAAS_NAMESPACE`: MaaS namespace (default: opendatahub)
 - `E2E_TEST_TOKEN_SA_NAMESPACE`, `E2E_TEST_TOKEN_SA_NAME`: Service account for token generation
 - `E2E_TIMEOUT`: Request timeout in seconds (default: 30)
 - `E2E_RECONCILE_WAIT`: Wait time for reconciliation in seconds (default: 8)
+
+### API Key Management Tests
+
+Tests for the API Key Management endpoints (`/v1/api-keys`):
+
+```bash
+cd test/e2e
+./run_api_key_tests.sh
+```
+
+**Environment Variables:**
+- `MAAS_API_BASE_URL` - MaaS API URL (auto-discovered from `oc get route maas-api`)
+- `TOKEN` - User token (auto-obtained via `oc whoami -t`)
+- `ADMIN_OC_TOKEN` - Optional admin token for authorization tests (if not set, admin tests are skipped)
+
+**Test Coverage:**
+- ✅ Create, list, revoke API keys
+- ✅ Admin authorization (manage other users' keys)
+- ✅ Non-admin authorization (403 on other users' keys)
+- ✅ Validation endpoint (active and revoked keys)
+
+Results: `test/e2e/reports/api-keys-report.html`
 
 ## CI Integration
 

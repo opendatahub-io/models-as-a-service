@@ -317,17 +317,17 @@ func TestListingModels(t *testing.T) {
 	modelMgr, errMgr := models.NewManager(testLogger)
 	require.NoError(t, errMgr)
 
-	// Create token manager for test - uses fixtures helper which sets up tier config
-	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	// Set up test fixtures
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
 	defer cleanup()
 
 	// Create a mock subscription selector that auto-selects for single subscription users
 	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{})
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, subscriptionSelector, maasModelRefLister, fixtures.TestNamespace)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister, fixtures.TestNamespace)
 
 	// Create token handler to extract user info middleware
-	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 
 	v1 := router.Group("/v1")
 	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
@@ -421,18 +421,18 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	modelMgr, errMgr := models.NewManager(testLogger)
 	require.NoError(t, errMgr)
 
-	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
 	defer cleanup()
 
 	// Create subscription lister with premium and free subscriptions
-	multiSubLister := &fakeMultiSubscriptionLister{
+	multiSubLister := fakeMultiSubscriptionLister{
 		"premium": []string{"premium-users"},
 		"free":    []string{"free-users"},
 	}
 	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister)
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager, subscriptionSelector, maasModelRefLister, fixtures.TestNamespace)
-	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister, fixtures.TestNamespace)
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 
 	v1 := router.Group("/v1")
 	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)

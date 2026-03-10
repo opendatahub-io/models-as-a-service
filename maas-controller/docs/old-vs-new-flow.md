@@ -99,8 +99,8 @@ Model Endpoint
 | Resource | Namespace | Created by | Purpose |
 |----------|-----------|------------|---------|
 | MaaSModelRef | opendatahub | User/admin | Registers a model with MaaS |
-| MaaSAuthPolicy | opendatahub | User/admin | Defines who (groups) can access which models |
-| MaaSSubscription | opendatahub | User/admin | Defines per-model token rate limits for owner groups |
+| MaaSAuthPolicy | models-as-a-service | User/admin | Defines who (groups) can access which models |
+| MaaSSubscription | models-as-a-service | User/admin | Defines per-model token rate limits for owner groups |
 | AuthPolicy (generated) | llm | maas-controller | Per-model auth, one per (MaaSAuthPolicy, model) pair |
 | TokenRateLimitPolicy (generated) | llm | maas-controller | Per-model rate limits, one per (MaaSSubscription, model) pair |
 
@@ -147,7 +147,7 @@ A user can have a subscription but no access → **403**.
 To move from old flow to new flow on an existing cluster:
 
 1. Deploy the full stack (including maas-controller): `./scripts/deploy.sh`
-   - Or install just the controller: `kubectl apply -k maas-controller/config/default`
+   - Or install just the controller: `kubectl apply -k deployment/base/maas-controller/default`
 2. For each model:
    - Create a `MaaSModelRef` CR referencing the LLMInferenceService
    - Create a `MaaSAuthPolicy` CR with the allowed groups

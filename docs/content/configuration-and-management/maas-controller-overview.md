@@ -131,7 +131,7 @@ flowchart LR
 
 | Your resource   | Controller creates / uses                                      |
 |-----------------|-----------------------------------------------------------------|
-| **MaaSModelRef**   | **HTTPRoute** (or validates KServe-created route for llmisvc)  |
+| **MaaSModelRef**   | **HTTPRoute** (or validates KServe-created route for LLMInferenceService)  |
 | **MaaSAuthPolicy** | One **AuthPolicy** per referenced model; targets that model’s HTTPRoute |
 | **MaaSSubscription** | One **TokenRateLimitPolicy** per referenced model; targets that model’s HTTPRoute |
 
@@ -177,7 +177,7 @@ flowchart TB
 ```mermaid
 erDiagram
     MaaSModelRef ||--o{ HTTPRoute : "creates or validates"
-    MaaSModelRef }o--|| LLMInferenceService : "references (llmisvc)"
+    MaaSModelRef }o--|| LLMInferenceService : "references (kind: LLMInferenceService)"
     MaaSAuthPolicy ||--o{ AuthPolicy : "one per model"
     MaaSAuthPolicy }o--o{ MaaSModelRef : "modelRefs"
     MaaSSubscription ||--o{ TokenRateLimitPolicy : "one per model"
@@ -187,9 +187,9 @@ erDiagram
     HTTPRoute }o--|| Gateway : "parentRef"
 ```
 
-- **MaaSModelRef**: `spec.modelRef` = llmisvc or ExternalModel (name, namespace).
-- **MaaSAuthPolicy**: `spec.modelRefs` (list of model names), `spec.subjects` (groups, users).
-- **MaaSSubscription**: `spec.owner` (groups, users), `spec.modelRefs` (model name + token rate limits per model).
+- **MaaSModelRef**: `spec.modelRef.kind` = LLMInferenceService or ExternalModel; `spec.modelRef.name` = name of the referenced model resource.
+- **MaaSAuthPolicy**: `spec.modelRefs` (list of ModelRef objects with name and namespace), `spec.subjects` (groups, users).
+- **MaaSSubscription**: `spec.owner` (groups, users), `spec.modelRefs` (list of ModelSubscriptionRef objects with name, namespace, and either `tokenRateLimits` array or `tokenRateLimitRef` reference to define per-model rate limits).
 
 ---
 

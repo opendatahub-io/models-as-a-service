@@ -13,10 +13,11 @@
 #   collect_e2e_artifacts
 #
 # Or run the full auth debug report:
-#   MAAS_NAMESPACE=opendatahub ./test/e2e/scripts/auth_utils.sh
+#   ./test/e2e/scripts/auth_utils.sh
 #
 # Environment:
-#   MAAS_NAMESPACE     - Namespace where maas-api/maas-controller run (default: opendatahub)
+#   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
+#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 #   AUTHORINO_NAMESPACE - Namespace for Authorino (default: kuadrant-system)
 #   ARTIFACT_DIR       - Prow artifact dir; also ARTIFACTS, LOG_DIR (default: test/e2e/reports)
 #
@@ -34,7 +35,8 @@ _find_root() {
 }
 
 PROJECT_ROOT="$(_find_root)"
-MAAS_NAMESPACE="${MAAS_NAMESPACE:-opendatahub}"
+DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
+MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-kuadrant-system}"
 # OpenShift CI/Prow use ARTIFACT_DIR; respect ARTIFACTS_DIR if already set by caller
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}}"
@@ -106,8 +108,8 @@ collect_cluster_state() {
     kubectl get nodes -o wide 2>/dev/null || true
     kubectl get ns 2>/dev/null || true
     echo ""
-    echo "--- MaaS namespace ($MAAS_NAMESPACE) ---"
-    kubectl get all -n "$MAAS_NAMESPACE" 2>/dev/null || true
+    echo "--- MaaS deployment namespace ($DEPLOYMENT_NAMESPACE) ---"
+    kubectl get all -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
     echo ""
     echo "--- AuthPolicies ---"
     kubectl get authpolicies -A 2>/dev/null || true
@@ -116,7 +118,8 @@ collect_cluster_state() {
     kubectl get tokenratelimitpolicies -A 2>/dev/null || true
     echo ""
     echo "--- MaaS CRs ---"
-    kubectl get maasmodelrefs,maasauthpolicies,maassubscriptions -n "$MAAS_NAMESPACE" 2>/dev/null || true
+    kubectl get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
+    kubectl get maasauthpolicies,maassubscriptions -n "$MAAS_SUBSCRIPTION_NAMESPACE" 2>/dev/null || true
     echo ""
     echo "--- HTTPRoutes ---"
     kubectl get httproutes -A 2>/dev/null | head -30 || true
@@ -131,7 +134,7 @@ collect_cluster_state() {
 # Collect logs from all pods in the maas namespace
 # -----------------------------------------------------------------------------
 collect_namespace_pod_logs() {
-  local ns="${1:-$MAAS_NAMESPACE}"
+  local ns="${1:-$DEPLOYMENT_NAMESPACE}"
   local outdir="${2:-$ARTIFACTS_DIR/pod-logs}"
   mkdir -p "$outdir"
   echo "Collecting pod logs from namespace $ns to $outdir"
@@ -153,7 +156,7 @@ collect_e2e_artifacts() {
   echo "Artifact dir: $ARTIFACTS_DIR"
   collect_authorino_logs_redacted "$ARTIFACTS_DIR/authorino-debug.log"
   collect_cluster_state "$ARTIFACTS_DIR"
-  collect_namespace_pod_logs "$MAAS_NAMESPACE" "$ARTIFACTS_DIR/pod-logs"
+  collect_namespace_pod_logs "$DEPLOYMENT_NAMESPACE" "$ARTIFACTS_DIR/pod-logs"
   echo "=============================================="
 }
 
@@ -188,19 +191,20 @@ run_auth_debug_report() {
   _run "Current context" "kubectl config current-context 2>/dev/null || echo 'N/A'"
   _run "Logged-in user" "oc whoami 2>/dev/null || echo 'Not logged in'"
   _run "Cluster domain" "oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo 'N/A'"
-  _append "MAAS_NAMESPACE: $MAAS_NAMESPACE"
+  _append "DEPLOYMENT_NAMESPACE: $DEPLOYMENT_NAMESPACE"
+  _append "MAAS_SUBSCRIPTION_NAMESPACE: $MAAS_SUBSCRIPTION_NAMESPACE"
   _append "AUTHORINO_NAMESPACE: $AUTHORINO_NAMESPACE"
   _append ""
 
   _section "MaaS API Deployment"
-  _run "maas-api pods" "kubectl get pods -n $MAAS_NAMESPACE -l app.kubernetes.io/name=maas-api -o wide 2>/dev/null || true"
-  _run "maas-api service" "kubectl get svc maas-api -n $MAAS_NAMESPACE -o wide 2>/dev/null || true"
+  _run "maas-api pods" "kubectl get pods -n $DEPLOYMENT_NAMESPACE -l app.kubernetes.io/name=maas-api -o wide 2>/dev/null || true"
+  _run "maas-api service" "kubectl get svc maas-api -n $DEPLOYMENT_NAMESPACE -o wide 2>/dev/null || true"
   _append ""
 
   _section "maas-controller"
-  _run "maas-controller pods" "kubectl get pods -n $MAAS_NAMESPACE -l app=maas-controller -o wide 2>/dev/null || true"
+  _run "maas-controller pods" "kubectl get pods -n $DEPLOYMENT_NAMESPACE -l app=maas-controller -o wide 2>/dev/null || true"
   _run "maas-controller MAAS_API_NAMESPACE" \
-    "kubectl get deployment maas-controller -n $MAAS_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name==\"MAAS_API_NAMESPACE\") | \"\(.name)=\(.value // .valueFrom.fieldRef.fieldPath // \"N/A\")\"' 2>/dev/null || echo 'N/A'"
+    "kubectl get deployment maas-controller -n $DEPLOYMENT_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name==\"MAAS_API_NAMESPACE\") | \"\(.name)=\(.value // .valueFrom.fieldRef.fieldPath // \"N/A\")\"' 2>/dev/null || echo 'N/A'"
   _append ""
 
   _section "Kuadrant AuthPolicies"
@@ -208,14 +212,14 @@ run_auth_debug_report() {
   _append ""
 
   _section "MaaS CRs"
-  _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n $MAAS_NAMESPACE -o wide 2>/dev/null || true"
-  _run "MaaSSubscriptions" "kubectl get maassubscriptions -n $MAAS_NAMESPACE -o wide 2>/dev/null || true"
-  _run "MaaSModelRefs" "kubectl get maasmodelrefs -n $MAAS_NAMESPACE -o wide 2>/dev/null || true"
+  _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
+  _run "MaaSSubscriptions" "kubectl get maassubscriptions -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
+  _run "MaaSModelRefs" "kubectl get maasmodelrefs -n $DEPLOYMENT_NAMESPACE -o wide 2>/dev/null || true"
   _append ""
 
   _section "Gateway / HTTPRoutes"
   _run "Gateway" "kubectl get gateway -n openshift-ingress maas-default-gateway -o wide 2>/dev/null || kubectl get gateway -A 2>/dev/null | head -10 || true"
-  _run "HTTPRoutes (maas-api)" "kubectl get httproute maas-api-route -n $MAAS_NAMESPACE -o wide 2>/dev/null || true"
+  _run "HTTPRoutes (maas-api)" "kubectl get httproute maas-api-route -n $DEPLOYMENT_NAMESPACE -o wide 2>/dev/null || true"
   _append ""
 
   _section "Authorino"
@@ -223,8 +227,9 @@ run_auth_debug_report() {
   _append ""
 
   # Determine maas-api namespace
-  # Note: MAAS_API_NAMESPACE uses valueFrom.fieldRef, so .value is null; use MAAS_NAMESPACE instead
-  local maas_api_ns="$MAAS_NAMESPACE"
+  local maas_api_ns
+  maas_api_ns=$(kubectl get deployment maas-controller -n $DEPLOYMENT_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name=="MAAS_API_NAMESPACE") | .value' 2>/dev/null || echo "$DEPLOYMENT_NAMESPACE")
+  [[ -z "$maas_api_ns" ]] && maas_api_ns="$DEPLOYMENT_NAMESPACE"
 
   local sub_select_url="https://maas-api.${maas_api_ns}.svc.cluster.local:8443/v1/subscriptions/select"
   _section "Subscription Selector Endpoint Validation"
@@ -236,7 +241,7 @@ run_auth_debug_report() {
     curl_ns="openshift-ingress"
   fi
   if ! kubectl get namespace "$curl_ns" &>/dev/null; then
-    curl_ns="$MAAS_NAMESPACE"
+    curl_ns="$DEPLOYMENT_NAMESPACE"
   fi
 
   _append "--- Connectivity test (from $curl_ns, simulates Authorino) ---"

@@ -75,7 +75,7 @@ esac
 DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
 OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
-NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
+NAMESPACE="${DEPLOYMENT_NAMESPACE:-}"  # Auto-determined based on operator type
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
@@ -366,7 +366,6 @@ validate_configuration() {
     # Operator mode: ALWAYS use fixed namespace based on operator type
     # This matches upstream deploy-rhoai-stable.sh behavior where the
     # applications namespace is determined by DSCInitialization, not env vars.
-    # The $NAMESPACE env var (e.g., from Prow CI) is intentionally ignored.
     case "$OPERATOR_TYPE" in
       rhoai)
         NAMESPACE="redhat-ods-applications"
@@ -424,17 +423,6 @@ main() {
       ;;
   esac
 
-  # TODO: Move to kustomize overlay once deployment structure is finalized.
-  # NetworkPolicy to allow Authorino (Kuadrant) to reach MaaS API for AuthPolicy evaluation.
-  if [[ "$POLICY_ENGINE" == "kuadrant" ]]; then
-    local data_dir="${SCRIPT_DIR}/data"
-    if [[ -f "${data_dir}/maas-authorino-networkpolicy.yaml" ]]; then
-      log_info "Applying maas-authorino-allow NetworkPolicy..."
-      kubectl apply -f "${data_dir}/maas-authorino-networkpolicy.yaml" -n "$NAMESPACE" 2>/dev/null || \
-        log_warn "Failed to apply maas-authorino-allow NetworkPolicy (may already exist)"
-    fi
-  fi
-
   # Install subscription controller (always deployed)
   # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script.
   log_info ""
@@ -443,7 +431,7 @@ main() {
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local project_root="$script_dir/.."
   local controller_dir="$project_root/maas-controller"
-  local config_dir="$controller_dir/config/default"
+  local config_dir="$project_root/deployment/base/maas-controller/default"
 
   if [[ ! -d "$controller_dir" ]]; then
     log_error "maas-controller directory not found at $controller_dir — subscription controller required"
@@ -457,7 +445,7 @@ main() {
       fi
       set_maas_controller_image
       if [[ "$NAMESPACE" != "opendatahub" ]]; then
-        (cd "$project_root" && kustomize build maas-controller/config/default | \
+        (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
           sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
           cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
@@ -472,7 +460,7 @@ main() {
       fi
       cleanup_maas_controller_image
     else
-      log_info "  Controller deployed via kustomize overlay (maas-controller/config/default)"
+      log_info "  Controller deployed via kustomize overlay (deployment/base/maas-controller/default)"
     fi
 
     log_info "  Waiting for maas-controller to be ready..."
@@ -521,11 +509,14 @@ deploy_via_operator() {
   # Install rate limiter component
   install_policy_engine
 
-  # Install primary operator
+  # Install primary operator (creates namespace)
   install_primary_operator
 
   # Apply custom resources
   apply_custom_resources
+
+  # Deploy PostgreSQL for API key storage (requires namespace to exist)
+  deploy_postgresql
 
   # Inject custom MaaS API image if specified
   inject_maas_api_image_operator_mode "$NAMESPACE"
@@ -576,12 +567,15 @@ deploy_via_kustomize() {
     kubectl create namespace "$NAMESPACE"
   fi
 
+  # Deploy PostgreSQL for API key storage (requires namespace to exist)
+  deploy_postgresql
+
   log_info "Applying kustomize manifests..."
   kubectl apply --server-side=true -f <(kustomize build "$overlay")
 
   # Apply gateway policies separately so they stay in openshift-ingress (overlay
   # namespace would otherwise overwrite them to $NAMESPACE)
-  local policies_dir="$project_root/maas-controller/config/policies"
+  local policies_dir="$project_root/deployment/base/maas-controller/policies"
   if [[ -d "$policies_dir" ]]; then
     log_info "Applying gateway policies (openshift-ingress)..."
     kubectl apply --server-side=true -f <(kustomize build "$policies_dir")
@@ -596,6 +590,146 @@ deploy_via_kustomize() {
   configure_cluster_audience
 
   log_info "Kustomize deployment completed"
+}
+
+#──────────────────────────────────────────────────────────────
+# POSTGRESQL DEPLOYMENT
+#──────────────────────────────────────────────────────────────
+
+deploy_postgresql() {
+  log_info "Deploying PostgreSQL for API key storage..."
+
+  # Check if PostgreSQL already exists
+  if kubectl get deployment postgres -n "$NAMESPACE" &>/dev/null; then
+    log_info "  PostgreSQL already deployed in namespace $NAMESPACE"
+    log_info "  Service: postgres:5432"
+    log_info "  Secret: maas-db-config (contains DB_CONNECTION_URL)"
+    return 0
+  fi
+
+  # PostgreSQL configuration (POC-grade, not for production)
+  local POSTGRES_USER="${POSTGRES_USER:-maas}"
+  local POSTGRES_DB="${POSTGRES_DB:-maas}"
+
+  # Generate random password if not provided
+  local POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+  if [[ -z "$POSTGRES_PASSWORD" ]]; then
+    POSTGRES_PASSWORD="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
+    log_info "  Generated random PostgreSQL password (stored in secret postgres-creds)"
+  fi
+
+  log_info "  Creating PostgreSQL deployment..."
+  log_info "  ⚠️  Using POC configuration (ephemeral storage)"
+
+  # Deploy PostgreSQL resources
+  kubectl apply -n "$NAMESPACE" -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-creds
+  labels:
+    app: postgres
+    purpose: poc
+stringData:
+  POSTGRES_USER: "${POSTGRES_USER}"
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+  POSTGRES_DB: "${POSTGRES_DB}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    purpose: poc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: registry.redhat.io/rhel9/postgresql-15:latest
+        env:
+        - name: POSTGRESQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-creds
+              key: POSTGRES_USER
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-creds
+              key: POSTGRES_PASSWORD
+        - name: POSTGRESQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: postgres-creds
+              key: POSTGRES_DB
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/pgsql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        readinessProbe:
+          exec:
+            command: ["/usr/libexec/check-container"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+    purpose: poc
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: maas-db-config
+  labels:
+    app: maas-api
+    purpose: poc
+stringData:
+  DB_CONNECTION_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+EOF
+
+  log_info "  Waiting for PostgreSQL to be ready..."
+  if ! kubectl wait -n "$NAMESPACE" --for=condition=available deployment/postgres --timeout=120s; then
+    log_error "PostgreSQL deployment failed to become ready"
+    return 1
+  fi
+
+  log_info "  PostgreSQL deployed successfully"
+  log_info "  Database: $POSTGRES_DB"
+  log_info "  User: $POSTGRES_USER"
+  log_info "  Secret: maas-db-config (contains DB_CONNECTION_URL)"
+  log_info ""
+  log_info "  ⚠️  For production, use AWS RDS, Crunchy Operator, or Azure Database"
+  log_info "  Note: Schema migrations run automatically when maas-api starts"
 }
 
 #──────────────────────────────────────────────────────────────
@@ -1025,8 +1159,11 @@ apply_dsci() {
     return 0
   fi
 
-  # Create DSCI only if it doesn't exist
-  cat <<EOF | kubectl apply -f -
+  # Create DSCI with retries
+  local max_attempts=5
+  local wait_seconds=15
+  for attempt in $(seq 1 $max_attempts); do
+    if cat <<EOF | kubectl apply -f -
 apiVersion: dscinitialization.opendatahub.io/v1
 kind: DSCInitialization
 metadata:
@@ -1040,6 +1177,15 @@ spec:
   trustedCABundle:
     managementState: Managed
 EOF
+    then
+      return 0
+    fi
+    log_warn "DSCInitialization apply attempt $attempt/$max_attempts failed (webhook may not be ready), retrying in ${wait_seconds}s..."
+    sleep $wait_seconds
+  done
+
+  log_error "Failed to apply DSCInitialization after $max_attempts attempts"
+  return 1
 }
 
 apply_dsc() {

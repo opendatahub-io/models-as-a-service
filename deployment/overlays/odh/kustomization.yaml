@@ -9,10 +9,9 @@ metadata:
 
 namespace: opendatahub
 resources:
-  - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule)
-  - ../../../maas-controller/config/default
-  - ../../../maas-controller/config/policies  # gateway-default-auth, gateway-default-deny
-  - maas-authorino-networkpolicy.yaml
+  - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule + NetworkPolicy)
+  - ../../base/maas-controller/default
+  - ../../base/maas-controller/policies  # gateway-default-auth, gateway-default-deny
 
 configMapGenerator:
 - envs:
@@ -43,6 +42,12 @@ patches:
                 configMapKeyRef:
                   key: gateway-name
                   name: maas-parameters
+            - name: API_KEY_MAX_EXPIRATION_DAYS
+              valueFrom:
+                configMapKeyRef:
+                  key: api-key-max-expiration-days
+                  name: maas-parameters
+                  optional: true
   target:
     kind: Deployment
     name: maas-api
@@ -76,6 +81,17 @@ replacements:
       name: maas-api
     fieldPaths:
     - spec.template.spec.containers.[name=maas-api].image
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.maas-controller-image
+  targets:
+  - select:
+      kind: Deployment
+      name: maas-controller
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].image
 - source:
     kind: ConfigMap
     version: v1

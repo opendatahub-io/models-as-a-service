@@ -74,7 +74,6 @@ nav:
     - Advanced Administration:
       - Observability: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
-      - Storage Configuration: advanced-administration/storage-configuration.md
   - End User Guide:
     - Self Service Model Access: user-guide/self-service-model-access.md
 
