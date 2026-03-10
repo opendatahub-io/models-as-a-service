@@ -42,6 +42,12 @@ patches:
                 configMapKeyRef:
                   key: gateway-name
                   name: maas-parameters
+            - name: API_KEY_MAX_EXPIRATION_DAYS
+              valueFrom:
+                configMapKeyRef:
+                  key: api-key-max-expiration-days
+                  name: maas-parameters
+                  optional: true
   target:
     kind: Deployment
     name: maas-api

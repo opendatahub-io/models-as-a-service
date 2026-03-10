@@ -283,6 +283,76 @@ func TestServiceList(t *testing.T) {
 }
 
 // ============================================================
+// MAX EXPIRATION VALIDATION TESTS
+// ============================================================
+
+func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("WithinLimit", func(t *testing.T) {
+		store := api_keys.NewMockStore()
+		cfg := &config.Config{
+			APIKeyMaxExpirationDays: 30, // 30 days max
+		}
+		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
+
+		// Request 7 days - should succeed
+		expiresIn := 7 * 24 * time.Hour
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.NotEmpty(t, result.Key)
+	})
+
+	t.Run("ExceedsLimit", func(t *testing.T) {
+		store := api_keys.NewMockStore()
+		cfg := &config.Config{
+			APIKeyMaxExpirationDays: 30, // 30 days max
+		}
+		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
+
+		// Request 60 days - should fail
+		expiresIn := 60 * 24 * time.Hour
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn)
+
+		require.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "exceeds maximum allowed")
+		assert.Contains(t, err.Error(), "30 days")
+	})
+
+	t.Run("ExactlyAtLimit", func(t *testing.T) {
+		store := api_keys.NewMockStore()
+		cfg := &config.Config{
+			APIKeyMaxExpirationDays: 30, // 30 days max
+		}
+		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
+
+		// Request exactly 30 days - should succeed
+		expiresIn := 30 * 24 * time.Hour
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+	})
+
+	t.Run("NoExpirationRequested", func(t *testing.T) {
+		store := api_keys.NewMockStore()
+		cfg := &config.Config{
+			APIKeyMaxExpirationDays: 30, // 30 days max
+		}
+		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
+
+		// Request permanent key (nil expiration) - should succeed (max limit only applies to expiring keys)
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", nil)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+	})
+}
+
+// ============================================================
 // TEST HELPERS
 // ============================================================
 
