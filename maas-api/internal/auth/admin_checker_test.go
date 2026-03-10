@@ -26,7 +26,6 @@ func (m *mockAuthLister) List(selector labels.Selector) ([]runtime.Object, error
 	return nil, nil
 }
 
-//nolint:ireturn // Mock implementation must match k8s interface signature
 func (m *mockAuthLister) Get(name string) (runtime.Object, error) {
 	if m.err != nil {
 		return nil, m.err
@@ -34,7 +33,6 @@ func (m *mockAuthLister) Get(name string) (runtime.Object, error) {
 	return m.authCR, nil
 }
 
-//nolint:ireturn // Mock implementation must match k8s interface signature
 func (m *mockAuthLister) ByNamespace(namespace string) cache.GenericNamespaceLister {
 	return nil
 }
