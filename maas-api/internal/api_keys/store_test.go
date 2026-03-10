@@ -12,7 +12,6 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
-//nolint:ireturn // Returns MetadataStore interface by design.
 func createTestStore(t *testing.T) api_keys.MetadataStore {
 	t.Helper()
 	return api_keys.NewMockStore()
