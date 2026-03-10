@@ -1,7 +1,7 @@
 # MaaS Controller Makefile
 # Build and deploy the MaaS control plane (MaaSModelRef, MaaSAuthPolicy, MaaSSubscription)
 
-.PHONY: build run test tidy install uninstall image-build image-push docker-build generate manifests help
+.PHONY: build run test tidy install uninstall image-build image-push docker-build generate manifests verify-codegen help
 
 help:
 	@echo "MaaS Controller make targets:"
@@ -12,8 +12,11 @@ help:
 	@echo "  make manifests    - generate CRD manifests"
 	@echo "  make install      - apply deployment/base/maas-controller/default (CRDs, RBAC, deployment)"
 	@echo "  make uninstall    - delete deployment/base/maas-controller/default resources"
+	@echo "  make verify-codegen - run generate + manifests and fail if files changed (CI check)"
 	@echo "  make image-build  - build container image (podman/buildah/docker); default IMAGE=quay.io/opendatahub/maas-controller"
 	@echo "  make image-push   - build and push image; override with IMAGE=... IMAGE_TAG=..."
+
+CONTROLLER_GEN_VERSION ?= v0.16.4
 
 BINARY_NAME := manager
 BUILD_DIR := bin
@@ -47,6 +50,15 @@ generate:
 # Generate CRD manifests
 manifests:
 	controller-gen crd paths="./api/..." output:crd:dir=../deployment/base/maas-controller/crd/bases
+
+# Run generate + manifests and verify no files changed (used by CI)
+verify-codegen: generate manifests
+	@if ! git diff --quiet HEAD -- api/ ../deployment/base/maas-controller/crd/bases/; then \
+		echo "ERROR: Generated files are out of date. Please run 'make generate manifests' and commit the results."; \
+		git diff --stat HEAD -- api/ ../deployment/base/maas-controller/crd/bases/; \
+		exit 1; \
+	fi
+	@echo "Generated files are up to date."
 
 # Install CRDs, RBAC, and manager deployment (default: opendatahub namespace)
 install:
