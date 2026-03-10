@@ -17,6 +17,7 @@ help:
 	@echo "  make image-push   - build and push image; override with IMAGE=... IMAGE_TAG=..."
 
 CONTROLLER_GEN_VERSION ?= v0.16.4
+CONTROLLER_GEN = $(BUILD_DIR)/controller-gen
 
 BINARY_NAME := manager
 BUILD_DIR := bin
@@ -43,19 +44,29 @@ test: tidy
 tidy:
 	go mod tidy
 
+# Install controller-gen into local bin (pinned version)
+$(CONTROLLER_GEN): | $(BUILD_DIR)
+	GOBIN=$(abspath $(BUILD_DIR)) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
+
 # Generate deepcopy code for API types
-generate:
-	controller-gen object paths="./api/..."
+generate: $(CONTROLLER_GEN)
+	$(CONTROLLER_GEN) object paths="./api/..."
 
 # Generate CRD manifests
-manifests:
-	controller-gen crd paths="./api/..." output:crd:dir=../deployment/base/maas-controller/crd/bases
+manifests: $(CONTROLLER_GEN)
+	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:dir=../deployment/base/maas-controller/crd/bases
 
 # Run generate + manifests and verify no files changed (used by CI)
 verify-codegen: generate manifests
 	@if ! git diff --quiet HEAD -- api/ ../deployment/base/maas-controller/crd/bases/; then \
 		echo "ERROR: Generated files are out of date. Please run 'make generate manifests' and commit the results."; \
 		git diff --stat HEAD -- api/ ../deployment/base/maas-controller/crd/bases/; \
+		exit 1; \
+	fi
+	@UNTRACKED=$$(git ls-files --others --exclude-standard -- api/ ../deployment/base/maas-controller/crd/bases/); \
+	if [ -n "$$UNTRACKED" ]; then \
+		echo "ERROR: Untracked generated files detected. Please commit them:"; \
+		echo "$$UNTRACKED"; \
 		exit 1; \
 	fi
 	@echo "Generated files are up to date."

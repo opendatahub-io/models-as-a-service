@@ -50,16 +50,6 @@ jobs:
         cache: true
         cache-dependency-path: maas-controller/go.sum
 
-    - name: Align controller-gen version with Makefile
-      id: controller-gen-version
-      working-directory: maas-controller
-      run: |
-        VERSION=$(grep '^CONTROLLER_GEN_VERSION' Makefile | head -1 | sed 's/.*?= *//')
-        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-    - name: Install controller-gen
-      run: go install sigs.k8s.io/controller-tools/cmd/controller-gen@${{ steps.controller-gen-version.outputs.version }}
-
     - name: Verify generated code is up to date
       working-directory: maas-controller
       run: make verify-codegen
