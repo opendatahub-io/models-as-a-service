@@ -59,8 +59,9 @@ Tests for the API Key Management endpoints (`/v1/api-keys`):
 
 ```bash
 cd test/e2e
-# Set up venv if not already done (see "Run All Subscription Tests" above)
+python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
 
 export GATEWAY_HOST="maas.apps.your-cluster.example.com"
 # Or: export MAAS_API_BASE_URL="https://maas.apps.your-cluster.example.com/maas-api"
