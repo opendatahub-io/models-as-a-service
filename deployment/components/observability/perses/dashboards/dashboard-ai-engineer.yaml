@@ -128,7 +128,7 @@ spec:
       spec:
         display:
           name: "🚦 Rate Limit Ratio"
-          description: "Percentage of your requests rejected by rate limiting (HTTP 429). High values indicate you are exceeding your tier quota."
+          description: "Percentage of your requests rejected by rate limiting (HTTP 429). High values indicate you are exceeding your subscription quota."
         plugin:
           kind: StatChart
           spec:
@@ -285,12 +285,12 @@ spec:
                   seriesNameFormat: "{{model}}"
                   query: sum by (model) (increase(authorized_hits{user=~"^$user$", model!=""}[1h]))
 
-    rateLimitedByTier:
+    rateLimitedBySubscription:
       kind: Panel
       spec:
         display:
-          name: "❌ Rate Limited by Tier (Hourly)"
-          description: "Rate-limited requests by tier in 1-hour windows. Note: Grafana uses $__range (adapts to dashboard time picker); Perses does not support $__range, so a fixed 1h window is used."
+          name: "❌ Rate Limited by Subscription (Hourly)"
+          description: "Rate-limited requests by subscription in 1-hour windows. Note: Grafana uses $__range (adapts to dashboard time picker); Perses does not support $__range, so a fixed 1h window is used."
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -306,15 +306,15 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{tier}} (limited)"
-                  query: sum by (tier) (increase(limited_calls{user=~"^$user$", tier!=""}[1h]))
+                  seriesNameFormat: "{{subscription}} (limited)"
+                  query: sum by (subscription) (increase(limited_calls{user=~"^$user$", subscription!=""}[1h]))
 
-    usageSummaryByModelTier:
+    usageSummaryByModelSubscription:
       kind: Panel
       spec:
         display:
-          name: "🔍 My Usage Summary by Model & Tier"
-          description: "Token consumption by model and tier. Note: OpenShift Console shows raw labels; native Perses applies the formatted series name."
+          name: "🔍 My Usage Summary by Model & Subscription"
+          description: "Token consumption by model and subscription. Note: OpenShift Console shows raw labels; native Perses applies the formatted series name."
         plugin:
           kind: TimeSeriesTable
           spec: {}
@@ -324,8 +324,8 @@ spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{model}} / {{tier}}"
-                  query: sum by (model, tier) (authorized_hits{user=~"^$user$", model!=""})
+                  seriesNameFormat: "{{model}} / {{subscription}}"
+                  query: sum by (model, subscription) (authorized_hits{user=~"^$user$", model!=""})
 
   # Layout definition
   layouts:
@@ -425,7 +425,7 @@ spec:
             width: 24
             height: 8
             content:
-              "$ref": "#/spec/panels/rateLimitedByTier"
+              "$ref": "#/spec/panels/rateLimitedBySubscription"
 
     - kind: Grid
       spec:
@@ -439,4 +439,4 @@ spec:
             width: 24
             height: 6
             content:
-              "$ref": "#/spec/panels/usageSummaryByModelTier"
+              "$ref": "#/spec/panels/usageSummaryByModelSubscription"

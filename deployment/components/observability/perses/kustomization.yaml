@@ -35,6 +35,7 @@ resources:
   # Both modes: Dashboards (for UIPlugin, apply to openshift-operators instead)
   - dashboards/dashboard-ai-engineer.yaml
   - dashboards/dashboard-platform-admin.yaml
+  - dashboards/dashboard-usage.yaml
   # UIPlugin (perses-uiplugin.yaml) is cluster-scoped - apply separately:
   #   kubectl apply -f perses-uiplugin.yaml
 

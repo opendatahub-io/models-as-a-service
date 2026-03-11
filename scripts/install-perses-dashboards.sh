@@ -97,7 +97,8 @@ echo ""
 echo "📊 Deploying Perses dashboards..."
 kubectl apply -f "$OBSERVABILITY_DIR/perses/dashboards/dashboard-ai-engineer.yaml" -n openshift-operators
 kubectl apply -f "$OBSERVABILITY_DIR/perses/dashboards/dashboard-platform-admin.yaml" -n openshift-operators
-echo "   ✅ Dashboards deployed (Platform Admin, AI Engineer)"
+kubectl apply -f "$OBSERVABILITY_DIR/perses/dashboards/dashboard-usage.yaml" -n openshift-operators
+echo "   ✅ Dashboards deployed (Platform Admin, AI Engineer, Usage)"
 
 echo ""
 echo "🔗 Configuring Prometheus datasource..."
@@ -121,6 +122,7 @@ echo ""
 echo "📈 Available Dashboards:"
 echo "   - Platform Admin Dashboard"
 echo "   - AI Engineer Dashboard"
+echo "   - Usage Dashboard"
 echo ""
 
 exit 0

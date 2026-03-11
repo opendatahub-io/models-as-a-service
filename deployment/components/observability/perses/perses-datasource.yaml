@@ -9,6 +9,11 @@
 # NOTE: Unlike Grafana, Perses datasource does NOT require explicit bearer
 # token auth. The Cluster Observability Operator handles authentication
 # through the pod's ServiceAccount and RBAC configuration.
+#
+# TLS: Thanos Querier serves HTTPS signed by the OpenShift service CA.
+# The operator creates a Perses Secret named "prometheus-secret" from the
+# client.tls config below; the proxy references it via the "secret" field
+# so Perses skips certificate verification for this internal connection.
 ---
 apiVersion: perses.dev/v1alpha1
 kind: PersesDatasource
@@ -29,8 +34,10 @@ spec:
           kind: HTTPProxy
           spec:
             url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
-  # TLS configuration for OpenShift service CA
+            secret: "prometheus-secret"
+  # The operator translates this into a Perses Secret named "prometheus-secret"
+  # (datasource name + "-secret") that the proxy references above.
   client:
     tls:
       enable: true
-      insecureSkipVerify: true  # Acceptable: internal cluster communication only
+      insecureSkipVerify: true
