@@ -13,7 +13,7 @@
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
 #   4. Deploy MaaS system (free + premium + unconfigured: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
 #   5. Setup test tokens (admin + regular user) for comprehensive testing
-#   6. Run E2E tests (API keys + subscription tests)
+#   6. Run E2E tests (API keys + subscription + models endpoint tests)
 #   7. Run deployment validation + token metadata verification
 # 
 # USAGE:
@@ -415,7 +415,7 @@ setup_premium_test_token() {
 }
 
 run_e2e_tests() {
-    echo "-- E2E Tests (API Keys + Subscription) --"
+    echo "-- E2E Tests (API Keys + Subscription + Models Endpoint) --"
 
     # Note: setup_premium_test_token() is called earlier in main execution
     # (Phase 1: Admin Setup) while still logged in as system:admin
@@ -454,15 +454,16 @@ run_e2e_tests() {
     echo "  - ADMIN_OC_TOKEN: $(echo "${ADMIN_OC_TOKEN:-not set}" | cut -c1-20)..."
     echo "  - GATEWAY_HOST: ${GATEWAY_HOST}"
 
-    # Run all e2e tests: API keys, subscription, and namespace scoping tests
+    # Run all e2e tests: API keys, subscription, models endpoint, and namespace scoping tests
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
-        "$test_dir/tests/test_subscription.py"; then
         # "$test_dir/tests/test_namespace_scoping.py" \
+        "$test_dir/tests/test_subscription.py" \
+        "$test_dir/tests/test_models_endpoint.py" ; then 
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi

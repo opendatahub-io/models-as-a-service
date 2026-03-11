@@ -75,15 +75,67 @@ cd test/e2e
 
 Results: `test/e2e/reports/api-keys-report.html`
 
+### Models Endpoint Tests
+
+Tests for the `/v1/models` endpoint that validate subscription-aware model filtering:
+
+```bash
+cd test/e2e
+source .venv/bin/activate
+
+# Run all /v1/models tests
+pytest tests/test_models_endpoint.py -v
+
+# Run specific test scenarios
+pytest tests/test_models_endpoint.py::TestModelsEndpoint::test_single_subscription_auto_select -v
+pytest tests/test_models_endpoint.py::TestModelsEndpoint::test_multi_subscription_without_header_403 -v
+```
+
+**Test Coverage (15 tests):**
+
+*Success Cases (HTTP 200) - 11 tests:*
+- ✅ Single subscription auto-select (no header required)
+- ✅ Explicit subscription header with multiple subscriptions
+- ✅ Empty subscription header value behavior
+- ✅ Subscription header case insensitivity (HTTP standard)
+- ✅ Models correctly filtered by subscription
+- ⚠️  Same modelRef listed twice should deduplicate (xfail - returns 2+ duplicates instead of 1)
+- ⚠️  Different modelRefs serving SAME model ID should deduplicate (xfail - returns 3+ duplicates instead of 1)
+- ✅ Different modelRefs with different IDs returns 2 entries (uses non-duplicating simulators)
+- ⚠️  Empty model list returns [] not null (xfail - currently returns null)
+- ✅ Response schema matches OpenAPI specification
+- ✅ Model metadata (url, ready, created, owned_by) preserved
+
+*Error Cases (HTTP 403) - 3 tests:*
+- ✅ Multiple subscriptions without header → 403 permission_error
+- ✅ Invalid subscription header → 403 permission_error
+- ✅ Access denied to subscription → 403 permission_error
+
+*Error Cases (HTTP 401) - 1 test:*
+- ✅ Unauthenticated request → 401 authentication_error
+
+**What's Being Validated:**
+The `/v1/models` endpoint implements subscription-aware model filtering:
+- Users with a single subscription don't need to specify `x-maas-subscription` header
+- Users with multiple subscriptions must use `x-maas-subscription` header to select
+- Returns proper error responses (403/401) with `permission_error`/`authentication_error` types
+- Models are correctly filtered to only show those from the specified subscription
+- Response structure matches OpenAPI schema: `{"object": "list", "data": [...]}`
+- HTTP header handling follows standards (case-insensitive)
+- Model metadata is accurately preserved from source
+
 ## CI Integration
 
 These tests run automatically in CI via:
-- **Prow**: `./test/e2e/scripts/prow_run_smoke_test.sh` (includes subscription tests)
+- **Prow**: `./test/e2e/scripts/prow_run_smoke_test.sh` (includes all E2E tests)
 - **GitHub Actions**: Can be integrated into `.github/workflows/` as needed
 
 The `prow_run_smoke_test.sh` script:
 1. Deploys MaaS platform and dependencies
 2. Deploys test models (free + premium simulators)
-3. Runs subscription controller tests (`test_subscription.py`)
+3. Runs E2E tests:
+   - API key management (`test_api_keys.py`)
+   - Subscription controller (`test_subscription.py`)
+   - Models endpoint (`test_models_endpoint.py`)
 4. Runs deployment validation and token metadata verification
 5. Collects artifacts (HTML/XML reports, logs) to `ARTIFACT_DIR`
