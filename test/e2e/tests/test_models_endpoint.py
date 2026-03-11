@@ -177,7 +177,7 @@ class TestModelsEndpoint:
         log.info("✅ All prerequisites validated - proceeding with /v1/models tests")
         log.info("=" * 60)
 
-    @pytest.mark.xfail(reason="/v1/models returns all accessible models regardless of subscription; needs filtering by selected subscription")
+    @pytest.mark.xfail(reason="/v1/models returns all accessible models regardless of subscription; needs filtering by selected subscription", strict=True)
     def test_single_subscription_auto_select(self):
         """
         Test: User with exactly one accessible subscription can list models without
@@ -299,7 +299,7 @@ class TestModelsEndpoint:
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_reconcile()
 
-    @pytest.mark.xfail(reason="/v1/models returns all accessible models regardless of subscription; needs filtering by selected subscription")
+    @pytest.mark.xfail(reason="/v1/models returns all accessible models regardless of subscription; needs filtering by selected subscription", strict=True)
     def test_explicit_subscription_header(self):
         """
         Test: User with multiple subscriptions can list models by providing
@@ -314,6 +314,7 @@ class TestModelsEndpoint:
         sa_ns = "default"
         maas_ns = _ns()
         api_key = None
+        sa_user = None
 
         try:
             # Create service account - will be in system:authenticated group
@@ -374,14 +375,15 @@ class TestModelsEndpoint:
 
         finally:
             # Remove SA from premium-simulator-subscription
-            log.info(f"Removing {sa_user} from premium-simulator-subscription users")
-            # Get current users list, remove our SA, then patch
-            result = subprocess.run([
-                "kubectl", "get", "maassubscription", "premium-simulator-subscription",
-                "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
-            ], capture_output=True, text=True)
+            if sa_user is not None:
+                log.info(f"Removing {sa_user} from premium-simulator-subscription users")
+                # Get current users list, remove our SA, then patch
+                result = subprocess.run([
+                    "kubectl", "get", "maassubscription", "premium-simulator-subscription",
+                    "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
+                ], capture_output=True, text=True)
 
-            if sa_user in result.stdout:
+                if sa_user in result.stdout:
                 users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
                 users = [u for u in users if u != sa_user]
                 subprocess.run([
@@ -604,7 +606,7 @@ class TestModelsEndpoint:
 
             _delete_sa(sa_name, namespace=sa_ns)
 
-    @pytest.mark.xfail(reason="Known bug: API does not deduplicate - same modelRef 2x returns 2+ duplicates instead of 1")
+    @pytest.mark.xfail(reason="Known bug: API does not deduplicate - same modelRef 2x returns 2+ duplicates instead of 1", strict=True)
     def test_deduplication_same_model_multiple_refs(self):
         """
         Test 6: Same modelRef listed twice should deduplicate to 1 entry.
@@ -751,7 +753,7 @@ class TestModelsEndpoint:
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_reconcile()
 
-    @pytest.mark.xfail(reason="Known bug: API does not deduplicate - different refs serving same model ID return 3+ duplicates instead of 1")
+    @pytest.mark.xfail(reason="Known bug: API does not deduplicate - different refs serving same model ID return 3+ duplicates instead of 1", strict=True)
     def test_different_modelrefs_same_model_id(self):
         """
         Test 7: Different modelRefs serving same model ID should deduplicate.
@@ -910,7 +912,7 @@ class TestModelsEndpoint:
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_reconcile()
 
-    @pytest.mark.xfail(reason="/v1/models returns all accessible models regardless of subscription; needs filtering by selected subscription")
+    @pytest.mark.xfail(reason="/v1/models returns all accessible models regardless of subscription; needs filtering by selected subscription", strict=True)
     def test_multiple_distinct_models_in_subscription(self):
         """
         Test 8: Multiple distinct models should return exactly 2 entries (1 per unique ID).
@@ -1063,7 +1065,7 @@ class TestModelsEndpoint:
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_reconcile()
 
-    @pytest.mark.xfail(reason="Known bug: API returns null instead of []")
+    @pytest.mark.xfail(reason="Known bug: API returns null instead of []", strict=True)
     def test_empty_model_list(self):
         """
         Test 9: Empty model list should return [] not null.
@@ -1151,8 +1153,9 @@ class TestModelsEndpoint:
             assert "object" in data, "Response missing 'object' field"
             assert data["object"] == "list", f"Expected object='list', got {data['object']}"
             assert "data" in data, "Response missing 'data' field"
+            assert data["data"] is not None, "'data' field must not be null"
 
-            models = data.get("data") or []
+            models = data["data"]
             assert isinstance(models, list), f"'data' must be an array, got {type(models).__name__}"
 
             # Validate each model matches schema
