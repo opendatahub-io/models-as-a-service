@@ -7,8 +7,7 @@
 #
 # Usage: ./install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
 
-set -e
-set -o pipefail
+set -euo pipefail
 
 for cmd in kubectl kustomize; do
     if ! command -v "$cmd" &>/dev/null; then
@@ -46,7 +45,7 @@ show_help() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         --grafana-namespace)
-            if [[ -z "$2" || "$2" == -* ]]; then
+            if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo "Error: --grafana-namespace requires a value"
                 exit 1
             fi
@@ -54,7 +53,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --grafana-label)
-            if [[ -z "$2" || "$2" == -* ]]; then
+            if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo "Error: --grafana-label requires a value (e.g. app=grafana)"
                 exit 1
             fi
@@ -73,7 +72,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/components/observability"
 
 # ==========================================
@@ -90,11 +89,17 @@ fi
 # ==========================================
 echo "🔍 Discovering Grafana instance(s)..."
 
-LIST_OPTS="-A --no-headers"
-[ -n "$GRAFANA_NAMESPACE" ] && LIST_OPTS="-n $GRAFANA_NAMESPACE --no-headers"
-[ -n "$GRAFANA_LABEL" ]    && LIST_OPTS="$LIST_OPTS -l $GRAFANA_LABEL"
+LIST_OPTS=(-A --no-headers)
+[ -n "${GRAFANA_NAMESPACE:-}" ] && LIST_OPTS=(-n "$GRAFANA_NAMESPACE" --no-headers)
+[ -n "${GRAFANA_LABEL:-}" ]     && LIST_OPTS+=(-l "$GRAFANA_LABEL")
 
-GRAFANA_LIST=$(kubectl get grafanas.grafana.integreatly.org $LIST_OPTS 2>/dev/null || true)
+GRAFANA_LIST=$(kubectl get grafanas.grafana.integreatly.org "${LIST_OPTS[@]}" 2>&1) || {
+    echo "⚠️  Failed to discover Grafana instances:" >&2
+    echo "   $GRAFANA_LIST" >&2
+    [ -z "${GRAFANA_NAMESPACE:-}" ] && \
+        echo "   (Tip: Use --grafana-namespace if cluster-wide list permission is not granted.)" >&2
+    exit 0
+}
 if [ -z "$GRAFANA_LIST" ]; then
     GRAFANA_COUNT=0
 else
@@ -144,7 +149,7 @@ echo "   ✅ One Grafana instance found: $GRAFANA_NAME in namespace $TARGET_NS"
 # ==========================================
 echo ""
 echo "📊 Deploying MaaS dashboard definitions to namespace $TARGET_NS..."
-kustomize build "$OBSERVABILITY_DIR/dashboards" | \
+kustomize build "$OBSERVABILITY_DIR/grafana" | \
     sed "s/namespace: maas-api/namespace: $TARGET_NS/g" | \
     kubectl apply -f -
 
