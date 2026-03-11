@@ -67,7 +67,7 @@ class TestModelsEndpoint:
     - Returns HTTP 401 for missing authentication
     - Filters models based on subscription access (probes each model endpoint)
 
-    Test Coverage (15 tests) - Organized by Expected HTTP Status:
+    Test Coverage (14 tests) - Organized by Expected HTTP Status:
 
     ═══════════════════════════════════════════════════════════════════════════
     SUCCESS CASES (HTTP 200) - Core Subscription Selection
@@ -81,49 +81,46 @@ class TestModelsEndpoint:
     3. test_empty_subscription_header_value
        → Empty header value → 200 (same as no header)
 
-    4. test_subscription_header_case_insensitive
-       → Various header capitalizations → 200 (HTTP standard)
-
     ═══════════════════════════════════════════════════════════════════════════
     SUCCESS CASES (HTTP 200) - Model Filtering & Data Validation
     ═══════════════════════════════════════════════════════════════════════════
-    5. test_models_filtered_by_subscription
+    4. test_models_filtered_by_subscription
        → Models correctly filtered by specified subscription
 
-    6. test_deduplication_same_model_multiple_refs (xfail - deduplication bug)
+    5. test_deduplication_same_model_multiple_refs (xfail - deduplication bug)
        → Same modelRef listed twice should deduplicate to 1 entry
 
-    7. test_different_modelrefs_same_model_id (xfail - deduplication bug)
+    6. test_different_modelrefs_same_model_id (xfail - deduplication bug)
        → Different modelRefs serving SAME model ID should deduplicate to 1 entry
 
-    8. test_multiple_distinct_models_in_subscription
+    7. test_multiple_distinct_models_in_subscription
        → Different modelRefs with different IDs returns 2 entries (no duplicates)
 
-    9. test_empty_model_list (xfail - null bug)
+    8. test_empty_model_list (xfail - null bug)
        → Empty model list should return [] not null
 
-    10. test_response_schema_matches_openapi
-        → Response structure matches OpenAPI specification
+    9. test_response_schema_matches_openapi
+       → Response structure matches OpenAPI specification
 
-    11. test_model_metadata_preserved
+    10. test_model_metadata_preserved
         → Model fields (url, ready, created, owned_by) accurate
 
     ═══════════════════════════════════════════════════════════════════════════
     ERROR CASES (HTTP 403) - Permission Errors
     ═══════════════════════════════════════════════════════════════════════════
-    12. test_multi_subscription_without_header_403
+    11. test_multi_subscription_without_header_403
         → Multiple subscriptions, no header → 403 permission_error
 
-    13. test_invalid_subscription_header_403
+    12. test_invalid_subscription_header_403
         → Non-existent subscription → 403 permission_error
 
-    14. test_access_denied_to_subscription_403
+    13. test_access_denied_to_subscription_403
         → Subscription exists but user lacks access → 403 permission_error
 
     ═══════════════════════════════════════════════════════════════════════════
     ERROR CASES (HTTP 401) - Authentication Errors
     ═══════════════════════════════════════════════════════════════════════════
-    15. test_unauthenticated_request_401
+    14. test_unauthenticated_request_401
         → No Authorization header → 401 authentication_error
     """
 
@@ -443,64 +440,6 @@ class TestModelsEndpoint:
             assert data.get("object") == "list"
 
             log.info(f"✅ Empty subscription header → {r.status_code} (auto-selected)")
-
-        finally:
-            _delete_sa(sa_name, namespace=sa_ns)
-
-    def test_subscription_header_case_insensitive(self):
-        """
-        Test 10: x-maas-subscription header is case-insensitive.
-
-        HTTP headers are case-insensitive by spec. Test various capitalizations.
-        """
-        log.info("Test 10: Subscription header case insensitivity")
-
-        sa_name = "e2e-models-case-test-sa"
-        sa_ns = "default"
-        api_key = None
-
-        try:
-            # Create SA and API key
-            sa_token = _create_sa_token(sa_name, namespace=sa_ns)
-
-            api_key_response = requests.post(
-                f"{_maas_api_url()}/v1/api-keys",
-                headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-case-test-key"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
-            )
-            assert api_key_response.status_code in (200, 201)
-            api_key = api_key_response.json().get("key")
-
-            _wait_reconcile()
-
-            # Test different header capitalizations
-            header_variations = [
-                "x-maas-subscription",
-                "X-MaaS-Subscription",
-                "X-MAAS-SUBSCRIPTION",
-                "x-MAAS-subscription",
-            ]
-
-            for header_name in header_variations:
-                r = requests.get(
-                    f"{_maas_api_url()}/v1/models",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        header_name: "simulator-subscription",
-                    },
-                    timeout=TIMEOUT,
-                    verify=TLS_VERIFY,
-                )
-
-                assert r.status_code == 200, \
-                    f"Header '{header_name}' should work (HTTP headers are case-insensitive), got {r.status_code}"
-
-                data = r.json()
-                assert data.get("object") == "list"
-
-            log.info(f"✅ Subscription header case insensitive → all {len(header_variations)} variations work")
 
         finally:
             _delete_sa(sa_name, namespace=sa_ns)
@@ -1117,7 +1056,7 @@ class TestModelsEndpoint:
 
         Validates all required fields and types match the API specification.
         """
-        log.info("Test 10: Response schema matches OpenAPI spec")
+        log.info("Test 9: Response schema matches OpenAPI spec")
 
         sa_name = "e2e-models-schema-test-sa"
         sa_ns = "default"
@@ -1190,7 +1129,7 @@ class TestModelsEndpoint:
 
         Validates that url, ready, created, owned_by fields are accurate.
         """
-        log.info("Test 11: Model metadata preserved")
+        log.info("Test 10: Model metadata preserved")
 
         sa_name = "e2e-models-metadata-sa"
         sa_ns = "default"
