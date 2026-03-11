@@ -25,7 +25,7 @@ spec:
   - name: output-image
     value: quay.io/opendatahub/maas-controller:odh-stable
   - name: dockerfile
-    value: maas-controller/Dockerfile
+    value: Dockerfile
   - name: path-context
     value: maas-controller
   pipelineRef:
