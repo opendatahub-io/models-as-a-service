@@ -581,17 +581,13 @@ setup_test_tokens() {
         fi
     fi
     
-    # 3. Fallback for regular user: use current user's token (same as admin for local testing)
-    # Local runs typically use the same htpasswd user for both roles
+    # 3. Fallback for regular user: always use a separate SA to ensure distinct users
+    # This is required for IDOR tests that verify users cannot access each other's keys
     if [[ -z "$TOKEN" ]]; then
-        TOKEN=$(oc whoami -t 2>/dev/null || true)
-        if [[ -n "$TOKEN" ]]; then
-            echo "✅ Regular user token for $current_user (same as admin for local testing)"
-        else
-            echo "⚠️  No htpasswd token - using SA token (model catalog may be empty)"
-            setup_test_user "tester-regular-user" "view"
-            TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
-        fi
+        echo "Creating separate SA token for regular user (required for IDOR tests)..."
+        setup_test_user "tester-regular-user" "view"
+        TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
+        echo "✅ Regular user token for tester-regular-user (SA-based)"
     fi
     
     echo "Token setup complete (main session unchanged: $(oc whoami))"
