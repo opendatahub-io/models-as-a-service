@@ -425,6 +425,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:        "postgresql://localhost/test",
 				Secure:                 false,
 				APIKeyExpirationPolicy: "optional",
+				APIKeyMaxExpirationDays: 30,
 			},
 		},
 		{
@@ -433,6 +434,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:        "postgresql://localhost/test",
 				TLS:                    TLSConfig{SelfSigned: true, MinVersion: TLSVersion(tls.VersionTLS12)},
 				APIKeyExpirationPolicy: "optional",
+				APIKeyMaxExpirationDays: 30,
 			},
 		},
 		{
@@ -441,6 +443,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:        "postgresql://localhost/test",
 				TLS:                    TLSConfig{Cert: "/cert.pem", Key: "/key.pem", MinVersion: TLSVersion(tls.VersionTLS12)},
 				APIKeyExpirationPolicy: "optional",
+				APIKeyMaxExpirationDays: 30,
 			},
 		},
 	}
