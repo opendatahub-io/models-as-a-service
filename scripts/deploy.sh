@@ -29,6 +29,7 @@
 #   MAAS_API_IMAGE            Custom MaaS API container image
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
 #   OPERATOR_TYPE             Operator type (rhoai/odh)
+#   SKIP_POLICY_ENGINE        Skip policy engine installation (true/false, default: false)
 #   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #
 # EXAMPLES:
@@ -899,6 +900,11 @@ patch_kuadrant_csv_for_gateway() {
 }
 
 install_policy_engine() {
+  if [[ "${SKIP_POLICY_ENGINE:-false}" == "true" ]]; then
+    log_info "Skipping policy engine installation (SKIP_POLICY_ENGINE=true)"
+    return 0
+  fi
+
   log_info "Installing policy engine: $POLICY_ENGINE"
 
   case "$POLICY_ENGINE" in
