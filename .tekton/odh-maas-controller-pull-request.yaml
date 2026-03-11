@@ -44,7 +44,7 @@ spec:
     - name: pathInRepo
       value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
-    serviceAccountName: build-pipeline-maas-controller
+    serviceAccountName: build-pipeline-odh-maas-controller
   workspaces:
   - name: git-auth
     secret:
