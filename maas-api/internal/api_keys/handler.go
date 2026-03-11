@@ -188,9 +188,13 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 		return
 	}
 
-	// Return plain array for backward compatibility with dashboard UI.
-	// The POST /search endpoint returns the full paginated wrapper.
-	c.JSON(http.StatusOK, result.Keys)
+	response := ListAPIKeysResponse{
+		Object:  "list",
+		Data:    result.Keys,
+		HasMore: result.HasMore,
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
