@@ -188,6 +188,7 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 		return
 	}
 
+	// Build response
 	response := ListAPIKeysResponse{
 		Object:  "list",
 		Data:    result.Keys,
