@@ -902,6 +902,7 @@ patch_kuadrant_csv_for_gateway() {
 install_policy_engine() {
   if [[ "${SKIP_POLICY_ENGINE:-false}" == "true" ]]; then
     log_info "Skipping policy engine installation (SKIP_POLICY_ENGINE=true)"
+    log_info "  Assumes operator, Kuadrant CR, and Gateway are already configured"
     return 0
   fi
 
