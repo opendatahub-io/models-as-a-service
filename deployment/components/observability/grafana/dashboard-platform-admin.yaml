@@ -54,8 +54,8 @@ spec:
           "id": 10,
           "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "max(limitador_up)", "instant": true, "refId": "A"}],
-          "description": "Shows if Limitador (rate limiting service) is running. Green = healthy, Red = down. Uses max() to deduplicate across scrape sources (PodMonitor + headless service auto-discovery).",
+          "targets": [{"expr": "count(kube_pod_status_phase{namespace=~\"$kuadrant_namespace\", pod=~\"limitador.*\", phase=\"Running\"}) OR vector(0)", "instant": true, "refId": "A"}],
+          "description": "Count of running Limitador pods (rate limiting service). Should be >= 1.",
           "title": "💚 Limitador",
           "type": "stat"
         },
@@ -175,25 +175,25 @@ spec:
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "Authentication/authorization evaluation latency (P50/P95/P99). Shows how long Authorino takes to evaluate each request. High latency here adds directly to overall request latency. Requires the authorino-server-metrics ServiceMonitor.",
+          "description": "Authentication/authorization evaluation latency (P50/P95/P99) for MaaS AuthPolicies. Shows how long Authorino takes to evaluate each request. High latency here adds directly to overall request latency. Requires the authorino-server-metrics ServiceMonitor.",
           "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.1}, {"color": "red", "value": 0.5}]}, "unit": "s", "noValue": "No Data\nDeploy authorino-server-metrics ServiceMonitor"}, "overrides": []},
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 23},
           "id": 52,
           "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P99", "refId": "C"}],
+          "targets": [{"expr": "histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=\"\"}[5m])) by (le))", "legendFormat": "P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=\"\"}[5m])) by (le))", "legendFormat": "P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=\"\"}[5m])) by (le))", "legendFormat": "P99", "refId": "C"}],
           "title": "🔐 Auth Evaluation Latency (P50/P95/P99)",
           "type": "timeseries"
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "Rate of auth evaluation outcomes from Authorino. Shows successful authentications vs denials over time. A rising denial rate may indicate misconfigured policies or an attack. Requires the authorino-server-metrics ServiceMonitor.",
+          "description": "Rate of auth evaluation outcomes from Authorino for MaaS AuthPolicies. Shows successful authentications vs denials over time. A rising denial rate may indicate misconfigured policies or an attack. Requires the authorino-server-metrics ServiceMonitor.",
           "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "ops", "noValue": "No Data\nDeploy authorino-server-metrics ServiceMonitor"}, "overrides": [{"matcher": {"id": "byRegexp", "options": ".*OK.*"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}, {"matcher": {"id": "byRegexp", "options": ".*(PERMISSION_DENIED|UNAUTHENTICATED).*"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]}]},
           "gridPos": {"h": 8, "w": 12, "x": 12, "y": 23},
           "id": 53,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (status) (rate(auth_server_authconfig_response_status[5m]))", "legendFormat": "{{status}}", "refId": "A"}],
+          "targets": [{"expr": "sum by (status) (rate(auth_server_authconfig_response_status{authconfig!=\"\"}[5m]))", "legendFormat": "{{status}}", "refId": "A"}],
           "title": "🔐 Auth Success / Deny Rate",
           "type": "timeseries"
         },
@@ -212,7 +212,7 @@ spec:
           "id": 1,
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(authorized_hits)", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "sum(authorized_hits{namespace=~\"$kuadrant_namespace\"})", "instant": true, "refId": "A"}],
           "description": "Total tokens consumed by successful API requests.",
           "title": "📊 Total Tokens",
           "type": "stat"
@@ -224,7 +224,7 @@ spec:
           "id": 38,
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(authorized_calls)", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "sum(authorized_calls{namespace=~\"$kuadrant_namespace\"})", "instant": true, "refId": "A"}],
           "description": "Total API requests that were successfully authorized.",
           "title": "📊 Total Requests",
           "type": "stat"
@@ -236,7 +236,7 @@ spec:
           "id": 3,
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(rate(authorized_hits[5m]))", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "sum(rate(authorized_hits{namespace=~\"$kuadrant_namespace\"}[5m]))", "instant": true, "refId": "A"}],
           "description": "Current token consumption rate (tokens per second) averaged over the last 5 minutes.",
           "title": "⚡ Token Rate",
           "type": "stat"
@@ -248,7 +248,7 @@ spec:
           "id": 39,
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(rate(authorized_calls[5m]))", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "sum(rate(authorized_calls{namespace=~\"$kuadrant_namespace\"}[5m]))", "instant": true, "refId": "A"}],
           "description": "Current request rate (requests per second) averaged over the last 5 minutes.",
           "title": "⚡ Request Rate",
           "type": "stat"
@@ -272,8 +272,8 @@ spec:
           "id": 14,
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "count(count by (user) (authorized_calls))", "instant": true, "refId": "A"}],
-          "description": "Unique users with at least one successful request (aligns with maas_tier_active_users concept; platform total).",
+          "targets": [{"expr": "count(sum by (user) (increase(authorized_calls{namespace=~\"$kuadrant_namespace\", user!=\"\"}[1h])) > 0)", "instant": true, "refId": "A"}],
+          "description": "Unique users with at least one successful request (platform total).",
           "title": "👥 Active Users",
           "type": "stat"
         },
@@ -285,7 +285,7 @@ spec:
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket[15m])) by (le))", "instant": true, "refId": "A"}],
-          "description": "Median (50th percentile) response latency measured at the gateway over a 15m window. 50% of requests complete faster than this value.",
+          "description": "Median (50th percentile) response latency measured at the MaaS gateway over a 15m window.",
           "title": "⏱️ P50 Response Latency",
           "type": "stat"
         },
@@ -296,8 +296,8 @@ spec:
           "id": 40,
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "(sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)", "instant": true, "refId": "A"}],
-          "description": "Percentage of gateway requests rejected by rate limiting (HTTP 429). High values indicate users are exceeding their tier quotas — consider adjusting rate limits or upgrading user tiers. This is a capacity planning signal, not a system health issue.",
+          "targets": [{"expr": "(sum(limited_calls{namespace=~\"$kuadrant_namespace\"}) / (sum(authorized_calls{namespace=~\"$kuadrant_namespace\"}) + sum(limited_calls{namespace=~\"$kuadrant_namespace\"}))) OR vector(0)", "instant": true, "refId": "A"}],
+          "description": "Percentage of gateway requests rejected by rate limiting (HTTP 429). High values indicate users are exceeding their subscription quotas — consider adjusting rate limits or upgrading subscriptions. This is a capacity planning signal, not a system health issue.",
           "title": "🚦 Rate Limit Ratio",
           "type": "stat"
         },
@@ -316,7 +316,7 @@ spec:
           "id": 5,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (model) (rate(authorized_hits{model!=\"\"}[5m]))", "legendFormat": "{{model}}", "refId": "A"}],
+          "targets": [{"expr": "sum by (model) (rate(authorized_hits{namespace=~\"$kuadrant_namespace\", model!=\"\"}[5m]))", "legendFormat": "{{model}}", "refId": "A"}],
           "description": "Token consumption rate (tokens/s) broken down by model. Shows which models consume the most tokens.",
           "title": "📈 Token Rate by Model",
           "type": "timeseries"
@@ -328,8 +328,8 @@ spec:
           "id": 6,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(rate(istio_requests_total{response_code=~\"4..\", response_code!=\"429\"}[5m])) OR vector(0)", "legendFormat": "4xx Errors (excl. 429)", "refId": "A"}, {"expr": "sum(rate(istio_requests_total{response_code=~\"5..\"}[5m])) OR vector(0)", "legendFormat": "5xx Errors", "refId": "B"}, {"expr": "sum(rate(limited_calls[5m])) OR vector(0)", "legendFormat": "429 Rate Limited", "refId": "C"}],
-          "description": "Error rates by type. 4xx = client errors excluding 429 (401 auth, 400 bad request), 5xx = server errors, Rate Limited = 429 quota exceeded (from Limitador).",
+          "targets": [{"expr": "sum(rate(istio_requests_total{response_code=~\"4..\", response_code!=\"429\"}[5m])) OR vector(0)", "legendFormat": "4xx Errors (excl. 429)", "refId": "A"}, {"expr": "sum(rate(istio_requests_total{response_code=~\"5..\"}[5m])) OR vector(0)", "legendFormat": "5xx Errors", "refId": "B"}, {"expr": "sum(rate(limited_calls{namespace=~\"$kuadrant_namespace\"}[5m])) OR vector(0)", "legendFormat": "429 Rate Limited", "refId": "C"}],
+          "description": "Error rates by type. 4xx = client errors excluding 429, 5xx = server errors, Rate Limited = 429 quota exceeded (from Limitador).",
           "title": "❌ Overall Error Rate",
           "type": "timeseries"
         },
@@ -340,9 +340,9 @@ spec:
           "id": 7,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (tier) (rate(authorized_hits[5m]))", "legendFormat": "{{tier}}", "refId": "A"}],
-          "description": "Token consumption rate (tokens/s) by tier (aligns with Token Consumption by Tier; metric: authorized_hits).",
-          "title": "📊 Token Consumption by Tier",
+          "targets": [{"expr": "sum by (subscription) (rate(authorized_hits{namespace=~\"$kuadrant_namespace\", subscription!=\"\"}[5m]))", "legendFormat": "{{subscription}}", "refId": "A"}],
+          "description": "Token consumption rate (tokens/s) by subscription.",
+          "title": "📊 Token Consumption by Subscription",
           "type": "timeseries"
         },
         {
@@ -352,9 +352,9 @@ spec:
           "id": 19,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (tier) (rate(authorized_calls[5m]))", "legendFormat": "{{tier}}", "refId": "A"}],
-          "description": "Request rate (req/s) by tier (aligns with Request Volume by Tier; metric: authorized_calls).",
-          "title": "📈 Request Volume by Tier",
+          "targets": [{"expr": "sum by (subscription) (rate(authorized_calls{namespace=~\"$kuadrant_namespace\", subscription!=\"\"}[5m]))", "legendFormat": "{{subscription}}", "refId": "A"}],
+          "description": "Request rate (req/s) by subscription.",
+          "title": "📈 Request Volume by Subscription",
           "type": "timeseries"
         },
         {
@@ -376,9 +376,9 @@ spec:
           "id": 20,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (tier) (rate(limited_calls[5m]))", "legendFormat": "{{tier}}", "refId": "A"}],
-          "description": "Rate limit violations (HTTP 429) by tier (aligns with Rate Limit Violations; metric: limited_calls).",
-          "title": "🚫 Rate Limit Violations by Tier",
+          "targets": [{"expr": "sum by (subscription) (rate(limited_calls{namespace=~\"$kuadrant_namespace\", subscription!=\"\"}[5m]))", "legendFormat": "{{subscription}}", "refId": "A"}],
+          "description": "Rate limit violations (HTTP 429) by subscription.",
+          "title": "🚫 Rate Limit Violations by Subscription",
           "type": "timeseries"
         },
         {
@@ -396,7 +396,7 @@ spec:
           "id": 15,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(rate(limited_calls[5m]))", "legendFormat": "Rate Limited", "refId": "A"}],
+          "targets": [{"expr": "sum(rate(limited_calls{namespace=~\"$kuadrant_namespace\"}[5m]))", "legendFormat": "Rate Limited", "refId": "A"}],
           "description": "Rate of requests that exceeded quota and received HTTP 429 (Too Many Requests). High values indicate users are hitting their rate limits.",
           "title": "🚫 Rate Limited Requests",
           "type": "timeseries"
@@ -579,7 +579,7 @@ spec:
           "id": 34,
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "📊 Hits"}]},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "topk(10, sum by (user) (authorized_hits{user!=\"\"}))", "format": "table", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "topk(10, sum by (user) (authorized_hits{namespace=~\"$kuadrant_namespace\", user!=\"\"}))", "format": "table", "instant": true, "refId": "A"}],
           "description": "Top 10 users ranked by total tokens consumed. Helps identify your highest-consuming users.",
           "title": "🏆 Top 10 Users by Token Usage",
           "type": "table"
@@ -591,8 +591,8 @@ spec:
           "id": 35,
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "📊 Declined Requests"}]},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "topk(10, sum by (user) (limited_calls{user!=\"\"}))", "format": "table", "instant": true, "refId": "A"}],
-          "description": "Top 10 users ranked by rate-limited requests (HTTP 429). High counts may indicate users need a higher tier or are experiencing quota issues.",
+          "targets": [{"expr": "topk(10, sum by (user) (limited_calls{namespace=~\"$kuadrant_namespace\", user!=\"\"}))", "format": "table", "instant": true, "refId": "A"}],
+          "description": "Top 10 users ranked by rate-limited requests (HTTP 429). High counts may indicate users need a higher subscription or are experiencing quota issues.",
           "title": "🏆 Top 10 Users by Declined Requests",
           "type": "table"
         },
@@ -611,21 +611,21 @@ spec:
           "id": 8,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (user) (rate(authorized_hits[5m]))", "legendFormat": "{{user}}", "refId": "A"}],
+          "targets": [{"expr": "sum by (user) (rate(authorized_hits{namespace=~\"$kuadrant_namespace\"}[5m]))", "legendFormat": "{{user}}", "refId": "A"}],
           "description": "Token consumption rate (tokens/s) broken down by individual user. Shows usage patterns over time.",
           "title": "👥 Token Rate by User",
           "type": "timeseries"
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": [{"matcher": {"id": "byName", "options": "user"}, "properties": [{"id": "displayName", "value": "👤 User"}]}, {"matcher": {"id": "byName", "options": "model"}, "properties": [{"id": "displayName", "value": "🤖 Model"}]}, {"matcher": {"id": "byName", "options": "tier"}, "properties": [{"id": "displayName", "value": "🏷️ Tier"}]}, {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "📊 Requests"}]}]},
+          "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": [{"matcher": {"id": "byName", "options": "user"}, "properties": [{"id": "displayName", "value": "👤 User"}]}, {"matcher": {"id": "byName", "options": "model"}, "properties": [{"id": "displayName", "value": "🤖 Model"}]}, {"matcher": {"id": "byName", "options": "subscription"}, "properties": [{"id": "displayName", "value": "🏷️ Subscription"}]}, {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "📊 Requests"}]}]},
           "gridPos": {"h": 8, "w": 24, "x": 0, "y": 124},
           "id": 9,
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": true}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "📊 Requests"}]},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (user, tier) (authorized_calls{user!=\"\"})", "format": "table", "instant": true, "refId": "A"}],
-          "description": "Request count by user and tier. Excludes anonymous/internal requests (no user label). The model label is not available on authorized_calls; use authorized_hits for per-model token breakdown.",
-          "title": "📋 Request Volume by User & Tier",
+          "targets": [{"expr": "sum by (user, subscription) (authorized_calls{namespace=~\"$kuadrant_namespace\", user!=\"\"})", "format": "table", "instant": true, "refId": "A"}],
+          "description": "Request count by user and subscription. Excludes anonymous/internal requests (no user label). The model label is not available on authorized_calls; use authorized_hits for per-model token breakdown.",
+          "title": "📋 Request Volume by User & Subscription",
           "type": "table"
         },
         {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 132}, "id": 107, "panels": [], "title": "📦 Resource Allocation", "type": "row"},
@@ -636,7 +636,7 @@ spec:
           "id": 29,
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Memory Requests"}]},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "max by (pod) (kube_pod_container_resource_requests{namespace=~\"$llm_namespace\", resource=\"cpu\"})", "format": "table", "instant": true, "refId": "A"}, {"expr": "max by (pod) (kube_pod_container_resource_limits{namespace=~\"$llm_namespace\", resource=\"cpu\"})", "format": "table", "instant": true, "refId": "B"}, {"expr": "max by (pod) (kube_pod_container_resource_requests{namespace=~\"$llm_namespace\", resource=\"memory\"})", "format": "table", "instant": true, "refId": "C"}, {"expr": "max by (pod) (kube_pod_container_resource_limits{namespace=~\"$llm_namespace\", resource=\"memory\"})", "format": "table", "instant": true, "refId": "D"}, {"expr": "max by (pod) (kube_pod_container_resource_requests{namespace=~\"$llm_namespace\", resource=~\"nvidia.com/gpu|amd.com/gpu\"})", "format": "table", "instant": true, "refId": "E"}],
+          "targets": [{"expr": "sum by (pod) (kube_pod_container_resource_requests{namespace=~\"$llm_namespace\", resource=\"cpu\"})", "format": "table", "instant": true, "refId": "A"}, {"expr": "sum by (pod) (kube_pod_container_resource_limits{namespace=~\"$llm_namespace\", resource=\"cpu\"})", "format": "table", "instant": true, "refId": "B"}, {"expr": "sum by (pod) (kube_pod_container_resource_requests{namespace=~\"$llm_namespace\", resource=\"memory\"})", "format": "table", "instant": true, "refId": "C"}, {"expr": "sum by (pod) (kube_pod_container_resource_limits{namespace=~\"$llm_namespace\", resource=\"memory\"})", "format": "table", "instant": true, "refId": "D"}, {"expr": "sum by (pod) (kube_pod_container_resource_requests{namespace=~\"$llm_namespace\", resource=~\"nvidia.com/gpu|amd.com/gpu\"})", "format": "table", "instant": true, "refId": "E"}],
           "title": "📦 Resource Allocation per Model",
           "description": "Resource requests/limits for LLM model pods. GPU column shows requested GPUs (nvidia.com/gpu or amd.com/gpu). For GPU utilization metrics, DCGM Exporter must be installed. See 'GPU Cache Usage' panel above for vLLM's KV-cache utilization.",
           "type": "table",
@@ -651,21 +651,21 @@ spec:
           "id": 30,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (user) (rate(authorized_hits[5m]))", "legendFormat": "{{user}} (tokens/s)", "refId": "A"}, {"expr": "sum by (user) (rate(limited_calls[5m]))", "legendFormat": "{{user}} (429 Rate Limited)", "refId": "B"}],
+          "targets": [{"expr": "sum by (user) (rate(authorized_hits{namespace=~\"$kuadrant_namespace\"}[5m]))", "legendFormat": "{{user}} (tokens/s)", "refId": "A"}, {"expr": "sum by (user) (rate(limited_calls{namespace=~\"$kuadrant_namespace\"}[5m]))", "legendFormat": "{{user}} (429 Rate Limited)", "refId": "B"}],
           "title": "👤 Token Usage & Rate Limits per User",
           "type": "timeseries"
         },
-        {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 150}, "id": 108, "panels": [], "title": "📊 Per-Tier & Per-Model Breakdown", "type": "row"},
+        {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 150}, "id": 108, "panels": [], "title": "📊 Per-Subscription & Per-Model Breakdown", "type": "row"},
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "P50 / P95 / P99 latency per access tier.\n\nThe tier label is added via Istio Telemetry reading the X-MaaS-Tier header injected by AuthPolicy.\nPer-user latency is not on the histogram to keep cardinality bounded.",
+          "description": "P50 / P95 / P99 gateway latency.\n\nPer-user and per-subscription latency is not on the histogram to keep cardinality bounded.",
           "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "ms"}, "overrides": []},
           "gridPos": {"h": 8, "w": 8, "x": 0, "y": 151},
           "id": 31,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "histogram_quantile(0.5, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=\"\",tier!=\"unknown\"}[5m])))", "legendFormat": "{{tier}} P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=\"\",tier!=\"unknown\"}[5m])))", "legendFormat": "{{tier}} P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=\"\",tier!=\"unknown\"}[5m])))", "legendFormat": "{{tier}} P99", "refId": "C"}],
-          "title": "⏱️ Latency per Tier (P50 / P95 / P99)",
+          "targets": [{"expr": "histogram_quantile(0.5, sum by (le) (rate(istio_request_duration_milliseconds_bucket[5m])))", "legendFormat": "P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket[5m])))", "legendFormat": "P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum by (le) (rate(istio_request_duration_milliseconds_bucket[5m])))", "legendFormat": "P99", "refId": "C"}],
+          "title": "⏱️ Gateway Latency (P50 / P95 / P99)",
           "type": "timeseries"
         },
         {
@@ -682,14 +682,14 @@ spec:
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "Token consumption per tier over time (stacked).\n\nShows absolute token volume per tier as stacked bars. The height of each bar is the total tokens consumed in that interval; the stacking shows the tier proportion.\n\nFor per-user billing, use the AI Engineer dashboard or query Prometheus:\n  sum by (user) (increase(authorized_hits[24h]))",
+          "description": "Token consumption per subscription over time (stacked).\n\nShows absolute token volume per subscription as stacked bars. The height of each bar is the total tokens consumed in that interval; the stacking shows the subscription proportion.\n\nFor per-user billing, use the AI Engineer dashboard or query Prometheus:\n  sum by (user) (increase(authorized_hits[24h]))",
           "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "tokens", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "bars", "fillOpacity": 80, "gradientMode": "hue", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "normal"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
           "gridPos": {"h": 8, "w": 8, "x": 16, "y": 151},
           "id": 33,
           "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (tier) (increase(authorized_hits{tier!=\"\"}[5m]))", "legendFormat": "{{tier}}", "refId": "A"}],
-          "title": "📊 Token Volume by Tier",
+          "targets": [{"expr": "sum by (subscription) (increase(authorized_hits{namespace=~\"$kuadrant_namespace\", subscription!=\"\"}[5m]))", "legendFormat": "{{subscription}}", "refId": "A"}],
+          "title": "📊 Token Volume by Subscription",
           "type": "timeseries"
         }
       ],
@@ -702,7 +702,7 @@ spec:
           {"current": {"selected": false, "text": "maas-api", "value": "maas-api"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)", "description": "Auto-detected namespace where MaaS API is deployed", "hide": 0, "includeAll": false, "label": "MaaS Namespace", "multi": false, "name": "maas_namespace", "options": [], "query": {"qryType": 1, "query": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"},
           {"current": {"selected": false, "text": "kuadrant-system", "value": "kuadrant-system"}, "description": "Namespace where Kuadrant (Authorino, Limitador) is deployed", "hide": 0, "label": "Kuadrant Namespace", "name": "kuadrant_namespace", "options": [{"selected": true, "text": "kuadrant-system", "value": "kuadrant-system"}], "query": "kuadrant-system", "skipUrlSync": false, "type": "textbox"},
           {"current": {"selected": false, "text": "openshift-ingress", "value": "openshift-ingress"}, "description": "Namespace where the Istio/Gateway pods run", "hide": 0, "label": "Gateway Namespace", "name": "gateway_namespace", "options": [{"selected": true, "text": "openshift-ingress", "value": "openshift-ingress"}], "query": "openshift-ingress", "skipUrlSync": false, "type": "textbox"},
-          {"current": {"selected": false, "text": "llm", "value": "llm"}, "description": "Namespace where LLM model pods are deployed", "hide": 0, "label": "LLM Namespace", "name": "llm_namespace", "options": [{"selected": true, "text": "llm", "value": "llm"}], "query": "llm", "skipUrlSync": false, "type": "textbox"},
+          {"current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(vllm:num_requests_running, namespace)", "description": "Auto-detected namespace(s) where LLM model pods are deployed", "hide": 0, "includeAll": true, "allValue": ".*", "label": "LLM Namespace", "multi": true, "name": "llm_namespace", "options": [], "query": {"qryType": 1, "query": "label_values(vllm:num_requests_running, namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"},
           {"current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(vllm:num_requests_running, model_name)", "description": "Filter by model", "hide": 0, "includeAll": true, "allValue": ".*", "label": "Model", "multi": true, "name": "model", "options": [], "query": {"qryType": 1, "query": "label_values(vllm:num_requests_running, model_name)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"}
         ]
       },

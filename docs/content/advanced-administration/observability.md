@@ -28,7 +28,7 @@ The observability stack consists of:
 
 | Component | Exposes Metrics? | Scraped into Prometheus? | In Dashboards? |
 |-----------|-----------------|--------------------------|----------------|
-| **Limitador** | Yes (`/metrics`) | Yes (Kuadrant PodMonitor or MaaS ServiceMonitor) | Yes — 16 panels use `authorized_hits`, `authorized_calls`, `limited_calls`, `limitador_up` |
+| **Limitador** | Yes (`/metrics`) | Yes (Kuadrant PodMonitor or MaaS ServiceMonitor) | Yes — 16 panels use `authorized_hits`, `authorized_calls`, `limited_calls`; health check uses `kube_pod_status_phase` |
 | **Authorino** | Yes (`/metrics` + `/server-metrics`) | Yes — `/metrics` via Kuadrant operator; `/server-metrics` via MaaS `authorino-server-metrics` ServiceMonitor | Yes — Auth Evaluation Latency (P50/P95/P99), Auth Success/Deny Rate, plus pod-up check |
 | **Istio Gateway** | Yes (Envoy `/stats/prometheus`) | Yes (`istio-gateway-metrics` ServiceMonitor) | Yes — latency histograms, request counts, error rates |
 | **maas-api** | **No** — returns 404 on `/metrics` | No | Only pod-up check via `kube_pod_status_phase` |
@@ -50,9 +50,8 @@ The observability stack is defined in `deployment/base/observability/`. It inclu
 
     ./scripts/observability/install-observability.sh [--namespace NAMESPACE]
 
-When using the full deployment script, this is applied automatically:
-
-    ./scripts/deploy.sh
+!!! info
+    Observability is **not** included in `deploy.sh` — it must be installed separately using `install-observability.sh`.
 
 !!! note "Prerequisites"
     - **Tools**: `kubectl`, `kustomize`, `jq`, `yq` must be installed
@@ -115,6 +114,9 @@ Authorino exposes metrics on two separate endpoints:
 
 !!! note "MaaS ServiceMonitor"
     The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime stats). MaaS deploys an additional `authorino-server-metrics` ServiceMonitor to scrape `/server-metrics` for auth evaluation metrics. This is deployed automatically by `install-observability.sh`.
+
+!!! note "Authconfig label values are hashed"
+    In Kuadrant deployments, the `authconfig` label on Authorino metrics contains SHA-256 hashes (e.g. `18e32965...`) rather than human-readable AuthPolicy names. Kuadrant creates AuthConfig CRs in `kuadrant-system` with hashed names derived from the policy and route configuration. Since all AuthConfig CRs in a MaaS deployment are Kuadrant-managed MaaS auth policies, dashboard panels use `authconfig!=""` to include all evaluations. This is safe because Authorino is deployed exclusively for MaaS via Kuadrant.
 
 !!! note "Lazily registered metrics"
     Authorino upstream [documents](https://github.com/Kuadrant/authorino/blob/main/docs/user-guides/observability.md) additional per-evaluator metrics (`auth_server_evaluator_total`, `auth_server_evaluator_duration_seconds`, `auth_server_evaluator_cancelled`, `auth_server_evaluator_denied`). These are **lazily registered** and only appear when specific evaluator types (e.g. OPA, HTTP authorization) are triggered. The MaaS AuthPolicy uses `kubernetesTokenReview`, which does not emit these metrics. They are not listed in the table above because they are not present in a standard MaaS deployment.
@@ -293,7 +295,7 @@ Provides a comprehensive view of system health, usage across all users, and reso
     | `$maas_namespace` | auto-detected | MaaS API namespace (auto-detected from `kube_pod_info{pod=~"maas-api.*"}`) |
     | `$kuadrant_namespace` | `kuadrant-system` | Kuadrant components namespace |
     | `$gateway_namespace` | `openshift-ingress` | Istio/Gateway namespace |
-    | `$llm_namespace` | `llm` | LLM model pods namespace |
+    | `$llm_namespace` | `All` (auto-detected) | LLM model pods namespace(s) (auto-detected from `vllm:num_requests_running`) |
     | `$model` | `All` | Filter by model name |
 
     To customize for your environment, change the variable values in Grafana's dashboard settings (gear icon → Variables).
@@ -306,10 +308,15 @@ Personal usage view for individual developers:
 |---------|---------|
 | **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Inference Success Rate |
 | **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
+| **Hourly Usage Patterns** | Hourly Token Usage by Model |
 | **Detailed Analysis** | Token Volume by Model, Rate Limited by Subscription |
+| **Usage Summary** | My Usage Summary by Model & Subscription |
 
 !!! note "Inference Success Rate"
     Both dashboards use `rate()` on vLLM counters (`request_success_total`, `e2e_request_latency_seconds_count`) instead of raw counter values. This handles pod restarts correctly (counters reset independently and raw division produces incorrect results). When no traffic is present, `rate()/rate()` produces `NaN`; the dashboards use `((ratio) >= 0) OR vector(1)` to filter `NaN` and default to 100% (healthy) when no traffic exists.
+
+!!! info "Inference Success Rate is platform-wide"
+    The Inference Success Rate panel in the AI Engineer dashboard shows the **platform-wide** model success rate, not per-user. This is because vLLM metrics do not carry user labels — they are emitted by the model backend and measure all inference requests regardless of caller. All other panels in the AI Engineer dashboard are filtered by the selected user.
 
 !!! info "Tokens vs Requests"
     Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
@@ -333,12 +340,12 @@ Monitoring is installed by `install-observability.sh`. Dashboards are installed 
 
     ./scripts/observability/install-grafana-dashboards.sh
 
-**Behavior:** Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning (and, for multiple, lists them) and exits without error. Use flags to target a specific instance:
+Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning and exits without error. Use flags to target a specific instance:
 
     ./scripts/observability/install-grafana-dashboards.sh --grafana-namespace maas-api
     ./scripts/observability/install-grafana-dashboards.sh --grafana-label app=grafana
 
-To deploy only the dashboard manifests manually (same namespace as your Grafana):
+To deploy only the dashboard manifests manually:
 
     kustomize build deployment/components/observability/grafana | \
       sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
@@ -346,7 +353,7 @@ To deploy only the dashboard manifests manually (same namespace as your Grafana)
 
 ### Sample Dashboard JSON
 
-For manual import, a sample dashboard JSON file is available:
+For manual Grafana import, a sample dashboard JSON file is available:
 
 - [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
