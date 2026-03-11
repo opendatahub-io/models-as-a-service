@@ -16,6 +16,8 @@ This directory contains `LLMInferenceService`s for deploying sample models. Plea
 
 ### Basic Deployment
 
+Create the 'llm' namespace where the model(s) would be deployed, by default.
+
 Deploy any model using:
 
 ```bash
