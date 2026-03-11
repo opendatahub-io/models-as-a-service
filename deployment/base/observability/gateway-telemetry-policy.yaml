@@ -8,7 +8,6 @@ spec:
     default:
       labels:
         model: responseBodyJSON("/model")
-        tier: auth.identity.tier
         user: auth.identity.userid
         # Subscription metadata for usage attribution and billing
         subscription: auth.identity.selected_subscription

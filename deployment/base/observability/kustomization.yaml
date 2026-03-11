@@ -14,7 +14,6 @@ resources:
 - istio-gateway-telemetry.yaml
 - istio-gateway-service.yaml
 - istio-gateway-servicemonitor.yaml
-
 labels:
 - pairs:
     app.kubernetes.io/part-of: maas-observability
