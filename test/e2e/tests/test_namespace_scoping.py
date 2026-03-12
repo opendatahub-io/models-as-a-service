@@ -400,7 +400,7 @@ class TestCrossNamespaceAuthPolicy:
             _delete_cr("MaaSAuthPolicy", policy1_name, policy_namespace)
             time.sleep(RECONCILE_WAIT)
 
-            # Verify AuthPolicy still exists (bug fix: it should NOT be deleted)
+            # Verify AuthPolicy still exists (it should be rebuilt)
             auth_policy_after = _get_cr("AuthPolicy", auth_policy_name, MODEL_NAMESPACE)
             assert auth_policy_after is not None, \
                 "AuthPolicy should still exist after deleting first policy (other policies reference it)"
@@ -612,7 +612,7 @@ class TestCrossNamespaceSubscription:
             _delete_cr("MaaSSubscription", sub1_name, policy_namespace)
             time.sleep(RECONCILE_WAIT)
 
-            # Verify TRLP still exists (bug fix: it should NOT be deleted)
+            # Verify TRLP still exists (it should be rebuilt)
             trlp_after = _get_cr("TokenRateLimitPolicy", trlp_name, MODEL_NAMESPACE)
             assert trlp_after is not None, \
                 "TokenRateLimitPolicy should still exist after deleting first subscription"

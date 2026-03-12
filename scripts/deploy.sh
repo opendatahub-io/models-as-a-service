@@ -571,14 +571,14 @@ deploy_via_kustomize() {
   deploy_postgresql
 
   log_info "Applying kustomize manifests..."
-  kubectl apply --server-side=true -f <(kustomize build "$overlay")
+  kubectl apply --server-side=true --force-conflicts -f <(kustomize build "$overlay")
 
   # Apply gateway policies separately so they stay in openshift-ingress (overlay
   # namespace would otherwise overwrite them to $NAMESPACE)
   local policies_dir="$project_root/deployment/base/maas-controller/policies"
   if [[ -d "$policies_dir" ]]; then
     log_info "Applying gateway policies (openshift-ingress)..."
-    kubectl apply --server-side=true -f <(kustomize build "$policies_dir")
+    kubectl apply --server-side=true --force-conflicts -f <(kustomize build "$policies_dir")
   fi
 
   # Configure TLS backend (if enabled)
