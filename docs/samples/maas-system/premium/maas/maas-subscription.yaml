@@ -3,6 +3,9 @@ kind: MaaSSubscription
 metadata:
   name: premium-simulator-subscription
   namespace: models-as-a-service
+  annotations:
+    openshift.io/display-name: "Premium Simulator Subscription"
+    openshift.io/description: "Premium-tier subscription with 1000 tokens/min rate limit"
 spec:
   owner:
     groups:
