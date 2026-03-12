@@ -213,28 +213,56 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			return
 		}
 
-		// Filter models by subscription(s) and deduplicate
-		// Deduplication key is (model_id, subscription_name) - same model via different subscriptions
-		// are separate entries, but same model via same subscription (e.g., listed twice) is one entry.
-		seen := make(map[string]bool) // key: "model_id|subscription_name"
+		// Filter models by subscription(s) and aggregate subscriptions
+		// Deduplication key is (model ID, URL) - models with the same ID and URL are
+		// the same instance and should have their subscriptions aggregated into an array.
+		type modelKey struct {
+			id  string
+			url string
+		}
+		modelsByKey := make(map[modelKey]*models.Model)
 
 		for _, sub := range subscriptionsToUse {
 			h.logger.Debug("Filtering models by subscription", "subscription", sub.Name, "modelCount", len(list))
 			filteredModels := h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, sub.Name)
 
 			for _, model := range filteredModels {
-				key := model.ID + "|" + sub.Name
-				if !seen[key] {
-					// Attach subscription info to the model
-					model.Subscription = &models.SubscriptionInfo{
-						Name:        sub.Name,
-						DisplayName: sub.DisplayName,
-						Description: sub.Description,
+				subInfo := models.SubscriptionInfo{
+					Name:        sub.Name,
+					DisplayName: sub.DisplayName,
+					Description: sub.Description,
+				}
+
+				// Create key from model ID and URL
+				urlStr := ""
+				if model.URL != nil {
+					urlStr = model.URL.String()
+				}
+				key := modelKey{id: model.ID, url: urlStr}
+
+				if existingModel, exists := modelsByKey[key]; exists {
+					// Model already exists - append subscription if not already present
+					alreadyHasSubscription := false
+					for _, existingSub := range existingModel.Subscriptions {
+						if existingSub.Name == subInfo.Name {
+							alreadyHasSubscription = true
+							break
+						}
 					}
-					modelList = append(modelList, model)
-					seen[key] = true
+					if !alreadyHasSubscription {
+						existingModel.Subscriptions = append(existingModel.Subscriptions, subInfo)
+					}
+				} else {
+					// New model - create entry with subscriptions array
+					model.Subscriptions = []models.SubscriptionInfo{subInfo}
+					modelsByKey[key] = &model
 				}
 			}
+		}
+
+		// Convert map to slice
+		for _, model := range modelsByKey {
+			modelList = append(modelList, *model)
 		}
 
 		h.logger.Debug("Access validation complete", "listed", len(list), "accessible", len(modelList), "subscriptions", len(subscriptionsToUse))
