@@ -22,7 +22,7 @@ If MaaS is already deployed and you want to run specific tests:
 
 ```bash
 ./test/e2e/smoke.sh          # API endpoints, model inference
-./test/e2e/observability.sh   # Metrics, Prometheus scraping, labels
+./test/e2e/observability_tests.sh   # Metrics, Prometheus scraping, labels
 ```
 
 ## Running Tests Locally

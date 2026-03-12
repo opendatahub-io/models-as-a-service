@@ -492,7 +492,7 @@ run_observability_tests() {
     echo "-- Observability Testing --"
     
     if [ "$SKIP_OBSERVABILITY" = false ]; then
-        if ! (cd "$PROJECT_ROOT" && bash test/e2e/observability.sh); then
+        if ! (cd "$PROJECT_ROOT" && bash test/e2e/observability_tests.sh); then
             echo "❌ ERROR: Observability tests failed"
             exit 1
         else
