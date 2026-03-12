@@ -5,6 +5,9 @@ kind: MaaSModelRef
 metadata:
   name: premium-simulated-simulated-premium
   namespace: llm
+  annotations:
+    openshift.io/display-name: "Premium Simulator"
+    openshift.io/description: "A simulated model for premium-tier testing"
 spec:
   modelRef:
     kind: LLMInferenceService
