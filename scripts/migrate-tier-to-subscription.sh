@@ -85,6 +85,18 @@ yaml_quote() {
     echo "\"$value\""
 }
 
+# Validate that an option has a value
+validate_option_value() {
+    local option="$1"
+    local value="${2:-}"
+
+    if [[ -z "$value" ]] || [[ "$value" == --* ]]; then
+        log_error "Option $option requires a value"
+        usage
+        exit 1
+    fi
+}
+
 usage() {
     cat <<EOF
 Usage: $0 [OPTIONS]
@@ -136,38 +148,47 @@ EOF
 while [[ $# -gt 0 ]]; do
     case $1 in
         --tier)
+            validate_option_value "$1" "${2:-}"
             TIER="$2"
             shift 2
             ;;
         --models)
+            validate_option_value "$1" "${2:-}"
             MODELS="$2"
             shift 2
             ;;
         --groups)
+            validate_option_value "$1" "${2:-}"
             AUTH_GROUPS="$2"
             shift 2
             ;;
         --rate-limit)
+            validate_option_value "$1" "${2:-}"
             RATE_LIMIT="$2"
             shift 2
             ;;
         --window)
+            validate_option_value "$1" "${2:-}"
             WINDOW="$2"
             shift 2
             ;;
         --output)
+            validate_option_value "$1" "${2:-}"
             OUTPUT_DIR="$2"
             shift 2
             ;;
         --subscription-ns)
+            validate_option_value "$1" "${2:-}"
             SUBSCRIPTION_NAMESPACE="$2"
             shift 2
             ;;
         --model-ns)
+            validate_option_value "$1" "${2:-}"
             MODEL_NAMESPACE="$2"
             shift 2
             ;;
         --maas-ns)
+            validate_option_value "$1" "${2:-}"
             MAAS_NAMESPACE="$2"
             shift 2
             ;;
@@ -261,10 +282,21 @@ if [[ -z "$AUTH_GROUPS" ]]; then
     fi
 fi
 
-# Create output directory
+# Create output directory and clean any existing files to prevent stale YAML
 if [[ "$DRY_RUN" == "false" ]]; then
-    mkdir -p "$OUTPUT_DIR"
-    log_success "Created output directory: $OUTPUT_DIR"
+    if [[ -d "$OUTPUT_DIR" ]]; then
+        # Directory exists - check if it has files
+        if [[ -n "$(find "$OUTPUT_DIR" -maxdepth 1 -name '*.yaml' -print -quit)" ]]; then
+            log_warn "Output directory '$OUTPUT_DIR' contains existing YAML files"
+            log_info "Cleaning directory to prevent applying stale manifests..."
+            rm -f "$OUTPUT_DIR"/*.yaml
+            log_success "Cleaned existing YAML files from: $OUTPUT_DIR"
+        fi
+    else
+        # Directory doesn't exist - create it
+        mkdir -p "$OUTPUT_DIR"
+        log_success "Created output directory: $OUTPUT_DIR"
+    fi
 fi
 
 # Convert comma-separated lists to arrays
@@ -298,6 +330,12 @@ done
 # Validate namespace names used in modelRefs (CRD limit: 63 characters)
 if ! validate_resource_name "$MODEL_NAMESPACE" "Model namespace" 63; then
     log_error "Model namespace is used in modelRefs[].namespace and must not exceed 63 characters"
+    exit 1
+fi
+
+# Validate subscription namespace (used as metadata.namespace for MaaSAuthPolicy/MaaSSubscription)
+if ! validate_resource_name "$SUBSCRIPTION_NAMESPACE" "Subscription namespace" 63; then
+    log_error "Subscription namespace is used as metadata.namespace for generated CRs and must not exceed 63 characters"
     exit 1
 fi
 
@@ -505,7 +543,11 @@ if [[ "$APPLY" == "true" ]]; then
         fi
     fi
 
-    # Apply CRs
+    # Apply CRs (only files generated in this run - directory was cleaned earlier)
+    log_verbose "Applying YAML files from $OUTPUT_DIR:"
+    if [[ "$VERBOSE" == "true" ]]; then
+        ls -1 "$OUTPUT_DIR"/*.yaml 2>/dev/null | sed 's/^/  /'
+    fi
     kubectl apply -f "$OUTPUT_DIR/"
 
     echo ""

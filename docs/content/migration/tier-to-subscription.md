@@ -39,7 +39,15 @@ Before starting the migration:
 # Backup script
 mkdir -p migration-backup
 kubectl get configmap tier-to-group-mapping -n maas-api -o yaml > migration-backup/tier-to-group-mapping.yaml
-kubectl get authpolicy gateway-auth-policy -n openshift-ingress -o yaml > migration-backup/gateway-auth-policy.yaml 2>/dev/null || echo "No gateway-auth-policy found"
+
+# Only backup gateway-auth-policy if it exists
+if kubectl get authpolicy gateway-auth-policy -n openshift-ingress >/dev/null 2>&1; then
+  kubectl get authpolicy gateway-auth-policy -n openshift-ingress -o yaml > migration-backup/gateway-auth-policy.yaml
+  echo "Backed up gateway-auth-policy"
+else
+  echo "No gateway-auth-policy found (skipping backup)"
+fi
+
 kubectl get tokenratelimitpolicy -n openshift-ingress -o yaml > migration-backup/gateway-rate-limits.yaml
 kubectl get llminferenceservice -n llm -o yaml > migration-backup/llm-models.yaml
 ```
@@ -594,8 +602,13 @@ kubectl delete maassubscription my-model-premium-subscription -n models-as-a-ser
 # kubectl delete maasauthpolicy -l migration=tier-to-subscription -n models-as-a-service
 # kubectl delete maassubscription -l migration=tier-to-subscription -n models-as-a-service
 
-# 3. Re-apply old gateway-auth-policy (if it was deleted)
-kubectl apply -f migration-backup/gateway-auth-policy.yaml
+# 3. Re-apply old gateway-auth-policy (if it was backed up)
+if [ -f migration-backup/gateway-auth-policy.yaml ]; then
+  kubectl apply -f migration-backup/gateway-auth-policy.yaml
+  echo "Restored gateway-auth-policy"
+else
+  echo "No gateway-auth-policy backup found (skipping restore)"
+fi
 
 # 4. Re-apply old TokenRateLimitPolicy (if modified)
 kubectl apply -f migration-backup/gateway-rate-limits.yaml
@@ -849,6 +862,7 @@ spec:
   owner:
     groups:
       - name: basic-users
+  priority: 1  # Lower priority
   modelRefs:
     - name: my-model
       namespace: llm
@@ -867,6 +881,7 @@ spec:
   owner:
     groups:
       - name: premium-users
+  priority: 10  # Higher priority
   modelRefs:
     - name: my-model
       namespace: llm
@@ -875,7 +890,7 @@ spec:
           window: 1m
 ```
 
-The controller aggregates these subscriptions with priority based on limit (highest wins for users in multiple groups).
+When a user belongs to multiple owner groups, the controller selects the subscription with the highest `spec.priority` value (defaults to 0). In this example, users in both groups get the premium subscription (priority 10) with 10000 tokens/min.
 
 ### What happens to users during migration?
 
@@ -902,9 +917,11 @@ This allows gradual migration with minimal risk.
 
 ### What if a user is in multiple groups with different subscriptions?
 
-The maas-controller aggregates multiple subscriptions for the same model with **priority based on token limit** (highest limit wins).
+When a user belongs to multiple owner groups with different subscriptions for the same model, the controller selects the subscription with the highest **`spec.priority`** value (higher numbers = higher priority, defaults to 0).
 
-Example: User in both `basic-users` (100 tokens/min) and `premium-users` (10000 tokens/min) groups will get 10000 tokens/min.
+**Example:** A user in both `basic-users` and `premium-users` groups:
+- If `basic-subscription` has `priority: 1` (100 tokens/min) and `premium-subscription` has `priority: 10` (10000 tokens/min), the user gets the premium subscription with 10000 tokens/min.
+- If both subscriptions have the same priority, the controller uses an implementation-defined tie-breaker (not guaranteed to be stable).
 
 ### Can I still use the tier-to-group-mapping ConfigMap?
 
