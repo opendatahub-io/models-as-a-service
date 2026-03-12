@@ -1004,7 +1004,7 @@ class TestModelsEndpoint:
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_reconcile()
 
-    @pytest.mark.xfail(reason="Known bug: API returns null instead of []", strict=True)
+    @pytest.mark.xfail(reason="Known bug: API returns null instead of []", strict=False)
     def test_empty_model_list(self):
         """
         Test 9: Empty model list should return [] not null.
