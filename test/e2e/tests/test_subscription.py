@@ -58,6 +58,7 @@ PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simu
 MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
+MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
 UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
 UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
@@ -295,8 +296,12 @@ def _get_auth_policies_for_model(model_ref, namespace=None):
     matching = []
     for policy in policies:
         model_refs = policy.get("spec", {}).get("modelRefs", [])
-        if model_ref in model_refs:
-            matching.append(policy["metadata"]["name"])
+        for ref in model_refs:
+            # Handle both string refs and dict refs with 'name' field
+            ref_name = ref.get("name") if isinstance(ref, dict) else ref
+            if ref_name == model_ref:
+                matching.append(policy["metadata"]["name"])
+                break
     return matching
 
 
@@ -332,9 +337,13 @@ def _sa_to_user(sa_name, namespace=None):
 
 
 def _create_test_maas_model(name, llmis_name="facebook-opt-125m-simulated", llmis_namespace="llm", namespace=None):
-    """Create a MaaSModelRef CR for testing."""
-    namespace = namespace or os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
-    log.info("Creating MaaSModelRef: %s", name)
+    """Create a MaaSModelRef CR for testing.
+
+    Note: MaaSModelRef can only reference backend models (LLMInferenceService) in the same namespace.
+    The namespace parameter sets where both the MaaSModelRef and its target are expected to be.
+    """
+    namespace = namespace or llmis_namespace  # Default to model's namespace, not opendatahub
+    log.info("Creating MaaSModelRef: %s in namespace: %s", name, namespace)
     _apply_cr({
         "apiVersion": "maas.opendatahub.io/v1alpha1",
         "kind": "MaaSModelRef",
@@ -342,8 +351,7 @@ def _create_test_maas_model(name, llmis_name="facebook-opt-125m-simulated", llmi
         "spec": {
             "modelRef": {
                 "kind": "LLMInferenceService",
-                "name": llmis_name,
-                "namespace": llmis_namespace
+                "name": llmis_name
             }
         }
     })
@@ -363,6 +371,9 @@ def _create_test_auth_policy(name, model_refs, users=None, groups=None, namespac
     if not isinstance(model_refs, list):
         model_refs = [model_refs]
 
+    # Convert model refs to required format: [{"name": "model1", "namespace": "llm"}, ...]
+    model_refs_formatted = [{"name": ref, "namespace": MODEL_NAMESPACE} for ref in model_refs]
+
     # Convert groups list to required format: [{"name": "group1"}, {"name": "group2"}]
     groups_formatted = [{"name": g} for g in (groups or [])]
 
@@ -372,7 +383,7 @@ def _create_test_auth_policy(name, model_refs, users=None, groups=None, namespac
         "kind": "MaaSAuthPolicy",
         "metadata": {"name": name, "namespace": namespace},
         "spec": {
-            "modelRefs": model_refs,
+            "modelRefs": model_refs_formatted,
             "subjects": {
                 "users": users or [],
                 "groups": groups_formatted
@@ -412,6 +423,7 @@ def _create_test_subscription(name, model_refs, users=None, groups=None, token_l
             },
             "modelRefs": [{
                 "name": ref,
+                "namespace": MODEL_NAMESPACE,
                 "tokenRateLimits": [{"limit": token_limit, "window": window}]
             } for ref in model_refs]
         }
@@ -471,7 +483,7 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
 
     Args:
         name: Name of the MaaSModelRef
-        namespace: Namespace (defaults to DEPLOYMENT_NAMESPACE or opendatahub)
+        namespace: Namespace (defaults to MODEL_NAMESPACE where models are deployed)
         timeout: Maximum wait time in seconds (default: 120)
 
     Returns:
@@ -480,7 +492,7 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
     Raises:
         TimeoutError: If MaaSModelRef doesn't become Ready within timeout
     """
-    namespace = namespace or os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+    namespace = namespace or MODEL_NAMESPACE
     deadline = time.time() + timeout
     log.info(f"Waiting for MaaSModelRef {name} to become Ready (timeout: {timeout}s)...")
 
@@ -690,7 +702,7 @@ class TestSubscriptionEnforcement:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-auth-pass-sub-fail", "namespace": ns},
                 "spec": {
-                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {
                         "groups": [{"name": "system:authenticated"}],  # Auth will pass
                     },
@@ -742,7 +754,7 @@ class TestMultipleSubscriptionsPerModel:
                 "metadata": {"name": "e2e-extra-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "nonexistent-group-xyz"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 999, "window": "1m"}]}],
                 },
             })
 
@@ -765,7 +777,7 @@ class TestMultipleSubscriptionsPerModel:
                 "metadata": {"name": "e2e-high-tier", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
                 },
             })
 
@@ -792,7 +804,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-premium-sa-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -803,7 +815,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "metadata": {"name": "e2e-premium-sa-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -827,7 +839,7 @@ class TestMultipleAuthPoliciesPerModel:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-extra-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [MODEL_REF],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -859,7 +871,7 @@ class TestCascadeDeletion:
                 "metadata": {"name": "e2e-temp-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -919,7 +931,7 @@ class TestOrderingEdgeCases:
                 "metadata": {"name": "e2e-ordering-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
             _wait_reconcile()
@@ -935,7 +947,7 @@ class TestOrderingEdgeCases:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-ordering-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -1152,7 +1164,7 @@ class TestManagedAnnotation:
 
 
 class TestMaasSubscriptionNamespace:
-    """Verifies MaaS controller only reconciles CRs in the configured MaaS subscription namespace."""
+    """Verifies MaaS controller reconciles CRs from any namespace (namespace scoping support)."""
 
     def test_authpolicy_and_subscription_in_maas_subscription_namespace(self):
         """MaaSAuthPolicy and MaaSSubscription in MaaS subscription namespace should be reconciled
@@ -1164,7 +1176,7 @@ class TestMaasSubscriptionNamespace:
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-watched-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [MODEL_REF],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
@@ -1174,7 +1186,7 @@ class TestMaasSubscriptionNamespace:
                 "metadata": {"name": "e2e-watched-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
                 },
             })
             _wait_reconcile(30)
@@ -1202,9 +1214,9 @@ class TestMaasSubscriptionNamespace:
             _wait_reconcile()
 
     def test_authpolicy_and_subscription_in_another_namespace(self):
-        """MaaSAuthPolicy and MaaSSubscription in another namespace should not be reconciled
-        and should not appear in the AuthPolicy and TRLP annotations for the model."""
-        ns = "e2e-unwatched-ns"
+        """MaaSAuthPolicy and MaaSSubscription in any namespace should be reconciled
+        and should appear in the AuthPolicy and TRLP annotations (namespace scoping support)."""
+        ns = "e2e-other-ns"
         subprocess.run(
             ["oc", "create", "namespace", ns],
             capture_output=True,
@@ -1215,19 +1227,19 @@ class TestMaasSubscriptionNamespace:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSAuthPolicy",
-                "metadata": {"name": "e2e-unwatched-auth", "namespace": ns},
+                "metadata": {"name": "e2e-other-ns-auth", "namespace": ns},
                 "spec": {
-                    "modelRefs": [MODEL_REF],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
                 },
             })
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-unwatched-sub", "namespace": ns},
+                "metadata": {"name": "e2e-other-ns-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
                 },
             })
             _wait_reconcile(30)
@@ -1237,8 +1249,8 @@ class TestMaasSubscriptionNamespace:
             assert auth_annotations is not None, (
                 f"AuthPolicy {auth_name} not found"
             )
-            assert "e2e-unwatched-auth" not in auth_annotations.get("maas.opendatahub.io/auth-policies", "").split(","), (
-                "MaaSAuthPolicy e2e-unwatched-auth reconciled"
+            assert "e2e-other-ns-auth" in auth_annotations.get("maas.opendatahub.io/auth-policies", "").split(","), (
+                "MaaSAuthPolicy e2e-other-ns-auth not reconciled (namespace scoping should allow this)"
             )
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
@@ -1246,12 +1258,12 @@ class TestMaasSubscriptionNamespace:
             assert trlp_annotations is not None, (
                 f"TRLP {trlp_name} not found"
             )
-            assert "e2e-unwatched-sub" not in trlp_annotations.get("maas.opendatahub.io/subscriptions", "").split(","), (
-                "MaaSSubscription e2e-unwatched-sub reconciled"
+            assert "e2e-other-ns-sub" in trlp_annotations.get("maas.opendatahub.io/subscriptions", "").split(","), (
+                "MaaSSubscription e2e-other-ns-sub not reconciled (namespace scoping should allow this)"
             )
         finally:
-            _delete_cr("maasauthpolicy", "e2e-unwatched-auth", namespace=ns)
-            _delete_cr("maassubscription", "e2e-unwatched-sub", namespace=ns)
+            _delete_cr("maasauthpolicy", "e2e-other-ns-auth", namespace=ns)
+            _delete_cr("maassubscription", "e2e-other-ns-sub", namespace=ns)
             _wait_reconcile()
             subprocess.run(
                 ["oc", "delete", "namespace", ns, "--ignore-not-found", "--timeout=30s"],
@@ -1288,7 +1300,7 @@ class TestE2ESubscriptionFlow:
         log.info("=" * 60)
         
         # Validate MODEL_REF exists and is Ready
-        model = _get_cr("maasmodelref", MODEL_REF, os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub"))
+        model = _get_cr("maasmodelref", MODEL_REF, MODEL_NAMESPACE)
         if not model:
             pytest.fail(f"PREREQUISITE MISSING: MaaSModelRef '{MODEL_REF}' not found. "
                        f"Ensure prow setup has created the model.")

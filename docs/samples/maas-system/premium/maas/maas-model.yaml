@@ -4,9 +4,8 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
   name: premium-simulated-simulated-premium
-  namespace: opendatahub
+  namespace: llm
 spec:
   modelRef:
     kind: LLMInferenceService
     name: premium-simulated-simulated-premium
-    namespace: llm

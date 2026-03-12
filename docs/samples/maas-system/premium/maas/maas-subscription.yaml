@@ -10,6 +10,7 @@ spec:
     users: []
   modelRefs:
     - name: premium-simulated-simulated-premium
+      namespace: llm
       tokenRateLimits:
         - limit: 1000
           window: 1m

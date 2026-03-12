@@ -250,8 +250,8 @@ deploy_models() {
                 all_ready=false
                 break
             fi
-        done < <(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-        if $all_ready && [[ -n "$(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o name 2>/dev/null)" ]]; then
+        done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
             break
         fi
         retries=$((retries + 1))
@@ -273,8 +273,8 @@ deploy_models() {
                     all_ready=false
                     break
                 fi
-            done < <(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-            if $all_ready && [[ -n "$(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o name 2>/dev/null)" ]]; then
+            done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+            if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
                 break
             fi
             retries=$((retries + 1))
@@ -429,6 +429,7 @@ run_e2e_tests() {
     # from its own namespace, but models are deployed in 'llm' namespace.
     # TODO: Fix maas-api to list MaaSModelRefs from ALL namespaces (pass "" to ListFromMaaSModelRefLister)
     export MODEL_NAME="facebook-opt-125m-simulated"
+    export E2E_MODEL_NAMESPACE="llm"
     # TOKEN and ADMIN_OC_TOKEN are already exported by setup_test_tokens()
 
     local test_dir="$PROJECT_ROOT/test/e2e"
@@ -453,14 +454,15 @@ run_e2e_tests() {
     echo "  - ADMIN_OC_TOKEN: $(echo "${ADMIN_OC_TOKEN:-not set}" | cut -c1-20)..."
     echo "  - GATEWAY_HOST: ${GATEWAY_HOST}"
 
-    # Run all e2e tests: API keys and subscription tests
+    # Run all e2e tests: API keys, subscription, and namespace scoping tests
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
-        "$test_dir/tests/test_subscription.py"; then
+        "$test_dir/tests/test_subscription.py" \
+        "$test_dir/tests/test_namespace_scoping.py"; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
@@ -579,17 +581,13 @@ setup_test_tokens() {
         fi
     fi
     
-    # 3. Fallback for regular user: use current user's token (same as admin for local testing)
-    # Local runs typically use the same htpasswd user for both roles
+    # 3. Fallback for regular user: always use a separate SA to ensure distinct users
+    # This is required for IDOR tests that verify users cannot access each other's keys
     if [[ -z "$TOKEN" ]]; then
-        TOKEN=$(oc whoami -t 2>/dev/null || true)
-        if [[ -n "$TOKEN" ]]; then
-            echo "✅ Regular user token for $current_user (same as admin for local testing)"
-        else
-            echo "⚠️  No htpasswd token - using SA token (model catalog may be empty)"
-            setup_test_user "tester-regular-user" "view"
-            TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
-        fi
+        echo "Creating separate SA token for regular user (required for IDOR tests)..."
+        setup_test_user "tester-regular-user" "view"
+        TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
+        echo "✅ Regular user token for tester-regular-user (SA-based)"
     fi
     
     echo "Token setup complete (main session unchanged: $(oc whoami))"

@@ -75,10 +75,11 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	setupLog.Info("watching namespace for MaaS AuthPolicy and MaaSSubscription", "namespace", maasSubscriptionNamespace)
+	// Cache options: MaaSAuthPolicy and MaaSSubscription can be created in any namespace
+	// and reference models in other namespaces, so we need to watch all namespaces.
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
-			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: map[string]cache.Config{maasSubscriptionNamespace: {}}},
-			&maasv1alpha1.MaaSSubscription{}: {Namespaces: map[string]cache.Config{maasSubscriptionNamespace: {}}},
+			// No namespace scoping - watch all namespaces for auth policies and subscriptions
 		},
 	}
 

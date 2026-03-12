@@ -5,7 +5,8 @@ metadata:
   namespace: models-as-a-service
 spec:
   modelRefs:
-    - facebook-opt-125m-simulated
+    - name: facebook-opt-125m-simulated
+      namespace: llm
   subjects:
     groups:
       - name: system:authenticated

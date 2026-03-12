@@ -6,6 +6,7 @@ metadata:
   namespace: openshift-ingress
   labels:
     app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-observability
 spec:
   selector:
     matchLabels:

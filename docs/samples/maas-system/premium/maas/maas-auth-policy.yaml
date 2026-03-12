@@ -5,7 +5,8 @@ metadata:
   namespace: models-as-a-service
 spec:
   modelRefs:
-    - premium-simulated-simulated-premium
+    - name: premium-simulated-simulated-premium
+      namespace: llm
   subjects:
     groups:
       - name: premium-user
