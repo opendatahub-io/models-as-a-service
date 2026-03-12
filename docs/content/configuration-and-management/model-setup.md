@@ -153,7 +153,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
   name: my-production-model
-  namespace: opendatahub
+  namespace: llm
   annotations:
     openshift.io/display-name: "My Production Model"
     openshift.io/description: "A fine-tuned model for production workloads"
