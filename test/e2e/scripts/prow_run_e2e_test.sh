@@ -67,7 +67,7 @@ source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}  # Skip platform and model deployment (for existing clusters)
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
-SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
+export SKIP_OBSERVABILITY=${SKIP_OBSERVABILITY:-false}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
 # ODH operator deployment
@@ -190,19 +190,6 @@ deploy_maas_platform() {
     fi
 
     echo "✅ MaaS platform deployment completed"
-}
-
-install_observability() {
-    if [[ "${SKIP_OBSERVABILITY}" == "true" ]]; then
-        echo "⏭️  Skipping observability installation (SKIP_OBSERVABILITY=true)"
-        return 0
-    fi
-    echo "Installing observability components..."
-    if ! "$PROJECT_ROOT/scripts/observability/install-observability.sh"; then
-        echo "❌ ERROR: Failed to deploy observability components"
-        exit 1
-    fi
-    echo "✅ Observability installation completed"
 }
 
 deploy_models() {
@@ -488,22 +475,6 @@ run_e2e_tests() {
     echo " - HTML      : ${html}"
 }
 
-run_observability_tests() {
-    echo "-- Observability Testing --"
-    
-    if [ "$SKIP_OBSERVABILITY" = false ]; then
-        if ! (cd "$PROJECT_ROOT" && bash test/e2e/observability_tests.sh); then
-            echo "❌ ERROR: Observability tests failed"
-            exit 1
-        else
-            echo "✅ Observability tests completed successfully"
-        fi
-    else
-        echo "⏭️  Skipping observability tests"
-    fi
-}
-
-
 setup_test_user() {
     local username="$1"
     local cluster_role="$2"
@@ -653,7 +624,7 @@ else
 fi
 
 print_header "Installing Observability"
-install_observability
+"$PROJECT_ROOT/scripts/observability/install-observability.sh"
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
@@ -690,6 +661,6 @@ print_header "Validating Deployment"
 validate_deployment
 
 print_header "Running Observability Tests"
-run_observability_tests
+bash "$PROJECT_ROOT/test/e2e/observability_tests.sh"
 
 echo "🎉 Deployment completed successfully!"

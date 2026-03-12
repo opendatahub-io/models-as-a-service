@@ -5,6 +5,12 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$DIR/../.." && pwd)"
 export PYTHONPATH="${DIR}:${PYTHONPATH:-}"
 
+# Skip if SKIP_OBSERVABILITY is set (CI toggle)
+if [[ "${SKIP_OBSERVABILITY:-false}" == "true" ]]; then
+    echo "⏭️  Skipping observability tests (SKIP_OBSERVABILITY=true)"
+    exit 0
+fi
+
 # Source shared helper functions (setup_python_venv, etc.)
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 

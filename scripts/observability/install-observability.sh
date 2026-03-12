@@ -10,6 +10,12 @@
 
 set -euo pipefail
 
+# Skip if SKIP_OBSERVABILITY is set (CI toggle)
+if [[ "${SKIP_OBSERVABILITY:-false}" == "true" ]]; then
+    echo "⏭️  Skipping observability installation (SKIP_OBSERVABILITY=true)"
+    exit 0
+fi
+
 # Preflight checks
 for cmd in kubectl kustomize jq yq; do
     if ! command -v "$cmd" &>/dev/null; then
