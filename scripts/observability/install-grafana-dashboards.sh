@@ -150,7 +150,7 @@ echo "   ✅ One Grafana instance found: $GRAFANA_NAME in namespace $TARGET_NS"
 echo ""
 echo "📊 Deploying MaaS dashboard definitions to namespace $TARGET_NS..."
 kustomize build "$OBSERVABILITY_DIR/grafana" | \
-    sed "s/namespace: maas-api/namespace: $TARGET_NS/g" | \
+    sed "s/^  namespace: maas-api$/  namespace: $TARGET_NS/" | \
     kubectl apply -f -
 
 echo "   ✅ Dashboards applied (Platform Admin, AI Engineer)."
