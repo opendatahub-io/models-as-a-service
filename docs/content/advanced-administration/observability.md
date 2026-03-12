@@ -423,8 +423,8 @@ The MaaS Istio Telemetry resource enables Prometheus metrics collection on the g
     # Rate limit ratio (percentage of requests rejected by rate limiting)
     (sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)
 
-    # Rate limit ratio by subscription
-    (sum by (subscription) (limited_calls) / (sum by (subscription) (authorized_calls) + sum by (subscription) (limited_calls))) OR vector(0)
+    # Rate limit ratio by subscription (windowed to handle counter resets)
+    (sum by (subscription) (rate(limited_calls[5m])) / (sum by (subscription) (rate(authorized_calls[5m])) + sum by (subscription) (rate(limited_calls[5m])))) OR vector(0)
 
     # Rate limit violations per second by subscription
     sum by (subscription) (rate(limited_calls[5m]))
