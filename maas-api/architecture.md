@@ -9,7 +9,8 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 - **Tier-Based Access Control**: Users are assigned to tiers (free, premium, enterprise) based on Kubernetes group membership
 - **Short-Lived Token Issuance**: Self-service ephemeral tokens with configurable expiration
 - **Rate & Token Limiting**: Per-tier request and token consumption limits
-- **Model listing**: GET /v1/models lists models from **MaaSModelRef** CRs (when the MaaS controller is installed) or falls back to discovering KServe LLMInferenceServices. See [Model listing flow](../docs/content/configuration-and-management/model-listing-flow.md).
+- **Model listing**: GET /v1/models lists models from **MaaSModelRef** CRs (when the MaaS controller is installed) or falls back to discovering KServe LLMInferenceServices. Supports subscription filtering (`X-MaaS-Subscription` header) and multi-subscription aggregation (`X-MaaS-Return-All-Models` header). See [Model listing flow](../docs/content/configuration-and-management/model-listing-flow.md).
+- **Subscription Management**: Models accessible via multiple subscriptions are automatically aggregated with subscription metadata in responses
 - **Usage Metrics**: Real-time telemetry with user, tier, and model tracking
 - **Kubernetes-Native**: Leverages Service Accounts, RBAC, and TokenReview for authentication
 
@@ -29,7 +30,7 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 | Endpoint              | Method | Purpose                                      | Request Body      | Response                    |
 |-----------------------|--------|----------------------------------------------|-------------------|-----------------------------|
 | `/health`             | GET    | Service health check                         | None              | Health status               |
-| `/v1/models`          | GET    | List available models (from MaaSModelRef CRs or LLMInferenceServices) | None              | OpenAI-compatible list      |
+| `/v1/models`          | GET    | List available models (from MaaSModelRef CRs or LLMInferenceServices) | `X-MaaS-Subscription` (optional)<br>`X-MaaS-Return-All-Models` (optional) | None | OpenAI-compatible list with subscription info |
 | `/v1/api-keys`        | POST   | Create hash-based API key (sk-oai-*)         | `{"name", "description", "expiresIn"}` | API key (shown once) |
 | `/v1/api-keys`        | GET    | List all API keys for user                   | None              | Array of API key metadata   |
 | `/v1/api-keys/{id}`   | GET    | Get specific API key by ID                   | None              | API key metadata            |
@@ -393,16 +394,28 @@ sequenceDiagram
 
 **Endpoint**: `GET /v1/models` — Returns an OpenAI-compatible list of available models.
 
-**Primary flow (MaaSModelRef)**  
+**Request Headers**:
+- `X-MaaS-Subscription` (optional): Filter models to a specific subscription by name
+- `X-MaaS-Return-All-Models` (optional): When set to `"true"`, returns models from all subscriptions the user has access to
+- `Authorization` (required): Bearer token for authentication
+
+**Header Behavior**:
+- If neither header is provided: Returns models from the user's default subscription (or requires `X-MaaS-Subscription` if user has multiple subscriptions)
+- If `X-MaaS-Subscription` is provided: Returns only models accessible via that subscription
+- If `X-MaaS-Return-All-Models: true`: Returns models from all accessible subscriptions
+- Cannot specify both headers (returns 400 Bad Request)
+
+**Primary flow (MaaSModelRef)**
 When the MaaS controller is installed and the API can list **MaaSModelRef** CRs (maas.opendatahub.io) in its namespace:
 
 1. The API lists all MaaSModelRef resources in the configured namespace.
 2. For each MaaSModelRef it maps: **id** = `metadata.name`, **url** = `status.endpoint`, **ready** = (`status.phase == "Ready"`), plus **created** / **owned_by** from metadata.
-3. No per-model HTTP calls are made; the controller has already reconciled status from the underlying LLMInferenceService and HTTPRoute.
+3. Access validation is performed by probing each model's `/v1/models` endpoint with the client's Authorization header (passed through as-is). Only models that return 2xx or 405 are included.
+4. **Subscription Aggregation**: Models are deduplicated by (model ID, URL) — if the same model instance is accessible via multiple subscriptions, it appears once in the response with an array of all subscriptions providing access.
 
 If the MaaSModelRef lister is not configured or listing fails, the API returns an empty list or an error. See [Model listing flow](../docs/content/configuration-and-management/model-listing-flow.md) for details.
 
-**Response format** (OpenAI-compatible):
+**Response format** (OpenAI-compatible with subscription metadata):
 ```json
 {
   "object": "list",
@@ -413,11 +426,29 @@ If the MaaSModelRef lister is not configured or listing fails, the API returns a
       "created": 1703001234,
       "owned_by": "opendatahub",
       "url": "https://maas.example.com/llm/facebook-opt-125m-simulated",
-      "ready": true
+      "ready": true,
+      "subscriptions": [
+        {
+          "name": "simulator-subscription",
+          "displayName": "Simulator Subscription",
+          "description": "Access to simulated models"
+        },
+        {
+          "name": "premium-simulator-subscription",
+          "displayName": "Premium Simulator",
+          "description": "Premium tier simulator access"
+        }
+      ]
     }
   ]
 }
 ```
+
+**Subscription Aggregation Example**:
+- User has access to subscriptions A and B
+- Model `gpt-3.5` with URL `https://example.com/gpt` is accessible via both subscriptions
+- Result: Single entry with `subscriptions: [{name: "A", ...}, {name: "B", ...}]`
+- If model `gpt-4` with different URL is only in subscription A, it appears separately
 
 ### Service Account Name Sanitization
 
