@@ -77,7 +77,7 @@ spec:
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "(sum(limited_calls{user=~\"^$user$\"}) / (sum(authorized_calls{user=~\"^$user$\"}) + sum(limited_calls{user=~\"^$user$\"}))) OR vector(0)", "instant": true, "refId": "A"}],
-          "description": "Percentage of your requests rejected by rate limiting (HTTP 429). High values indicate you are exceeding your tier quota — consider upgrading your tier or reducing request frequency.",
+          "description": "Percentage of your requests rejected by rate limiting (HTTP 429). High values indicate you are exceeding your subscription quota — consider upgrading your subscription or reducing request frequency.",
           "title": "🚦 Rate Limit Ratio",
           "type": "stat"
         },
@@ -149,19 +149,19 @@ spec:
           "id": 10,
           "options": {"legend": {"calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (tier) (increase(limited_calls{user=~\"^$user$\", tier!=\"\"}[$__range]))", "legendFormat": "{{tier}} (limited)", "refId": "A"}],
-          "title": "❌ Rate Limited by Tier (Selected Range)",
+          "targets": [{"expr": "sum by (subscription) (increase(limited_calls{user=~\"^$user$\", subscription!=\"\"}[$__range]))", "legendFormat": "{{subscription}} (limited)", "refId": "A"}],
+          "title": "❌ Rate Limited by Subscription (Selected Range)",
           "type": "timeseries"
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": [{"matcher": {"id": "byName", "options": "model"}, "properties": [{"id": "displayName", "value": "🤖 Model"}]}, {"matcher": {"id": "byName", "options": "tier"}, "properties": [{"id": "displayName", "value": "🏷️ Tier"}]}, {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "📊 Hits"}]}]},
+          "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": [{"matcher": {"id": "byName", "options": "model"}, "properties": [{"id": "displayName", "value": "🤖 Model"}]}, {"matcher": {"id": "byName", "options": "subscription"}, "properties": [{"id": "displayName", "value": "🏷️ Subscription"}]}, {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "📊 Hits"}]}]},
           "gridPos": {"h": 6, "w": 24, "x": 0, "y": 41},
           "id": 7,
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": true}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "📊 Hits"}]},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (model, tier) (authorized_hits{user=~\"^$user$\", model!=\"\"})", "format": "table", "instant": true, "refId": "A"}],
-          "title": "🔍 My Usage Summary by Model & Tier",
+          "targets": [{"expr": "sum by (model, subscription) (authorized_hits{user=~\"^$user$\", model!=\"\"})", "format": "table", "instant": true, "refId": "A"}],
+          "title": "🔍 My Usage Summary by Model & Subscription",
           "type": "table"
         }
       ],
