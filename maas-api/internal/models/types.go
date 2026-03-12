@@ -35,12 +35,12 @@ type Model struct {
 
 	// Kind is the model reference kind (e.g. "llmisvc" from MaaSModelRef spec.modelRef.kind).
 	// Used when validating access; default is "llmisvc" if unset.
-	Kind         string            `json:"kind,omitempty"`
-	URL          *apis.URL         `json:"url,omitempty"`
-	Ready        bool              `json:"ready"`
-	Details      *Details          `json:"modelDetails,omitempty"`
-	Aliases      []string          `json:"aliases,omitempty"`
-	Subscription *SubscriptionInfo `json:"subscription,omitempty"`
+	Kind          string             `json:"kind,omitempty"`
+	URL           *apis.URL          `json:"url,omitempty"`
+	Ready         bool               `json:"ready"`
+	Details       *Details           `json:"modelDetails,omitempty"`
+	Aliases       []string           `json:"aliases,omitempty"`
+	Subscriptions []SubscriptionInfo `json:"subscriptions,omitempty"` // Subscriptions providing access to this model
 }
 
 // UnmarshalJSON implements custom JSON unmarshalling to work around openai.Model's

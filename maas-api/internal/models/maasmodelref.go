@@ -72,12 +72,13 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 		created = t.Unix()
 	}
 
+	namespace := u.GetNamespace()
 	return &Model{
 		Model: openai.Model{
 			ID:      name,
 			Object:  "model",
 			Created: created,
-			OwnedBy: u.GetNamespace(),
+			OwnedBy: namespace,
 		},
 		Kind:  kind,
 		URL:   urlPtr,
