@@ -33,8 +33,8 @@ const (
 	maasModelRefGVRResource = "maasmodelrefs"
 )
 
-// maasModelRefUnstructured returns an unstructured MaaSModelRef for testing (name, namespace, endpoint URL, ready).
-func maasModelRefUnstructured(name, namespace, endpoint string, ready bool) *unstructured.Unstructured {
+// maasModelRefUnstructured returns an unstructured MaaSModelRef for testing (name, namespace, endpoint URL, ready, annotations).
+func maasModelRefUnstructured(name, namespace, endpoint string, ready bool, annotations map[string]string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   maasModelRefGVRGroup,
@@ -49,6 +49,9 @@ func maasModelRefUnstructured(name, namespace, endpoint string, ready bool) *uns
 		_ = unstructured.SetNestedField(u.Object, "Ready", "status", "phase")
 	}
 	_ = unstructured.SetNestedField(u.Object, "llmisvc", "spec", "modelRef", "kind")
+	if len(annotations) > 0 {
+		u.SetAnnotations(annotations)
+	}
 	return u
 }
 
@@ -263,10 +266,12 @@ func TestListingModels(t *testing.T) {
 				constant.AnnotationDescription:  "A large language model for general AI tasks",
 				constant.AnnotationDisplayName:  "Test Model Alpha",
 			},
-			// MaaSModelRef listing does not populate Details from annotations.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
-				_ = model
+				require.NotNil(t, model.Details, "Expected modelDetails to be populated from annotations")
+				assert.Equal(t, "Test Model Alpha", model.Details.DisplayName)
+				assert.Equal(t, "A large language model for general AI tasks", model.Details.Description)
+				assert.Equal(t, "General purpose LLM", model.Details.GenAIUseCase)
 			},
 		},
 		{
@@ -279,10 +284,12 @@ func TestListingModels(t *testing.T) {
 			Annotations: map[string]string{
 				constant.AnnotationDisplayName: "Test Model Beta",
 			},
-			// MaaSModelRef listing does not populate Details.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
-				_ = model
+				require.NotNil(t, model.Details, "Expected modelDetails to be populated from annotations")
+				assert.Equal(t, "Test Model Beta", model.Details.DisplayName)
+				assert.Empty(t, model.Details.Description)
+				assert.Empty(t, model.Details.GenAIUseCase)
 			},
 		},
 		{
@@ -305,7 +312,7 @@ func TestListingModels(t *testing.T) {
 	maasModelRefItems := make([]*unstructured.Unstructured, 0, len(llmTestScenarios))
 	for _, s := range llmTestScenarios {
 		endpoint := s.URL.String()
-		maasModelRefItems = append(maasModelRefItems, maasModelRefUnstructured(s.Name, fixtures.TestNamespace, endpoint, s.Ready))
+		maasModelRefItems = append(maasModelRefItems, maasModelRefUnstructured(s.Name, fixtures.TestNamespace, endpoint, s.Ready, s.Annotations))
 	}
 	maasModelRefLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelRefItems}
 
@@ -408,8 +415,8 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 
 	// Build MaaSModelRef unstructured list
 	maasModelRefItems := []*unstructured.Unstructured{
-		maasModelRefUnstructured("premium-model", fixtures.TestNamespace, premiumModelServer.URL, true),
-		maasModelRefUnstructured("free-model", fixtures.TestNamespace, freeModelServer.URL, true),
+		maasModelRefUnstructured("premium-model", fixtures.TestNamespace, premiumModelServer.URL, true, nil),
+		maasModelRefUnstructured("free-model", fixtures.TestNamespace, freeModelServer.URL, true, nil),
 	}
 	maasModelRefLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelRefItems}
 

@@ -96,6 +96,6 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 		Kind:  kind,
 		URL:   urlPtr,
 		Ready: ready,
-		Details: details
+		Details: details,
 	}
 }
