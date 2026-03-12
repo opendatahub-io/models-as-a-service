@@ -51,17 +51,19 @@ log_verbose() {
 }
 
 # Validate Kubernetes resource name (DNS subdomain format)
+# Usage: validate_resource_name <name> <field> [max_length]
 validate_resource_name() {
     local name="$1"
     local field="$2"
+    local max_length="${3:-253}"  # Default to 253 (DNS subdomain), override for stricter limits
 
     if [[ -z "$name" ]]; then
         log_error "$field cannot be empty"
         return 1
     fi
 
-    if [[ ${#name} -gt 253 ]]; then
-        log_error "$field '$name' exceeds maximum length of 253 characters"
+    if [[ ${#name} -gt $max_length ]]; then
+        log_error "$field '$name' exceeds maximum length of $max_length characters (actual: ${#name})"
         return 1
     fi
 
@@ -224,8 +226,9 @@ if ! [[ "$WINDOW" =~ ^[0-9]+(s|m|h|d)$ ]]; then
     exit 1
 fi
 
-# Validate tier name (used in resource names)
-if ! validate_resource_name "$TIER" "Tier name"; then
+# Validate tier name (used in resource names like ${TIER}-models-access, max 63 chars)
+if ! validate_resource_name "$TIER" "Tier name" 63; then
+    log_info "Tier name is used in generated CR names and must not exceed 63 characters"
     exit 1
 fi
 
@@ -268,11 +271,12 @@ fi
 IFS=',' read -ra MODEL_ARRAY <<< "$MODELS"
 IFS=',' read -ra GROUP_ARRAY <<< "$AUTH_GROUPS"
 
-# Validate model names
+# Validate model names (must be valid MaaSModelRef names, max 63 chars)
 for model in "${MODEL_ARRAY[@]}"; do
     model=$(echo "$model" | xargs) # trim whitespace
-    if ! validate_resource_name "$model" "Model name"; then
+    if ! validate_resource_name "$model" "Model name" 63; then
         log_error "Invalid model name in list: '$model'"
+        log_info "Model names are used as MaaSModelRef names and must not exceed 63 characters"
         exit 1
     fi
 done
@@ -290,6 +294,12 @@ for group in "${GROUP_ARRAY[@]}"; do
         exit 1
     fi
 done
+
+# Validate namespace names used in modelRefs (CRD limit: 63 characters)
+if ! validate_resource_name "$MODEL_NAMESPACE" "Model namespace" 63; then
+    log_error "Model namespace is used in modelRefs[].namespace and must not exceed 63 characters"
+    exit 1
+fi
 
 log_info "Migration Configuration:"
 log_verbose "  Tier: $TIER"
@@ -316,7 +326,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
   name: $(yaml_quote "$model")
-  namespace: $(yaml_quote "$MAAS_NAMESPACE")
+  namespace: $(yaml_quote "$MODEL_NAMESPACE")
   labels:
     migration.maas.opendatahub.io/from-tier: $(yaml_quote "$TIER")
     migration.maas.opendatahub.io/generated: "true"
@@ -363,7 +373,7 @@ EOF
         model=$(echo "$model" | xargs)
         cat >> "$AUTHPOLICY_FILE" <<MODELREF
     - name: $(yaml_quote "$model")
-      namespace: $(yaml_quote "$MAAS_NAMESPACE")
+      namespace: $(yaml_quote "$MODEL_NAMESPACE")
 MODELREF
     done
 
@@ -425,7 +435,7 @@ EOF
         model=$(echo "$model" | xargs)
         cat >> "$SUBSCRIPTION_FILE" <<EOF
     - name: $(yaml_quote "$model")
-      namespace: $(yaml_quote "$MAAS_NAMESPACE")
+      namespace: $(yaml_quote "$MODEL_NAMESPACE")
       tokenRateLimits:
         - limit: $RATE_LIMIT
           window: $(yaml_quote "$WINDOW")
@@ -510,7 +520,7 @@ if [[ "$APPLY" == "true" ]]; then
     log_info "Checking MaaSModelRef status..."
     for model in "${MODEL_ARRAY[@]}"; do
         model=$(echo "$model" | xargs)
-        PHASE=$(kubectl get maasmodelref "$model" -n "$MAAS_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+        PHASE=$(kubectl get maasmodelref "$model" -n "$MODEL_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
         if [[ "$PHASE" == "Ready" ]]; then
             log_success "  $model: Ready"
         elif [[ "$PHASE" == "Pending" ]]; then

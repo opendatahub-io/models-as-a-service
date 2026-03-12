@@ -148,12 +148,11 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
   name: my-model-name
-  namespace: opendatahub
+  namespace: llm  # Must be in same namespace as the LLMInferenceService
 spec:
   modelRef:
     kind: LLMInferenceService
     name: my-model-name
-    namespace: llm
 ```
 
 Apply it:
@@ -170,7 +169,8 @@ metadata:
   namespace: models-as-a-service
 spec:
   modelRefs:
-    - my-model-name
+    - name: my-model-name
+      namespace: llm
   subjects:
     groups:
       - name: premium-users
@@ -198,6 +198,7 @@ spec:
     users: []
   modelRefs:
     - name: my-model-name
+      namespace: llm
       tokenRateLimits:
         - limit: 50000  # From old TokenRateLimitPolicy
           window: 1m
@@ -214,7 +215,7 @@ The maas-controller should automatically create Kuadrant policies:
 
 ```bash
 # Check MaaSModelRef status
-kubectl get maasmodelref my-model-name -n opendatahub -o jsonpath='{.status.phase}'
+kubectl get maasmodelref my-model-name -n llm -o jsonpath='{.status.phase}'
 # Expected: Ready
 
 # Check generated AuthPolicy (one per model)
@@ -224,7 +225,7 @@ kubectl get authpolicy -n llm -l maas.opendatahub.io/model-ref=my-model-name
 kubectl get tokenratelimitpolicy -n llm -l maas.opendatahub.io/subscription=my-model-premium-subscription
 
 # View full status
-kubectl describe maasmodelref my-model-name -n opendatahub
+kubectl describe maasmodelref my-model-name -n llm
 ```
 
 #### Automation Script
@@ -245,7 +246,14 @@ ls migration-crs/
 
 # Apply generated CRs
 kubectl apply -f migration-crs/
+
+# Optional: Label resources for easier rollback (adjust resource names as needed)
+kubectl label maasmodelref my-model-1 my-model-2 my-model-3 -n llm migration=tier-to-subscription
+kubectl label maasauthpolicy my-model-premium-access -n models-as-a-service migration=tier-to-subscription
+kubectl label maassubscription my-model-premium-subscription -n models-as-a-service migration=tier-to-subscription
 ```
+
+> **Tip:** Label migration resources with `migration=tier-to-subscription` so you can easily roll them back using label selectors (e.g., `kubectl delete maasmodelref -l migration=tier-to-subscription -n llm`).
 
 See [Migration Script](#migration-automation-script) section below for details.
 
@@ -255,7 +263,7 @@ Test each migrated model to ensure the new subscription model works correctly:
 
 ```bash
 # 1. Check all MaaS CRs are Ready
-kubectl get maasmodelref -n opendatahub
+kubectl get maasmodelref -n llm
 kubectl get maasauthpolicy -n models-as-a-service
 kubectl get maassubscription -n models-as-a-service
 
@@ -567,26 +575,40 @@ If migration fails or issues arise:
 ### Immediate Rollback
 
 ```bash
-# 1. Delete new MaaS CRs
-kubectl delete maasmodelref --all -n opendatahub
-kubectl delete maasauthpolicy --all -n models-as-a-service
-kubectl delete maassubscription --all -n models-as-a-service
+# 1. List MaaS CRs created during migration (verify before deletion)
+echo "=== MaaSModelRef resources ==="
+kubectl get maasmodelref -n llm
+echo "=== MaaSAuthPolicy resources ==="
+kubectl get maasauthpolicy -n models-as-a-service
+echo "=== MaaSSubscription resources ==="
+kubectl get maassubscription -n models-as-a-service
 
-# 2. Re-apply old gateway-auth-policy (if it was deleted)
+# 2. Delete specific MaaS CRs created during migration
+# Replace with the actual resource names from your migration
+kubectl delete maasmodelref my-model-name -n llm
+kubectl delete maasauthpolicy my-model-premium-access -n models-as-a-service
+kubectl delete maassubscription my-model-premium-subscription -n models-as-a-service
+
+# Alternative: If you labeled migration resources, use label selector
+# kubectl delete maasmodelref -l migration=tier-to-subscription -n llm
+# kubectl delete maasauthpolicy -l migration=tier-to-subscription -n models-as-a-service
+# kubectl delete maassubscription -l migration=tier-to-subscription -n models-as-a-service
+
+# 3. Re-apply old gateway-auth-policy (if it was deleted)
 kubectl apply -f migration-backup/gateway-auth-policy.yaml
 
-# 3. Re-apply old TokenRateLimitPolicy (if modified)
+# 4. Re-apply old TokenRateLimitPolicy (if modified)
 kubectl apply -f migration-backup/gateway-rate-limits.yaml
 
-# 4. Re-add tier annotations to models
+# 5. Re-add tier annotations to models
 kubectl annotate llminferenceservice my-model-name -n llm \
   alpha.maas.opendatahub.io/tiers='["premium","enterprise"]' \
   --overwrite
 
-# 5. Re-apply tier-to-group-mapping ConfigMap (if deleted)
+# 6. Re-apply tier-to-group-mapping ConfigMap (if deleted)
 kubectl apply -f migration-backup/tier-to-group-mapping.yaml
 
-# 6. Restart MaaS API to reload tier configuration
+# 7. Restart MaaS API to reload tier configuration
 kubectl rollout restart deployment/maas-api -n opendatahub
 ```
 
@@ -611,7 +633,7 @@ If only some models have issues, you can rollback specific models:
 
 ```bash
 # Delete MaaS CRs for specific model only
-kubectl delete maasmodelref my-model-name -n opendatahub
+kubectl delete maasmodelref my-model-name -n llm
 kubectl delete maasauthpolicy my-model-premium-access -n models-as-a-service
 kubectl delete maassubscription my-model-premium-subscription -n models-as-a-service
 
@@ -718,7 +740,7 @@ kubectl logs -n kuadrant-system -l app.kubernetes.io/name=limitador --tail=50
 kubectl logs -n opendatahub -l app.kubernetes.io/name=maas-controller --tail=100
 
 # Check MaaSModelRef status
-kubectl get maasmodelref my-model-name -n opendatahub -o yaml
+kubectl get maasmodelref my-model-name -n llm -o yaml
 
 # Verify HTTPRoute exists
 kubectl get httproute -n llm my-model-name
@@ -743,7 +765,7 @@ kubectl annotate maasauthpolicy my-model-premium-access -n models-as-a-service \
 **Resolution:**
 ```bash
 # Check MaaSModelRef status
-kubectl describe maasmodelref my-model-name -n opendatahub
+kubectl describe maasmodelref my-model-name -n llm
 
 # Check LLMInferenceService status
 kubectl get llminferenceservice my-model-name -n llm -o yaml
@@ -829,6 +851,7 @@ spec:
       - name: basic-users
   modelRefs:
     - name: my-model
+      namespace: llm
       tokenRateLimits:
         - limit: 100
           window: 1m
@@ -846,6 +869,7 @@ spec:
       - name: premium-users
   modelRefs:
     - name: my-model
+      namespace: llm
       tokenRateLimits:
         - limit: 10000
           window: 1m
@@ -935,7 +959,8 @@ metadata:
   namespace: models-as-a-service
 spec:
   modelRefs:
-    - public-model
+    - name: public-model
+      namespace: llm
   subjects:
     groups:
       - name: system:authenticated
