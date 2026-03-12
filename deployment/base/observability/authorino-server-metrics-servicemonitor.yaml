@@ -9,12 +9,6 @@
 # that are NOT collected by the Kuadrant-provided authorino-operator-monitor
 # (which only scrapes /metrics for controller-runtime stats).
 #
-# NOT a duplicate of deployment/components/observability/prometheus/kuadrant-servicemonitors.yaml
-# (authorino-runtime). That file is for the standalone Prometheus path
-# (deployment/components/observability/prometheus/) and is never deployed by
-# install-observability.sh. The two ServiceMonitors serve different deployment
-# scenarios and are never active on the same cluster simultaneously.
-#
 # Note: If a Kuadrant update begins scraping /server-metrics natively,
 # install-observability.sh will autodetect this and skip deploying this
 # ServiceMonitor (it checks for existing monitors that scrape /server-metrics).
