@@ -121,6 +121,15 @@ kubectl get llminferenceservices -n llm
 
 See the deployment scripts documentation at `scripts/README.md` for more information about validation and troubleshooting.
 
+### 8. Verify Observability Metrics
+
+!!! warning "Lazy metric population"
+    Many metrics are **lazily registered** — they only appear after the first event triggers them. You **must generate traffic** (steps 4-6 above) before validating metrics. Dashboard panels will show "No Data" until traffic has been sent. This is normal Prometheus client behavior, not a configuration issue.
+
+To verify observability is enabled: generate traffic (steps 4-6), then query Prometheus for metrics such as `authorized_hits`, `authorized_calls`, or `vllm:e2e_request_latency_seconds`. If metrics appear, observability is working.
+
+For troubleshooting (resource checks, port-forward to endpoints, Prometheus targets), see [Observability](../advanced-administration/observability.md).
+
 ## Automated Validation
 
 For faster validation, you can use the automated validation script to run the manual validation steps more quickly:
@@ -208,3 +217,8 @@ For detailed TLS configuration options, see [TLS Configuration](../configuration
 6. **Routes not accessible (503 errors)**: Check MaaS Default Gateway status and HTTPRoute configuration
       - [ ] Verify Gateway is in `Programmed` state: `kubectl get gateway -n openshift-ingress maas-default-gateway`
       - [ ] Check HTTPRoute configuration and status
+7. **Metrics missing or dashboards show "No Data"**: Most metrics are lazily populated
+      - [ ] **Send traffic first** — metrics like `authorized_hits`, `authorized_calls`, vLLM histograms, and Authorino auth metrics only appear after the first request triggers them (see [Verify Observability Metrics](#8-verify-observability-metrics))
+      - [ ] Verify ServiceMonitors exist: `kubectl get servicemonitor -n kuadrant-system` and `kubectl get servicemonitor -n llm`
+      - [ ] Check Prometheus targets are healthy: port-forward to Prometheus and check `/api/v1/targets`
+      - [ ] For Authorino auth metrics, verify the `authorino-server-metrics` ServiceMonitor is deployed (run `./scripts/install-observability.sh` if missing)
