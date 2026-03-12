@@ -41,6 +41,123 @@ func NewModelsHandler(
 	}
 }
 
+// selectSubscriptionsForListing determines which subscriptions to use for model listing.
+// Returns the subscriptions list and a shouldReturn flag (true if the handler should return early).
+func (h *ModelsHandler) selectSubscriptionsForListing(
+	c *gin.Context,
+	userContext *token.UserContext,
+	requestedSubscription string,
+	returnAllModels bool,
+) ([]*subscription.SelectResponse, bool) {
+	if returnAllModels {
+		// Return all models across all accessible subscriptions
+		if h.subscriptionSelector != nil {
+			allSubs, err := h.subscriptionSelector.GetAllAccessible(userContext.Groups, userContext.Username)
+			if err != nil {
+				h.logger.Error("Failed to get all accessible subscriptions", "error", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": gin.H{
+						"message": "Failed to get subscriptions",
+						"type":    "server_error",
+					}})
+				return nil, true
+			}
+			h.logger.Debug("Returning models from all accessible subscriptions", "subscriptionCount", len(allSubs))
+			return allSubs, false
+		}
+		// No selector configured - cannot return all models
+		h.logger.Debug("X-MaaS-Return-All-Models requested but subscription selector not configured")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "X-MaaS-Return-All-Models not supported",
+				"type":    "invalid_request_error",
+			}})
+		return nil, true
+	}
+
+	// Single subscription selection (existing behavior)
+	if h.subscriptionSelector != nil {
+		result, err := h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription)
+		if err != nil {
+			h.handleSubscriptionSelectionError(c, err)
+			return nil, true
+		}
+		return []*subscription.SelectResponse{result}, false
+	}
+	// If no selector configured, use the requested subscription header as-is (for backward compat)
+	return []*subscription.SelectResponse{{Name: requestedSubscription}}, false
+}
+
+// handleSubscriptionSelectionError handles errors from subscription selection and sends appropriate HTTP responses.
+func (h *ModelsHandler) handleSubscriptionSelectionError(c *gin.Context, err error) {
+	var multipleSubsErr *subscription.MultipleSubscriptionsError
+	var accessDeniedErr *subscription.AccessDeniedError
+	var notFoundErr *subscription.SubscriptionNotFoundError
+	var noSubErr *subscription.NoSubscriptionError
+
+	// For consistency with inferencing (which uses Authorino and returns 403 for all
+	// subscription errors), we return 403 Forbidden for all subscription-related errors.
+	if errors.As(err, &multipleSubsErr) {
+		h.logger.Debug("User has multiple subscriptions, x-maas-subscription header required",
+			"subscriptionCount", len(multipleSubsErr.Subscriptions),
+		)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": err.Error(),
+				"type":    "permission_error",
+			}})
+		return
+	}
+
+	if errors.As(err, &accessDeniedErr) {
+		h.logger.Debug("Access denied to subscription")
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": err.Error(),
+				"type":    "permission_error",
+			}})
+		return
+	}
+
+	if errors.As(err, &notFoundErr) {
+		h.logger.Debug("Subscription not found")
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": err.Error(),
+				"type":    "permission_error",
+			}})
+		return
+	}
+
+	if errors.As(err, &noSubErr) {
+		h.logger.Debug("No subscription found for user")
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": err.Error(),
+				"type":    "permission_error",
+			}})
+		return
+	}
+
+	// Other errors are internal server errors
+	h.logger.Error("Subscription selection failed", "error", err)
+	c.JSON(http.StatusInternalServerError, gin.H{
+		"error": gin.H{
+			"message": "Failed to select subscription",
+			"type":    "server_error",
+		}})
+}
+
+// addSubscriptionIfNew adds a subscription to the model's subscriptions array if not already present.
+func (h *ModelsHandler) addSubscriptionIfNew(model *models.Model, subInfo models.SubscriptionInfo) {
+	for _, existingSub := range model.Subscriptions {
+		if existingSub.Name == subInfo.Name {
+			return
+		}
+	}
+	model.Subscriptions = append(model.Subscriptions, subInfo)
+}
+
 // ListLLMs handles GET /v1/models.
 func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	// Require Authorization header and pass it through as-is to list and access validation.
@@ -101,101 +218,9 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	}
 
 	// Determine which subscriptions to use for model filtering
-	var subscriptionsToUse []*subscription.SelectResponse
-	if returnAllModels {
-		// Return all models across all accessible subscriptions
-		if h.subscriptionSelector != nil {
-			allSubs, err := h.subscriptionSelector.GetAllAccessible(userContext.Groups, userContext.Username)
-			if err != nil {
-				h.logger.Error("Failed to get all accessible subscriptions", "error", err)
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error": gin.H{
-						"message": "Failed to get subscriptions",
-						"type":    "server_error",
-					}})
-				return
-			}
-			// If no subscriptions, will return empty list (handled later)
-			subscriptionsToUse = allSubs
-			h.logger.Debug("Returning models from all accessible subscriptions", "subscriptionCount", len(allSubs))
-		} else {
-			// No selector configured - cannot return all models
-			h.logger.Debug("X-MaaS-Return-All-Models requested but subscription selector not configured")
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": gin.H{
-					"message": "X-MaaS-Return-All-Models not supported",
-					"type":    "invalid_request_error",
-				}})
-			return
-		}
-	} else {
-		// Single subscription selection (existing behavior)
-		if h.subscriptionSelector != nil {
-			result, err := h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription)
-			if err != nil {
-				var multipleSubsErr *subscription.MultipleSubscriptionsError
-				var accessDeniedErr *subscription.AccessDeniedError
-				var notFoundErr *subscription.SubscriptionNotFoundError
-				var noSubErr *subscription.NoSubscriptionError
-
-				// For consistency with inferencing (which uses Authorino and returns 403 for all
-				// subscription errors), we return 403 Forbidden for all subscription-related errors.
-				if errors.As(err, &multipleSubsErr) {
-					h.logger.Debug("User has multiple subscriptions, x-maas-subscription header required",
-						"subscriptionCount", len(multipleSubsErr.Subscriptions),
-					)
-					c.JSON(http.StatusForbidden, gin.H{
-						"error": gin.H{
-							"message": err.Error(),
-							"type":    "permission_error",
-						}})
-					return
-				}
-
-				if errors.As(err, &accessDeniedErr) {
-					h.logger.Debug("Access denied to subscription")
-					c.JSON(http.StatusForbidden, gin.H{
-						"error": gin.H{
-							"message": err.Error(),
-							"type":    "permission_error",
-						}})
-					return
-				}
-
-				if errors.As(err, &notFoundErr) {
-					h.logger.Debug("Subscription not found")
-					c.JSON(http.StatusForbidden, gin.H{
-						"error": gin.H{
-							"message": err.Error(),
-							"type":    "permission_error",
-						}})
-					return
-				}
-
-				if errors.As(err, &noSubErr) {
-					h.logger.Debug("No subscription found for user")
-					c.JSON(http.StatusForbidden, gin.H{
-						"error": gin.H{
-							"message": err.Error(),
-							"type":    "permission_error",
-						}})
-					return
-				}
-
-				// Other errors are internal server errors
-				h.logger.Error("Subscription selection failed", "error", err)
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error": gin.H{
-						"message": "Failed to select subscription",
-						"type":    "server_error",
-					}})
-				return
-			}
-			subscriptionsToUse = []*subscription.SelectResponse{result}
-		} else {
-			// If no selector configured, use the requested subscription header as-is (for backward compat)
-			subscriptionsToUse = []*subscription.SelectResponse{{Name: requestedSubscription}}
-		}
+	subscriptionsToUse, shouldReturn := h.selectSubscriptionsForListing(c, userContext, requestedSubscription, returnAllModels)
+	if shouldReturn {
+		return
 	}
 
 	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null
@@ -242,16 +267,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 
 				if existingModel, exists := modelsByKey[key]; exists {
 					// Model already exists - append subscription if not already present
-					alreadyHasSubscription := false
-					for _, existingSub := range existingModel.Subscriptions {
-						if existingSub.Name == subInfo.Name {
-							alreadyHasSubscription = true
-							break
-						}
-					}
-					if !alreadyHasSubscription {
-						existingModel.Subscriptions = append(existingModel.Subscriptions, subInfo)
-					}
+					h.addSubscriptionIfNew(existingModel, subInfo)
 				} else {
 					// New model - create entry with subscriptions array
 					model.Subscriptions = []models.SubscriptionInfo{subInfo}
