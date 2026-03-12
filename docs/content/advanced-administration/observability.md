@@ -22,13 +22,13 @@ The observability stack consists of:
 - **vLLM / llm-d / Simulator**: Expose inference metrics (TTFT, ITL, queue depth, token throughput, KV-cache usage); llm-d also exposes EPP routing metrics
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
 - **ServiceMonitors**: Deployed to configure Prometheus metric scraping
-- **Visualization**: Grafana dashboards (see [Grafana documentation](https://grafana.com/docs/grafana/latest/))
+- **Visualization**: Grafana dashboards or Perses dashboards (OpenShift Console integration)
 
 ### Component Metrics Status
 
 | Component | Exposes Metrics? | Scraped into Prometheus? | In Dashboards? |
 |-----------|-----------------|--------------------------|----------------|
-| **Limitador** | Yes (`/metrics`) | Yes (Kuadrant PodMonitor or MaaS ServiceMonitor) | Yes — 16 panels use `authorized_hits`, `authorized_calls`, `limited_calls`, `limitador_up` |
+| **Limitador** | Yes (`/metrics`) | Yes (Kuadrant PodMonitor or MaaS ServiceMonitor) | Yes — 16 panels use `authorized_hits`, `authorized_calls`, `limited_calls`; health check uses `kube_pod_status_phase` |
 | **Authorino** | Yes (`/metrics` + `/server-metrics`) | Yes — `/metrics` via Kuadrant operator; `/server-metrics` via MaaS `authorino-server-metrics` ServiceMonitor | Yes — Auth Evaluation Latency (P50/P95/P99), Auth Success/Deny Rate, plus pod-up check |
 | **Istio Gateway** | Yes (Envoy `/stats/prometheus`) | Yes (`istio-gateway-metrics` ServiceMonitor) | Yes — latency histograms, request counts, error rates |
 | **maas-api** | **No** — returns 404 on `/metrics` | No | Only pod-up check via `kube_pod_status_phase` |
@@ -86,7 +86,7 @@ When Kuadrant TelemetryPolicy and TokenRateLimitPolicy are applied, Limitador ex
 | `limited_calls` | Counter | `user`, `subscription`, `limitador_namespace` | Requests denied due to token rate limits. |
 
 !!! note "`model` label availability"
-    The `model` label is currently available **only on `authorized_hits`**. The `authorized_calls` and `limited_calls` metrics carry `user` and `subscription` labels but not `model`, due to how the wasm-shim constructs the CEL evaluation context for these counters. This is a known upstream limitation tracked for improvement in Kuadrant.
+    The `model` label is currently available **only on `authorized_hits`**. The `authorized_calls` and `limited_calls` metrics carry `user` and `subscription` labels but not `model`, due to how the wasm-shim constructs the CEL evaluation context for these counters. The Usage Dashboard uses a `group_left` join to propagate the `model` label from `authorized_hits` to the other metrics for display purposes. This is a known upstream limitation tracked for improvement in Kuadrant.
 
 Per-user latency is not exposed on the gateway histogram to keep cardinality bounded. Per-user metrics are available from Limitador (`authorized_hits`, `authorized_calls`, `limited_calls`).
 
@@ -115,6 +115,9 @@ Authorino exposes metrics on two separate endpoints:
 
 !!! note "MaaS ServiceMonitor"
     The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime stats). MaaS deploys an additional `authorino-server-metrics` ServiceMonitor to scrape `/server-metrics` for auth evaluation metrics. This is deployed automatically by `install-observability.sh`.
+
+!!! note "Authconfig label values are hashed"
+    In Kuadrant deployments, the `authconfig` label on Authorino metrics contains SHA-256 hashes (e.g. `18e32965...`) rather than human-readable AuthPolicy names. Kuadrant creates AuthConfig CRs in `kuadrant-system` with hashed names derived from the policy and route configuration. Since all AuthConfig CRs in a MaaS deployment are Kuadrant-managed MaaS auth policies, dashboard panels use `authconfig!=""` to include all evaluations. This is safe because Authorino is deployed exclusively for MaaS via Kuadrant.
 
 !!! note "Lazily registered metrics"
     Authorino upstream [documents](https://github.com/Kuadrant/authorino/blob/main/docs/user-guides/observability.md) additional per-evaluator metrics (`auth_server_evaluator_total`, `auth_server_evaluator_duration_seconds`, `auth_server_evaluator_cancelled`, `auth_server_evaluator_denied`). These are **lazily registered** and only appear when specific evaluator types (e.g. OPA, HTTP authorization) are triggered. The MaaS AuthPolicy uses `kubernetesTokenReview`, which does not emit these metrics. They are not listed in the table above because they are not present in a standard MaaS deployment.
@@ -246,7 +249,7 @@ By default, Limitador stores rate-limiting counters in memory, which means:
 
 To enable persistent metric counts, refer to the detailed guide:
 
-**[Configuring Redis storage for rate limiting](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp)**
+**[Configuring Redis storage for rate limiting](https://docs.kuadrant.io/1.0.x/limitador-operator/doc/storage/)**
 
 This Red Hat documentation provides:
 
@@ -259,14 +262,26 @@ For local development and testing, you can also use our [Limitador Persistence](
 
 ## Visualization
 
-For dashboard visualization options, see:
+MaaS provides two visualization options — choose one (or both):
+
+| Platform | Integration | Install Script |
+|----------|------------|----------------|
+| **Grafana** | Standalone Grafana Operator; GrafanaDashboard CRs | `./scripts/observability/install-grafana-dashboards.sh` |
+| **Perses** | OpenShift Console native (via Cluster Observability Operator UIPlugin) | `./scripts/observability/install-perses-dashboards.sh` |
+
+Both options deploy Platform Admin and AI Engineer dashboards with equivalent metrics coverage. Perses additionally includes a **Usage Dashboard** for per-user consumption tracking and chargeback. Choose based on your environment:
+
+- **Grafana**: Feature-rich, standalone UI. Best when a Grafana instance already exists or when you need advanced alerting, annotations, or external sharing. Deploys: Platform Admin, AI Engineer.
+- **Perses**: CNCF native, integrated into the OpenShift Console. Best for OpenShift-native workflows where a separate Grafana instance is not desired. Deploys: Platform Admin, AI Engineer, Usage.
+
+For general references:
 
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
 - **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25/html/managing_and_monitoring_models/index)
 
 ### Included Dashboards
 
-MaaS includes two Grafana dashboards for different personas:
+MaaS includes dashboards for different personas (Platform Admin and AI Engineer available in both Grafana and Perses; Usage is Perses-only):
 
 #### Platform Admin Dashboard
 
@@ -277,11 +292,11 @@ Provides a comprehensive view of system health, usage across all users, and reso
 | **Component Health** | Limitador up, Authorino pods, MaaS API pods, Gateway pods, Firing Alerts |
 | **Key Metrics** | Total Tokens, Total Requests, Token Rate, Request Rate, Inference Success Rate, Active Users, P50 Response Latency, Rate Limit Ratio |
 | **Auth Evaluation** | Auth Evaluation Latency (P50/P95/P99), Auth Success/Deny Rate |
-| **Traffic Analysis** | Token/Request Rate by Model, Error Rates (4xx excl. 429, 5xx, 429 Rate Limited), Token/Request Rate by Tier, P95 Latency |
+| **Traffic Analysis** | Token/Request Rate by Model, Error Rates (4xx excl. 429, 5xx, 429 Rate Limited), Token/Request Rate by Subscription, P95 Latency |
 | **Error Breakdown** | Rate Limited Requests, Unauthorized Requests |
 | **Model Metrics** | vLLM queue depth, inference latency, KV cache usage, token throughput, prompt vs generation token ratio, queue wait time, TTFT, ITL |
 | **Top Users** | By token usage, by declined requests |
-| **Detailed Breakdown** | Token Rate by User, Request Volume by User & Tier |
+| **Detailed Breakdown** | Token Rate by User, Request Volume by User & Subscription |
 | **Resource Allocation** | CPU/Memory/GPU per model pod |
 
 !!! note "Template Variables"
@@ -293,7 +308,7 @@ Provides a comprehensive view of system health, usage across all users, and reso
     | `$maas_namespace` | auto-detected | MaaS API namespace (auto-detected from `kube_pod_info{pod=~"maas-api.*"}`) |
     | `$kuadrant_namespace` | `kuadrant-system` | Kuadrant components namespace |
     | `$gateway_namespace` | `openshift-ingress` | Istio/Gateway namespace |
-    | `$llm_namespace` | `llm` | LLM model pods namespace |
+    | `$llm_namespace` | `All` (auto-detected) | LLM model pods namespace(s) (auto-detected from `vllm:num_requests_running`) |
     | `$model` | `All` | Filter by model name |
 
     To customize for your environment, change the variable values in Grafana's dashboard settings (gear icon → Variables).
@@ -306,16 +321,32 @@ Personal usage view for individual developers:
 |---------|---------|
 | **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Inference Success Rate |
 | **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
-| **Detailed Analysis** | Token Volume by Model, Rate Limited by Tier |
+| **Hourly Usage Patterns** | Hourly Token Usage by Model |
+| **Detailed Analysis** | Token Volume by Model, Rate Limited by Subscription |
+| **Usage Summary** | My Usage Summary by Model & Subscription |
+
+#### Usage Dashboard
+
+Tabular view for per-user consumption tracking and chargeback (Perses only):
+
+| Section | Metrics |
+|---------|---------|
+| **Overview Stats** | Total Tokens, Total Requests, Active Users |
+| **Token Consumption by User** | Table with columns: User, Subscription, Tokens, Requests, Rate Limited |
+
+The Usage Dashboard supports filtering by User, Subscription, and Model variables, with pagination and a default 7-day time range. All three table columns (`authorized_hits`, `authorized_calls`, `limited_calls`) are aggregated by `(user, subscription)` so values are consistent across columns.
 
 !!! note "Inference Success Rate"
-    Both dashboards use `rate()` on vLLM counters (`request_success_total`, `e2e_request_latency_seconds_count`) instead of raw counter values. This handles pod restarts correctly (counters reset independently and raw division produces incorrect results). When no traffic is present, `rate()/rate()` produces `NaN`; the dashboards use `((ratio) >= 0) OR vector(1)` to filter `NaN` and default to 100% (healthy) when no traffic exists.
+    Both dashboards use `rate()` on vLLM counters (`request_success_total`, `e2e_request_latency_seconds_count`) instead of raw counter values. This handles pod restarts correctly (counters reset independently and raw division produces incorrect results). When no traffic is present, the denominator is clamped with `clamp_min(..., 1e-9)` and multiplied by a traffic existence check `(sum(rate(...)) > 0)`, falling back to `OR vector(0)` so idle periods show 0% instead of a misleading 100%.
+
+!!! info "Inference Success Rate is platform-wide"
+    The Inference Success Rate panel in the AI Engineer dashboard shows the **platform-wide** model success rate, not per-user. This is because vLLM metrics do not carry user labels — they are emitted by the model backend and measure all inference requests regardless of caller. All other panels in the AI Engineer dashboard are filtered by the selected user.
 
 !!! info "Tokens vs Requests"
     Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
 
 !!! tip "Per-User Token Billing"
-    The **Platform Admin dashboard** shows token consumption aggregated by **subscription** and **model** for system-level visibility. Per-user token consumption for billing is available via:
+    The **Platform Admin dashboard** shows token consumption aggregated by **subscription** and **model** for system-level visibility. The **Usage dashboard** provides a per-user table with subscription, model, tokens, requests, and rate-limited counts. Per-user token consumption for billing is also available via:
 
     - **AI Engineer dashboard**: Individual users see their own token usage
     - **Prometheus API**: Query `sum by (user) (increase(authorized_hits[24h]))` for billing periods
@@ -323,30 +354,48 @@ Personal usage view for individual developers:
 
 ### Prerequisites
 
+**For Grafana dashboards:**
+
 - **Grafana** must be installed (for example via your observability team's process, a centralized instance, or the [Grafana Operator](https://grafana.github.io/grafana-operator/docs/installation/)). The dashboard helper does **not** install Grafana; it only deploys MaaS dashboard definitions and **never fails** (warnings only if none or multiple instances are found).
 - Ensure the Grafana instance has label `app=grafana` so MaaS dashboard definitions attach.
 - Configure a **Prometheus or Thanos datasource** in Grafana; the MaaS dashboards use the default Prometheus datasource.
 
+**For Perses dashboards (two-step install):**
+
+- **OpenShift 4.18+** with the Cluster Observability Operator available in the operator catalog.
+- **Step 1** — Run `scripts/installers/install-perses.sh` to install the Cluster Observability Operator and wait for Perses CRDs to become available.
+- **Step 2** — Run `scripts/observability/install-perses-dashboards.sh` to enable the Perses UIPlugin in the OpenShift Console and deploy MaaS dashboard definitions.
+- Both scripts must be run in sequence; `install-perses-dashboards.sh` will exit with a warning if CRDs from step 1 are not yet present.
+- Perses dashboards are accessed via the OpenShift Console (Observe → Dashboards → Perses tab).
+
 ### Deploying Dashboards
 
-Monitoring is installed by `install-observability.sh`. Dashboards are installed by a **separate helper** that discovers Grafana cluster-wide:
+Monitoring is installed by `install-observability.sh`. Dashboards are installed by **separate helpers** — one for each visualization platform:
+
+**Grafana:**
 
     ./scripts/observability/install-grafana-dashboards.sh
 
-**Behavior:** Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning (and, for multiple, lists them) and exits without error. Use flags to target a specific instance:
+Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning and exits without error. Use flags to target a specific instance:
 
     ./scripts/observability/install-grafana-dashboards.sh --grafana-namespace maas-api
     ./scripts/observability/install-grafana-dashboards.sh --grafana-label app=grafana
 
-To deploy only the dashboard manifests manually (same namespace as your Grafana):
+**Perses:**
 
-    kustomize build deployment/components/observability/grafana | \
+    ./scripts/observability/install-perses-dashboards.sh
+
+Checks for Perses CRDs and, if they are missing, exits with a warning directing you to run `install-perses.sh` first (operator installation is a separate step handled by `scripts/installers/install-perses.sh`). When CRDs are present, `install-perses-dashboards.sh` enables the Perses UIPlugin in the OpenShift Console and deploys PersesDashboard CRs to `openshift-operators`. After installation, dashboards are accessible at **Observe → Dashboards → Perses tab** in the OpenShift Console.
+
+**Manual Grafana import (dashboard JSON only):**
+
+    kustomize build deployment/components/observability/grafana/dashboards | \
       sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
       kubectl apply -f -
 
 ### Sample Dashboard JSON
 
-For manual import, a sample dashboard JSON file is available:
+For manual Grafana import, a sample dashboard JSON file is available:
 
 - [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
@@ -383,7 +432,24 @@ To import into Grafana:
 
 #### Gateway Metrics Collection
 
-The MaaS Istio Telemetry resource enables Prometheus metrics collection on the gateway. This provides gateway-level latency histograms and request counts for all MaaS traffic. Per-user metrics are available from Limitador (`authorized_hits`, `authorized_calls`, `limited_calls`).
+The MaaS Platform uses an Istio Telemetry resource to enable Prometheus metrics collection on the MaaS gateway. This ensures gateway latency histograms and request counts are scraped for the MaaS gateway pods.
+
+**Configuration** (`deployment/base/observability/istio-gateway-telemetry.yaml`):
+
+    apiVersion: telemetry.istio.io/v1
+    kind: Telemetry
+    metadata:
+      name: maas-gateway-metrics
+      namespace: openshift-ingress
+    spec:
+      selector:
+        matchLabels:
+          gateway.networking.k8s.io/gateway-name: maas-default-gateway
+      metrics:
+      - providers:
+        - name: prometheus
+
+Per-subscription and per-user latency breakdowns are not available on the gateway histogram to keep metric cardinality bounded. Per-user and per-subscription metrics are available from Limitador (`authorized_hits`, `authorized_calls`, `limited_calls`).
 
 ### Common Queries
 
@@ -416,7 +482,7 @@ The MaaS Istio Telemetry resource enables Prometheus metrics collection on the g
 
     # Inference success rate using rate() to handle counter resets correctly
     # The >= 0 filter removes NaN (0/0 when no traffic), falling back to vector(1) = 100%
-    ((sum(rate(vllm:request_success_total[5m])) / sum(rate(vllm:e2e_request_latency_seconds_count[5m]))) >= 0) OR vector(1)
+    ((sum(rate(vllm:request_success_total[5m])) / clamp_min(sum(rate(vllm:e2e_request_latency_seconds_count[5m])), 1e-9)) * (sum(rate(vllm:e2e_request_latency_seconds_count[5m])) > 0)) OR vector(0)
 
 **Rate limiting metrics** (capacity planning — are users exceeding their quotas?):
 
@@ -444,7 +510,7 @@ The MaaS Istio Telemetry resource enables Prometheus metrics collection on the g
     histogram_quantile(0.99, sum by (le) (rate(istio_request_duration_milliseconds_bucket[5m])))
 
 !!! tip "Filtering metrics"
-    Limitador usage metrics (`authorized_hits` for token consumption, `authorized_calls` for request counts) already only include successful requests.
+    Limitador usage metrics already exclude rate-limited requests. `authorized_hits` reflects token usage for successful responses, while `authorized_calls` counts requests that were allowed through rate limiting and may still fail downstream.
 
 ## Maintenance
 
@@ -468,17 +534,17 @@ Some features require upstream changes and are currently blocked:
 
 | Feature | Blocker | Workaround |
 |---------|---------|------------|
-| **`model` label on `authorized_calls` / `limited_calls`** | Kuadrant wasm-shim does not pass `responseBodyJSON` context for these counters | Use `authorized_hits` for per-model breakdown; `authorized_calls`/`limited_calls` support per-user and per-subscription |
+| **`model` label on `authorized_calls` / `limited_calls`** | Kuadrant wasm-shim does not pass `responseBodyJSON` context for these counters | Use `authorized_hits` for per-model breakdown; the Usage Dashboard uses `group_left` joins to propagate the `model` label from `authorized_hits`. `authorized_calls`/`limited_calls` natively support per-user and per-subscription |
 | **Input/output token split** | Kuadrant TokenRateLimitPolicy sends a single `hits_addend` (total tokens); no mechanism for separate prompt/completion counters | Total tokens available via `authorized_hits`; the response body contains `usage.prompt_tokens` and `usage.completion_tokens` but the wasm-shim does not split them |
 | **Input/output token breakdown per user** | vLLM does not label its own metrics with `user` | Total tokens per user available via `authorized_hits{user="..."}`; vLLM prompt/generation token metrics are per-model only |
-| **Rate-limited requests not in Istio metrics** | When the Kuadrant WASM plugin rejects a request (429), it calls `sendLocalReply()` which short-circuits the Envoy filter chain. These requests appear in Limitador metrics (`limited_calls`) but may not appear in Istio gateway metrics. | Use `limited_calls` from Limitador for rate-limiting visibility (has correct `subscription` and `user` labels). |
 | **Kuadrant policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` etc. are defined in Kuadrant dev but not yet shipped in RHCL 1.x | Enable `observability.enable: true` on the Kuadrant CR; the ServiceMonitors are created but policy-specific gauges will appear in a future operator release |
 | **Authorino auth server metrics (upstream)** | The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime); `/server-metrics` is not scraped by the upstream operator | **Resolved by MaaS**: The `authorino-server-metrics` ServiceMonitor (deployed by `install-observability.sh`) scrapes `/server-metrics`. Auth evaluation latency and success/deny rate are visualized in the Platform Admin dashboard. |
+| **Rate-limited requests not in Istio metrics** | When the Kuadrant WASM plugin rejects a request (429), it calls `sendLocalReply()` which short-circuits the Envoy filter chain. These requests appear in Limitador metrics (`limited_calls`) but may not appear in Istio gateway metrics. | Use `limited_calls` from Limitador for rate-limiting visibility (has correct `subscription` and `user` labels). |
 | **maas-api application metrics** | The maas-api Go service does not expose a `/metrics` endpoint | No workaround available. Metrics such as API key creation rate, token issuance rate, model discovery latency, and handler durations require adding Prometheus instrumentation to the Go service (e.g. `promhttp` handler, custom counters/histograms). |
 | **PromQL "name does not end in _total" warnings** | Limitador metrics (`authorized_hits`, `authorized_calls`, `limited_calls`) and Authorino's `auth_server_authconfig_response_status` are counters but do not follow the Prometheus naming convention of ending in `_total`. When `rate()` is applied, Prometheus generates a warning that Grafana displays on panels. This is [Grafana issue #84636](https://github.com/grafana/grafana/issues/84636) (open). | The warnings are cosmetic and do not affect data correctness. All dashboard queries correctly apply `rate()` or `increase()` to these counters. The metric names are defined by upstream Kuadrant (Limitador) and Authorino — renaming requires upstream changes. |
 
 !!! note "Total Tokens vs Token Breakdown"
-    Total token consumption per user **is available** via `authorized_hits{user="..."}`. The blocked feature is the input/output split (prompt vs generation tokens) at the gateway level, which requires the wasm-shim to send two separate counter updates to Limitador.
+    Total token consumption per user **is available** via `authorized_hits{user="..."}`. The blocked feature is the input/output split (prompt vs generation tokens) at the gateway level, which requires the wasm-shim to send two separate counter updates to Limitador. Chargeback and usage tracking per user, per subscription, and per model are supported using `authorized_hits`.
 
 ### Available Per-User and Per-Subscription Metrics
 
@@ -492,16 +558,19 @@ Some features require upstream changes and are currently blocked:
 | **Rate limited per user** | `limited_calls` | `user` |
 | **Rate limited per subscription** | `limited_calls` | `subscription` |
 
+!!! warning "TelemetryPolicy `user` label dependency"
+    The `user` label on Limitador metrics (`authorized_hits`, `authorized_calls`, `limited_calls`) is added by TelemetryPolicy. Removing it would break: Active Users count, Top Users by Token Consumption, Top Users by Request Volume, Top Rate-Limited Users, Usage Dashboard table, and the **entire AI Engineer dashboard** (all panels filter by `user`). Aggregate views (per-subscription, per-model, latency, error rates) and Istio/Authorino panels are unaffected — they do not use the `user` label.
+
 ### Requirements Alignment
 
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| **Usage dashboards** (token consumption per user, per subscription, per model) | Met | Grafana dashboard + `authorized_hits` with `user`, `subscription`, `model`; Prometheus scrapes Limitador `/metrics`. |
+| **Usage dashboards** (token consumption per user, per subscription, per model) | Met | Grafana (Platform Admin, AI Engineer) and Perses (Platform Admin, AI Engineer, Usage) dashboards + `authorized_hits` with `user`, `subscription`, `model`; Prometheus scrapes Limitador `/metrics`. The Usage Dashboard (Perses-only) provides a tabular per-user breakdown. |
 | **Latency** (P50/P95/P99) | Met | `istio_request_duration_milliseconds_bucket`; gateway-level histograms. |
 | **Request tracking** (per user, per subscription) | Met | `authorized_calls` with `user` and `subscription` labels; `limited_calls` for rate-limit violations. |
 | **Export for chargeback** (CSV/API) | Not provided (RFE) | Per-user token data exists in Prometheus (`authorized_hits{user="..."}`) but no dedicated billing API or export endpoint is implemented. **RFE recommendation**: Add `/maas-api/v1/usage` endpoint that queries Prometheus and returns per-user, per-subscription, per-model token consumption in CSV/JSON for finance and chargeback systems. |
 | **Input/output token split** | Not available | Only total tokens (`authorized_hits`); separate input and output counters require upstream Kuadrant wasm-shim changes to send split `hits_addend` values. |
-| **`model` label on request/rate-limit counters** | Partial | `model` available on `authorized_hits` only; requires upstream Kuadrant fix to propagate `responseBodyJSON` context to `authorized_calls`/`limited_calls` counters. |
+| **`model` label on request/rate-limit counters** | Partial | `model` available on `authorized_hits` only; the Usage Dashboard uses `group_left` joins to propagate `model` to other metrics for display. Requires upstream Kuadrant fix to natively propagate `responseBodyJSON` context to `authorized_calls`/`limited_calls` counters. |
 | **Policy enforcement health** | Future | Kuadrant operator metrics (`kuadrant_policies_enforced`, `kuadrant_ready`, etc.) defined upstream but not yet shipped in RHCL 1.x; `limitador_up` and `datastore_partitioned` are available now. |
 | **Auth evaluation metrics** | Met | Authorino `/server-metrics` is scraped by the `authorino-server-metrics` ServiceMonitor. Auth evaluation latency (P50/P95/P99) and success/deny rate are available in the Platform Admin dashboard. |
 | **maas-api application metrics** | Not available (gap) | The maas-api Go service does not expose `/metrics`. API key creation rate, token issuance rate, and handler latency are not observable. Requires adding Prometheus instrumentation to the Go service. |
