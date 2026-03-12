@@ -2,6 +2,12 @@ name: Build
 
 on:
   pull_request:
+    paths:
+      - 'maas-controller/api/**'
+      - 'maas-controller/Makefile'
+      - 'deployment/base/maas-controller/crd/**'
+      - 'deployment/**'
+      - '.github/workflows/build-test.yml'
   push:
     branches:
       - main

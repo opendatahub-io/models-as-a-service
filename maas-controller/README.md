@@ -375,11 +375,9 @@ This updates:
 - `maas-controller/api/maas/v1alpha1/zz_generated.deepcopy.go` (deepcopy methods)
 - `deployment/base/maas-controller/crd/bases/maas.opendatahub.io_*.yaml` (CRD schemas)
 
-CI will fail if the generated files are out of date. Install `controller-gen` if you don't have it:
+CI will fail if the generated files are out of date.
 
-```bash
-go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
-```
+> **Note:** You don't need to install `controller-gen` manually - `make generate` and `make manifests` automatically install the correct pinned version to `bin/controller-gen`.
 
 ## Troubleshooting
 

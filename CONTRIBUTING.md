@@ -74,7 +74,7 @@ This project follows a **Stream-Lake-Ocean** release model. Code flows from acti
 **Run locally before pushing:**
 
 - Kustomize: `./scripts/ci/validate-manifests.sh` (from repo root; requires kustomize 5.7.x).
-- MaaS Controller codegen: from the repo root, run `make -C maas-controller verify-codegen` (requires `controller-gen`; install with `go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest`).
+- MaaS Controller codegen: from the repo root, run `make -C maas-controller verify-codegen` (automatically installs the correct `controller-gen` version to `bin/controller-gen`).
 - MaaS API: from `maas-api/`, run `make lint` and `make test`.
 - Full E2E (Prow-style): `./test/e2e/scripts/prow_run_smoke_test.sh` (from repo root; requires OpenShift cluster and cluster-admin).
 
