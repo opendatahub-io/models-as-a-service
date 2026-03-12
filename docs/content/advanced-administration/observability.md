@@ -344,18 +344,6 @@ To deploy only the dashboard manifests manually (same namespace as your Grafana)
       sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
       kubectl apply -f -
 
-### Sample Dashboard JSON
-
-For manual import, a sample dashboard JSON file is available:
-
-- [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
-
-To import into Grafana:
-
-1. Go to Grafana → Dashboards → Import
-2. Upload the JSON file or paste content
-3. Select your Prometheus datasource
-
 ## Key Metrics Reference
 
 ### Token and Request Metrics
