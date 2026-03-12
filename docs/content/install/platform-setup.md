@@ -302,10 +302,24 @@ spec:
     allowedRoutes:
       namespaces:
         from: All
+  - name: https
+    port: 443
+    protocol: HTTPS
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: <your-tls-cert-secret>
+        kind: Secret
+    allowedRoutes:
+      namespaces:
+        from: All
   infrastructure:
     labels:
       serving.kserve.io/gateway: kserve-ingress-gateway
 ```
+
+!!! info "TLS Certificate"
+    Replace `<your-tls-cert-secret>` with your TLS certificate secret name. Common OpenShift certificate secrets include `default-gateway-cert`, `data-science-gatewayconfig-tls`, or `data-science-gateway-service-tls`. The certificate secret must exist in the `openshift-ingress` namespace.
 
 !!! info "Gateway Architecture"
     MaaS uses a segregated gateway approach where models explicitly opt-in to MaaS capabilities. The `openshift-ai-inference` gateway above is for standard KServe inference, while `maas-default-gateway` (created later) enables token authentication and rate limiting. For details, see [Model Setup - Gateway Architecture](../configuration-and-management/model-setup.md#gateway-architecture).
@@ -462,8 +476,28 @@ spec:
      allowedRoutes:
        namespaces:
          from: All
+   - name: https
+     hostname: maas.${CLUSTER_DOMAIN}
+     port: 443
+     protocol: HTTPS
+     allowedRoutes:
+       namespaces:
+         from: All
+     tls:
+       certificateRefs:
+       - kind: Secret
+         name: router-certs-default
+       mode: Terminate
 EOF
 ```
+
+!!! tip "TLS Certificate"
+    The example above uses `router-certs-default`, which is the default OpenShift router certificate available on most clusters. If you need to use a different certificate, common alternatives include:
+
+    - `data-science-gateway-service-tls` (if Data Science operator is installed)
+    - `default-gateway-cert`
+
+    To verify available certificates: `kubectl get secrets -n openshift-ingress --field-selector type=kubernetes.io/tls`
 
 Wait for the Gateway to be programmed:
 
