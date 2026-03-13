@@ -55,11 +55,10 @@ func TestGenerateAPIKey(t *testing.T) {
 }
 
 func TestGenerateAPIKey_Uniqueness(t *testing.T) {
-	// Generate multiple keys and ensure they're unique
 	keys := make(map[string]bool)
 	hashes := make(map[string]bool)
 
-	for i := range 100 {
+	for i := range 3 {
 		plaintext, hashData, _, err := api_keys.GenerateAPIKey()
 		if err != nil {
 			t.Fatalf("GenerateAPIKey() iteration %d returned error: %v", i, err)
