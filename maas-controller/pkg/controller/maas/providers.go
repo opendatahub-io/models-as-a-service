@@ -93,36 +93,21 @@ func GetRouteResolver(kind string) RouteResolver {
 	return f()
 }
 
-// ErrModelNotFound is returned when a MaaSModelRef cannot be found by name (e.g. in findHTTPRouteForModel).
+// ErrModelNotFound is returned when a MaaSModelRef cannot be found (e.g. in findHTTPRouteForModel).
 var ErrModelNotFound = errors.New("MaaSModelRef not found")
 
-// findHTTPRouteForModel finds the MaaSModelRef by name, uses the kind's RouteResolver to get HTTPRoute name/namespace,
+// findHTTPRouteForModel finds the MaaSModelRef by namespace and name, uses the kind's RouteResolver to get HTTPRoute name/namespace,
 // and verifies the HTTPRoute exists. Returns (httpRouteName, httpRouteNamespace, error).
-func findHTTPRouteForModel(ctx context.Context, c client.Reader, defaultNS, modelName string) (string, string, error) {
-	maasModelList := &maasv1alpha1.MaaSModelRefList{}
-	if err := c.List(ctx, maasModelList); err != nil {
-		return "", "", fmt.Errorf("failed to list MaaSModelRefs: %w", err)
+func findHTTPRouteForModel(ctx context.Context, c client.Reader, modelNamespace, modelName string) (string, string, error) {
+	maasModel := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: modelNamespace, Name: modelName}, maasModel); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", "", fmt.Errorf("%w: %s/%s", ErrModelNotFound, modelNamespace, modelName)
+		}
+		return "", "", fmt.Errorf("failed to get MaaSModelRef %s/%s: %w", modelNamespace, modelName, err)
 	}
-
-	var maasModel *maasv1alpha1.MaaSModelRef
-	for i := range maasModelList.Items {
-		if maasModelList.Items[i].Name != modelName {
-			continue
-		}
-		if !maasModelList.Items[i].GetDeletionTimestamp().IsZero() {
-			continue
-		}
-		if maasModelList.Items[i].Namespace == defaultNS {
-			maasModel = &maasModelList.Items[i]
-			break
-		}
-		if maasModel == nil {
-			maasModel = &maasModelList.Items[i]
-		}
-	}
-
-	if maasModel == nil {
-		return "", "", fmt.Errorf("%w: %s", ErrModelNotFound, modelName)
+	if !maasModel.GetDeletionTimestamp().IsZero() {
+		return "", "", fmt.Errorf("%w: %s/%s (deleting)", ErrModelNotFound, modelNamespace, modelName)
 	}
 
 	resolver := GetRouteResolver(maasModel.Spec.ModelRef.Kind)

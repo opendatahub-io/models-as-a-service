@@ -16,6 +16,12 @@ This directory contains `LLMInferenceService`s for deploying sample models. Plea
 
 ### Basic Deployment
 
+Create the `llm` namespace where models are deployed (if it doesn't already exist):
+
+```bash
+kubectl create namespace llm
+```
+
 Deploy any model using:
 
 ```bash

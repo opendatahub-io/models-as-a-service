@@ -7,7 +7,17 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
+
+// deletionTimestampSet returns true when an object's DeletionTimestamp transitions
+// from nil to non-nil, indicating the object is being deleted. Use with
+// predicate.Funcs{UpdateFunc: deletionTimestampSet} alongside
+// GenerationChangedPredicate so that finalizer-based deletion handlers run.
+func deletionTimestampSet(e event.UpdateEvent) bool {
+	return e.ObjectOld.GetDeletionTimestamp().IsZero() &&
+		!e.ObjectNew.GetDeletionTimestamp().IsZero()
+}
 
 // validateCELValue checks that a string is safe to interpolate into a CEL expression.
 // Rejects values containing characters that could break or inject into CEL string literals.
@@ -20,7 +30,7 @@ func validateCELValue(value, fieldName string) error {
 
 // findAllSubscriptionsForModel returns all MaaSSubscriptions that reference the given model,
 // excluding subscriptions that are being deleted.
-func findAllSubscriptionsForModel(ctx context.Context, c client.Reader, modelName string) ([]maasv1alpha1.MaaSSubscription, error) {
+func findAllSubscriptionsForModel(ctx context.Context, c client.Reader, modelNamespace, modelName string) ([]maasv1alpha1.MaaSSubscription, error) {
 	var allSubs maasv1alpha1.MaaSSubscriptionList
 	if err := c.List(ctx, &allSubs); err != nil {
 		return nil, fmt.Errorf("failed to list MaaSSubscriptions: %w", err)
@@ -31,7 +41,7 @@ func findAllSubscriptionsForModel(ctx context.Context, c client.Reader, modelNam
 			continue
 		}
 		for _, ref := range s.Spec.ModelRefs {
-			if ref.Name == modelName {
+			if ref.Namespace == modelNamespace && ref.Name == modelName {
 				result = append(result, s)
 				break
 			}
@@ -42,7 +52,7 @@ func findAllSubscriptionsForModel(ctx context.Context, c client.Reader, modelNam
 
 // findAllAuthPoliciesForModel returns all MaaSAuthPolicies that reference the given model,
 // excluding policies that are being deleted.
-func findAllAuthPoliciesForModel(ctx context.Context, c client.Reader, modelName string) ([]maasv1alpha1.MaaSAuthPolicy, error) {
+func findAllAuthPoliciesForModel(ctx context.Context, c client.Reader, modelNamespace, modelName string) ([]maasv1alpha1.MaaSAuthPolicy, error) {
 	var allPolicies maasv1alpha1.MaaSAuthPolicyList
 	if err := c.List(ctx, &allPolicies); err != nil {
 		return nil, fmt.Errorf("failed to list MaaSAuthPolicies: %w", err)
@@ -53,7 +63,7 @@ func findAllAuthPoliciesForModel(ctx context.Context, c client.Reader, modelName
 			continue
 		}
 		for _, ref := range p.Spec.ModelRefs {
-			if ref == modelName {
+			if ref.Namespace == modelNamespace && ref.Name == modelName {
 				result = append(result, p)
 				break
 			}
@@ -64,8 +74,8 @@ func findAllAuthPoliciesForModel(ctx context.Context, c client.Reader, modelName
 
 // findAnySubscriptionForModel returns any one non-deleted MaaSSubscription that references the model.
 // Used by watch mappers to find a subscription to trigger reconciliation for a model.
-func findAnySubscriptionForModel(ctx context.Context, c client.Reader, modelName string) *maasv1alpha1.MaaSSubscription {
-	subs, err := findAllSubscriptionsForModel(ctx, c, modelName)
+func findAnySubscriptionForModel(ctx context.Context, c client.Reader, modelNamespace, modelName string) *maasv1alpha1.MaaSSubscription {
+	subs, err := findAllSubscriptionsForModel(ctx, c, modelNamespace, modelName)
 	if err != nil || len(subs) == 0 {
 		return nil
 	}
@@ -73,8 +83,8 @@ func findAnySubscriptionForModel(ctx context.Context, c client.Reader, modelName
 }
 
 // findAnyAuthPolicyForModel returns any one non-deleted MaaSAuthPolicy that references the model.
-func findAnyAuthPolicyForModel(ctx context.Context, c client.Reader, modelName string) *maasv1alpha1.MaaSAuthPolicy {
-	policies, err := findAllAuthPoliciesForModel(ctx, c, modelName)
+func findAnyAuthPolicyForModel(ctx context.Context, c client.Reader, modelNamespace, modelName string) *maasv1alpha1.MaaSAuthPolicy {
+	policies, err := findAllAuthPoliciesForModel(ctx, c, modelNamespace, modelName)
 	if err != nil || len(policies) == 0 {
 		return nil
 	}
