@@ -112,10 +112,10 @@ If maas-controller is not already installed:
 kubectl apply -k deployment/base/maas-controller/default
 
 # Verify controller is running
-kubectl get pods -n opendatahub -l app.kubernetes.io/name=maas-controller
+kubectl get pods -n opendatahub -l app=maas-controller
 
 # Check controller logs
-kubectl logs -n opendatahub -l app.kubernetes.io/name=maas-controller --tail=20
+kubectl logs -n opendatahub -l app=maas-controller --tail=20
 
 # Verify gateway default policies were created
 kubectl get authpolicy gateway-default-auth -n openshift-ingress
@@ -865,7 +865,7 @@ kubectl logs -n kuadrant-system -l app.kubernetes.io/name=limitador --tail=50
 **Resolution:**
 ```bash
 # Check maas-controller logs
-kubectl logs -n opendatahub -l app.kubernetes.io/name=maas-controller --tail=100
+kubectl logs -n opendatahub -l app=maas-controller --tail=100
 
 # Check MaaSModelRef status
 kubectl get maasmodelref my-model-name -n llm -o yaml
@@ -905,7 +905,7 @@ kubectl get httproute -n llm my-model-name
 kubectl wait --for=condition=Ready llminferenceservice/my-model-name -n llm --timeout=5m
 
 # Check maas-controller logs for errors
-kubectl logs -n opendatahub -l app.kubernetes.io/name=maas-controller | grep my-model-name
+kubectl logs -n opendatahub -l app=maas-controller | grep my-model-name
 ```
 
 ### Duplicate AuthPolicies (ODH Model Controller conflict)

@@ -594,7 +594,7 @@ if [[ "$APPLY" == "true" ]]; then
         log_success "All policies created successfully!"
     else
         log_warn "Not all policies created yet. Controller may still be reconciling."
-        log_info "Check maas-controller logs: kubectl logs -n $MAAS_NAMESPACE -l app.kubernetes.io/name=maas-controller"
+        log_info "Check maas-controller logs: kubectl logs -n $MAAS_NAMESPACE -l app=maas-controller"
     fi
 
     echo ""
