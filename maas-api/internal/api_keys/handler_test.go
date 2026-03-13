@@ -45,6 +45,15 @@ func (m *mockAdminChecker) IsAdmin(userGroups []string) bool {
 	return false
 }
 
+// createTestAPIKey is a helper function for tests to create PBKDF2 hash data.
+func createTestAPIKey(plaintext string) (string, *APIKeyHashData) {
+	hashData, err := HashAPIKey(plaintext)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create test API key: %v", err))
+	}
+	return plaintext, hashData
+}
+
 // executeSearchRequest is a test helper that executes a search request and returns the parsed response.
 func executeSearchRequest(t *testing.T, handler *Handler, requestBody string, user *token.UserContext) SearchAPIKeysResponse {
 	t.Helper()
@@ -101,14 +110,20 @@ func TestSearchAPIKeys_EmptyRequest(t *testing.T) {
 		Groups:   []string{"system:authenticated"},
 	}
 
-	// Create test keys
+	// Create test keys with PBKDF2 hashes
 	ctx := context.Background()
-	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Key 1", "", []string{"system:authenticated"}, nil)
+	
+	key1, hash1 := createTestAPIKey("sk-oai-test1")
+	err := store.AddKey(ctx, testUser.Username, "key-1", key1, hash1, "Key 1", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Key 2", "", []string{"system:authenticated"}, nil)
+	
+	key2, hash2 := createTestAPIKey("sk-oai-test2")
+	err = store.AddKey(ctx, testUser.Username, "key-2", key2, hash2, "Key 2", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
+	
 	// Create a revoked key
-	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Key 3", "", []string{"system:authenticated"}, nil)
+	key3, hash3 := createTestAPIKey("sk-oai-test3")
+	err = store.AddKey(ctx, testUser.Username, "key-3", key3, hash3, "Key 3", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "key-3")
 	require.NoError(t, err)
@@ -151,9 +166,10 @@ func TestSearchAPIKeys_Pagination(t *testing.T) {
 	ctx := context.Background()
 	for i := 1; i <= 75; i++ {
 		keyID := fmt.Sprintf("key-%d", i)
-		keyHash := fmt.Sprintf("hash-%d", i)
+		plaintextKey := fmt.Sprintf("sk-oai-test%d", i)
 		name := fmt.Sprintf("Key %d", i)
-		err := store.AddKey(ctx, testUser.Username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		_, hashData := createTestAPIKey(plaintextKey)
+		err := store.AddKey(ctx, testUser.Username, keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 
@@ -253,9 +269,11 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 	}
 
 	// Create active and revoked keys
-	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, nil)
+	activeKey, activeHash := createTestAPIKey("sk-oai-active")
+	err := store.AddKey(ctx, testUser.Username, "active-key", activeKey, activeHash, "Active Key", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, nil)
+	revokedKey, revokedHash := createTestAPIKey("sk-oai-revoked")
+	err = store.AddKey(ctx, testUser.Username, "revoked-key", revokedKey, revokedHash, "Revoked Key", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "revoked-key")
 	require.NoError(t, err)
@@ -379,11 +397,14 @@ func TestSearchAPIKeys_Sorting(t *testing.T) {
 	}
 
 	// Create keys with different names
-	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Charlie", "", []string{"system:authenticated"}, nil)
+	key1, hash1 := createTestAPIKey("sk-oai-charlie")
+	err := store.AddKey(ctx, testUser.Username, "key-1", key1, hash1, "Charlie", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Alice", "", []string{"system:authenticated"}, nil)
+	key2, hash2 := createTestAPIKey("sk-oai-alice")
+	err = store.AddKey(ctx, testUser.Username, "key-2", key2, hash2, "Alice", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Bob", "", []string{"system:authenticated"}, nil)
+	key3, hash3 := createTestAPIKey("sk-oai-bob")
+	err = store.AddKey(ctx, testUser.Username, "key-3", key3, hash3, "Bob", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
 
 	t.Run("DefaultSort_CreatedAtDesc", func(t *testing.T) {
@@ -504,9 +525,10 @@ func TestSearchAPIKeys_AdminVsRegularUser(t *testing.T) {
 	for _, username := range users {
 		for i := 1; i <= 2; i++ {
 			keyID := fmt.Sprintf("%s-key-%d", username, i)
-			keyHash := fmt.Sprintf("%s-hash-%d", username, i)
+			plaintextKey := fmt.Sprintf("sk-oai-%s%d", username, i)
 			name := fmt.Sprintf("%s Key %d", username, i)
-			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+			_, hashData := createTestAPIKey(plaintextKey)
+			err := store.AddKey(ctx, username, keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 			require.NoError(t, err)
 		}
 	}
@@ -625,16 +647,18 @@ func TestSearchAPIKeys_AdminFiltersByUsernameAndStatus(t *testing.T) {
 		// Create 2 active keys
 		for i := 1; i <= 2; i++ {
 			keyID := fmt.Sprintf("%s-active-%d", username, i)
-			keyHash := fmt.Sprintf("%s-hash-active-%d", username, i)
+			plaintextKey := fmt.Sprintf("sk-oai-%s-active-%d", username, i)
 			name := fmt.Sprintf("%s Active Key %d", username, i)
-			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+			_, hashData := createTestAPIKey(plaintextKey)
+			err := store.AddKey(ctx, username, keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 			require.NoError(t, err)
 		}
 		// Create 1 revoked key
 		keyID := fmt.Sprintf("%s-revoked", username)
-		keyHash := fmt.Sprintf("%s-hash-revoked", username)
+		plaintextKey := fmt.Sprintf("sk-oai-%s-revoked", username)
 		name := fmt.Sprintf("%s Revoked Key", username)
-		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		_, hashData := createTestAPIKey(plaintextKey)
+		err := store.AddKey(ctx, username, keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 		err = store.Revoke(ctx, keyID)
 		require.NoError(t, err)
@@ -705,17 +729,19 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 	// Create keys for alice and bob
 	for i := 1; i <= 3; i++ {
 		keyID := fmt.Sprintf("alice-key-%d", i)
-		keyHash := fmt.Sprintf("alice-hash-%d", i)
+		plaintextKey := fmt.Sprintf("sk-oai-alice-key-%d", i)
 		name := fmt.Sprintf("Alice Key %d", i)
-		err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		_, hashData := createTestAPIKey(plaintextKey)
+		err := store.AddKey(ctx, "alice", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 
 	for i := 1; i <= 2; i++ {
 		keyID := fmt.Sprintf("bob-key-%d", i)
-		keyHash := fmt.Sprintf("bob-hash-%d", i)
+		plaintextKey := fmt.Sprintf("sk-oai-bob-key-%d", i)
 		name := fmt.Sprintf("Bob Key %d", i)
-		err := store.AddKey(ctx, "bob", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		_, hashData := createTestAPIKey(plaintextKey)
+		err := store.AddKey(ctx, "bob", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 
@@ -768,9 +794,10 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		// Re-add alice keys (they were revoked in first test)
 		for i := 4; i <= 6; i++ {
 			keyID := fmt.Sprintf("alice-key-%d", i)
-			keyHash := fmt.Sprintf("alice-hash-%d", i)
+			plaintextKey := fmt.Sprintf("sk-oai-alice-extra-%d", i)
 			name := fmt.Sprintf("Alice Key %d", i)
-			err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+			_, hashData := createTestAPIKey(plaintextKey)
+			err := store.AddKey(ctx, "alice", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 			require.NoError(t, err)
 		}
 
@@ -912,9 +939,11 @@ func TestGetAPIKeyHandler(t *testing.T) {
 	}
 
 	// Add keys to store
-	err := store.AddKey(context.Background(), aliceKey.Username, aliceKey.ID, "hash1", aliceKey.Name, "", aliceKey.Groups, nil)
+	aliceAPIKey, aliceHashData := createTestAPIKey("sk-oai-alice-search")
+	err := store.AddKey(context.Background(), aliceKey.Username, aliceKey.ID, aliceAPIKey, aliceHashData, aliceKey.Name, "", aliceKey.Groups, nil)
 	require.NoError(t, err)
-	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, "hash2", bobKey.Name, "", bobKey.Groups, nil)
+	bobAPIKey, bobHashData := createTestAPIKey("sk-oai-bob-search")
+	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, bobAPIKey, bobHashData, bobKey.Name, "", bobKey.Groups, nil)
 	require.NoError(t, err)
 
 	t.Run("OwnerCanGetOwnKey", func(t *testing.T) {
@@ -1015,7 +1044,8 @@ func testRevokeKeySuccess(t *testing.T, user *token.UserContext) {
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	// Create alice's key
-	err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
+	aliceKey, aliceHash := createTestAPIKey("sk-oai-alice-tiers1")
+	err := store.AddKey(context.Background(), "alice", "alice-key-1", aliceKey, aliceHash, "Alice's Key", "", []string{"tier-free"}, nil)
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -1058,7 +1088,8 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 		// Create alice's key
-		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
+		aliceKey2, aliceHash2 := createTestAPIKey("sk-oai-alice-tiers2")
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", aliceKey2, aliceHash2, "Alice's Key", "", []string{"tier-free"}, nil)
 		require.NoError(t, err)
 
 		// Bob trying to revoke Alice's key
@@ -1125,7 +1156,8 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 		// Create and immediately revoke alice's key
-		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
+		aliceKey3, aliceHash3 := createTestAPIKey("sk-oai-alice-tiers3")
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", aliceKey3, aliceHash3, "Alice's Key", "", []string{"tier-free"}, nil)
 		require.NoError(t, err)
 		err = store.Revoke(context.Background(), "alice-key-1")
 		require.NoError(t, err)

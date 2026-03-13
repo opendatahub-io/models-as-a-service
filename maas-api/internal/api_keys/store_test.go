@@ -65,7 +65,9 @@ func TestAPIKeyOperations(t *testing.T) {
 	defer store.Close()
 
 	t.Run("AddKey", func(t *testing.T) {
-		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", []string{"system:authenticated", "premium-user"}, nil)
+		hashData, err := api_keys.HashAPIKey("test-plaintext-key-1")
+		require.NoError(t, err)
+		err = store.AddKey(ctx, "user1", "key-id-1", "test-plaintext-key-1", hashData, "my-key", "test key", []string{"system:authenticated", "premium-user"}, nil)
 		require.NoError(t, err)
 
 		params := api_keys.PaginationParams{Limit: 10, Offset: 0}
@@ -77,16 +79,18 @@ func TestAPIKeyOperations(t *testing.T) {
 		assert.False(t, result.HasMore)
 	})
 
-	t.Run("GetByHash", func(t *testing.T) {
-		key, err := store.GetByHash(ctx, "hash123")
+	t.Run("GetByKey", func(t *testing.T) {
+		// Use the plaintext key that was stored
+		plaintext := "test-plaintext-key-1"
+		key, err := store.GetByKey(ctx, plaintext)
 		require.NoError(t, err)
 		assert.Equal(t, "my-key", key.Name)
 		assert.Equal(t, "user1", key.Username)
 		assert.Equal(t, []string{"system:authenticated", "premium-user"}, key.Groups)
 	})
 
-	t.Run("GetByHashNotFound", func(t *testing.T) {
-		_, err := store.GetByHash(ctx, "nonexistent-hash")
+	t.Run("GetByKeyNotFound", func(t *testing.T) {
+		_, err := store.GetByKey(ctx, "sk-oai-nonexistent-key")
 		require.ErrorIs(t, err, api_keys.ErrKeyNotFound)
 	})
 
@@ -95,19 +99,23 @@ func TestAPIKeyOperations(t *testing.T) {
 		require.NoError(t, err)
 
 		// Getting by hash should now fail
-		_, err = store.GetByHash(ctx, "hash123")
-		require.ErrorIs(t, err, api_keys.ErrInvalidKey)
+		plaintext := "test-plaintext-key-1"
+		_, err = store.GetByKey(ctx, plaintext)
+		require.ErrorIs(t, err, api_keys.ErrKeyNotFound)
 	})
 
 	t.Run("UpdateLastUsed", func(t *testing.T) {
 		// Add another key for this test
-		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", []string{"system:authenticated", "free-user"}, nil)
+		hashData, err := api_keys.HashAPIKey("test-plaintext-key-2")
+		require.NoError(t, err)
+		err = store.AddKey(ctx, "user2", "key-id-2", "test-plaintext-key-2", hashData, "key2", "", []string{"system:authenticated", "free-user"}, nil)
 		require.NoError(t, err)
 
 		err = store.UpdateLastUsed(ctx, "key-id-2")
 		require.NoError(t, err)
 
-		key, err := store.GetByHash(ctx, "hash456")
+		plaintext := "test-plaintext-key-2"
+		key, err := store.GetByKey(ctx, plaintext)
 		require.NoError(t, err)
 		assert.NotEmpty(t, key.LastUsedAt)
 	})
@@ -124,9 +132,11 @@ func TestList(t *testing.T) {
 
 	for i := 1; i <= totalKeys; i++ {
 		keyID := fmt.Sprintf("key-%d", i)
-		keyHash := fmt.Sprintf("hash-%d", i)
 		name := fmt.Sprintf("Key %d", i)
-		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		plaintextKey := fmt.Sprintf("plaintext-key-%d", i)
+		hashData, err := api_keys.HashAPIKey(plaintextKey)
+		require.NoError(t, err)
+		err = store.AddKey(ctx, username, keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 
@@ -164,18 +174,22 @@ func TestEmptyUsernameReturnsAllUsers(t *testing.T) {
 	// Create 3 keys for alice
 	for i := 1; i <= 3; i++ {
 		keyID := fmt.Sprintf("alice-key-%d", i)
-		keyHash := fmt.Sprintf("alice-hash-%d", i)
 		name := fmt.Sprintf("Alice Key %d", i)
-		err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		plaintextKey := fmt.Sprintf("alice-plaintext-key-%d", i)
+		hashData, err := api_keys.HashAPIKey(plaintextKey)
+		require.NoError(t, err)
+		err = store.AddKey(ctx, "alice", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 
 	// Create 2 keys for bob
 	for i := 1; i <= 2; i++ {
 		keyID := fmt.Sprintf("bob-key-%d", i)
-		keyHash := fmt.Sprintf("bob-hash-%d", i)
 		name := fmt.Sprintf("Bob Key %d", i)
-		err := store.AddKey(ctx, "bob", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		plaintextKey := fmt.Sprintf("bob-plaintext-key-%d", i)
+		hashData, err := api_keys.HashAPIKey(plaintextKey)
+		require.NoError(t, err)
+		err = store.AddKey(ctx, "bob", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 
@@ -202,18 +216,22 @@ func TestFilterByStatus(t *testing.T) {
 	// Create 3 active keys
 	for i := 1; i <= 3; i++ {
 		keyID := fmt.Sprintf("active-key-%d", i)
-		keyHash := fmt.Sprintf("active-hash-%d", i)
 		name := fmt.Sprintf("Active Key %d", i)
-		err := store.AddKey(ctx, "testuser", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		plaintextKey := fmt.Sprintf("active-plaintext-key-%d", i)
+		hashData, err := api_keys.HashAPIKey(plaintextKey)
+		require.NoError(t, err)
+		err = store.AddKey(ctx, "testuser", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 
 	// Create 2 revoked keys
 	for i := 1; i <= 2; i++ {
 		keyID := fmt.Sprintf("revoked-key-%d", i)
-		keyHash := fmt.Sprintf("revoked-hash-%d", i)
 		name := fmt.Sprintf("Revoked Key %d", i)
-		err := store.AddKey(ctx, "testuser", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		plaintextKey := fmt.Sprintf("revoked-plaintext-key-%d", i)
+		hashData, err := api_keys.HashAPIKey(plaintextKey)
+		require.NoError(t, err)
+		err = store.AddKey(ctx, "testuser", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 		err = store.Revoke(ctx, keyID)
 		require.NoError(t, err)
@@ -248,16 +266,20 @@ func TestFilterByMultipleStatuses(t *testing.T) {
 	// Create 2 active keys
 	for i := 1; i <= 2; i++ {
 		keyID := fmt.Sprintf("active-key-%d", i)
-		keyHash := fmt.Sprintf("active-hash-%d", i)
 		name := fmt.Sprintf("Active Key %d", i)
-		err := store.AddKey(ctx, "testuser", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		plaintextKey := fmt.Sprintf("multiactive-plaintext-key-%d", i)
+		hashData, err := api_keys.HashAPIKey(plaintextKey)
+		require.NoError(t, err)
+		err = store.AddKey(ctx, "testuser", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 
 	// Create 1 revoked key
 	keyID := "revoked-key"
-	keyHash := "revoked-hash"
-	err := store.AddKey(ctx, "testuser", keyID, keyHash, "Revoked Key", "", []string{"system:authenticated"}, nil)
+	plaintextKey := "revoked-multi-plaintext-key"
+	hashData, err := api_keys.HashAPIKey(plaintextKey)
+	require.NoError(t, err)
+	err = store.AddKey(ctx, "testuser", keyID, plaintextKey, hashData, "Revoked Key", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, keyID)
 	require.NoError(t, err)
@@ -290,29 +312,37 @@ func TestFilterByUsernameAndStatus(t *testing.T) {
 	// alice: 2 active, 1 revoked
 	for i := 1; i <= 2; i++ {
 		keyID := fmt.Sprintf("alice-active-%d", i)
-		keyHash := fmt.Sprintf("alice-hash-active-%d", i)
 		name := fmt.Sprintf("Alice Active Key %d", i)
-		err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		plaintextKey := fmt.Sprintf("alice-active-plaintext-key-%d", i)
+		hashData, err := api_keys.HashAPIKey(plaintextKey)
+		require.NoError(t, err)
+		err = store.AddKey(ctx, "alice", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 	}
 	keyID := "alice-revoked"
-	keyHash := "alice-hash-revoked"
-	err := store.AddKey(ctx, "alice", keyID, keyHash, "Alice Revoked Key", "", []string{"system:authenticated"}, nil)
+	plaintextKey := "alice-revoked-plaintext-key"
+	hashData, err := api_keys.HashAPIKey(plaintextKey)
+	require.NoError(t, err)
+	err = store.AddKey(ctx, "alice", keyID, plaintextKey, hashData, "Alice Revoked Key", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, keyID)
 	require.NoError(t, err)
 
 	// bob: 1 active, 2 revoked
 	keyID = "bob-active"
-	keyHash = "bob-hash-active"
-	err = store.AddKey(ctx, "bob", keyID, keyHash, "Bob Active Key", "", []string{"system:authenticated"}, nil)
+	plaintextKey = "bob-active-plaintext-key"
+	hashData, err = api_keys.HashAPIKey(plaintextKey)
+	require.NoError(t, err)
+	err = store.AddKey(ctx, "bob", keyID, plaintextKey, hashData, "Bob Active Key", "", []string{"system:authenticated"}, nil)
 	require.NoError(t, err)
 
 	for i := 1; i <= 2; i++ {
 		keyID = fmt.Sprintf("bob-revoked-%d", i)
-		keyHash = fmt.Sprintf("bob-hash-revoked-%d", i)
 		name := fmt.Sprintf("Bob Revoked Key %d", i)
-		err = store.AddKey(ctx, "bob", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		plaintextKey = fmt.Sprintf("bob-revoked-plaintext-key-%d", i)
+		hashData, err = api_keys.HashAPIKey(plaintextKey)
+		require.NoError(t, err)
+		err = store.AddKey(ctx, "bob", keyID, plaintextKey, hashData, name, "", []string{"system:authenticated"}, nil)
 		require.NoError(t, err)
 		err = store.Revoke(ctx, keyID)
 		require.NoError(t, err)
