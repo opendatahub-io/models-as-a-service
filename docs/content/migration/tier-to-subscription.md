@@ -682,7 +682,7 @@ kubectl annotate llminferenceservice my-model-name -n llm \
 ```bash
 # Check if MaaSAuthPolicy exists for the model
 kubectl get maasauthpolicy -n models-as-a-service -o json | \
-  jq -r '.items[] | select(.spec.modelRefs[]?.name == "my-model-name")'
+  jq -r '.items[] | select(.spec.modelRefs[]? | .name? == "my-model-name")'
 
 # Check if AuthPolicy was generated
 kubectl get authpolicy -n llm -l maas.opendatahub.io/model-ref=my-model-name
