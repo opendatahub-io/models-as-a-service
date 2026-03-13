@@ -13,9 +13,9 @@ metadata:
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
-    appstudio.openshift.io/component: odh-maas-api-ci
+    appstudio.openshift.io/component: odh-maas-controller-ci
     pipelines.appstudio.openshift.io/type: build
-  name: odh-maas-api-on-pull-request
+  name: odh-maas-controller-on-pull-request
   namespace: open-data-hub-tenant
 spec:
   params:
@@ -24,11 +24,11 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/maas-api:odh-pr
+    value: quay.io/opendatahub/maas-controller:odh-pr
   - name: dockerfile
-    value: maas-api/Dockerfile
+    value: Dockerfile
   - name: path-context
-    value: maas-api
+    value: maas-controller
   - name: additional-tags
     value:
     - 'odh-pr-{{revision}}'
@@ -44,7 +44,7 @@ spec:
     - name: pathInRepo
       value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
-    serviceAccountName: build-pipeline-maas-api-poc
+    serviceAccountName: build-pipeline-odh-maas-controller-ci
   workspaces:
   - name: git-auth
     secret:

@@ -22,9 +22,9 @@ import (
 
 // MaaSAuthPolicySpec defines the desired state of MaaSAuthPolicy
 type MaaSAuthPolicySpec struct {
-	// ModelRefs is a list of model names that this policy grants access to
+	// ModelRefs is a list of models (by name and namespace) that this policy grants access to
 	// +kubebuilder:validation:MinItems=1
-	ModelRefs []string `json:"modelRefs"`
+	ModelRefs []ModelRef `json:"modelRefs"`
 
 	// Subjects defines who has access (OR logic - any match grants access)
 	// +kubebuilder:validation:XValidation:rule="size(self.groups) > 0 || size(self.users) > 0",message="at least one group or user must be specified in subjects"
@@ -33,6 +33,19 @@ type MaaSAuthPolicySpec struct {
 	// MeteringMetadata contains billing and tracking information
 	// +optional
 	MeteringMetadata *MeteringMetadata `json:"meteringMetadata,omitempty"`
+}
+
+// ModelRef references a MaaSModelRef by name and namespace.
+type ModelRef struct {
+	// Name is the name of the MaaSModelRef
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name"`
+
+	// Namespace is the namespace where the MaaSModelRef lives
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
 }
 
 // SubjectSpec defines the subjects that have access
@@ -73,8 +86,10 @@ type AuthPolicyRefStatus struct {
 	Name string `json:"name"`
 	// Namespace is the namespace of the AuthPolicy resource.
 	Namespace string `json:"namespace"`
-	// Model is the model name this AuthPolicy targets.
+	// Model is the MaaSModelRef name this AuthPolicy targets.
 	Model string `json:"model"`
+	// ModelNamespace is the namespace of the MaaSModelRef.
+	ModelNamespace string `json:"modelNamespace"`
 	// Accepted reports whether the AuthPolicy has been accepted (e.g. status.conditions type=Accepted).
 	// +optional
 	Accepted string `json:"accepted,omitempty"`
