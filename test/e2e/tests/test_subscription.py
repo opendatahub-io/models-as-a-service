@@ -1214,9 +1214,9 @@ class TestMaasSubscriptionNamespace:
             _wait_reconcile()
 
     def test_authpolicy_and_subscription_in_another_namespace(self):
-        """MaaSAuthPolicy and MaaSSubscription in any namespace should be reconciled
-        and should appear in the AuthPolicy and TRLP annotations (namespace scoping support)."""
-        ns = "e2e-other-ns"
+        """MaaSAuthPolicy and MaaSSubscription in another namespace should not be reconciled
+        and should not appear in the AuthPolicy and TRLP annotations for the model."""
+        ns = "e2e-unwatched-ns"
         subprocess.run(
             ["oc", "create", "namespace", ns],
             capture_output=True,
@@ -1227,7 +1227,7 @@ class TestMaasSubscriptionNamespace:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSAuthPolicy",
-                "metadata": {"name": "e2e-other-ns-auth", "namespace": ns},
+                "metadata": {"name": "e2e-unwatched-auth", "namespace": ns},
                 "spec": {
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
                     "subjects": {"groups": [{"name": "system:authenticated"}]},
@@ -1236,7 +1236,7 @@ class TestMaasSubscriptionNamespace:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-other-ns-sub", "namespace": ns},
+                "metadata": {"name": "e2e-unwatched-sub", "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
@@ -1249,8 +1249,8 @@ class TestMaasSubscriptionNamespace:
             assert auth_annotations is not None, (
                 f"AuthPolicy {auth_name} not found"
             )
-            assert "e2e-other-ns-auth" in auth_annotations.get("maas.opendatahub.io/auth-policies", "").split(","), (
-                "MaaSAuthPolicy e2e-other-ns-auth not reconciled (namespace scoping should allow this)"
+            assert "e2e-unwatched-auth" not in auth_annotations.get("maas.opendatahub.io/auth-policies", "").split(","), (
+                "MaaSAuthPolicy e2e-unwatched-auth not reconciled (namespace scoping should not allow this)"
             )
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
@@ -1258,12 +1258,12 @@ class TestMaasSubscriptionNamespace:
             assert trlp_annotations is not None, (
                 f"TRLP {trlp_name} not found"
             )
-            assert "e2e-other-ns-sub" in trlp_annotations.get("maas.opendatahub.io/subscriptions", "").split(","), (
-                "MaaSSubscription e2e-other-ns-sub not reconciled (namespace scoping should allow this)"
+            assert "e2e-unwatched-sub" not in trlp_annotations.get("maas.opendatahub.io/subscriptions", "").split(","), (
+                "MaaSSubscription e2e-unwatched-sub not reconciled (namespace scoping should not allow this)"
             )
         finally:
-            _delete_cr("maasauthpolicy", "e2e-other-ns-auth", namespace=ns)
-            _delete_cr("maassubscription", "e2e-other-ns-sub", namespace=ns)
+            _delete_cr("maasauthpolicy", "e2e-unwatched-auth", namespace=ns)
+            _delete_cr("maassubscription", "e2e-unwatched-sub", namespace=ns)
             _wait_reconcile()
             subprocess.run(
                 ["oc", "delete", "namespace", ns, "--ignore-not-found", "--timeout=30s"],
