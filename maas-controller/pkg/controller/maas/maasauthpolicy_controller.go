@@ -253,8 +253,8 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			},
 		}
 
-		// Check for subscription selection errors and deny if present
-		authRules["subscription-error-check"] = map[string]interface{}{
+		// Fail-close: require successful subscription selection (name must be present)
+		authRules["subscription-valid"] = map[string]interface{}{
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]interface{}{
