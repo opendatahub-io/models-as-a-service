@@ -1,6 +1,6 @@
 # MaaSModelRef
 
-Represents an AI/ML model endpoint in the MaaS catalog. The MaaS API lists models from MaaSModelRef resources (using `status.endpoint` and `status.phase`).
+Identifies an AI/ML model on the cluster. The MaaS API lists models from MaaSModelRef resources (using `status.endpoint` and `status.phase`).
 
 ## MaaSModelRefSpec
 

@@ -55,8 +55,11 @@ nav:
     - index.md
     - Release Notes:
       - Overview: release-notes/index.md
-  - Architecture: architecture.md
-  - Install Guide:
+  - Concepts:
+    - Architecture: architecture.md
+    - Access and Quota Overview: configuration-and-management/subscription-overview.md
+    - MaaS Models: configuration-and-management/maas-models.md
+  - Install:
     - Quick Start: quickstart.md
     - Prerequisites:
       - Overview: install/prerequisites.md
@@ -68,9 +71,10 @@ nav:
       - Troubleshooting: install/troubleshooting.md
   - Administration Guide:
     - Configuration & Management:
-      - Subscription Management: configuration-and-management/subscription-overview.md
-      - Subscription Configuration: configuration-and-management/subscription-configuration.md
-      - Subscription Concepts: configuration-and-management/subscription-concepts.md
+      - Access Configuration Overview: configuration-and-management/access-configuration-overview.md
+      - MaaSModelRef Configuration: configuration-and-management/maas-model-ref-configuration.md
+      - MaaSSubscription Configuration: configuration-and-management/maas-subscription-configuration.md
+      - MaaSAuthPolicy Configuration: configuration-and-management/maas-auth-policy-configuration.md
       - Token Management: configuration-and-management/token-management.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
     - Model Setup: configuration-and-management/model-setup.md
@@ -82,9 +86,9 @@ nav:
     - Advanced Administration:
       - Observability: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
-  - End User Guide:
+  - User Guide:
     - Self Service Model Access: user-guide/self-service-model-access.md
-  - API & Reference:
+  - API Reference:
     - MaaS API (Swagger): reference/api-reference.md
     - MaaS CRDs:
       - MaaSModelRef: reference/crds/maas-model-ref.md

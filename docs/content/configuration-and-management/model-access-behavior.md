@@ -44,6 +44,6 @@ API keys and tokens are per-identity, not per-model. Token validity and model ac
 
 ### Related Documentation
 
-- [Subscription Configuration](subscription-configuration.md) - How to configure subscription access
+- [MaaSSubscription Configuration](maas-subscription-configuration.md) - How to configure subscription access
 - [Model Setup](model-setup.md) - How to configure models for MaaS
 - [Token Management](token-management.md) - Understanding token lifecycle

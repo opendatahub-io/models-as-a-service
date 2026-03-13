@@ -11,7 +11,7 @@ Our sample models are packaged as Kustomize overlays that deploy:
 | **MaaSAuthPolicy** | Grants access to the model for specified groups (who can use it) |
 | **MaaSSubscription** | Defines rate limits (token quotas) for specific groups |
 
-For more detail on each resource, see [Subscription Overview](../configuration-and-management/subscription-overview.md).
+For more detail on each resource, see [Access and Quota Overview](../configuration-and-management/subscription-overview.md).
 
 !!! tip "Create llm namespace (optional)"
     Models deploy to the `llm` namespace. If it does not exist, create it first (idempotent—safe to run even if it already exists):
@@ -111,7 +111,7 @@ To expose an existing model through MaaS, you must:
 2. Create a **MaaSModelRef** that references the LLMInferenceService
 3. Create **MaaSAuthPolicy** and **MaaSSubscription** to define access and rate limits
 
-See [Subscription Configuration](../configuration-and-management/subscription-configuration.md) for step-by-step instructions.
+See [MaaSSubscription Configuration](../configuration-and-management/maas-subscription-configuration.md) for step-by-step instructions.
 
 **Gateway reference** — If the model does not yet use the MaaS gateway:
 

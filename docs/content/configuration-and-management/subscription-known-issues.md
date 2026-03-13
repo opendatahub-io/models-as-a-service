@@ -68,5 +68,5 @@ API keys store the user's groups at creation time. If a user's group membership 
 
 ## Related Documentation
 
-- [Subscription Overview](subscription-overview.md)
-- [Subscription Configuration](subscription-configuration.md)
+- [Access and Quota Overview](subscription-overview.md)
+- [MaaSSubscription Configuration](maas-subscription-configuration.md)

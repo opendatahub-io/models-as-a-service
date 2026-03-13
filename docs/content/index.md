@@ -15,7 +15,7 @@ Use this platform to streamline the deployment of your models, monitor usage, an
 
 ### ⚙️ Configuration & Management
 
-- **[Subscription Management](configuration-and-management/subscription-overview.md)** - Configuring subscriptions, access control, and rate limits
+- **[Access and Quota Overview](configuration-and-management/subscription-overview.md)** - Policies (access) and subscriptions (quota) for model access
 - **[Model Setup](configuration-and-management/model-setup.md)** - Setting up models for MaaS
 - **[Self-Service Model Access](user-guide/self-service-model-access.md)** - Managing model access and policies
 

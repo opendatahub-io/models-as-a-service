@@ -3,11 +3,11 @@
 This guide explains the authentication and credential management used to access models in the MaaS Platform.
 
 !!! tip "Subscription model (current)"
-    The **subscription-based** architecture uses **API keys** (`sk-oai-*`) for programmatic access. Create keys via `POST /v1/api-keys` and use them with the `Authorization: Bearer` header. When users have multiple subscriptions, include the `X-MaaS-Subscription` header. See [Subscription Configuration](subscription-configuration.md).
+    The **subscription-based** architecture uses **API keys** (`sk-oai-*`) for programmatic access. Create keys via `POST /v1/api-keys` and use them with the `Authorization: Bearer` header. When users have multiple subscriptions, include the `X-MaaS-Subscription` header. See [MaaSSubscription Configuration](maas-subscription-configuration.md).
 
 !!! note "Prerequisites"
     This document assumes you have configured subscriptions (MaaSAuthPolicy, MaaSSubscription).
-    See [Subscription Configuration](subscription-configuration.md) for setup.
+    See [MaaSSubscription Configuration](maas-subscription-configuration.md) for setup.
 
 ---
 
@@ -174,7 +174,7 @@ The Service Account will be automatically recreated the next time you request a 
 
 **Q: My subscription access is wrong. How do I fix it?**
 
-A: Your access is determined by your group membership in OpenShift and how those groups are mapped in MaaSAuthPolicy and MaaSSubscription. Contact your platform administrator to ensure you are in the correct user group and that it is mapped in [Subscription Configuration](subscription-configuration.md).
+A: Your access is determined by your group membership in OpenShift and how those groups are mapped in MaaSAuthPolicy and MaaSSubscription. Contact your platform administrator to ensure you are in the correct user group and that it is mapped in [MaaSSubscription Configuration](maas-subscription-configuration.md).
 
 ---
 
@@ -222,6 +222,6 @@ A: Token audience identifies the intended recipient of a token. Some gateways ex
 
 ## Related Documentation
 
-- **[Subscription Configuration](subscription-configuration.md)**: For operators - subscription setup, access control, and rate limiting
+- **[MaaSSubscription Configuration](maas-subscription-configuration.md)**: For operators - subscription setup, access control, and rate limiting
 
 ---
