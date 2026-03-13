@@ -9,4 +9,4 @@ namespace: llm
 namePrefix: e2e-unconfigured-
 
 resources:
-  - ../../../models/simulator
+  - ../../../../../docs/samples/models/simulator

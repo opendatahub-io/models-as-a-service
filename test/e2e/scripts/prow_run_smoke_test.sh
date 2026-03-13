@@ -11,7 +11,7 @@
 #   1. Install cert-manager and LeaderWorkerSet (LWS) operators (required for KServe)
 #   2. Deploy MaaS platform via kustomize (RHCL, gateway, MaaS API, maas-controller)
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
-#   4. Deploy MaaS system (free + premium + unconfigured: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
+#   4. Deploy MaaS system (free + premium + e2e test fixtures: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
 #   5. Setup test tokens (admin + regular user) for comprehensive testing
 #   6. Run E2E tests (API keys + subscription + models endpoint tests)
 #   7. Run deployment validation + token metadata verification
@@ -214,15 +214,15 @@ deploy_models() {
     fi
 
     # Deploy all at once so dependencies resolve correctly
-    # Sample kustomizations hardcode namespace: models-as-a-service; override to $MAAS_SUBSCRIPTION_NAMESPACE
+    # E2E test fixtures kustomization hardcodes namespace: models-as-a-service; override to $MAAS_SUBSCRIPTION_NAMESPACE
     # so CRs land in the correct namespace.
-    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/maas-system/ | \
+    if ! (cd "$PROJECT_ROOT" && kustomize build test/e2e/fixtures/ | \
             sed "s/namespace: models-as-a-service/namespace: $MAAS_SUBSCRIPTION_NAMESPACE/g" | \
             kubectl apply -f -); then
-        echo "❌ ERROR: Failed to deploy MaaS system"
+        echo "❌ ERROR: Failed to deploy MaaS system with e2e fixtures"
         exit 1
     fi
-    echo "✅ MaaS system deployed (free + premium tiers)"
+    echo "✅ MaaS system deployed (free + premium + e2e test fixtures)"
 
     echo "Waiting for models to be ready..."
     if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
@@ -461,7 +461,6 @@ run_e2e_tests() {
         --html="$html" --self-contained-html \
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
-        # "$test_dir/tests/test_namespace_scoping.py" \
         "$test_dir/tests/test_subscription.py" \
         "$test_dir/tests/test_models_endpoint.py" ; then 
         echo "❌ ERROR: E2E tests failed"

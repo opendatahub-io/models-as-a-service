@@ -2,15 +2,9 @@
 # per tier. Deploy all at once so dependencies resolve correctly.
 # - free: system:authenticated, 100 tokens/min
 # - premium: premium-user, 1000 tokens/min
-# - unconfigured: no auth/subscription (e2e tests validate 403)
-# - distinct: distinct model ID (e2e tests for multiple distinct models)
-# - distinct-2: second distinct model ID (e2e tests for multiple distinct models)
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - free
   - premium
-  - unconfigured
-  - distinct
-  - distinct-2
