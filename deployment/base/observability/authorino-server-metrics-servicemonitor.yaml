@@ -1,7 +1,7 @@
 # ServiceMonitor for Authorino /server-metrics endpoint.
 #
 # Deployment path: OpenShift user-workload monitoring (install-observability.sh).
-# Deployed by: scripts/install-observability.sh → kubectl apply
+# Deployed by: scripts/observability/install-observability.sh → kubectl apply
 # Scraped by:  OpenShift user-workload Prometheus (openshift-user-workload-monitoring)
 #
 # This scrapes auth evaluation metrics (auth_server_authconfig_total,
