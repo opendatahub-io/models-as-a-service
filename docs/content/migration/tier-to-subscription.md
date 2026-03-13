@@ -526,7 +526,15 @@ kubectl get configmap tier-to-group-mapping -n maas-api -o yaml
   --tier premium \
   --groups premium-users,premium-group \
   --models $(kubectl get llminferenceservice -n llm -o json | \
-    jq -r '[.items[] | select(.metadata.annotations["alpha.maas.opendatahub.io/tiers"] | fromjson | any(. == "premium")) | .metadata.name] | join(",")') \
+    jq -r '[.items[]
+      | . as $item
+      | try (
+          .metadata.annotations["alpha.maas.opendatahub.io/tiers"] | fromjson
+        ) catch (
+          (env.DEBUG // "" | if . != "" then "WARN: malformed JSON in \($item.metadata.name)" | debug else empty end) | []
+        )
+      | if type == "array" and any(. == "premium") then $item.metadata.name else empty end
+    ] | join(",")') \
   --rate-limit 50000 \
   --output migration-crs/premium/
 ```
