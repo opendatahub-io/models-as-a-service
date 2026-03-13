@@ -24,6 +24,7 @@ import (
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,16 +50,6 @@ const (
 	defaultGatewayNamespace = "openshift-ingress"
 	defaultClusterAudience  = "https://kubernetes.default.svc"
 )
-
-const modelRefNameIndex = "spec.modelRef.name"
-
-func modelRefNameIndexer(obj client.Object) []string {
-	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
-	if !ok || model.Spec.ModelRef.Name == "" {
-		return nil
-	}
-	return []string{model.Spec.ModelRef.Name}
-}
 
 // MaaSModelRefReconciler reconciles a MaaSModelRef object
 type MaaSModelRefReconciler struct {
@@ -94,6 +85,18 @@ func (r *MaaSModelRefReconciler) gatewayNamespace() string {
 
 const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
 
+// Field index for efficiently finding MaaSModelRefs by their modelRef.name
+const modelRefNameIndex = "spec.modelRef.name"
+
+// modelRefNameIndexer returns the modelRef.name for indexing
+func modelRefNameIndexer(obj client.Object) []string {
+	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
+	if !ok || model.Spec.ModelRef.Name == "" {
+		return nil
+	}
+	return []string{model.Spec.ModelRef.Name}
+}
+
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSModelRef", req.NamespacedName)
@@ -120,21 +123,23 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
+	statusSnapshot := model.Status.DeepCopy()
+
 	kind := model.Spec.ModelRef.Kind
 	handler := GetBackendHandler(kind, r)
 	if handler == nil {
 		log.Error(nil, "unknown modelRef kind", "kind", kind)
-		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("unknown kind: %s", kind))
+		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("unknown kind: %s", kind), statusSnapshot)
 		return ctrl.Result{}, nil
 	}
 
 	if err := handler.ReconcileRoute(ctx, log, model); err != nil {
 		if errors.Is(err, ErrKindNotImplemented) {
-			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported")
+			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "failed to reconcile HTTPRoute")
-		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to reconcile HTTPRoute: %v", err))
+		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to reconcile HTTPRoute: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
 	}
 
@@ -143,23 +148,27 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if errors.Is(err, ErrKindNotImplemented) {
 			model.Status.Endpoint = ""
 			model.Status.Phase = "Failed"
-			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported")
+			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "failed to update model status")
 		model.Status.Endpoint = ""
 		model.Status.Phase = "Failed"
-		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to update model status: %v", err))
+		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to update model status: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
 	}
-	model.Status.Endpoint = endpoint
+	if model.Spec.EndpointOverride != "" {
+		model.Status.Endpoint = model.Spec.EndpointOverride
+	} else {
+		model.Status.Endpoint = endpoint
+	}
 	if ready {
 		model.Status.Phase = "Ready"
-		r.updateStatus(ctx, model, "Ready", "Successfully reconciled")
+		r.updateStatus(ctx, model, "Ready", "Successfully reconciled", statusSnapshot)
 	} else {
 		model.Status.Phase = "Pending"
 		model.Status.Endpoint = ""
-		r.updateStatus(ctx, model, "Pending", "Waiting for backend to become ready")
+		r.updateStatus(ctx, model, "Pending", "Waiting for backend to become ready", statusSnapshot)
 	}
 	return ctrl.Result{}, nil
 }
@@ -167,12 +176,12 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 func (r *MaaSModelRefReconciler) handleDeletion(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(model, maasModelFinalizer) {
 		// Clean up generated AuthPolicies for this model
-		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Name, "AuthPolicy", "kuadrant.io", "v1"); err != nil {
+		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Namespace, model.Name, "AuthPolicy", "kuadrant.io", "v1"); err != nil {
 			return ctrl.Result{}, err
 		}
 
 		// Clean up generated TokenRateLimitPolicies for this model
-		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Name, "TokenRateLimitPolicy", "kuadrant.io", "v1alpha1"); err != nil {
+		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Namespace, model.Name, "TokenRateLimitPolicy", "kuadrant.io", "v1alpha1"); err != nil {
 			return ctrl.Result{}, err
 		}
 
@@ -194,9 +203,9 @@ func (r *MaaSModelRefReconciler) handleDeletion(ctx context.Context, log logr.Lo
 	return ctrl.Result{}, nil
 }
 
-// deleteGeneratedPoliciesByLabel finds and deletes all generated policies
+// deleteGeneratedPoliciesByLabel finds and deletes generated policies in the model's namespace
 // (AuthPolicy or TokenRateLimitPolicy) labeled with the given model name.
-func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context, log logr.Logger, modelName, kind, group, version string) error {
+func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Context, log logr.Logger, modelNamespace, modelName, kind, group, version string) error {
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: version, Kind: kind + "List"})
 
@@ -205,7 +214,7 @@ func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Cont
 		"app.kubernetes.io/managed-by": "maas-controller",
 	}
 
-	if err := r.List(ctx, policyList, labelSelector); err != nil {
+	if err := r.List(ctx, policyList, client.InNamespace(modelNamespace), labelSelector); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
@@ -230,43 +239,37 @@ func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Cont
 	return nil
 }
 
-func (r *MaaSModelRefReconciler) updateStatus(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message string) {
-	r.updateStatusWithReason(ctx, model, phase, message, "")
+func (r *MaaSModelRefReconciler) updateStatus(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message string, statusSnapshot *maasv1alpha1.MaaSModelStatus) {
+	r.updateStatusWithReason(ctx, model, phase, message, "", statusSnapshot)
 }
 
 // updateStatusWithReason sets Phase and Ready condition; when phase is "Failed", reason overrides the default "ReconcileFailed" (e.g. "Unsupported" for unimplemented kinds).
-func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message, reason string) {
+func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message, reason string, statusSnapshot *maasv1alpha1.MaaSModelStatus) {
 	model.Status.Phase = phase
-	condition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}
+
+	status := metav1.ConditionTrue
+	condReason := "Reconciled"
 	if phase != "Ready" {
-		condition.Status = metav1.ConditionFalse
+		status = metav1.ConditionFalse
 		if reason != "" {
-			// Use provided reason when available (e.g., "Unsupported" for unimplemented kinds)
-			condition.Reason = reason
+			condReason = reason
 		} else if phase == "Failed" {
-			condition.Reason = "ReconcileFailed"
+			condReason = "ReconcileFailed"
 		} else {
-			condition.Reason = "BackendNotReady"
+			condReason = "BackendNotReady"
 		}
 	}
 
-	// Update condition
-	found := false
-	for i, c := range model.Status.Conditions {
-		if c.Type == condition.Type {
-			model.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		model.Status.Conditions = append(model.Status.Conditions, condition)
+	apimeta.SetStatusCondition(&model.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             status,
+		Reason:             condReason,
+		Message:            message,
+		ObservedGeneration: model.GetGeneration(),
+	})
+
+	if equality.Semantic.DeepEqual(*statusSnapshot, model.Status) {
+		return
 	}
 
 	if err := r.Status().Update(ctx, model); err != nil {
@@ -311,14 +314,17 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaaSModelRef{}).
+		For(&maasv1alpha1.MaaSModelRef{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		))).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
 		// (fixes race condition where MaaSModelRef is created before HTTPRoute exists).
-		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.mapHTTPRouteToMaaSModelRefs)).
-		// Watch LLMInferenceServices so we re-reconcile when the backend becomes
-		// ready (or transitions away from ready). The predicate filters to spec
-		// changes (generation) and Ready-condition status changes, skipping
-		// metadata-only updates.
+		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapHTTPRouteToMaaSModelRefs,
+		)).
+		// Watch LLMInferenceServices so we re-reconcile when the backing service's Ready status changes
+		// (automatically updates MaaSModelRef status from Pending -> Ready and vice versa).
 		Watches(&kservev1alpha1.LLMInferenceService{},
 			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
 			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
@@ -326,34 +332,27 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// mapHTTPRouteToMaaSModelRefs returns reconcile requests for all MaaSModelRefs whose
-// route namespace (ModelRef.Namespace or MaaSModelRef.Namespace) matches the HTTPRoute's namespace.
+// mapHTTPRouteToMaaSModelRefs returns reconcile requests for all MaaSModelRefs in the HTTPRoute's namespace.
 func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
 	route, ok := obj.(*gatewayapiv1.HTTPRoute)
 	if !ok {
 		return nil
 	}
 	var models maasv1alpha1.MaaSModelRefList
-	if err := r.List(ctx, &models); err != nil {
+	if err := r.List(ctx, &models, client.InNamespace(route.Namespace)); err != nil {
 		return nil
 	}
 	var requests []reconcile.Request
 	for _, m := range models.Items {
-		ns := m.Spec.ModelRef.Namespace
-		if ns == "" {
-			ns = m.Namespace
-		}
-		if ns == route.Namespace {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
-			})
-		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
+		})
 	}
 	return requests
 }
 
 // mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
-// reference the given LLMInferenceService by name and namespace.
+// reference the given LLMInferenceService by name in the same namespace.
 func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
 	llmisvc, ok := obj.(*kservev1alpha1.LLMInferenceService)
 	if !ok {
@@ -370,11 +369,8 @@ func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, 
 		if kind != "LLMInferenceService" {
 			continue
 		}
-		refNS := m.Spec.ModelRef.Namespace
-		if refNS == "" {
-			refNS = m.Namespace
-		}
-		if refNS == llmisvc.Namespace {
+		// MaaSModelRef references models in the same namespace
+		if m.Namespace == llmisvc.Namespace {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
 			})

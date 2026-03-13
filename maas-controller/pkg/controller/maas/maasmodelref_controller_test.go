@@ -39,15 +39,34 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+// fakeHandler is a test-only BackendHandler that returns preconfigured values.
+type fakeHandler struct {
+	endpoint string
+	ready    bool
+}
+
+func (f *fakeHandler) ReconcileRoute(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
+	return nil
+}
+func (f *fakeHandler) Status(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, bool, error) {
+	return f.endpoint, f.ready, nil
+}
+func (f *fakeHandler) GetModelEndpoint(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, error) {
+	return f.endpoint, nil
+}
+func (f *fakeHandler) CleanupOnDelete(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
+	return nil
+}
+
 func init() {
 	utilruntime.Must(kservev1alpha1.AddToScheme(scheme))
 }
 
 // --- Test helpers ---
 
-// newMaasModelRef is a helper function to create a MaasModelRef resource.
-func newMaaSModelRef(name, ns, kind, refName, refNS string) *maasv1alpha1.MaaSModelRef {
-	m := &maasv1alpha1.MaaSModelRef{
+// newMaaSModelRef is a helper function to create a MaaSModelRef resource.
+func newMaaSModelRef(name, ns, kind, refName string) *maasv1alpha1.MaaSModelRef {
+	return &maasv1alpha1.MaaSModelRef{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: maasv1alpha1.MaaSModelSpec{
 			ModelRef: maasv1alpha1.ModelReference{
@@ -56,10 +75,6 @@ func newMaaSModelRef(name, ns, kind, refName, refNS string) *maasv1alpha1.MaaSMo
 			},
 		},
 	}
-	if refNS != "" {
-		m.Spec.ModelRef.Namespace = refNS
-	}
-	return m
 }
 
 // newLLMISvc is a helper function to create a LLMInferenceService resource.
@@ -150,6 +165,72 @@ func TestMaaSModelRefReconciler_gatewayName(t *testing.T) {
 	})
 }
 
+func TestReconcile_EndpointOverride(t *testing.T) {
+	const testKind = "_test_fake_kind"
+	discoveredEndpoint := "https://discovered.example.com/model"
+	overrideEndpoint := "https://override.example.com/model"
+
+	tests := []struct {
+		name             string
+		endpointOverride string
+		wantEndpoint     string
+	}{
+		{
+			name:             "uses_discovered_endpoint_when_no_override",
+			endpointOverride: "",
+			wantEndpoint:     discoveredEndpoint,
+		},
+		{
+			name:             "uses_override_when_set",
+			endpointOverride: overrideEndpoint,
+			wantEndpoint:     overrideEndpoint,
+		},
+	}
+
+	// Register a fake handler kind for testing.
+	backendHandlerFactories[testKind] = func(_ *MaaSModelRefReconciler) BackendHandler {
+		return &fakeHandler{endpoint: discoveredEndpoint, ready: true}
+	}
+	defer delete(backendHandlerFactories, testKind)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := &maasv1alpha1.MaaSModelRef{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-model", Namespace: "default"},
+				Spec: maasv1alpha1.MaaSModelSpec{
+					ModelRef:         maasv1alpha1.ModelReference{Kind: testKind, Name: "backend"},
+					EndpointOverride: tt.endpointOverride,
+				},
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(model).
+				WithStatusSubresource(model).
+				Build()
+
+			r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-model", Namespace: "default"}}
+
+			if _, err := r.Reconcile(context.Background(), req); err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+
+			updated := &maasv1alpha1.MaaSModelRef{}
+			if err := c.Get(context.Background(), req.NamespacedName, updated); err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+
+			if updated.Status.Endpoint != tt.wantEndpoint {
+				t.Errorf("Status.Endpoint = %q, want %q", updated.Status.Endpoint, tt.wantEndpoint)
+			}
+			if updated.Status.Phase != "Ready" {
+				t.Errorf("Status.Phase = %q, want %q", updated.Status.Phase, "Ready")
+			}
+		})
+	}
+}
+
 func TestMaaSModelRefReconciler_gatewayNamespace(t *testing.T) {
 	t.Run("default_when_empty", func(t *testing.T) {
 		r := &MaaSModelRefReconciler{}
@@ -178,7 +259,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 
 	route := newLLMISvcRoute(llmisvcName, ns)
 	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionFalse)
-	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName, "")
+	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName)
 	r, c := newTestReconciler(model, route, llmisvc)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
@@ -240,7 +321,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 
 	route := newLLMISvcRoute(llmisvcName, ns)
 	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionTrue)
-	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName, "")
+	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName)
 	r, c := newTestReconciler(model, route, llmisvc)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
@@ -294,7 +375,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 func TestMapLLMISvcToMaaSModels(t *testing.T) {
 	t.Run("different_kind_not_enqueued", func(t *testing.T) {
 		svc := newLLMISvc("my-svc", "default")
-		model := newMaaSModelRef("ext-model", "default", "ExternalModel", "my-svc", "")
+		model := newMaaSModelRef("ext-model", "default", "ExternalModel", "my-svc")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 0 {
@@ -304,7 +385,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 
 	t.Run("different_name_not_enqueued", func(t *testing.T) {
 		svc := newLLMISvc("svc-beta", "default")
-		model := newMaaSModelRef("my-model", "default", "LLMInferenceService", "svc-alpha", "")
+		model := newMaaSModelRef("my-model", "default", "LLMInferenceService", "svc-alpha")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 0 {
@@ -312,33 +393,33 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 		}
 	})
 
-	t.Run("cross_namespace_match", func(t *testing.T) {
-		svc := newLLMISvc("shared-svc", "ns-b")
-		model := newMaaSModelRef("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
+	t.Run("same_namespace_match", func(t *testing.T) {
+		svc := newLLMISvc("shared-svc", "default")
+		model := newMaaSModelRef("my-model", "default", "LLMInferenceService", "shared-svc")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 1 {
-			t.Fatalf("expected 1 request for cross-namespace match, got %d: %v", len(requests), requests)
+			t.Fatalf("expected 1 request for same-namespace match, got %d: %v", len(requests), requests)
 		}
-		if requests[0].Name != "cross-ns-model" || requests[0].Namespace != "ns-a" {
-			t.Errorf("request = %v, want {Name: cross-ns-model, Namespace: ns-a}", requests[0].NamespacedName)
+		if requests[0].Name != "my-model" || requests[0].Namespace != "default" {
+			t.Errorf("request = %v, want {Name: my-model, Namespace: default}", requests[0].NamespacedName)
 		}
 	})
 
-	t.Run("cross_namespace_no_match", func(t *testing.T) {
-		svc := newLLMISvc("shared-svc", "ns-c")
-		model := newMaaSModelRef("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
+	t.Run("different_namespace_not_enqueued", func(t *testing.T) {
+		svc := newLLMISvc("shared-svc", "ns-b")
+		model := newMaaSModelRef("my-model", "ns-a", "LLMInferenceService", "shared-svc")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 0 {
-			t.Errorf("expected no requests for namespace mismatch, got %d: %v", len(requests), requests)
+			t.Errorf("expected no requests for different namespace, got %d: %v", len(requests), requests)
 		}
 	})
 
 	t.Run("multiple_models_same_llmisvc", func(t *testing.T) {
 		svc := newLLMISvc("shared-svc", "default")
-		model1 := newMaaSModelRef("model-1", "default", "LLMInferenceService", "shared-svc", "")
-		model2 := newMaaSModelRef("model-2", "default", "LLMInferenceService", "shared-svc", "")
+		model1 := newMaaSModelRef("model-1", "default", "LLMInferenceService", "shared-svc")
+		model2 := newMaaSModelRef("model-2", "default", "LLMInferenceService", "shared-svc")
 		r, _ := newTestReconciler(model1, model2, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 2 {
@@ -429,6 +510,64 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 	})
 }
 
+// TestMaaSModelRefReconciler_DuplicateReconciliation verifies that reconciling the same
+// MaaSModelRef twice does not produce a redundant status update when nothing has changed.
+func TestMaaSModelRefReconciler_DuplicateReconciliation(t *testing.T) {
+	const testKind = "_test_dup_recon_kind"
+
+	backendHandlerFactories[testKind] = func(_ *MaaSModelRefReconciler) BackendHandler {
+		return &fakeHandler{endpoint: "https://model.example.com", ready: true}
+	}
+	defer delete(backendHandlerFactories, testKind)
+
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "dup-model", Namespace: "default"},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{Kind: testKind, Name: "backend"},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(model).
+		WithStatusSubresource(model).
+		Build()
+
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "dup-model", Namespace: "default"}}
+
+	// First reconcile: writes status (Ready phase).
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile #1: %v", err)
+	}
+
+	got := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
+		t.Fatalf("Get after reconcile #1: %v", err)
+	}
+	if got.Status.Phase != "Ready" {
+		t.Fatalf("Phase after reconcile #1 = %q, want Ready", got.Status.Phase)
+	}
+	rvAfterFirst := got.ResourceVersion
+
+	// Second reconcile: nothing changed, status write should be skipped.
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile #2: %v", err)
+	}
+
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
+		t.Fatalf("Get after reconcile #2: %v", err)
+	}
+	rvAfterSecond := got.ResourceVersion
+
+	if rvAfterFirst != rvAfterSecond {
+		t.Errorf("redundant status update: ResourceVersion changed from %s to %s; "+
+			"second reconcile should skip the status write when nothing changed",
+			rvAfterFirst, rvAfterSecond)
+	}
+}
+
 // newPreexistingGeneratedPolicy builds an unstructured Kuadrant policy with the labels
 // that deleteGeneratedPoliciesByLabel selects on. The name and GVK are caller-supplied
 // so the same helper covers both AuthPolicy and TokenRateLimitPolicy.
@@ -500,7 +639,7 @@ func TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation(t *testin
 						Build()
 
 					r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
-					if err := r.deleteGeneratedPoliciesByLabel(context.Background(), logr.Discard(), modelName, res.kind, res.group, res.version); err != nil {
+					if err := r.deleteGeneratedPoliciesByLabel(context.Background(), logr.Discard(), namespace, modelName, res.kind, res.group, res.version); err != nil {
 						t.Fatalf("deleteGeneratedPoliciesByLabel: unexpected error: %v", err)
 					}
 

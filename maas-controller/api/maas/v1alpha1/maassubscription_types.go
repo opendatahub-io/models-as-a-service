@@ -53,8 +53,15 @@ type OwnerSpec struct {
 
 // ModelSubscriptionRef defines a model reference with rate limits
 type ModelSubscriptionRef struct {
-	// Name is the name of the model
+	// Name is the name of the MaaSModelRef
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
+
+	// Namespace is the namespace where the MaaSModelRef lives
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
 
 	// TokenRateLimits defines token-based rate limits for this model
 	// +optional

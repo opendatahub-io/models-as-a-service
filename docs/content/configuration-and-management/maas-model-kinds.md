@@ -16,6 +16,33 @@ MaaSModelRef's `spec.modelRef` identifies the **referent** (the backend that ser
 
 The controller that reconciles MaaSModelRef uses **kind** to decide how to resolve the backend and populate `status.endpoint` and `status.phase`. Cross-namespace references are supported by specifying `modelRef.namespace`.
 
+## Endpoint override
+
+MaaSModel supports an optional `spec.endpointOverride` field. When set, the controller uses this value for `status.endpoint` instead of the auto-discovered endpoint from the backend (LLMInferenceService status, Gateway, or HTTPRoute hostnames).
+
+This is useful when:
+- The controller picks the wrong gateway or hostname for the model endpoint.
+- Your environment requires a specific URL that differs from what the backend reports.
+- You need to point the model at a custom proxy or load balancer.
+
+Example:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModel
+metadata:
+  name: my-model
+  namespace: opendatahub
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: my-model
+    namespace: llm
+  endpointOverride: "https://correct-hostname.example.com/my-model"
+```
+
+The controller still validates the backend (HTTPRoute exists, LLMInferenceService is ready, etc.) — the override only affects the final endpoint URL written to `status.endpoint`. When the field is empty or omitted, the controller uses its normal discovery logic.
+
 ## Current behavior
 
 - **Supported kind today:** `LLMInferenceService` (also accepts the alias `llmisvc` for backwards compatibility). The MaaS controller reconciles MaaSModelRefs whose **modelRef** points to an LLMInferenceService (by name and optional namespace). It sets `status.endpoint` from the LLMInferenceService status and `status.phase` from its readiness.

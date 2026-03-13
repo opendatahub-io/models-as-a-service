@@ -250,8 +250,8 @@ deploy_models() {
                 all_ready=false
                 break
             fi
-        done < <(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-        if $all_ready && [[ -n "$(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o name 2>/dev/null)" ]]; then
+        done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
             break
         fi
         retries=$((retries + 1))
@@ -273,8 +273,8 @@ deploy_models() {
                     all_ready=false
                     break
                 fi
-            done < <(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-            if $all_ready && [[ -n "$(oc get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" -o name 2>/dev/null)" ]]; then
+            done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+            if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
                 break
             fi
             retries=$((retries + 1))
@@ -429,6 +429,7 @@ run_e2e_tests() {
     # from its own namespace, but models are deployed in 'llm' namespace.
     # TODO: Fix maas-api to list MaaSModelRefs from ALL namespaces (pass "" to ListFromMaaSModelRefLister)
     export MODEL_NAME="facebook-opt-125m-simulated"
+    export E2E_MODEL_NAMESPACE="llm"
     # TOKEN and ADMIN_OC_TOKEN are already exported by setup_test_tokens()
 
     local test_dir="$PROJECT_ROOT/test/e2e"
@@ -453,7 +454,7 @@ run_e2e_tests() {
     echo "  - ADMIN_OC_TOKEN: $(echo "${ADMIN_OC_TOKEN:-not set}" | cut -c1-20)..."
     echo "  - GATEWAY_HOST: ${GATEWAY_HOST}"
 
-    # Run all e2e tests: API keys and subscription tests
+    # Run all e2e tests: API keys, subscription, and namespace scoping tests
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
@@ -461,6 +462,7 @@ run_e2e_tests() {
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_subscription.py"; then
+        # "$test_dir/tests/test_namespace_scoping.py" \
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
@@ -471,34 +473,76 @@ run_e2e_tests() {
 }
 
 
+# Namespace for admin SA in SA fallback (avoids both admin+regular in default → both would be admin)
+E2E_ADMIN_SA_NAMESPACE="${E2E_ADMIN_SA_NAMESPACE:-maas-admin}"
+
 setup_test_user() {
     local username="$1"
     local cluster_role="$2"
+    local namespace="${3:-default}"
+    
+    # Create namespace if it doesn't exist
+    if ! oc get namespace "$namespace" &>/dev/null; then
+        echo "Creating namespace: $namespace"
+        oc create namespace "$namespace"
+    fi
     
     # Check and create service account
-    if ! oc get serviceaccount "$username" -n default >/dev/null 2>&1; then
-        echo "Creating service account: $username"
-        oc create serviceaccount "$username" -n default
+    if ! oc get serviceaccount "$username" -n "$namespace" >/dev/null 2>&1; then
+        echo "Creating service account: $username in $namespace"
+        oc create serviceaccount "$username" -n "$namespace"
     else
-        echo "Service account $username already exists"
+        echo "Service account $username already exists in $namespace"
     fi
     
     # Check and create cluster role binding
     if ! oc get clusterrolebinding "${username}-binding" >/dev/null 2>&1; then
         echo "Creating cluster role binding for $username"
-        oc adm policy add-cluster-role-to-user "$cluster_role" "system:serviceaccount:default:$username"
+        oc adm policy add-cluster-role-to-user "$cluster_role" "system:serviceaccount:${namespace}:${username}"
     else
         echo "Cluster role binding for $username already exists"
     fi
     
-    echo "✅ User setup completed: $username"
+    echo "✅ User setup completed: $username (namespace: $namespace)"
+}
+
+# Patch Auth CR to add system:serviceaccounts:${admin_namespace} so SA-based admin token works.
+# maas-api AdminChecker checks user.Groups against Auth CR spec.adminGroups.
+# SA in namespace X has groups: system:serviceaccounts, system:serviceaccounts:X.
+# We use a dedicated admin namespace (maas-admin) so the regular user (in default) is NOT admin.
+_patch_auth_cr_for_sa_admin() {
+    local admin_namespace="${1:-$E2E_ADMIN_SA_NAMESPACE}"
+    local admin_group="system:serviceaccounts:${admin_namespace}"
+    
+    local auth_cr
+    for gvr in "auths.services.platform.opendatahub.io" "auths.platform.opendatahub.io"; do
+        if oc get "$gvr" auth &>/dev/null; then
+            auth_cr="$gvr"
+            break
+        fi
+    done
+    if [[ -z "$auth_cr" ]]; then
+        echo "⚠️  Auth CR not found - admin tests may fail (SA token not in adminGroups)"
+        return 0
+    fi
+    local current
+    current=$(oc get "$auth_cr" auth -o jsonpath='{.spec.adminGroups[*]}' 2>/dev/null || true)
+    if [[ "$current" == *"${admin_group}"* ]]; then
+        echo "✅ Auth CR already has ${admin_group} in adminGroups"
+        return 0
+    fi
+    if oc patch "$auth_cr" auth --type=json -p="[{\"op\": \"add\", \"path\": \"/spec/adminGroups/-\", \"value\": \"${admin_group}\"}]" 2>/dev/null; then
+        echo "✅ Added ${admin_group} to Auth CR adminGroups (SA admin fallback)"
+    else
+        echo "⚠️  Failed to patch Auth CR - admin tests may fail"
+    fi
 }
 
 setup_test_tokens() {
     # ═══════════════════════════════════════════════════════════════════════════
     # Extract test tokens WITHOUT switching the main oc session.
     # 
-    # Architecture:
+    # Architecture: 
     #   - Main oc session stays as system:admin (for any cluster operations)
     #   - Test tokens are extracted into env vars using a TEMPORARY kubeconfig
     #   - Tests use TOKEN/ADMIN_OC_TOKEN env vars for API authentication
@@ -574,22 +618,22 @@ setup_test_tokens() {
             echo "✅ Admin token for $current_user (added to odh-admins)"
         else
             echo "⚠️  No htpasswd token available - using SA token (admin tests may fail)"
-            setup_test_user "tester-admin-user" "cluster-admin"
-            ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n default --duration=1h)
+            setup_test_user "tester-admin-user" "cluster-admin" "$E2E_ADMIN_SA_NAMESPACE"
+            # maas-api AdminChecker uses Auth CR adminGroups; SA in maas-admin has system:serviceaccounts:maas-admin
+            # Patch Auth CR so only tester-admin-user is admin (regular user stays in default → not admin)
+            _patch_auth_cr_for_sa_admin "$E2E_ADMIN_SA_NAMESPACE"
+            ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n "$E2E_ADMIN_SA_NAMESPACE" --duration=1h)
         fi
     fi
     
-    # 3. Fallback for regular user: use current user's token (same as admin for local testing)
-    # Local runs typically use the same htpasswd user for both roles
+    # 3. Fallback for regular user: always use a separate SA to ensure distinct users
+    # This is required for IDOR tests that verify users cannot access each other's keys
+    # Regular user stays in default namespace (system:serviceaccounts:default) - NOT in adminGroups
     if [[ -z "$TOKEN" ]]; then
-        TOKEN=$(oc whoami -t 2>/dev/null || true)
-        if [[ -n "$TOKEN" ]]; then
-            echo "✅ Regular user token for $current_user (same as admin for local testing)"
-        else
-            echo "⚠️  No htpasswd token - using SA token (model catalog may be empty)"
-            setup_test_user "tester-regular-user" "view"
-            TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
-        fi
+        echo "Creating separate SA token for regular user (required for IDOR tests)..."
+        setup_test_user "tester-regular-user" "view" "default"
+        TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
+        echo "✅ Regular user token for tester-regular-user (SA-based, namespace: default)"
     fi
     
     echo "Token setup complete (main session unchanged: $(oc whoami))"

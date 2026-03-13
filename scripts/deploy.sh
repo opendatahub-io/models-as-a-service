@@ -423,17 +423,6 @@ main() {
       ;;
   esac
 
-  # TODO: Move to kustomize overlay once deployment structure is finalized.
-  # NetworkPolicy to allow Authorino (Kuadrant) to reach MaaS API for AuthPolicy evaluation.
-  if [[ "$POLICY_ENGINE" == "kuadrant" ]]; then
-    local data_dir="${SCRIPT_DIR}/data"
-    if [[ -f "${data_dir}/maas-authorino-networkpolicy.yaml" ]]; then
-      log_info "Applying maas-authorino-allow NetworkPolicy..."
-      kubectl apply -f "${data_dir}/maas-authorino-networkpolicy.yaml" -n "$NAMESPACE" 2>/dev/null || \
-        log_warn "Failed to apply maas-authorino-allow NetworkPolicy (may already exist)"
-    fi
-  fi
-
   # Install subscription controller (always deployed)
   # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script.
   log_info ""
