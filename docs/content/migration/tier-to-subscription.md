@@ -38,7 +38,14 @@ Before starting the migration:
 ```bash
 # Backup script
 mkdir -p migration-backup
-kubectl get configmap tier-to-group-mapping -n maas-api -o yaml > migration-backup/tier-to-group-mapping.yaml
+
+# Backup tier-to-group-mapping ConfigMap if it exists
+if kubectl get configmap tier-to-group-mapping -n maas-api >/dev/null 2>&1; then
+  kubectl get configmap tier-to-group-mapping -n maas-api -o yaml > migration-backup/tier-to-group-mapping.yaml
+  echo "Backed up tier-to-group-mapping"
+else
+  echo "No tier-to-group-mapping ConfigMap found (skipping backup)"
+fi
 
 # Only backup gateway-auth-policy if it exists
 if kubectl get authpolicy gateway-auth-policy -n openshift-ingress >/dev/null 2>&1; then
@@ -48,8 +55,21 @@ else
   echo "No gateway-auth-policy found (skipping backup)"
 fi
 
-kubectl get tokenratelimitpolicy -n openshift-ingress -o yaml > migration-backup/gateway-rate-limits.yaml
-kubectl get llminferenceservice -n llm -o yaml > migration-backup/llm-models.yaml
+# Backup tokenratelimitpolicy resources if they exist
+if kubectl get tokenratelimitpolicy -n openshift-ingress >/dev/null 2>&1; then
+  kubectl get tokenratelimitpolicy -n openshift-ingress -o yaml > migration-backup/gateway-rate-limits.yaml
+  echo "Backed up tokenratelimitpolicy resources"
+else
+  echo "No tokenratelimitpolicy resources found (skipping backup)"
+fi
+
+# Backup llminferenceservice resources if they exist
+if kubectl get llminferenceservice -n llm >/dev/null 2>&1; then
+  kubectl get llminferenceservice -n llm -o yaml > migration-backup/llm-models.yaml
+  echo "Backed up llminferenceservice resources"
+else
+  echo "No llminferenceservice resources found (skipping backup)"
+fi
 ```
 
 ## Migration Strategies
@@ -288,14 +308,44 @@ kubectl get authpolicy -n llm
 kubectl get tokenratelimitpolicy -n llm
 
 # 3. Test inference as a user in the premium group
+
+# ⚠️ SECURITY WARNING: Token Handling
+# The examples below store bearer tokens in shell variables, which can leak via:
+# - Shell history files (~/.bash_history, ~/.zsh_history)
+# - Process listings (ps, /proc)
+# - Environment variable dumps
+#
+# For production or sensitive environments, use one of these safer alternatives:
+#
+# Option A: Secure token file with restricted permissions
+#   mkdir -p ~/.kube/tokens
+#   chmod 700 ~/.kube/tokens
+#   oc whoami -t > ~/.kube/tokens/current
+#   chmod 600 ~/.kube/tokens/current
+#   # Use in curl: -H "Authorization: Bearer $(cat ~/.kube/tokens/current)"
+#   # Clean up after use: rm -f ~/.kube/tokens/current
+#
+# Option B: Disable shell history for this session
+#   set +o history  # Disable history (bash/zsh)
+#   TOKEN=$(oc whoami -t)
+#   # ... run commands ...
+#   unset TOKEN     # Clear token from environment
+#   set -o history  # Re-enable history
+#
+# For demonstration purposes, the examples use TOKEN variables.
+# Always clear sensitive tokens after use with: unset TOKEN
+
 oc login --username=premium-user  # Or use existing token
-TOKEN=$(oc whoami -t)
 
 # Discover gateway host
 HOST="maas.$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
 
+# Safer approach: Use token file with restricted permissions
+mkdir -p ~/.kube/tokens && chmod 700 ~/.kube/tokens
+oc whoami -t > ~/.kube/tokens/current && chmod 600 ~/.kube/tokens/current
+
 # Test model access
-curl -H "Authorization: Bearer $TOKEN" \
+curl -H "Authorization: Bearer $(cat ~/.kube/tokens/current)" \
   "https://${HOST}/llm/my-model-name/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{"model":"my-model-name","messages":[{"role":"user","content":"test"}],"max_tokens":10}'
@@ -305,7 +355,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 # 4. Test rate limiting
 for i in {1..60}; do
   curl -s -o /dev/null -w "%{http_code}\n" \
-    -H "Authorization: Bearer $TOKEN" \
+    -H "Authorization: Bearer $(cat ~/.kube/tokens/current)" \
     "https://${HOST}/llm/my-model-name/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d '{"model":"my-model-name","messages":[{"role":"user","content":"test"}],"max_tokens":10}'
@@ -314,12 +364,16 @@ done | sort | uniq -c
 
 # 5. Test unauthorized user (should get 403)
 oc login --username=unauthorized-user
-TOKEN=$(oc whoami -t)
-curl -v -H "Authorization: Bearer $TOKEN" \
+oc whoami -t > ~/.kube/tokens/current && chmod 600 ~/.kube/tokens/current
+
+curl -v -H "Authorization: Bearer $(cat ~/.kube/tokens/current)" \
   "https://${HOST}/llm/my-model-name/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{"model":"my-model-name","messages":[{"role":"user","content":"test"}],"max_tokens":10}'
 # Expected: 403 Forbidden
+
+# Clean up token file after use
+rm -f ~/.kube/tokens/current
 
 # 6. Use validation script
 ./scripts/validate-deployment.sh
@@ -333,9 +387,34 @@ Once new system is validated and working correctly:
 
 ```bash
 # Remove tier annotations from all models
-kubectl get llminferenceservice -n llm -o name | while read model; do
-  kubectl annotate $model -n llm alpha.maas.opendatahub.io/tiers- --ignore-not-found
-done
+# Track failures to ensure all annotations are removed
+failed_models=()
+
+# Use process substitution to avoid subshell issue with pipe
+while read model; do
+  if kubectl annotate $model -n llm alpha.maas.opendatahub.io/tiers- --ignore-not-found; then
+    echo "✓ Removed tier annotation from $model"
+  else
+    echo "✗ Failed to remove tier annotation from $model" >&2
+    failed_models+=("$model")
+  fi
+done < <(kubectl get llminferenceservice -n llm -o name)
+
+# Report any failures
+if [ ${#failed_models[@]} -gt 0 ]; then
+  echo ""
+  echo "⚠️  WARNING: Failed to remove tier annotations from the following models:" >&2
+  printf '  - %s\n' "${failed_models[@]}" >&2
+  echo ""
+  echo "Please manually remove annotations from these models:" >&2
+  for model in "${failed_models[@]}"; do
+    echo "  kubectl annotate $model -n llm alpha.maas.opendatahub.io/tiers-" >&2
+  done
+  exit 1
+else
+  echo ""
+  echo "✓ Successfully removed tier annotations from all models"
+fi
 ```
 
 #### 4.2 Delete old gateway-auth-policy (if exists)
@@ -434,11 +513,12 @@ kubectl annotate authpolicy <policy-name> -n <namespace> \
 ```bash
 # Check for duplicate AuthPolicies targeting same HTTPRoute
 kubectl get authpolicy -A -o json | \
-  jq -r '.items[] | select(.spec.targetRef.kind=="HTTPRoute") | "\(.metadata.namespace)/\(.metadata.name) -> \(.spec.targetRef.name)"' | \
+  jq -r '.items[] | select(.spec.targetRef != null and .spec.targetRef.kind == "HTTPRoute") | "\(.metadata.namespace)/\(.metadata.name) -> \(.spec.targetRef.name // "<missing-target>")"' | \
   sort
 
 # Look for multiple policies targeting the same HTTPRoute
 # Expected: One AuthPolicy per HTTPRoute (created by maas-controller)
+# If you see "<missing-target>", investigate that AuthPolicy for missing targetRef.name
 ```
 
 ## Migration Automation Script
@@ -629,16 +709,26 @@ else
   echo "No gateway-auth-policy backup found (skipping restore)"
 fi
 
-# 4. Re-apply old TokenRateLimitPolicy (if modified)
-kubectl apply -f migration-backup/gateway-rate-limits.yaml
+# 4. Re-apply old TokenRateLimitPolicy (if backed up)
+if [ -f migration-backup/gateway-rate-limits.yaml ]; then
+  kubectl apply -f migration-backup/gateway-rate-limits.yaml
+  echo "Restored gateway-rate-limits"
+else
+  echo "No gateway-rate-limits backup found (skipping restore)"
+fi
 
 # 5. Re-add tier annotations to models
 kubectl annotate llminferenceservice my-model-name -n llm \
   alpha.maas.opendatahub.io/tiers='["premium","enterprise"]' \
   --overwrite
 
-# 6. Re-apply tier-to-group-mapping ConfigMap (if deleted)
-kubectl apply -f migration-backup/tier-to-group-mapping.yaml
+# 6. Re-apply tier-to-group-mapping ConfigMap (if backed up)
+if [ -f migration-backup/tier-to-group-mapping.yaml ]; then
+  kubectl apply -f migration-backup/tier-to-group-mapping.yaml
+  echo "Restored tier-to-group-mapping"
+else
+  echo "No tier-to-group-mapping backup found (skipping restore)"
+fi
 
 # 7. Restart MaaS API to reload tier configuration
 kubectl rollout restart deployment/maas-api -n opendatahub
@@ -648,15 +738,21 @@ kubectl rollout restart deployment/maas-api -n opendatahub
 
 ```bash
 # Test tier-based system is working
-TOKEN=$(oc whoami -t)
+# Using secure token file (see Phase 3 security warning for details)
+mkdir -p ~/.kube/tokens && chmod 700 ~/.kube/tokens
+oc whoami -t > ~/.kube/tokens/current && chmod 600 ~/.kube/tokens/current
+
 HOST="maas.$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
 
-curl -H "Authorization: Bearer $TOKEN" \
+curl -H "Authorization: Bearer $(cat ~/.kube/tokens/current)" \
   "https://${HOST}/llm/my-model-name/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{"model":"my-model-name","messages":[{"role":"user","content":"test"}],"max_tokens":10}'
 
 # Expected: 200 OK (tier-based system restored)
+
+# Clean up token file
+rm -f ~/.kube/tokens/current
 ```
 
 ### Partial Rollback
