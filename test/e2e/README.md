@@ -53,27 +53,23 @@ See `tests/test_subscription.py` docstring for all available environment variabl
 - `E2E_TIMEOUT`: Request timeout in seconds (default: 30)
 - `E2E_RECONCILE_WAIT`: Wait time for reconciliation in seconds (default: 8)
 
-### API Key Management Tests
+## Test Artifacts
 
-Tests for the API Key Management endpoints (`/v1/api-keys`):
+All test runs produce artifacts in `ARTIFACT_DIR` (default: `test/e2e/reports/`):
 
-```bash
-cd test/e2e
-./run_api_key_tests.sh
-```
+- `subscription-*.xml` - JUnit XML results (consumed by Prow)
+- `subscription-*.html` - HTML test report (self-contained)
+- `authorino-debug.log` - Authorino logs with tokens redacted
+- `cluster-state.log` - Snapshot of MaaS CRs, AuthPolicies, routes, gateway
+- `pod-logs/*.log` - Pod logs from the MaaS namespace
+- `auth-debug.log` - Full auth debug report (connectivity, DNS, config)
 
-**Environment Variables:**
-- `MAAS_API_BASE_URL` - MaaS API URL (auto-discovered from `oc get route maas-api`)
-- `TOKEN` - User token (auto-obtained via `oc whoami -t`)
-- `ADMIN_OC_TOKEN` - Optional admin token for authorization tests (if not set, admin tests are skipped)
+## Troubleshooting
 
-**Test Coverage:**
-- ✅ Create, list, revoke API keys
-- ✅ Admin authorization (manage other users' keys)
-- ✅ Non-admin authorization (403 on other users' keys)
-- ✅ Validation endpoint (active and revoked keys)
-
-Results: `test/e2e/reports/api-keys-report.html`
+- **Tests fail with 401/403**: Check Authorino is running (`oc get pods -n kuadrant-system`), check AuthPolicies are enforced (`oc get authpolicies -A`), run `./test/e2e/scripts/auth_utils.sh`
+- **MaaSModelRefs stuck non-Ready**: Bounce the controller: `kubectl rollout restart deployment/maas-controller -n opendatahub`
+- **Python venv issues**: If `--upgrade-deps` fails (Python < 3.9), scripts fall back automatically
+- **Token issues in CI**: Set `E2E_TEST_TOKEN_SA_NAMESPACE` + `E2E_TEST_TOKEN_SA_NAME` for SA token fallback
 
 ## CI Integration
 
