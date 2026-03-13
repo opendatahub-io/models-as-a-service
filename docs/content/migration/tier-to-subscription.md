@@ -733,7 +733,7 @@ kubectl logs -n openshift-ingress -l app.kubernetes.io/name=authorino --tail=50
 ```bash
 # Check if MaaSSubscription exists for the model
 kubectl get maassubscription -n models-as-a-service -o json | \
-  jq -r '.items[] | select(.spec.modelRefs[].name == "my-model-name")'
+  jq -r '.items[] | select(.spec.modelRefs[]? | .name? == "my-model-name")'
 
 # Check if TokenRateLimitPolicy was generated
 kubectl get tokenratelimitpolicy -n llm -l maas.opendatahub.io/model-ref=my-model-name
