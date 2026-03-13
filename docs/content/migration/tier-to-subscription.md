@@ -247,10 +247,10 @@ kubectl get maasmodelref my-model-name -n llm -o jsonpath='{.status.phase}'
 # Expected: Ready
 
 # Check generated AuthPolicy (one per model)
-kubectl get authpolicy -n llm -l maas.opendatahub.io/model-ref=my-model-name
+kubectl get authpolicy -n llm -l maas.opendatahub.io/model=my-model-name
 
 # Check generated TokenRateLimitPolicy (one per model)
-kubectl get tokenratelimitpolicy -n llm -l maas.opendatahub.io/subscription=my-model-premium-subscription
+kubectl get tokenratelimitpolicy -n llm -l maas.opendatahub.io/model=my-model-name
 
 # View full status
 kubectl describe maasmodelref my-model-name -n llm
@@ -789,7 +789,7 @@ kubectl get maasauthpolicy -n models-as-a-service -o json | \
   jq -r '.items[] | select(.spec.modelRefs[]? | .name? == "my-model-name")'
 
 # Check if AuthPolicy was generated
-kubectl get authpolicy -n llm -l maas.opendatahub.io/model-ref=my-model-name
+kubectl get authpolicy -n llm -l maas.opendatahub.io/model=my-model-name
 
 # Check AuthPolicy status
 kubectl describe authpolicy -n llm <policy-name>
@@ -840,7 +840,7 @@ kubectl get maassubscription -n models-as-a-service -o json | \
   jq -r '.items[] | select(.spec.modelRefs[]? | .name? == "my-model-name")'
 
 # Check if TokenRateLimitPolicy was generated
-kubectl get tokenratelimitpolicy -n llm -l maas.opendatahub.io/model-ref=my-model-name
+kubectl get tokenratelimitpolicy -n llm -l maas.opendatahub.io/model=my-model-name
 
 # Check TokenRateLimitPolicy status
 kubectl describe tokenratelimitpolicy -n llm <policy-name>
@@ -977,7 +977,6 @@ spec:
   owner:
     groups:
       - name: basic-users
-  priority: 1  # Lower priority
   modelRefs:
     - name: my-model
       namespace: llm
@@ -996,7 +995,6 @@ spec:
   owner:
     groups:
       - name: premium-users
-  priority: 10  # Higher priority
   modelRefs:
     - name: my-model
       namespace: llm
@@ -1005,7 +1003,7 @@ spec:
           window: 1m
 ```
 
-When a user belongs to multiple owner groups, the controller selects the subscription with the highest `spec.priority` value (defaults to 0). In this example, users in both groups get the premium subscription (priority 10) with 10000 tokens/min.
+When a user belongs to multiple owner groups, the controller selects the subscription with the **highest token rate limit**. In this example, users in both groups get the premium subscription with 10000 tokens/min (higher than the basic subscription's 100 tokens/min).
 
 ### What happens to users during migration?
 
@@ -1032,11 +1030,13 @@ This allows gradual migration with minimal risk.
 
 ### What if a user is in multiple groups with different subscriptions?
 
-When a user belongs to multiple owner groups with different subscriptions for the same model, the controller selects the subscription with the highest **`spec.priority`** value (higher numbers = higher priority, defaults to 0).
+When a user belongs to multiple owner groups with different subscriptions for the same model, the controller selects the subscription with the **highest token rate limit** (the subscription with the highest `limit` value wins).
 
 **Example:** A user in both `basic-users` and `premium-users` groups:
-- If `basic-subscription` has `priority: 1` (100 tokens/min) and `premium-subscription` has `priority: 10` (10000 tokens/min), the user gets the premium subscription with 10000 tokens/min.
-- If both subscriptions have the same priority, the controller uses an implementation-defined tie-breaker (not guaranteed to be stable).
+- If `basic-subscription` has 100 tokens/min and `premium-subscription` has 10000 tokens/min, the user gets the premium subscription with 10000 tokens/min (highest limit wins).
+- If both subscriptions have the same token rate limit, the controller uses an implementation-defined tie-breaker (not guaranteed to be stable).
+
+> **Note:** The `spec.priority` field exists in the MaaSSubscription CRD but is currently not used by the controller. Selection is based solely on token rate limit.
 
 ### Can I still use the tier-to-group-mapping ConfigMap?
 

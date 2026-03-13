@@ -579,8 +579,13 @@ if [[ "$APPLY" == "true" ]]; then
     log_info "Checking generated Kuadrant policies..."
     sleep 2
 
-    AUTHPOLICY_COUNT=$(kubectl get authpolicy -n "$MODEL_NAMESPACE" -l maas.opendatahub.io/auth-policy=${TIER}-models-access 2>/dev/null | grep -c "maas-auth-" || true)
-    TRLP_COUNT=$(kubectl get tokenratelimitpolicy -n "$MODEL_NAMESPACE" -l maas.opendatahub.io/subscription=${TIER}-models-subscription 2>/dev/null | grep -c "subscription-" || true)
+    AUTHPOLICY_COUNT=$(kubectl get authpolicy -n "$MODEL_NAMESPACE" -l app.kubernetes.io/managed-by=maas-controller,app.kubernetes.io/part-of=maas-auth-policy 2>/dev/null | wc -l | tr -d ' ')
+    # Subtract 1 for header line
+    AUTHPOLICY_COUNT=$((AUTHPOLICY_COUNT > 0 ? AUTHPOLICY_COUNT - 1 : 0))
+
+    TRLP_COUNT=$(kubectl get tokenratelimitpolicy -n "$MODEL_NAMESPACE" -l app.kubernetes.io/managed-by=maas-controller,app.kubernetes.io/part-of=maas-subscription 2>/dev/null | wc -l | tr -d ' ')
+    # Subtract 1 for header line
+    TRLP_COUNT=$((TRLP_COUNT > 0 ? TRLP_COUNT - 1 : 0))
 
     log_verbose "  AuthPolicies created: $AUTHPOLICY_COUNT (expected: ${#MODEL_ARRAY[@]})"
     log_verbose "  TokenRateLimitPolicies created: $TRLP_COUNT (expected: ${#MODEL_ARRAY[@]})"
