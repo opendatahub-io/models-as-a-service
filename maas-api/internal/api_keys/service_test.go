@@ -31,11 +31,11 @@ func TestValidateAPIKey_ValidKey(t *testing.T) {
 
 	// Create a valid API key
 	keyID := "test-key-id"
-	plainKey, hash := createTestAPIKey(t)
+	plainKey, hashData := createTestAPIKey(t)
 	username := "alice"
 	groups := []string{"tier-premium", "system:authenticated"}
 
-	err := store.AddKey(ctx, username, keyID, hash, "Test Key", "", groups, nil)
+	err := store.AddKey(ctx, username, keyID, plainKey, hashData, "Test Key", "", groups, nil)
 	require.NoError(t, err)
 
 	// Validate the key
@@ -94,11 +94,11 @@ func TestValidateAPIKey_RevokedKey(t *testing.T) {
 
 	// Create and immediately revoke a key
 	keyID := "revoked-key-id"
-	plainKey, hash := createTestAPIKey(t)
+	plainKey, hashData := createTestAPIKey(t)
 	username := "bob"
 	groups := []string{"tier-free"}
 
-	err := store.AddKey(ctx, username, keyID, hash, "Revoked Key", "", groups, nil)
+	err := store.AddKey(ctx, username, keyID, plainKey, hashData, "Revoked Key", "", groups, nil)
 	require.NoError(t, err)
 
 	// Revoke the key
@@ -111,7 +111,7 @@ func TestValidateAPIKey_RevokedKey(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.False(t, result.Valid)
-	assert.Equal(t, "key revoked or expired", result.Reason)
+	assert.Equal(t, "key not found", result.Reason)
 }
 
 func TestValidateAPIKey_ExpiredKey(t *testing.T) {
@@ -120,12 +120,12 @@ func TestValidateAPIKey_ExpiredKey(t *testing.T) {
 
 	// Create a key that's already expired
 	keyID := "expired-key-id"
-	plainKey, hash := createTestAPIKey(t)
+	plainKey, hashData := createTestAPIKey(t)
 	username := "charlie"
 	groups := []string{"tier-basic"}
 	expiresAt := time.Now().Add(-24 * time.Hour) // Expired 1 day ago
 
-	err := store.AddKey(ctx, username, keyID, hash, "Expired Key", "", groups, &expiresAt)
+	err := store.AddKey(ctx, username, keyID, plainKey, hashData, "Expired Key", "", groups, &expiresAt)
 	require.NoError(t, err)
 
 	// Validate the expired key
@@ -134,7 +134,7 @@ func TestValidateAPIKey_ExpiredKey(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.False(t, result.Valid)
-	assert.Equal(t, "key revoked or expired", result.Reason)
+	assert.Equal(t, "key not found", result.Reason)
 }
 
 func TestValidateAPIKey_EmptyGroups(t *testing.T) {
@@ -143,10 +143,10 @@ func TestValidateAPIKey_EmptyGroups(t *testing.T) {
 
 	// Create a key with no groups (nil)
 	keyID := "no-groups-key"
-	plainKey, hash := createTestAPIKey(t)
+	plainKey, hashData := createTestAPIKey(t)
 	username := "dave"
 
-	err := store.AddKey(ctx, username, keyID, hash, "No Groups Key", "", nil, nil)
+	err := store.AddKey(ctx, username, keyID, plainKey, hashData, "No Groups Key", "", nil, nil)
 	require.NoError(t, err)
 
 	// Validate the key
@@ -166,11 +166,11 @@ func TestValidateAPIKey_UpdatesLastUsed(t *testing.T) {
 
 	// Create a valid API key
 	keyID := "last-used-key"
-	plainKey, hash := createTestAPIKey(t)
+	plainKey, hashData := createTestAPIKey(t)
 	username := "eve"
 	groups := []string{"tier-enterprise"}
 
-	err := store.AddKey(ctx, username, keyID, hash, "Last Used Test", "", groups, nil)
+	err := store.AddKey(ctx, username, keyID, plainKey, hashData, "Last Used Test", "", groups, nil)
 	require.NoError(t, err)
 
 	// Get initial metadata (last_used_at should be empty/nil)
@@ -202,11 +202,11 @@ func TestGetAPIKey(t *testing.T) {
 
 	// Create a key
 	keyID := "get-test-key"
-	_, hash := createTestAPIKey(t)
+	plainKey, hashData := createTestAPIKey(t)
 	username := "alice"
 	keyName := "Alice's Key"
 
-	err := store.AddKey(ctx, username, keyID, hash, keyName, "Test description", nil, nil)
+	err := store.AddKey(ctx, username, keyID, plainKey, hashData, keyName, "Test description", nil, nil)
 	require.NoError(t, err)
 
 	// Get via service layer
@@ -235,10 +235,10 @@ func TestRevokeAPIKey(t *testing.T) {
 
 	// Create a key
 	keyID := "revoke-test-key"
-	_, hash := createTestAPIKey(t)
+	plainKey, hashData := createTestAPIKey(t)
 	username := "bob"
 
-	err := store.AddKey(ctx, username, keyID, hash, "Revoke Test", "", nil, nil)
+	err := store.AddKey(ctx, username, keyID, plainKey, hashData, "Revoke Test", "", nil, nil)
 	require.NoError(t, err)
 
 	// Verify it's active
@@ -264,8 +264,8 @@ func TestServiceList(t *testing.T) {
 	username := "charlie"
 	for i := 1; i <= 3; i++ {
 		keyID := "list-test-key-" + string(rune('0'+i))
-		_, hash := createTestAPIKey(t)
-		err := store.AddKey(ctx, username, keyID, hash, "Key "+string(rune('0'+i)), "", nil, nil)
+		plainKey, hashData := createTestAPIKey(t)
+		err := store.AddKey(ctx, username, keyID, plainKey, hashData, "Key "+string(rune('0'+i)), "", nil, nil)
 		require.NoError(t, err)
 	}
 
@@ -358,9 +358,9 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 // ============================================================
 
 // createTestAPIKey generates a valid API key and its hash for testing.
-func createTestAPIKey(t *testing.T) (string, string) {
+func createTestAPIKey(t *testing.T) (string, *api_keys.APIKeyHashData) {
 	t.Helper()
-	plainKey, hash, _, err := api_keys.GenerateAPIKey()
+	plainKey, hashData, _, err := api_keys.GenerateAPIKey()
 	require.NoError(t, err)
-	return plainKey, hash
+	return plainKey, hashData
 }

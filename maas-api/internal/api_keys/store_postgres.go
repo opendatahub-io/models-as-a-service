@@ -35,18 +35,19 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 	}
 }
 
-// AddKey stores an API key with hash-only storage (no plaintext).
+
+// AddKey stores an API key with PBKDF2 hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time) error {
+func (s *PostgresStore) AddKey(
+	ctx context.Context, username, keyID, plaintextKey string, hashData *APIKeyHashData,
+	name, description string, userGroups []string, expiresAt *time.Time,
+) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
 	if name == "" {
 		return ErrEmptyName
-	}
-	if keyHash == "" {
-		return errors.New("key hash is required")
 	}
 	if userGroups == nil {
 		userGroups = []string{}
@@ -57,7 +58,7 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, na
 		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
 	`
 	// Use pq.Array to handle PostgreSQL TEXT[] type
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), time.Now().UTC(), expiresAt)
+	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, hashData.Hash, pq.Array(userGroups), time.Now().UTC(), expiresAt)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
@@ -313,7 +314,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	var description sql.NullString
 
 	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &createdAt, &expiresAt, &k.Status, &lastUsedAt); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrKeyNotFound
 		}
 		return nil, fmt.Errorf("failed to get key: %w", err)
@@ -333,57 +334,58 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	return &k, nil
 }
 
-// GetByHash looks up an API key by its SHA-256 hash (critical path for validation).
-func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, error) {
+// GetByKey looks up and validates an API key using direct hash lookup.
+// Computes PBKDF2 hash with constant salt and performs exact match - no verification loop needed.
+func (s *PostgresStore) GetByKey(ctx context.Context, providedKey string) (*ApiKey, error) {
+	// Compute PBKDF2 hash with constant salt for direct lookup
+	hashData, err := HashAPIKey(providedKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute key hash: %w", err)
+	}
+	
+	// Direct hash lookup - O(1) with index on key_hash
 	query := `
-		SELECT id, username, name, description, user_groups, status, expires_at, last_used_at
+		SELECT id, username, name, description, user_groups, status, expires_at, last_used_at, created_at
 		FROM api_keys
-		WHERE key_hash = $1
+		WHERE status = 'active' 
+		  AND (expires_at IS NULL OR expires_at > NOW())
+		  AND key_hash = $1
 	`
-	row := s.db.QueryRowContext(ctx, query, keyHash)
-
+	
+	row := s.db.QueryRowContext(ctx, query, hashData.Hash)
+	
 	var k ApiKey
+	var createdAt time.Time
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
-	var userGroups []string
 
-	// Use pq.Array to scan PostgreSQL TEXT[] into []string
-	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Status, &expiresAt, &lastUsedAt); err != nil {
-		if err == sql.ErrNoRows {
+	err = row.Scan(
+		&k.ID, &k.Username, &k.Name, &description, pq.Array(&k.Groups),
+		&k.Status, &expiresAt, &lastUsedAt, &createdAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrKeyNotFound
 		}
-		return nil, fmt.Errorf("database lookup failed: %w", err)
+		return nil, fmt.Errorf("failed to scan API key: %w", err)
 	}
 
+	// Handle nullable fields
+	k.CreationDate = createdAt.UTC().Format(time.RFC3339)
 	if description.Valid {
 		k.Description = description.String
 	}
-	// user_groups is now directly scanned as []string - no JSON parsing needed
-	k.Groups = userGroups
-
+	if expiresAt.Valid {
+		k.ExpirationDate = expiresAt.Time.UTC().Format(time.RFC3339)
+	}
 	if lastUsedAt.Valid {
 		k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
 	}
 
-	// Check expiration and auto-update status if expired
-	if expiresAt.Valid && time.Now().UTC().After(expiresAt.Time) {
-		if k.Status == StatusActive {
-			// Auto-update status to expired
-			updateQuery := `UPDATE api_keys SET status = 'expired' WHERE id = $1 AND status = 'active'`
-			if _, err := s.db.ExecContext(ctx, updateQuery, k.ID); err != nil {
-				s.logger.Warn("Failed to update expired key status", "key_id", k.ID, "error", err)
-			}
-			k.Status = StatusExpired
-		}
-	}
-
-	// Reject revoked/expired keys
-	if k.Status == StatusRevoked || k.Status == StatusExpired {
-		return nil, ErrInvalidKey
-	}
-
+	// Hash matched - key is valid! No additional verification needed.
 	return &k, nil
 }
+
 
 // InvalidateAll revokes all active keys for a user.
 // Returns the count of keys that were revoked.

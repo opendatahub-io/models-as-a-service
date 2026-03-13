@@ -54,7 +54,7 @@ type CreateAPIKeyResponse struct {
 // If expiresIn is not provided, defaults to APIKeyMaxExpirationDays.
 // Per Feature Refinement "Key Format & Security":
 // - Generates cryptographically secure key with sk-oai-* prefix
-// - Stores ONLY the SHA-256 hash (plaintext never stored)
+// - Stores ONLY the PBKDF2-HMAC-SHA256 hash (plaintext never stored)
 // - Returns plaintext ONCE at creation ("show-once" pattern)
 // - Stores user groups for subscription-based authorization.
 // Admins can create keys for other users by specifying a different username.
@@ -86,7 +86,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups 
 	expiresAt := time.Now().UTC().Add(*expiresIn)
 
 	// Generate the API key
-	plaintext, hash, prefix, err := GenerateAPIKey()
+	plaintext, hashData, prefix, err := GenerateAPIKey()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate API key: %w", err)
 	}
@@ -95,9 +95,9 @@ func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups 
 	keyID := uuid.New().String()
 
 	// Store in database (hash only, plaintext NEVER stored)
-	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
+	// Note: prefix is used for indexing but plaintext is not stored
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
-	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, &expiresAt); err != nil {
+	if err := s.store.AddKey(ctx, username, keyID, plaintext, hashData, name, description, userGroups, &expiresAt); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
@@ -130,7 +130,7 @@ func (s *Service) GetAPIKey(ctx context.Context, id string) (*ApiKey, error) {
 
 // ValidateAPIKey validates an API key by hash lookup (called by Authorino HTTP callback)
 // Per Feature Refinement "Gateway Integration (Inference Flow)":
-// - Computes SHA-256 hash of incoming key
+// - Computes PBKDF2-HMAC-SHA256 hash verification of incoming key
 // - Looks up hash in database
 // - Returns user identity if valid, rejection reason if invalid.
 func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationResult, error) {
@@ -142,11 +142,8 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		}, nil
 	}
 
-	// Compute hash of incoming key
-	hash := HashAPIKey(key)
-
-	// Lookup in database
-	metadata, err := s.store.GetByHash(ctx, hash)
+	// Lookup in database using direct hash lookup (store computes PBKDF2 hash and matches exactly)
+	metadata, err := s.store.GetByKey(ctx, key)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
 			return &ValidationResult{

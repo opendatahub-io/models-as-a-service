@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -20,23 +22,36 @@ const (
 
 	// displayPrefixLength is the number of chars to show in the display prefix (after sk-oai-).
 	displayPrefixLength = 12
+
+	// PBKDF2 security parameters following OWASP 2024 guidelines.
+	HashBytes  = 32     // 256 bits  
+	Iterations = 600000 // OWASP recommendation for 2024
+	
+	// Constant salt for operator deployment (acceptable for machine-generated high-entropy keys).
+	ConstantSalt = "openshiftai.pbkdf2.salt.v1" // 26 bytes UTF-8
 )
 
+// APIKeyHashData represents a hashed API key with PBKDF2 metadata.
+type APIKeyHashData struct {
+	Hash       string `json:"hash"`       // Hex-encoded PBKDF2 output
+	Iterations int    `json:"iterations"` // Number of PBKDF2 iterations
+}
+
 // GenerateAPIKey creates a new API key with format: sk-oai-{base62_encoded_256bit_random}
-// Returns: (plaintext_key, sha256_hash, display_prefix, error)
+// Returns: (plaintext_key, pbkdf2_hash_data, display_prefix, error)
 //
 // Security properties (per Feature Refinement "Key Format & Security"):
 // - 256 bits of cryptographic entropy
 // - Base62 encoding (alphanumeric only, URL-safe)
-// - SHA-256 hash for storage (plaintext never stored)
+// - PBKDF2-HMAC-SHA256 hash for storage (plaintext never stored)
 // - Display prefix for UI identification.
 //
 //nolint:nonamedreturns // Named returns improve readability for multiple return values.
-func GenerateAPIKey() (plaintext, hash, prefix string, err error) {
+func GenerateAPIKey() (plaintext string, hashData *APIKeyHashData, prefix string, err error) {
 	// 1. Generate 32 bytes (256 bits) of cryptographic entropy
 	entropy := make([]byte, entropyBytes)
 	if _, err := rand.Read(entropy); err != nil {
-		return "", "", "", fmt.Errorf("failed to generate entropy: %w", err)
+		return "", nil, "", fmt.Errorf("failed to generate entropy: %w", err)
 	}
 
 	// 2. Encode to base62 (alphanumeric only, no special characters)
@@ -45,8 +60,11 @@ func GenerateAPIKey() (plaintext, hash, prefix string, err error) {
 	// 3. Construct key with OpenShift AI prefix
 	plaintext = KeyPrefix + encoded
 
-	// 4. Compute SHA-256 hash for storage
-	hash = HashAPIKey(plaintext)
+	// 4. Compute PBKDF2-HMAC-SHA256 hash for storage
+	hashData, err = HashAPIKey(plaintext)
+	if err != nil {
+		return "", nil, "", fmt.Errorf("failed to hash API key: %w", err)
+	}
 
 	// 5. Create display prefix (first 12 chars + ellipsis)
 	if len(encoded) >= displayPrefixLength {
@@ -55,15 +73,36 @@ func GenerateAPIKey() (plaintext, hash, prefix string, err error) {
 		prefix = KeyPrefix + encoded + "..."
 	}
 
-	return plaintext, hash, prefix, nil
+	return plaintext, hashData, prefix, nil
 }
 
-// HashAPIKey computes SHA-256 hash of an API key (for validation and storage)
+// HashAPIKey computes PBKDF2-HMAC-SHA256 hash with constant salt
 // This is the canonical hashing function - used by both key creation and validation.
-func HashAPIKey(key string) string {
-	h := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(h[:])
+// Uses operator-defined constant salt (acceptable for machine-generated high-entropy keys).
+func HashAPIKey(key string) (*APIKeyHashData, error) {
+	// Use constant salt for operator deployment
+	salt := []byte(ConstantSalt)
+
+	// Compute PBKDF2-HMAC-SHA256
+	hash := pbkdf2.Key([]byte(key), salt, Iterations, HashBytes, sha256.New)
+	
+	// Prepare result before clearing sensitive data
+	result := &APIKeyHashData{
+		Hash:       hex.EncodeToString(hash),
+		Iterations: Iterations,
+	}
+
+	// Clear sensitive data from memory (defense in depth)
+	defer func() {
+		for i := range hash {
+			hash[i] = 0
+		}
+	}()
+
+	return result, nil
 }
+
+
 
 // IsValidKeyFormat checks if a key has the correct sk-oai-* prefix and valid base62 body.
 func IsValidKeyFormat(key string) bool {
