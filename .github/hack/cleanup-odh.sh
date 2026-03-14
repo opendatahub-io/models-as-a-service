@@ -125,7 +125,7 @@ done
 
 # 11. Delete llm namespace and model resources
 echo "11. Deleting LLM models and namespace..."
-force_delete_namespace "llm" "llminferenceservice" "inferenceservice"
+force_delete_namespace "llm" "llminferenceservice" "inferenceservice" "maasmodelrefs.maas.opendatahub.io"
 
 # 12. Delete gateway resources in openshift-ingress
 echo "12. Deleting gateway resources..."
