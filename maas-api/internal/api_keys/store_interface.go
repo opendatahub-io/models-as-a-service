@@ -23,11 +23,15 @@ const (
 )
 
 type MetadataStore interface {
-	// AddKey stores an API key with hash-only storage (no plaintext).
+	// AddKey stores an API key with PBKDF2 hash-only storage (no plaintext).
 	// Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 	// userGroups is an array of user's groups (used for authorization).
-	// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-	AddKey(ctx context.Context, username string, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time) error
+	// hashData contains PBKDF2 hash, salt, and iteration count.
+	// plaintextKey is used only for deriving the search prefix (not stored).
+	AddKey(
+		ctx context.Context, username string, keyID string, plaintextKey string,
+		hashData *APIKeyHashData, name, description string, userGroups []string, expiresAt *time.Time,
+	) error
 
 	// List returns a paginated list of API keys with optional filtering.
 	// Pagination is mandatory - no unbounded queries allowed.
@@ -47,9 +51,9 @@ type MetadataStore interface {
 
 	Get(ctx context.Context, jti string) (*ApiKey, error)
 
-	// GetByHash looks up an API key by its SHA-256 hash (for Authorino validation)
+	// GetByKey looks up and validates an API key using PBKDF2 verification
 	// Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked
-	GetByHash(ctx context.Context, keyHash string) (*ApiKey, error)
+	GetByKey(ctx context.Context, providedKey string) (*ApiKey, error)
 
 	// InvalidateAll marks all active tokens for a user as revoked.
 	// Returns the count of keys that were revoked.

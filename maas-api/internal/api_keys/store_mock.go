@@ -21,6 +21,7 @@ type storedKey struct {
 	metadata   ApiKey
 	username   string
 	keyHash    string
+	iterations int
 	expiresAt  time.Time
 	lastUsedAt *time.Time
 }
@@ -38,7 +39,10 @@ var _ MetadataStore = (*MockStore)(nil)
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time) error {
+func (m *MockStore) AddKey(
+	ctx context.Context, username, keyID, plaintextKey string, hashData *APIKeyHashData,
+	name, description string, userGroups []string, expiresAt *time.Time,
+) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -64,9 +68,10 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, 
 			Status:       StatusActive,
 			CreationDate: time.Now().UTC().Format(time.RFC3339),
 		},
-		username:  username,
-		keyHash:   keyHash,
-		expiresAt: expiresAtTime,
+		username:   username,
+		keyHash:    hashData.Hash,
+		iterations: hashData.Iterations,
+		expiresAt:  expiresAtTime,
 	}
 
 	return nil
@@ -348,6 +353,39 @@ func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 	}
 
 	return &meta, nil
+}
+
+func (m *MockStore) GetByKey(ctx context.Context, providedKey string) (*ApiKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, k := range m.keys {
+		// Check if key is active and not expired
+		now := time.Now().UTC()
+		if k.metadata.Status != StatusActive {
+			continue
+		}
+		if !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
+			continue
+		}
+
+		// Verify PBKDF2 hash
+		// Compute hash of provided key for direct comparison
+		computedHash, err := HashAPIKey(providedKey)
+		if err != nil {
+			continue
+		}
+		if computedHash.Hash == k.keyHash {
+			meta := k.metadata
+			meta.Username = k.username
+			if k.lastUsedAt != nil {
+				meta.LastUsedAt = k.lastUsedAt.Format(time.RFC3339)
+			}
+			return &meta, nil
+		}
+	}
+
+	return nil, ErrKeyNotFound
 }
 
 func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, error) {
