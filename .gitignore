@@ -29,6 +29,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.venv/
 env/
 venv/
 ENV/
@@ -37,8 +38,19 @@ venv.bak/
 pip-log.txt
 pip-delete-this-directory.txt
 .coverage
+coverage.xml
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
 htmlcov/
+
+# Test / build reports
+reports/
+
+# OS / editor cruft
+.DS_Store
+.vscode/
 apps/frontend/.env.local
 apps/backend/.env
 CLAUDE.md
