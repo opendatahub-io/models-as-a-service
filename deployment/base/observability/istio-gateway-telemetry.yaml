@@ -2,7 +2,7 @@
 apiVersion: telemetry.istio.io/v1
 kind: Telemetry
 metadata:
-  name: latency-per-tier
+  name: maas-gateway-metrics
   namespace: openshift-ingress
 spec:
   selector:
@@ -11,11 +11,3 @@ spec:
   metrics:
   - providers:
     - name: prometheus
-    overrides:
-    - match:
-        metric: REQUEST_DURATION
-        mode: CLIENT_AND_SERVER
-      tagOverrides:
-        tier:
-          operation: UPSERT
-          value: request.headers["x-maas-tier"]
