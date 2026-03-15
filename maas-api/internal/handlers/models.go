@@ -20,7 +20,6 @@ type ModelsHandler struct {
 	subscriptionSelector *subscription.Selector
 	logger               *logger.Logger
 	maasModelRefLister   models.MaaSModelRefLister
-	maasModelNamespace   string
 }
 
 // NewModelsHandler creates a new models handler.
@@ -30,7 +29,6 @@ func NewModelsHandler(
 	modelMgr *models.Manager,
 	subscriptionSelector *subscription.Selector,
 	maasModelRefLister models.MaaSModelRefLister,
-	maasModelNamespace string,
 ) *ModelsHandler {
 	if log == nil {
 		log = logger.Production()
@@ -40,7 +38,6 @@ func NewModelsHandler(
 		subscriptionSelector: subscriptionSelector,
 		logger:               log,
 		maasModelRefLister:   maasModelRefLister,
-		maasModelNamespace:   maasModelNamespace,
 	}
 }
 
@@ -158,10 +155,11 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		selectedSubscription = requestedSubscription
 	}
 
-	var modelList []models.Model
-	if h.maasModelRefLister != nil && h.maasModelNamespace != "" {
-		h.logger.Debug("Listing models from MaaSModelRef cache", "namespace", h.maasModelNamespace)
-		list, err := models.ListFromMaaSModelRefLister(h.maasModelRefLister, h.maasModelNamespace)
+	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null
+	modelList := []models.Model{}
+	if h.maasModelRefLister != nil {
+		h.logger.Debug("Listing models from MaaSModelRef cache (all namespaces)")
+		list, err := models.ListFromMaaSModelRefLister(h.maasModelRefLister)
 		if err != nil {
 			h.logger.Error("Listing from MaaSModelRef failed", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -175,7 +173,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, selectedSubscription)
 		h.logger.Debug("Access validation complete", "listed", len(list), "accessible", len(modelList))
 	} else {
-		h.logger.Debug("MaaSModelRef not configured (lister or namespace unset), returning empty model list")
+		h.logger.Debug("MaaSModelRef lister not configured, returning empty model list")
 	}
 
 	h.logger.Debug("GET /v1/models returning models", "count", len(modelList))
