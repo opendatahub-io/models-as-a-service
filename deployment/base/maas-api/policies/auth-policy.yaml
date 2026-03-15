@@ -29,7 +29,8 @@ spec:
         when:
           - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
         http:
-          url: https://maas-api.opendatahub.svc.cluster.local:8443/internal/v1/api-keys/validate
+          # Overwritten by ODH overlay replacement (app-namespace param). Use placeholder.
+          url: https://maas-api.placehold.svc.cluster.local:8443/internal/v1/api-keys/validate
           method: POST
           contentType: application/json
           body:
