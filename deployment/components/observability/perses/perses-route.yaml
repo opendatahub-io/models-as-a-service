@@ -1,0 +1,23 @@
+# OpenShift Route to expose Perses UI.
+# Standalone kustomize deployments only (kubectl apply -k).
+# Not used by install-perses-dashboards.sh — the UIPlugin integrates Perses
+# into the OpenShift Console directly (no external route needed).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: perses-ingress
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  to:
+    kind: Service
+    name: perses
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+

@@ -1,0 +1,260 @@
+# Perses Dashboard: Usage Dashboard
+# Token consumption overview with per-user breakdown table.
+# Matches the "Usage" tab from the RHOAI 3.4 prototype mock.
+apiVersion: perses.dev/v1alpha1
+kind: PersesDashboard
+metadata:
+  name: usage-dashboard
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  display:
+    name: "Usage Dashboard"
+    description: "Token consumption overview and per-user usage breakdown"
+  duration: 168h
+
+  variables:
+    - kind: ListVariable
+      spec:
+        name: user
+        display:
+          name: "User"
+        allowMultiple: true
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: user
+            matchers:
+              - authorized_hits{user!=""}
+    - kind: ListVariable
+      spec:
+        name: subscription
+        display:
+          name: "Subscription"
+        allowMultiple: true
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: subscription
+            matchers:
+              - authorized_hits{subscription!=""}
+    - kind: ListVariable
+      spec:
+        name: model
+        display:
+          name: "Model"
+        allowMultiple: true
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: model
+            matchers:
+              - authorized_hits{model!=""}
+
+  panels:
+    totalTokens:
+      kind: Panel
+      spec:
+        display:
+          name: "Total Tokens"
+          description: "Total tokens consumed across all authorized API requests."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Tokens"
+                  query: sum(authorized_hits{user!=""})
+
+    totalRequests:
+      kind: Panel
+      spec:
+        display:
+          name: "Total Requests"
+          description: "Total API requests that were successfully authorized."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Requests"
+                  query: sum(authorized_calls{user!=""})
+
+    activeUsers:
+      kind: Panel
+      spec:
+        display:
+          name: "Active Users"
+          description: "Number of unique users who have made API requests."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Users"
+                  query: count(count by (user) (authorized_calls{user!=""}))
+
+    successRate:
+      kind: Panel
+      spec:
+        display:
+          name: "Success Rate"
+          description: "Model inference success rate across all requests that reached the model."
+        plugin:
+          kind: GaugeChart
+          spec:
+            calculation: last-number
+            format:
+              unit: percent-decimal
+              decimalPlaces: 1
+            max: 1
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Success Rate"
+                  query: ((sum(rate(vllm:request_success_total[5m])) / clamp_min(sum(rate(vllm:e2e_request_latency_seconds_count[5m])), 1e-9)) * (sum(rate(vllm:e2e_request_latency_seconds_count[5m])) > 0)) OR vector(0)
+
+    tokenConsumptionByUser:
+      kind: Panel
+      spec:
+        display:
+          name: "Token Consumption by User"
+          description: "Per-user token consumption, requests, and rate-limited calls grouped by subscription."
+        plugin:
+          kind: Table
+          spec:
+            density: "compact"
+            pagination: true
+            transforms:
+              - kind: "MergeSeries"
+                spec: {}
+            columnSettings:
+              - name: "timestamp"
+                hide: true
+              - name: "user"
+                header: "User"
+                align: "left"
+                enableSorting: true
+              - name: "subscription"
+                header: "Subscription"
+                align: "left"
+                enableSorting: true
+              - name: "value #1"
+                header: "Tokens"
+                align: "right"
+                enableSorting: true
+                sort: "desc"
+                format:
+                  unit: decimal
+                  shortValues: true
+              - name: "value #2"
+                header: "Requests"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+              - name: "value #3"
+                header: "Rate Limited"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum by (user, subscription) (authorized_hits{user!="", user=~"$user", subscription=~"$subscription"})
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum by (user, subscription) (authorized_calls{user!="", user=~"$user", subscription=~"$subscription"})
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: sum by (user, subscription) (limited_calls{user!="", user=~"$user", subscription=~"$subscription"})
+
+  layouts:
+    - kind: Grid
+      spec:
+        display:
+          title: "Overview"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/totalTokens"
+          - x: 6
+            "y": 0
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/totalRequests"
+          - x: 12
+            "y": 0
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/activeUsers"
+          - x: 18
+            "y": 0
+            width: 6
+            height: 5
+            content:
+              "$ref": "#/spec/panels/successRate"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "Token Consumption by User"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 12
+            content:
+              "$ref": "#/spec/panels/tokenConsumptionByUser"
