@@ -253,12 +253,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			},
 		}
 
-		// Check for subscription selection errors and deny if present
-		authRules["subscription-error-check"] = map[string]interface{}{
+		// Fail-close: require successful subscription selection (name must be present)
+		authRules["subscription-valid"] = map[string]interface{}{
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]interface{}{
-				"rego": `allow { not object.get(input.auth.metadata["subscription-info"], "error", false) }`,
+				"rego": `allow { object.get(input.auth.metadata["subscription-info"], "name", "") != "" }`,
 			},
 		}
 
@@ -459,8 +459,6 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 
 // deleteModelAuthPolicy deletes the aggregated AuthPolicy for a model in the given namespace.
 func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
-	// Check if there are any remaining (non-deleted) MaaSAuthPolicies that reference this model.
-	// If yes, don't delete the aggregated AuthPolicy - they will rebuild it.
 	// Always delete the aggregated AuthPolicy so remaining MaaSAuthPolicies rebuild it
 	// without the subjects from the deleted policy. If we skip deletion, the aggregated
 	// AuthPolicy will contain stale subjects from the deleted MaaSAuthPolicy.
