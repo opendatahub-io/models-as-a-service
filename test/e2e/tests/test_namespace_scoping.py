@@ -520,9 +520,18 @@ class TestCrossNamespaceAuthPolicy:
             log.info("✓ Multiple policies deletion test passed (bug fix verified)")
 
         finally:
-            _delete_cr("MaaSAuthPolicy", policy1_name, policy_namespace)
-            _delete_cr("MaaSAuthPolicy", policy2_name, policy_namespace2)
-            _delete_namespace(policy_namespace2)
+            for resource, name, ns in [
+                ("MaaSAuthPolicy", policy1_name, policy_namespace),
+                ("MaaSAuthPolicy", policy2_name, policy_namespace2),
+            ]:
+                try:
+                    _delete_cr(resource, name, ns)
+                except Exception as e:
+                    log.warning(f"Cleanup failed for {resource}/{name}: {e}")
+            try:
+                _delete_namespace(policy_namespace2)
+            except Exception as e:
+                log.warning(f"Cleanup failed for namespace {policy_namespace2}: {e}")
 
 
 class TestCrossNamespaceSubscription:
@@ -619,8 +628,14 @@ class TestCrossNamespaceSubscription:
             log.info("✓ Cross-namespace Subscription test passed")
 
         finally:
-            _delete_cr("MaaSSubscription", subscription_name, maas_subscription_ns)
-            _delete_cr("MaaSAuthPolicy", maas_auth_policy_name, maas_subscription_ns)
+            for resource, name, ns in [
+                ("MaaSSubscription", subscription_name, maas_subscription_ns),
+                ("MaaSAuthPolicy", maas_auth_policy_name, maas_subscription_ns),
+            ]:
+                try:
+                    _delete_cr(resource, name, ns)
+                except Exception as e:
+                    log.warning(f"Cleanup failed for {resource}/{name}: {e}")
 
     def test_multiple_subscriptions_different_namespaces_same_model(self, policy_namespace, api_key):
         """
@@ -819,9 +834,15 @@ class TestCrossNamespaceSubscription:
             log.info("✓ Multiple subscriptions deletion test passed (bug fix verified)")
 
         finally:
-            _delete_cr("MaaSSubscription", sub1_name, maas_subscription_ns)
-            _delete_cr("MaaSSubscription", sub2_name, maas_subscription_ns)
-            _delete_cr("MaaSAuthPolicy", maas_auth_policy_name, maas_subscription_ns)
+            for resource, name, ns in [
+                ("MaaSSubscription", sub1_name, maas_subscription_ns),
+                ("MaaSSubscription", sub2_name, maas_subscription_ns),
+                ("MaaSAuthPolicy", maas_auth_policy_name, maas_subscription_ns),
+            ]:
+                try:
+                    _delete_cr(resource, name, ns)
+                except Exception as e:
+                    log.warning(f"Cleanup failed for {resource}/{name}: {e}")
 
 
 class TestAuthorizationBoundary:
@@ -881,5 +902,11 @@ class TestAuthorizationBoundary:
             log.info("✓ Authorization boundary test passed - policies only affect listed models")
 
         finally:
-            _delete_cr("MaaSAuthPolicy", policy_name, policy_namespace)
-            _delete_cr("MaaSModelRef", unmanaged_model_name, MODEL_NAMESPACE)
+            for resource, name, ns in [
+                ("MaaSAuthPolicy", policy_name, policy_namespace),
+                ("MaaSModelRef", unmanaged_model_name, MODEL_NAMESPACE),
+            ]:
+                try:
+                    _delete_cr(resource, name, ns)
+                except Exception as e:
+                    log.warning(f"Cleanup failed for {resource}/{name}: {e}")
