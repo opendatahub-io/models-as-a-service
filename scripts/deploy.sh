@@ -30,6 +30,7 @@
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
 #   OPERATOR_TYPE             Operator type (rhoai/odh)
 #   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
+#   KUSTOMIZE_FORCE_CONFLICTS When true, use --force-conflicts on kubectl apply in kustomize mode
 #
 # EXAMPLES:
 #   # Deploy ODH (default, uses kuadrant policy engine)
@@ -84,6 +85,7 @@ OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
+KUSTOMIZE_FORCE_CONFLICTS="${KUSTOMIZE_FORCE_CONFLICTS:-false}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -153,9 +155,10 @@ ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
   OPERATOR_CATALOG          Custom operator catalog
-  OPERATOR_IMAGE        Custom operator image
-  OPERATOR_TYPE         Operator type (rhoai/odh)
-  LOG_LEVEL             Logging verbosity (DEBUG, INFO, WARN, ERROR)
+  OPERATOR_IMAGE            Custom operator image
+  OPERATOR_TYPE             Operator type (rhoai/odh)
+  LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
+  KUSTOMIZE_FORCE_CONFLICTS When true, pass --force-conflicts to kubectl apply in kustomize mode (default: false)
 
 EXAMPLES:
   # Deploy ODH (default, uses kuadrant policy engine)
@@ -571,14 +574,14 @@ deploy_via_kustomize() {
   deploy_postgresql
 
   log_info "Applying kustomize manifests..."
-  kubectl apply --server-side=true -f <(kustomize build "$overlay")
+  kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$overlay")
 
   # Apply gateway policies separately so they stay in openshift-ingress (overlay
   # namespace would otherwise overwrite them to $NAMESPACE)
   local policies_dir="$project_root/deployment/base/maas-controller/policies"
   if [[ -d "$policies_dir" ]]; then
     log_info "Applying gateway policies (openshift-ingress)..."
-    kubectl apply --server-side=true -f <(kustomize build "$policies_dir")
+    kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$policies_dir")
   fi
 
   # Configure TLS backend (if enabled)

@@ -55,14 +55,13 @@ func maasModelRefUnstructured(name, namespace, endpoint string, ready bool) *uns
 // fakeMaaSModelRefLister implements models.MaaSModelRefLister for tests (namespace -> items).
 type fakeMaaSModelRefLister map[string][]*unstructured.Unstructured
 
-func (f fakeMaaSModelRefLister) List(namespace string) ([]*unstructured.Unstructured, error) {
-	items := f[namespace]
-	if items == nil {
-		return nil, nil
-	}
-	out := make([]*unstructured.Unstructured, len(items))
-	for i, u := range items {
-		out[i] = u.DeepCopy()
+func (f fakeMaaSModelRefLister) List() ([]*unstructured.Unstructured, error) {
+	// Return all items from all namespaces
+	var out []*unstructured.Unstructured
+	for _, items := range f {
+		for _, u := range items {
+			out = append(out, u.DeepCopy())
+		}
 	}
 	return out, nil
 }
@@ -324,7 +323,7 @@ func TestListingModels(t *testing.T) {
 	// Create a mock subscription selector that auto-selects for single subscription users
 	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{})
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister, fixtures.TestNamespace)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
 
 	// Create token handler to extract user info middleware
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -431,7 +430,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister)
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister, fixtures.TestNamespace)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 
 	v1 := router.Group("/v1")
