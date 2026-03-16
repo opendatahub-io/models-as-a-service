@@ -46,7 +46,7 @@ type maasModelRefLister struct {
 	lister cache.GenericLister
 }
 
-func (m *maasModelRefLister) List(namespace string) ([]*unstructured.Unstructured, error) {
+func (m *maasModelRefLister) List() ([]*unstructured.Unstructured, error) {
 	objs, err := m.lister.List(labels.Everything())
 	if err != nil {
 		return nil, err
@@ -57,9 +57,7 @@ func (m *maasModelRefLister) List(namespace string) ([]*unstructured.Unstructure
 		if !ok {
 			continue
 		}
-		if namespace != "" && u.GetNamespace() != namespace {
-			continue
-		}
+		// Return all MaaSModelRefs from all namespaces (no filtering)
 		out = append(out, u)
 	}
 	return out, nil

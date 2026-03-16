@@ -5,7 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -72,16 +74,8 @@ func serve() error {
 
 	router := gin.Default()
 	if cfg.DebugMode {
-		router.Use(cors.New(cors.Config{
-			AllowMethods:  []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-			AllowHeaders:  []string{"Authorization", "Content-Type", "Accept"},
-			ExposeHeaders: []string{"Content-Type"},
-			AllowOriginFunc: func(origin string) bool {
-				return true
-			},
-			AllowCredentials: true,
-			MaxAge:           12 * time.Hour,
-		}))
+		log.Warn("Debug CORS policy active: allowing localhost origins only")
+		router.Use(cors.New(debugCORSConfig()))
 	}
 
 	router.OPTIONS("/*path", func(c *gin.Context) { c.Status(204) })
@@ -166,7 +160,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	tokenHandler := token.NewHandler(log, cfg.Name)
 
-	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister, cfg.Namespace)
+	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister)
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, log)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
@@ -186,4 +180,33 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
 
 	return nil
+}
+
+// isLocalhostOrigin reports whether the origin is a localhost address,
+// used by the debug-mode CORS policy to restrict cross-origin access to
+// local development only. Accepts both ported (http://localhost:3000)
+// and default-port (http://localhost) forms.
+func isLocalhostOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Hostname() == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(u.Hostname())
+	return ip != nil && ip.IsLoopback()
+}
+
+func debugCORSConfig() cors.Config {
+	return cors.Config{
+		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:    []string{"Authorization", "Content-Type", "Accept"},
+		ExposeHeaders:   []string{"Content-Type"},
+		AllowOriginFunc: isLocalhostOrigin,
+		MaxAge:          12 * time.Hour,
+	}
 }

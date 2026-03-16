@@ -735,6 +735,116 @@ class TestSubscriptionEnforcement:
         r = _inference(api_key, extra_headers={"x-maas-subscription": SIMULATOR_SUBSCRIPTION})
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
 
+    def test_rate_limit_exhaustion_gets_429(self):
+        """
+        Test that a user gets 429 when they actually exceed their token rate limit.
+
+        This test creates a dedicated subscription with a very low token limit,
+        sends enough requests to exhaust it, and verifies a 429 response.
+
+        Uses the unconfigured model to avoid interfering with other tests.
+        """
+        # Use unconfigured model to isolate this test
+        model_ref = UNCONFIGURED_MODEL_REF
+        model_path = UNCONFIGURED_MODEL_PATH
+
+        # Create unique subscription and auth policy names
+        auth_policy_name = "e2e-rate-limit-test-auth"
+        subscription_name = "e2e-rate-limit-test-subscription"
+
+        # Very low limit for fast test: 15 tokens/min with max_tokens=3 per request
+        # Expected behavior:
+        #   - Requests 1-5 succeed (use 15 tokens total)
+        #   - Request 6 gets 429 (would need 18 tokens total)
+        token_limit = 15
+        window = "1m"
+        max_tokens = 3  # Explicitly track tokens per request for clarity
+
+        try:
+            # 1. Create auth policy allowing system:authenticated
+            _create_test_auth_policy(
+                name=auth_policy_name,
+                model_refs=[model_ref],
+                groups=["system:authenticated"]
+            )
+            _wait_reconcile()
+
+            # 2. Create subscription with low token limit
+            _create_test_subscription(
+                name=subscription_name,
+                model_refs=[model_ref],
+                groups=["system:authenticated"],
+                token_limit=token_limit,
+                window=window
+            )
+            _wait_reconcile()
+
+            # 3. Get API key for testing
+            api_key = _get_default_api_key()
+
+            # 4. Send requests to exhaust the limit
+            # Calculate expected successful requests: token_limit / max_tokens = 15 / 3 = 5
+            expected_success = token_limit // max_tokens
+            # Send 2 extra requests to ensure we hit the limit
+            total_requests = expected_success + 2
+
+            rate_limited = False
+            success_count = 0
+
+            for i in range(total_requests):
+                r = _inference(api_key, path=model_path, subscription=subscription_name)
+                request_num = i + 1
+                log.info(f"Request {request_num}/{total_requests}: {r.status_code}")
+
+                if r.status_code == 200:
+                    success_count += 1
+                elif r.status_code == 429:
+                    rate_limited = True
+                    log.info(f"Rate limit exceeded after {success_count} successful requests "
+                            f"({success_count * max_tokens} tokens used)")
+
+                    # Verify we hit the limit at approximately the right point (±1 for rounding)
+                    assert abs(success_count - expected_success) <= 1, \
+                        f"Expected ~{expected_success} successful requests before 429, got {success_count}"
+
+                    # Verify it's a rate limit 429, not a subscription error
+                    response_text = r.text.lower() if r.text else ""
+                    # Rate limit 429s typically mention "rate", "limit", or "quota"
+                    # Subscription 429s mention "subscription" without "rate"
+                    is_rate_limit_error = any(keyword in response_text
+                                             for keyword in ["rate", "limit", "quota", "too many"])
+                    is_subscription_error = "subscription" in response_text and not is_rate_limit_error
+
+                    assert is_rate_limit_error or not is_subscription_error, \
+                        f"Expected rate limit 429, not subscription error. Response: {r.text[:500]}"
+
+                    # Check for Retry-After header (optional but good practice)
+                    retry_after = r.headers.get("Retry-After") or r.headers.get("retry-after")
+                    if retry_after:
+                        log.info(f"Retry-After header present: {retry_after}")
+
+                    break
+                else:
+                    # Unexpected status code
+                    raise AssertionError(f"Unexpected status {r.status_code} at request {request_num}: {r.text[:200]}")
+
+                # Brief pause to avoid overwhelming the system, but stay within the window
+                time.sleep(0.1)
+
+            assert rate_limited, \
+                f"Expected 429 after ~{expected_success} requests with {token_limit} tokens/{window} limit, " \
+                f"but got {success_count} successful requests without hitting limit"
+
+            # Note: Skipping rate limit reset test to keep test fast (<5s)
+            # Reset behavior is tested manually via scripts/test-rate-limit.sh
+
+        finally:
+            # Clean up in reverse order of creation
+            _delete_cr("maassubscription", subscription_name)
+            _delete_cr("maasauthpolicy", auth_policy_name)
+            _wait_reconcile()
+            log.info("Cleaned up rate limit test resources")
+
 
 class TestMultipleSubscriptionsPerModel:
     """Multiple subscriptions for one model — API key in ONE subscription should get access.

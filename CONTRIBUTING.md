@@ -66,6 +66,7 @@ This project follows a **Stream-Lake-Ocean** release model. Code flows from acti
 
 - **PR title:** Must follow semantic format (`type: subject`, subject not starting with a capital). Use `draft`/`wip` label to bypass.
 - **Kustomize:** Manifests under `deployment/` are validated with `scripts/ci/validate-manifests.sh` (kustomize build).
+- **MaaS Controller codegen:** CI verifies that generated deepcopy code (`maas-controller/api/maas/v1alpha1/zz_generated.deepcopy.go`) and CRD manifests (`deployment/base/maas-controller/crd/bases/`) are in sync with the API types. If you change any file under `maas-controller/api/`, run `make -C maas-controller generate manifests` and commit the results before pushing. The check fails when uncommitted generated changes are detected.
 - **MaaS API (on `maas-api/**` changes):** Lint (golangci-lint), tests (`make test`), and image build.
 
 **Workflows requiring owner approval:** Some CI workflows (e.g. those that run on infrastructure or deploy) require approval from an [OWNERS](OWNERS) approver before they can run. If your PR’s workflows are blocked, ping an owner in the PR to request approval. Before asking, validate that the workflow would succeed by running the same steps locally where possible (for example, the Prow-style E2E script below).
@@ -73,6 +74,7 @@ This project follows a **Stream-Lake-Ocean** release model. Code flows from acti
 **Run locally before pushing:**
 
 - Kustomize: `./scripts/ci/validate-manifests.sh` (from repo root; requires kustomize 5.7.x).
+- MaaS Controller codegen: from the repo root, run `make -C maas-controller verify-codegen` (automatically installs the correct `controller-gen` version to `bin/controller-gen`).
 - MaaS API: from `maas-api/`, run `make lint` and `make test`.
 - Full E2E (Prow-style): `./test/e2e/scripts/prow_run_smoke_test.sh` (from repo root; requires OpenShift cluster and cluster-admin).
 
