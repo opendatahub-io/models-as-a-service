@@ -455,6 +455,7 @@ class TestModelsEndpoint:
         sa_ns = "default"
         maas_ns = _ns()
         api_key = None
+        sa_user = None
 
         try:
             # Create SA with access to both subscriptions
@@ -526,20 +527,21 @@ class TestModelsEndpoint:
 
         finally:
             # Cleanup
-            result = subprocess.run([
-                "kubectl", "get", "maassubscription", "premium-simulator-subscription",
-                "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
-            ], capture_output=True, text=True)
+            if sa_user is not None:
+                result = subprocess.run([
+                    "kubectl", "get", "maassubscription", "premium-simulator-subscription",
+                    "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
+                ], capture_output=True, text=True)
 
-            if sa_user in result.stdout:
-                users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
-                users = [u for u in users if u != sa_user]
-                subprocess.run([
-                    "kubectl", "patch", "maassubscription", "premium-simulator-subscription",
-                    "-n", maas_ns,
-                    "--type=merge",
-                    "-p", json.dumps({"spec": {"owner": {"users": users}}})
-                ], check=True)
+                if sa_user in result.stdout:
+                    users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
+                    users = [u for u in users if u != sa_user]
+                    subprocess.run([
+                        "kubectl", "patch", "maassubscription", "premium-simulator-subscription",
+                        "-n", maas_ns,
+                        "--type=merge",
+                        "-p", json.dumps({"spec": {"owner": {"users": users}}})
+                    ], check=True)
 
             _delete_sa(sa_name, namespace=sa_ns)
 
@@ -1005,20 +1007,40 @@ class TestModelsEndpoint:
         """
         Test 9: Empty model list should return [] not null.
 
+        Creates a subscription pointing to UNCONFIGURED_MODEL_REF which has no
+        auth policy. The SA has access to the subscription, but when probing the
+        model endpoint, Authorino returns 403 (no auth policy = no access).
+
+        This validates that FilterModelsByAccess returns [] (not null) when no
+        models are accessible.
         """
         log.info("Test 9: Empty model list returns empty array")
 
-        # Use a subscription that exists but has no accessible models
-        sa_ns = _ns()
-        oc_token = _create_sa_token("empty-model-test-sa")
-        subscription_name = "simulator-subscription"
+        sa_name = "e2e-empty-models-sa"
+        sa_ns = "default"
+        maas_ns = _ns()
+        subscription_name = "e2e-empty-models-subscription"
 
         try:
+            # Create SA
+            sa_token = _create_sa_token(sa_name, namespace=sa_ns)
+            sa_user = _sa_to_user(sa_name, namespace=sa_ns)
+
+            # Create subscription pointing to unconfigured model (has no auth policy)
+            log.info(f"Creating subscription with {UNCONFIGURED_MODEL_REF} (no auth policy = no access)")
+            _create_test_subscription(subscription_name, UNCONFIGURED_MODEL_REF, users=[sa_user])
+
+            # Create API key
+            api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
+
+            _wait_reconcile()
+
+            # Query /v1/models - should return empty list (model has no auth policy)
             url = f"{_maas_api_url()}/v1/models"
             r = requests.get(
                 url,
                 headers={
-                    "Authorization": f"Bearer {oc_token}",
+                    "Authorization": f"Bearer {api_key}",
                     "x-maas-subscription": subscription_name,
                 },
                 timeout=TIMEOUT,
@@ -1035,16 +1057,20 @@ class TestModelsEndpoint:
             models = data["data"]
 
             # The critical assertion: data must be an array, never null
-            assert models is not None
+            assert models is not None, "'data' field must not be null (should be [] for empty)"
 
             assert isinstance(models, list), \
                 f"data must be a list, got {type(models).__name__}"
 
-            # Empty array is acceptable (and expected in this test)
-            log.info(f"✅ Empty model list → {r.status_code} with data={models} (array, not null)")
+            # Verify it's actually empty (unconfigured model has no auth policy)
+            assert len(models) == 0, \
+                f"Expected empty list (unconfigured model has no auth policy), got {len(models)} models: {models}"
+
+            log.info(f"✅ Empty model list → {r.status_code} with data=[] (array, not null)")
 
         finally:
-            _delete_sa("empty-model-test-sa", namespace=sa_ns)
+            _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
+            _delete_sa(sa_name, namespace=sa_ns)
 
     def test_response_schema_matches_openapi(self):
         """
