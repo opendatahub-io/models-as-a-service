@@ -31,9 +31,11 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 | `/health`             | GET    | Service health check                         | None              | Health status               |
 | `/v1/models`          | GET    | List available models (from MaaSModelRef CRs or LLMInferenceServices) | None              | OpenAI-compatible list      |
 | `/v1/api-keys`        | POST   | Create hash-based API key (sk-oai-*)         | `{"name", "description", "expiresIn"}` | API key (shown once) |
-| `/v1/api-keys`        | GET    | List all API keys for user                   | None              | Array of API key metadata   |
+| `/v1/api-keys/search` | POST   | Search API keys with filtering and pagination | `{"filter", "sort", "pagination"}` | Array of API key metadata |
+| `/v1/api-keys/bulk-revoke` | POST | Bulk revoke API keys                      | `{"ids"}`         | Revocation result           |
 | `/v1/api-keys/{id}`   | GET    | Get specific API key by ID                   | None              | API key metadata            |
 | `/v1/api-keys/{id}`   | DELETE | Revoke specific API key                      | None              | Revoked API key metadata (200 OK) |
+| `/v1/subscriptions/select` | POST | Select subscription for user             | Subscription selection | Selected subscription     |
 | `/v1/tiers/lookup`    | POST   | Lookup tier for user groups (internal)       | `{"groups"}`      | `{"tier", "displayName"}`   |
 | `/internal/v1/api-keys/validate` | POST | Validate API key (Authorino callback) | `{"key"}`         | `{"valid", "userId", "groups"}` |
 
