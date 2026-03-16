@@ -4,6 +4,32 @@ MaaS Subscription Controller e2e tests.
 Tests auth enforcement (MaaSAuthPolicy) and rate limiting (MaaSSubscription)
 by hitting the gateway with API keys created via the MaaS API.
 
+Policy Evaluation Order:
+  1. AuthPolicy (Kuadrant) - FIRST LINE OF DEFENSE
+     - Validates API key via /internal/v1/api-keys/validate
+     - Validates subscription selection via /v1/subscriptions/select
+       * Checks subscription exists and user has access (groups/users match)
+       * Auto-selects if user has exactly one subscription
+       * Returns error if multiple subscriptions without header
+     - Denies invalid requests with 403 Forbidden (subscription validation failures)
+     - Injects auth.identity.selected_subscription for downstream policies
+
+  2. TokenRateLimitPolicy (Kuadrant) - RATE LIMITING ONLY
+     - Trusts auth.identity.selected_subscription (already validated by AuthPolicy)
+     - Applies rate limits based on selected subscription
+     - Returns 429 Too Many Requests only when rate limit exceeded
+     - Does NOT re-validate subscription (AuthPolicy already did this)
+
+Expected Error Codes:
+  - 401 Unauthorized: Missing or invalid API key
+  - 403 Forbidden: Valid API key but subscription validation failed
+    * Invalid subscription header (subscription doesn't exist)
+    * User not authorized for requested subscription
+    * Multiple subscriptions available but no header provided
+    * No subscriptions available for user
+  - 429 Too Many Requests: Valid request but rate limit exceeded
+  - 200 OK: Valid request with available rate limit quota
+
 Requires:
   - GATEWAY_HOST env var (e.g. maas.apps.cluster.example.com)
   - MAAS_API_BASE_URL env var (e.g. https://maas.apps.cluster.example.com/maas-api)
@@ -35,7 +61,7 @@ Environment variables (all optional, with defaults):
   - E2E_SIMULATOR_SUBSCRIPTION: Free-tier subscription (default: simulator-subscription)
   - E2E_PREMIUM_SIMULATOR_SUBSCRIPTION: Premium-tier subscription (default: premium-simulator-subscription)
   - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
-  - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 429 test (default: nonexistent-sub)
+  - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 403 test (default: nonexistent-sub)
 """
 
 import base64
@@ -734,12 +760,16 @@ class TestSubscriptionEnforcement:
             _delete_cr("maasauthpolicy", "e2e-auth-pass-sub-fail")
             _wait_reconcile()
 
-    def test_invalid_subscription_header_gets_429(self):
-        """API key with invalid subscription header should get 429 or 403."""
+    def test_invalid_subscription_header_gets_403(self):
+        """API key with invalid subscription header should get 403 Forbidden from AuthPolicy.
+
+        AuthPolicy validates subscription selection via /v1/subscriptions/select and denies
+        invalid subscriptions with 403 before the request reaches TokenRateLimitPolicy.
+        """
         api_key = _get_default_api_key()
         r = _inference(api_key, extra_headers={"x-maas-subscription": INVALID_SUBSCRIPTION})
-        # Gateway may return 429 (rate limited) or 403 (forbidden) for invalid subscription
-        assert r.status_code in (429, 403), f"Expected 429 or 403, got {r.status_code}"
+        # Should get 403 Forbidden from AuthPolicy subscription validation
+        assert r.status_code == 403, f"Expected 403, got {r.status_code}: {r.text[:200]}"
 
     def test_explicit_subscription_header_works(self):
         """API key with explicit valid subscription header should work."""
@@ -888,31 +918,6 @@ class TestMultipleSubscriptionsPerModel:
             _wait_reconcile()
 
 
-    def test_multi_tier_auto_select_highest(self):
-        """With 2 tiers for the same model, API key in both should still get access.
-        (Verifies multiple overlapping subscriptions don't break routing.)"""
-        ns = _ns()
-        try:
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-high-tier", "namespace": ns},
-                "spec": {
-                    "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
-                },
-            })
-
-            api_key = _get_default_api_key()
-            _poll_status(api_key, 200, extra_headers={"x-maas-subscription": "e2e-high-tier"})
-
-            r2 = _inference(api_key)
-            assert r2.status_code == 200, f"Expected 200 with auto-select, got {r2.status_code}"
-        finally:
-            _delete_cr("maassubscription", "e2e-high-tier")
-            _wait_reconcile()
-
-
 class TestMultipleAuthPoliciesPerModel:
     """Multiple auth policies for one model aggregate with OR logic."""
 
@@ -1006,22 +1011,19 @@ class TestCascadeDeletion:
             _delete_cr("maassubscription", "e2e-temp-sub")
 
     def test_delete_last_subscription_denies_access(self):
-        """Delete all subscriptions for a model -> access denied (403 or 429).
-        
-        When the last subscription is deleted, access is denied. The exact code
-        depends on which policy evaluates first:
-        - 403: AuthPolicy's subscription-error-check denies (no subscription found)
-        - 429: Default-deny TRLP with 0 tokens kicks in
-        
-        Both indicate the intended behavior: no subscription = no access.
+        """Delete all subscriptions for a model -> access denied with 403 Forbidden.
+
+        When the last subscription is deleted, AuthPolicy's subscription validation
+        fails (no subscriptions found for user) and returns 403 Forbidden before
+        the request reaches TokenRateLimitPolicy.
         """
         api_key = _get_default_api_key()
         original = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
         assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-            # With no subscription, expect either 403 or 429 (both = access denied)
-            r = _poll_status(api_key, [403, 429], subscription=False, timeout=30)
+            # With no subscription, expect 403 from AuthPolicy subscription validation
+            r = _poll_status(api_key, 403, subscription=False, timeout=30)
             log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
         finally:
             _apply_cr(original)
