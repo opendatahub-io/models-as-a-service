@@ -169,12 +169,12 @@ def _wait_for_trlp_enforced_with_retry(name: str, namespace: str, timeout: int =
         name: Name of the TokenRateLimitPolicy
         namespace: Namespace where TRLP exists
         timeout: Maximum time to wait per attempt in seconds
-        retries: Number of retry attempts
+        retries: Number of retry attempts after the initial try
 
     Returns:
         True if enforced within timeout and retries, False otherwise
     """
-    for attempt in range(retries):
+    for attempt in range(retries + 1):  # retries + 1 = initial attempt + retries
         if attempt > 0:
             log.info(f"Retry {attempt}/{retries} for TRLP {name} enforcement check...")
             time.sleep(5)  # Brief pause between retries
@@ -182,7 +182,7 @@ def _wait_for_trlp_enforced_with_retry(name: str, namespace: str, timeout: int =
         if _wait_for_trlp_enforced(name, namespace, timeout):
             return True
 
-    log.error(f"TRLP {name} not enforced after {retries} attempts")
+    log.error(f"TRLP {name} not enforced after {retries} retries")
     return False
 
 
@@ -716,7 +716,27 @@ class TestCrossNamespaceSubscription:
             assert r.status_code == 200, f"Expected 200, got {r.status_code}"
 
             # Capture TRLP metadata before deletion for verification
-            metadata_before = _get_trlp_metadata(trlp_name, MODEL_NAMESPACE)
+            # Retry to ensure we have valid metadata (not transient/empty)
+            log.info(f"Capturing TRLP {trlp_name} metadata before deletion...")
+            metadata_before = {}
+            metadata_deadline = time.time() + 30
+            while time.time() < metadata_deadline:
+                metadata_before = _get_trlp_metadata(trlp_name, MODEL_NAMESPACE)
+                # Ensure essential fields are non-empty
+                if (metadata_before and
+                    metadata_before.get('uid') and
+                    metadata_before.get('resourceVersion') and
+                    metadata_before.get('generation', 0) > 0):
+                    break
+                log.info("Retrying metadata capture (transient or empty values)...")
+                time.sleep(2)
+
+            # Verify we have valid metadata before proceeding
+            assert metadata_before, "Failed to capture valid TRLP metadata before deletion"
+            assert metadata_before.get('uid'), "TRLP uid is empty"
+            assert metadata_before.get('resourceVersion'), "TRLP resourceVersion is empty"
+            assert metadata_before.get('generation', 0) > 0, "TRLP generation is 0"
+
             log.info(f"TRLP before deletion - generation: {metadata_before.get('generation')}, "
                     f"resourceVersion: {metadata_before.get('resourceVersion')}, "
                     f"uid: {metadata_before.get('uid', '')[:8]}...")
