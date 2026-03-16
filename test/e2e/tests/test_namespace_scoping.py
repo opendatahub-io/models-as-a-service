@@ -20,7 +20,7 @@ Environment variables (all optional, with defaults):
   - MAAS_API_BASE_URL: MaaS API URL (required)
   - MAAS_NAMESPACE: Default MaaS namespace (default: opendatahub)
   - E2E_TIMEOUT: Request timeout in seconds (default: 30)
-  - E2E_RECONCILE_WAIT: Wait time for controller reconciliation (default: 10)
+  - E2E_RECONCILE_WAIT: Wait time for controller reconciliation (default: 15)
   - E2E_SKIP_TLS_VERIFY: Set to "true" to skip TLS verification
   - E2E_MODEL_REF: Model ref for tests (default: facebook-opt-125m-simulated)
   - E2E_MODEL_NAMESPACE: Namespace where model MaaSModelRef lives (default: llm)
@@ -731,19 +731,25 @@ class TestCrossNamespaceSubscription:
             assert trlp_after is not None, \
                 "TokenRateLimitPolicy should still exist after deleting first subscription"
 
-            # Wait for TRLP to be re-enforced after controller updates it
+            # Wait for TRLP to be re-enforced AND updated after controller modifies it
             # (controller deletes and recreates TRLP when subscriptions change)
-            log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} to be re-enforced after deletion...")
-            trlp_enforced = _wait_for_trlp_enforced_with_retry(
-                trlp_name,
-                MODEL_NAMESPACE,
-                timeout=60,
-                retries=3
-            )
-            assert trlp_enforced, f"TokenRateLimitPolicy {trlp_name} not re-enforced after subscription deletion"
+            # Must check both enforcement and metadata change in the same loop to avoid race
+            log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} to be re-enforced and updated...")
+            deadline = time.time() + 90
+            metadata_after = {}
+            while time.time() < deadline:
+                # must be enforced
+                if not _wait_for_trlp_enforced(trlp_name, MODEL_NAMESPACE, timeout=15):
+                    continue
+                # must also be a new revision/object
+                metadata_after = _get_trlp_metadata(trlp_name, MODEL_NAMESPACE)
+                uid_changed = metadata_after.get("uid") != metadata_before.get("uid")
+                rv_changed = metadata_after.get("resourceVersion") != metadata_before.get("resourceVersion")
+                if uid_changed or rv_changed:
+                    break
+                time.sleep(3)
 
-            # Verify TRLP was actually updated/recreated (metadata changed)
-            metadata_after = _get_trlp_metadata(trlp_name, MODEL_NAMESPACE)
+            assert metadata_after, f"TokenRateLimitPolicy {trlp_name} did not stabilize after subscription deletion"
             log.info(f"TRLP after deletion - generation: {metadata_after.get('generation')}, "
                     f"resourceVersion: {metadata_after.get('resourceVersion')}, "
                     f"uid: {metadata_after.get('uid', '')[:8]}...")
@@ -759,11 +765,11 @@ class TestCrossNamespaceSubscription:
                 f"After: uid={metadata_after.get('uid', '')[:8]}..., rv={metadata_after.get('resourceVersion')}"
 
             if uid_changed:
-                log.info("✓ TRLP was deleted and recreated (UID changed)")
+                log.info(f"✓ TRLP was deleted and recreated (UID changed)")
             elif gen_increased:
                 log.info(f"✓ TRLP was updated (generation {metadata_before.get('generation')} → {metadata_after.get('generation')})")
             else:
-                log.info("✓ TRLP resourceVersion changed (updated in-place)")
+                log.info(f"✓ TRLP resourceVersion changed (updated in-place)")
 
             # Inference should still work (use default simulator-subscription since sub1 was deleted)
             log.info("Testing inference with default simulator-subscription after deleting sub1")
