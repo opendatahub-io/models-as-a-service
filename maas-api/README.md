@@ -151,7 +151,7 @@ kustomize build ${PROJECT_DIR}/docs/samples/models/simulator | kubectl apply --s
 MaaS API supports two types of tokens:
 
 1.  **Ephemeral Tokens** - Stateless tokens that provide better security posture as they can be easily refreshed by the caller using OpenShift Identity. These tokens can live as long as API keys (up to the configured expiration), making them suitable for both temporary and long-term access scenarios.
-2.  **API Keys** - Named, long-lived tokens for applications (stored in SQLite database). Suitable for services or applications that need persistent access with metadata tracking.
+2.  **API Keys** - Named, long-lived tokens for applications (stored in PostgreSQL database). Suitable for services or applications that need persistent access with metadata tracking.
 
 ##### Ephemeral Tokens
 
