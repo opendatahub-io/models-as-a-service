@@ -154,3 +154,13 @@ To move from old flow to new flow on an existing cluster:
    - Create a `MaaSSubscription` CR with the token rate limits
 3. The old `gateway-token-rate-limits` and `tier-to-group-mapping` ConfigMap can be removed
 4. The MaaS API is still needed for token minting and model listing (unchanged)
+
+**For detailed step-by-step migration instructions, see [Migration Guide: Tier-Based to Subscription Model](../../docs/content/migration/tier-to-subscription.md)**.
+
+The migration guide includes:
+- Zero-downtime migration strategy
+- Automated migration script (`scripts/migrate-tier-to-subscription.sh`)
+- Conversion worksheet
+- Rollback procedures
+- Troubleshooting common issues
+- ODH Model Controller considerations

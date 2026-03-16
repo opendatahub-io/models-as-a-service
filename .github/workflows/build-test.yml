@@ -2,9 +2,19 @@ name: Build
 
 on:
   pull_request:
+    paths:
+      - 'maas-controller/api/**'
+      - 'maas-controller/Makefile'
+      - 'deployment/base/maas-controller/crd/**'
+      - 'deployment/**'
+      - '.github/workflows/build-test.yml'
   push:
     branches:
       - main
+
+permissions:
+  actions: read
+  contents: read
 
 jobs:
   validate-manifests:
@@ -27,3 +37,25 @@ jobs:
     - name: Validate Kustomize manifests
       run: |
         ./scripts/ci/validate-manifests.sh
+
+  verify-codegen:
+    name: Verify generated CRDs and deepcopy
+    timeout-minutes: 10
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-verify-codegen
+      cancel-in-progress: true
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: maas-controller/go.mod
+        cache: true
+        cache-dependency-path: maas-controller/go.sum
+
+    - name: Verify generated code is up to date
+      working-directory: maas-controller
+      run: make verify-codegen

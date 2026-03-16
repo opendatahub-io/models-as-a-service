@@ -77,6 +77,10 @@ kubectl delete operatorgroup odh-operator-group -n odh-operator --ignore-not-fou
 echo "7. Deleting odh-operator namespace..."
 kubectl delete ns odh-operator --ignore-not-found --timeout=120s 2>/dev/null || true
 
+# 8. Delete opendatahub namespace (contains deployed components)
+echo "8. Deleting opendatahub namespace..."
+kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || true
+
 force_delete_namespace() {
     local ns=$1
     shift
@@ -107,10 +111,6 @@ force_delete_namespace() {
     kubectl wait --for=delete namespace/"$ns" --timeout=30s 2>/dev/null || true
 }
 
-# 8. Delete opendatahub namespace (contains deployed components)
-echo "8. Deleting opendatahub namespace..."
-force_delete_namespace "opendatahub" "maasmodelrefs.maas.opendatahub.io"
-
 # 9. Delete models-as-a-service namespace (contains MaaS CRs)
 echo "9. Deleting models-as-a-service namespace..."
 force_delete_namespace "models-as-a-service" \
@@ -120,12 +120,12 @@ force_delete_namespace "models-as-a-service" \
 for policy_ns in kuadrant-system rh-connectivity-link; do
     echo "10. Deleting $policy_ns namespace (if installed)..."
     force_delete_namespace "$policy_ns" \
-    "authorinos.operator.authorino.kuadrat.io" "kuadrants.kuadrant.io" "limitadors.limitador.kuadrant.io"
+    "authorinos.operator.authorino.kuadrant.io" "kuadrants.kuadrant.io" "limitadors.limitador.kuadrant.io"
 done
 
 # 11. Delete llm namespace and model resources
 echo "11. Deleting LLM models and namespace..."
-force_delete_namespace "llm" "llminferenceservice" "inferenceservice"
+force_delete_namespace "llm" "llminferenceservice" "inferenceservice" "maasmodelrefs.maas.opendatahub.io"
 
 # 12. Delete gateway resources in openshift-ingress
 echo "12. Deleting gateway resources..."

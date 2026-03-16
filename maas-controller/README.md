@@ -359,8 +359,25 @@ make -C maas-controller build      # build binary to maas-controller/bin/manager
 make -C maas-controller run        # run locally (uses kubeconfig)
 make -C maas-controller test       # run tests
 make -C maas-controller install    # apply deployment/base/maas-controller/default to cluster
-make -C maas-controller uninstall # remove everything
+make -C maas-controller uninstall  # remove everything
 ```
+
+### Regenerating after API changes
+
+When you modify API types under `maas-controller/api/`, you **must** regenerate the deepcopy helpers and CRD manifests before committing:
+
+```bash
+make -C maas-controller generate manifests
+```
+
+This updates:
+
+- `maas-controller/api/maas/v1alpha1/zz_generated.deepcopy.go` (deepcopy methods)
+- `deployment/base/maas-controller/crd/bases/maas.opendatahub.io_*.yaml` (CRD schemas)
+
+CI will fail if the generated files are out of date.
+
+> **Note:** You don't need to install `controller-gen` manually - `make generate` and `make manifests` automatically install the correct pinned version to `bin/controller-gen`.
 
 ## Troubleshooting
 
