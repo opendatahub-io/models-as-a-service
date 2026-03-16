@@ -151,7 +151,6 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	v1Routes.POST("/tiers/lookup", tier.NewHandler(tierMapper).TierLookup)
 
 	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister)
-	v1Routes.POST("/subscriptions/select", subscription.NewHandler(log, subscriptionSelector).SelectSubscription)
 
 	modelManager, err := models.NewManager(log)
 	if err != nil {
@@ -178,6 +177,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	// Internal routes for Authorino HTTP callback (no auth required - called by Authorino)
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
+	internalRoutes.POST("/subscriptions/select", subscription.NewHandler(log, subscriptionSelector).SelectSubscription)
 
 	return nil
 }
