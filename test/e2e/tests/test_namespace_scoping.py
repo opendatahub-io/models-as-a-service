@@ -727,7 +727,15 @@ class TestCrossNamespaceSubscription:
             time.sleep(RECONCILE_WAIT)
 
             # Verify TRLP still exists (bug fix: it should NOT be deleted)
-            trlp_after = _get_cr("TokenRateLimitPolicy", trlp_name, MODEL_NAMESPACE)
+            # Use wait/retry to handle transient delete-recreate windows
+            log.info("Waiting for TokenRateLimitPolicy to exist after subscription deletion...")
+            trlp_after = None
+            wait_deadline = time.time() + 30
+            while time.time() < wait_deadline:
+                trlp_after = _get_cr("TokenRateLimitPolicy", trlp_name, MODEL_NAMESPACE)
+                if trlp_after is not None:
+                    break
+                time.sleep(2)
             assert trlp_after is not None, \
                 "TokenRateLimitPolicy should still exist after deleting first subscription"
 
@@ -765,11 +773,11 @@ class TestCrossNamespaceSubscription:
                 f"After: uid={metadata_after.get('uid', '')[:8]}..., rv={metadata_after.get('resourceVersion')}"
 
             if uid_changed:
-                log.info(f"✓ TRLP was deleted and recreated (UID changed)")
+                log.info("✓ TRLP was deleted and recreated (UID changed)")
             elif gen_increased:
                 log.info(f"✓ TRLP was updated (generation {metadata_before.get('generation')} → {metadata_after.get('generation')})")
             else:
-                log.info(f"✓ TRLP resourceVersion changed (updated in-place)")
+                log.info("✓ TRLP resourceVersion changed (updated in-place)")
 
             # Inference should still work (use default simulator-subscription since sub1 was deleted)
             log.info("Testing inference with default simulator-subscription after deleting sub1")
