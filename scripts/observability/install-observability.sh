@@ -66,6 +66,7 @@ done
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+
 # Import shared helper functions (wait_for_crd, etc.)
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
@@ -160,7 +161,7 @@ echo ""
 echo "3️⃣ Deploying TelemetryPolicy and ServiceMonitors..."
 
 # Deploy base observability resources (TelemetryPolicy + Istio Telemetry)
-# TelemetryPolicy is CRITICAL - it extracts user/tier/model labels for Limitador metrics
+# TelemetryPolicy is CRITICAL - it extracts user/subscription/model labels for Limitador metrics
 BASE_OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/base/observability"
 if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     kustomize build "$BASE_OBSERVABILITY_DIR" | kubectl apply -f -

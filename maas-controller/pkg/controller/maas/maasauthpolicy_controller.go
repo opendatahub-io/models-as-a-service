@@ -311,6 +311,16 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 						"metrics":  false,
 						"priority": int64(0),
 					},
+				// Overwrite client-sent X-MaaS-Subscription with the server-resolved
+				// subscription name. Istio Telemetry reads this header to tag
+				// REQUEST_DURATION with a subscription label for latency metrics.
+					"X-MaaS-Subscription": map[string]interface{}{
+						"plain": map[string]interface{}{
+							"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
 				},
 				"filters": map[string]interface{}{
 					"identity": map[string]interface{}{
