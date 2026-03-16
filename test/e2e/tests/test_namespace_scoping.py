@@ -759,11 +759,11 @@ class TestCrossNamespaceSubscription:
                 f"After: uid={metadata_after.get('uid', '')[:8]}..., rv={metadata_after.get('resourceVersion')}"
 
             if uid_changed:
-                log.info(f"✓ TRLP was deleted and recreated (UID changed)")
+                log.info("✓ TRLP was deleted and recreated (UID changed)")
             elif gen_increased:
                 log.info(f"✓ TRLP was updated (generation {metadata_before.get('generation')} → {metadata_after.get('generation')})")
             else:
-                log.info(f"✓ TRLP resourceVersion changed (updated in-place)")
+                log.info("✓ TRLP resourceVersion changed (updated in-place)")
 
             # Inference should still work (use default simulator-subscription since sub1 was deleted)
             log.info("Testing inference with default simulator-subscription after deleting sub1")
