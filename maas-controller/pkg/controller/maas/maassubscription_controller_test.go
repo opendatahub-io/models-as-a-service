@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -444,8 +445,8 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		t.Errorf("expected 1 limit entry, got %d: %v", len(limitsMap), limitsMap)
 	}
 
-	// Check the limit entry key
-	expectedKey := maasSubName + "-" + modelName + "-tokens"
+	// Check the limit entry key (now includes namespace: "namespace-name-model-tokens")
+	expectedKey := namespace + "-" + maasSubName + "-" + modelName + "-tokens"
 	limitEntry, ok := limitsMap[expectedKey]
 	if !ok {
 		t.Fatalf("expected limit entry %q not found, got keys: %v", expectedKey, getKeys(limitsMap))
@@ -474,7 +475,8 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		t.Fatalf("predicate not a string: %T", predMap["predicate"])
 	}
 
-	expected := `auth.identity.selected_subscription == "sub-a"`
+	// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
+	expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/%s@%s/%s"`, namespace, maasSubName, namespace, modelName)
 	if pred != expected {
 		t.Errorf("predicate = %q, want %q", pred, expected)
 	}
@@ -538,8 +540,8 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		t.Errorf("expected 2 limit entries, got %d: %v", len(limitsMap), getKeys(limitsMap))
 	}
 
-	// Verify sub-a limit entry
-	subAKey := "sub-a-" + modelName + "-tokens"
+	// Verify sub-a limit entry (now includes namespace in key)
+	subAKey := namespace + "-sub-a-" + modelName + "-tokens"
 	if limitA, ok := limitsMap[subAKey]; ok {
 		limitAMap, ok := limitA.(map[string]interface{})
 		if !ok {
@@ -560,7 +562,8 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		if !ok {
 			t.Fatalf("sub-a predicate not a string: %T", predMap["predicate"])
 		}
-		expected := `auth.identity.selected_subscription == "sub-a"`
+		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
+		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-a@%s/%s"`, namespace, namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-a predicate = %q, want %q", pred, expected)
 		}
@@ -569,11 +572,11 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 			t.Errorf("sub-a predicate should not reference sub-b: %s", pred)
 		}
 	} else {
-		t.Errorf("sub-a limit entry not found")
+		t.Errorf("sub-a limit entry not found, got keys: %v", getKeys(limitsMap))
 	}
 
-	// Verify sub-b limit entry
-	subBKey := "sub-b-" + modelName + "-tokens"
+	// Verify sub-b limit entry (now includes namespace in key)
+	subBKey := namespace + "-sub-b-" + modelName + "-tokens"
 	if limitB, ok := limitsMap[subBKey]; ok {
 		limitBMap, ok := limitB.(map[string]interface{})
 		if !ok {
@@ -594,7 +597,8 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		if !ok {
 			t.Fatalf("sub-b predicate not a string: %T", predMap["predicate"])
 		}
-		expected := `auth.identity.selected_subscription == "sub-b"`
+		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
+		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-b@%s/%s"`, namespace, namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-b predicate = %q, want %q", pred, expected)
 		}
@@ -603,7 +607,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 			t.Errorf("sub-b predicate should not reference sub-a: %s", pred)
 		}
 	} else {
-		t.Errorf("sub-b limit entry not found")
+		t.Errorf("sub-b limit entry not found, got keys: %v", getKeys(limitsMap))
 	}
 
 	// Verify no deny rules

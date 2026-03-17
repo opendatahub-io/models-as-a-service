@@ -328,6 +328,13 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 								"selected_subscription": map[string]interface{}{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
 								},
+								// Model-scoped subscription key for TRLP isolation: namespace/name@modelNamespace/modelName
+								"selected_subscription_key": map[string]interface{}{
+									"expression": fmt.Sprintf(
+										`has(auth.metadata["subscription-info"].namespace) && has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].namespace + "/" + auth.metadata["subscription-info"].name + "@%s/%s" : ""`,
+										ref.Namespace, ref.Name,
+									),
+								},
 								"organizationId": map[string]interface{}{
 									"expression": `has(auth.metadata["subscription-info"].organizationId) ? auth.metadata["subscription-info"].organizationId : ""`,
 								},

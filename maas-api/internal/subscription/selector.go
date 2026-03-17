@@ -37,6 +37,7 @@ func NewSelector(log *logger.Logger, lister Lister) *Selector {
 // subscription represents a parsed MaaSSubscription for selection.
 type subscription struct {
 	Name           string
+	Namespace      string
 	Groups         []string
 	Users          []string
 	Priority       int32
@@ -66,9 +67,11 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	sortSubscriptionsByPriority(subscriptions)
 
 	// Branch 1: Explicit subscription selection (with validation)
+	// Support both formats: "namespace/name" (preferred) and bare "name" (legacy)
 	if requestedSubscription != "" {
 		for _, sub := range subscriptions {
-			if sub.Name == requestedSubscription {
+			qualifiedName := fmt.Sprintf("%s/%s", sub.Namespace, sub.Name)
+			if qualifiedName == requestedSubscription || sub.Name == requestedSubscription {
 				if userHasAccess(&sub, username, groups) {
 					return toResponse(&sub), nil
 				}
@@ -134,7 +137,8 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 	}
 
 	sub := subscription{
-		Name: obj.GetName(),
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
 	}
 
 	// Parse owner
@@ -237,6 +241,7 @@ func sortSubscriptionsByPriority(subs []subscription) {
 func toResponse(sub *subscription) *SelectResponse {
 	return &SelectResponse{
 		Name:           sub.Name,
+		Namespace:      sub.Namespace,
 		OrganizationID: sub.OrganizationID,
 		CostCenter:     sub.CostCenter,
 		Labels:         sub.Labels,

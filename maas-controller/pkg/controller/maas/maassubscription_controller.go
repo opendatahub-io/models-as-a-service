@@ -148,21 +148,31 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			}
 		}
 
-		// Trust auth.identity.selected_subscription from AuthPolicy.
+		// Trust auth.identity.selected_subscription_key from AuthPolicy.
 		// AuthPolicy has already validated subscription selection via /v1/subscriptions/select,
 		// which handles:
 		//  - Validating subscription exists and user has access (groups/users match)
 		//  - Auto-selecting if user has exactly one subscription
 		//  - Returning 403 Forbidden for invalid scenarios (wrong header, no access, multiple without header)
 		// TokenRateLimitPolicy simply applies the rate limit for the validated subscription.
+		//
+		// The selected_subscription_key format is: {subNamespace}/{subName}@{modelNamespace}/{modelName}
+		// This ensures proper isolation between subscriptions in different namespaces and across models.
 		for _, si := range subs {
 			subNames = append(subNames, si.sub.Name)
 
-			limitsMap[fmt.Sprintf("%s-%s-tokens", si.sub.Name, si.mRef.Name)] = map[string]interface{}{
+			// Build subscription reference: namespace/name
+			subRef := fmt.Sprintf("%s/%s", si.sub.Namespace, si.sub.Name)
+			// Build model-scoped reference: subscription@model
+			modelScopedRef := fmt.Sprintf("%s@%s/%s", subRef, si.mRef.Namespace, si.mRef.Name)
+
+			// TRLP limit key must be safe for YAML (no slashes)
+			safeKey := strings.ReplaceAll(subRef, "/", "-")
+			limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, si.mRef.Name)] = map[string]interface{}{
 				"rates": si.rates,
 				"when": []interface{}{
 					map[string]interface{}{
-						"predicate": fmt.Sprintf(`auth.identity.selected_subscription == "%s"`, si.sub.Name),
+						"predicate": fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, modelScopedRef),
 					},
 				},
 				"counters": []interface{}{
