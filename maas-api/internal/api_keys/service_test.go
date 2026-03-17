@@ -344,11 +344,12 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		}
 		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
 
-		// Request permanent key (nil expiration) - should succeed (max limit only applies to expiring keys)
+		// No expiration requested - should default to APIKeyMaxExpirationDays (30 days)
 		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
+		require.NotNil(t, result.ExpiresAt, "should default to max expiration when not provided")
 	})
 }
 

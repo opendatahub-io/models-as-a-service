@@ -37,10 +37,6 @@ type Config struct {
 	// Format: postgresql://user:password@host:port/database
 	DBConnectionURL string
 
-	// APIKeyExpirationPolicy controls whether API keys must have expiration
-	// Values: "optional" (default) or "required"
-	APIKeyExpirationPolicy string
-
 	// APIKeyMaxExpirationDays is the maximum allowed expiration in days for API keys.
 	// Users cannot create API keys with expiration longer than this value.
 	// Default: 30 days. Minimum: 1 day.
@@ -67,7 +63,6 @@ func Load() *Config {
 		TLS:                     loadTLSConfig(),
 		DebugMode:               debugMode,
 		DBConnectionURL:         "", // Loaded from K8s secret via LoadDatabaseURL()
-		APIKeyExpirationPolicy:  env.GetString("API_KEY_EXPIRATION_POLICY", "optional"),
 		APIKeyMaxExpirationDays: maxExpirationDays,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
@@ -126,11 +121,6 @@ func (c *Config) Validate() error {
 		} else {
 			c.Address = DefaultInsecureAddr
 		}
-	}
-
-	// Validate API key expiration policy
-	if c.APIKeyExpirationPolicy != "optional" && c.APIKeyExpirationPolicy != "required" {
-		return errors.New("API_KEY_EXPIRATION_POLICY must be 'optional' or 'required'")
 	}
 
 	// Validate API key max expiration days
