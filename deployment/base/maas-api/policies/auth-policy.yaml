@@ -29,7 +29,9 @@ spec:
         when:
           - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
         http:
-          # Overwritten by ODH overlay replacement (app-namespace param). Use placeholder.
+          # Placeholder URL - gets patched based on deployment mode:
+          #   - Operator mode (ODH/RHOAI): ODH overlay replacement (app-namespace param)
+          #   - Kustomize mode: deploy.sh script patches with $NAMESPACE via sed
           url: https://maas-api.placehold.svc.cluster.local:8443/internal/v1/api-keys/validate
           method: POST
           contentType: application/json
