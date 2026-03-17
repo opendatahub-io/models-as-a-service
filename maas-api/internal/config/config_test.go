@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
@@ -460,7 +461,7 @@ func TestValidate(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.expectError)
 				}
-				if !contains(err.Error(), tt.expectError) {
+				if !strings.Contains(err.Error(), tt.expectError) {
 					t.Errorf("expected error containing %q, got %q", tt.expectError, err.Error())
 				}
 				return
@@ -579,7 +580,7 @@ func TestConfig_Validate_APIKeyMaxExpirationDays(t *testing.T) {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
 					return
 				}
-				if tt.errorMsg != "" && !contains(err.Error(), tt.errorMsg) {
+				if tt.errorMsg != "" && !strings.Contains(err.Error(), tt.errorMsg) {
 					t.Errorf("expected error containing %q, got %q", tt.errorMsg, err.Error())
 				}
 			} else if err != nil {
@@ -589,15 +590,3 @@ func TestConfig_Validate_APIKeyMaxExpirationDays(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
-}
-
-func containsAt(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
