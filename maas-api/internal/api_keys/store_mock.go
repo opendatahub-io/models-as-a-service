@@ -38,7 +38,7 @@ var _ MetadataStore = (*MockStore)(nil)
 
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
-// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
+// Note: plaintextKey parameter is unused - only hashData.Hash is stored.
 func (m *MockStore) AddKey(
 	ctx context.Context, username, keyID, plaintextKey string, hashData *APIKeyHashData,
 	name, description string, userGroups []string, expiresAt *time.Time,
@@ -356,33 +356,39 @@ func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 }
 
 func (m *MockStore) GetByKey(ctx context.Context, providedKey string) (*ApiKey, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Compute hash ONCE before acquiring lock (PBKDF2 is expensive: ~1.3s per hash)
+	// Since we use constant salt, the same key always produces the same hash.
+	computedHash, err := HashAPIKey(providedKey)
+	if err != nil {
+		return nil, ErrKeyNotFound
+	}
 
+	// Use RLock for read-only operation - allows concurrent readers
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	now := time.Now().UTC()
 	for _, k := range m.keys {
-		// Check if key is active and not expired
-		now := time.Now().UTC()
-		if k.metadata.Status != StatusActive {
+		// Check hash match first (O(1) string comparison)
+		if computedHash.Hash != k.keyHash {
 			continue
+		}
+
+		// Hash matched - now check status and expiration
+		if k.metadata.Status != StatusActive {
+			return nil, ErrInvalidKey // Revoked key
 		}
 		if !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
-			continue
+			return nil, ErrInvalidKey // Expired key
 		}
 
-		// Verify PBKDF2 hash
-		// Compute hash of provided key for direct comparison
-		computedHash, err := HashAPIKey(providedKey)
-		if err != nil {
-			continue
+		// Valid key found
+		meta := k.metadata
+		meta.Username = k.username
+		if k.lastUsedAt != nil {
+			meta.LastUsedAt = k.lastUsedAt.Format(time.RFC3339)
 		}
-		if computedHash.Hash == k.keyHash {
-			meta := k.metadata
-			meta.Username = k.username
-			if k.lastUsedAt != nil {
-				meta.LastUsedAt = k.lastUsedAt.Format(time.RFC3339)
-			}
-			return &meta, nil
-		}
+		return &meta, nil
 	}
 
 	return nil, ErrKeyNotFound

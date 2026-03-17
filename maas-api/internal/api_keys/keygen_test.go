@@ -35,20 +35,20 @@ func TestGenerateAPIKey(t *testing.T) {
 		t.Errorf("GenerateAPIKey() iterations = %d, want 600000", hashData.Iterations)
 	}
 
-	// Test 7: Prefix has correct format
+	// Test 5: Prefix has correct format
 	prefixRegex := regexp.MustCompile(`^sk-oai-[A-Za-z0-9]{12}\.\.\.$`)
 	if !prefixRegex.MatchString(prefix) {
 		t.Errorf("GenerateAPIKey() prefix format incorrect: got %q", prefix)
 	}
 
-	// Test 8: Key is alphanumeric after prefix (base62)
+	// Test 6: Key is alphanumeric after prefix (base62)
 	keyBody := plaintext[len(api_keys.KeyPrefix):]
 	alphanumRegex := regexp.MustCompile("^[A-Za-z0-9]+$")
 	if !alphanumRegex.MatchString(keyBody) {
 		t.Errorf("GenerateAPIKey() key body not alphanumeric: got %q", keyBody)
 	}
 
-	// Test 9: Key body is sufficiently long (256 bits → ~43 base62 chars)
+	// Test 7: Key body is sufficiently long (256 bits → ~43 base62 chars)
 	if len(keyBody) < 40 {
 		t.Errorf("GenerateAPIKey() key body too short: got %d chars, want >= 40", len(keyBody))
 	}

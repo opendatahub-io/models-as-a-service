@@ -28,6 +28,10 @@ const (
 	Iterations = 600000 // OWASP recommendation for 2024
 	
 	// Constant salt for operator deployment (acceptable for machine-generated high-entropy keys).
+	// SECURITY: This constant salt is ONLY safe for machine-generated 256-bit entropy keys.
+	// Rainbow table attacks are infeasible against 256-bit random keys regardless of salt.
+	// WARNING: Do NOT use this function for user-chosen passwords - constant salt enables
+	// rainbow tables against low-entropy inputs. Use per-user random salts for passwords.
 	ConstantSalt = "openshiftai.pbkdf2.salt.v1" // 26 bytes UTF-8
 )
 
@@ -86,18 +90,19 @@ func HashAPIKey(key string) (*APIKeyHashData, error) {
 	// Compute PBKDF2-HMAC-SHA256
 	hash := pbkdf2.Key([]byte(key), salt, Iterations, HashBytes, sha256.New)
 	
-	// Prepare result before clearing sensitive data
+	// Note: The hex-encoded hash is stored in an immutable Go string.
+	// Go strings cannot be reliably cleared from memory by user code.
+	// The raw byte slice is cleared below for defense-in-depth, but the
+	// string copy in result.Hash remains until garbage collected.
 	result := &APIKeyHashData{
 		Hash:       hex.EncodeToString(hash),
 		Iterations: Iterations,
 	}
 
-	// Clear sensitive data from memory (defense in depth)
-	defer func() {
-		for i := range hash {
-			hash[i] = 0
-		}
-	}()
+	// Clear raw bytes (defense-in-depth, but see note above about string limitation)
+	for i := range hash {
+		hash[i] = 0
+	}
 
 	return result, nil
 }

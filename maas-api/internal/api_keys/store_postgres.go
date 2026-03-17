@@ -38,7 +38,8 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 
 // AddKey stores an API key with PBKDF2 hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
-// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
+// Note: plaintextKey parameter is unused - only hashData.Hash is stored.
+// The plaintext is accepted for interface consistency but never persisted.
 func (s *PostgresStore) AddKey(
 	ctx context.Context, username, keyID, plaintextKey string, hashData *APIKeyHashData,
 	name, description string, userGroups []string, expiresAt *time.Time,
@@ -336,6 +337,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 
 // GetByKey looks up and validates an API key using direct hash lookup.
 // Computes PBKDF2 hash with constant salt and performs exact match - no verification loop needed.
+// Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked/expired.
 func (s *PostgresStore) GetByKey(ctx context.Context, providedKey string) (*ApiKey, error) {
 	// Compute PBKDF2 hash with constant salt for direct lookup
 	hashData, err := HashAPIKey(providedKey)
@@ -344,12 +346,11 @@ func (s *PostgresStore) GetByKey(ctx context.Context, providedKey string) (*ApiK
 	}
 	
 	// Direct hash lookup - O(1) with index on key_hash
+	// Fetch without filtering on status/expiry to properly distinguish error cases
 	query := `
 		SELECT id, username, name, description, user_groups, status, expires_at, last_used_at, created_at
 		FROM api_keys
-		WHERE status = 'active' 
-		  AND (expires_at IS NULL OR expires_at > NOW())
-		  AND key_hash = $1
+		WHERE key_hash = $1
 	`
 	
 	row := s.db.QueryRowContext(ctx, query, hashData.Hash)
@@ -382,7 +383,26 @@ func (s *PostgresStore) GetByKey(ctx context.Context, providedKey string) (*ApiK
 		k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
 	}
 
-	// Hash matched - key is valid! No additional verification needed.
+	// Check expiration and auto-update status if expired
+	now := time.Now().UTC()
+	if expiresAt.Valid && expiresAt.Time.Before(now) {
+		if k.Status == StatusActive {
+			// Auto-update status to expired in database
+			updateQuery := `UPDATE api_keys SET status = 'expired' WHERE id = $1 AND status = 'active'`
+			if _, updateErr := s.db.ExecContext(ctx, updateQuery, k.ID); updateErr != nil {
+				s.logger.Warn("Failed to update expired key status", "key_id", k.ID, "error", updateErr)
+			}
+			k.Status = StatusExpired
+		}
+		return nil, ErrInvalidKey
+	}
+
+	// Check if key is revoked or expired
+	if k.Status == StatusRevoked || k.Status == StatusExpired {
+		return nil, ErrInvalidKey
+	}
+
+	// Hash matched and key is active - valid!
 	return &k, nil
 }
 

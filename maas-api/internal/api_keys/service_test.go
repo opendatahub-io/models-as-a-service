@@ -105,13 +105,13 @@ func TestValidateAPIKey_RevokedKey(t *testing.T) {
 	err = store.Revoke(ctx, keyID)
 	require.NoError(t, err)
 
-	// Validate the revoked key
+	// Validate the revoked key - should return "key revoked or expired" (not "key not found")
 	result, err := svc.ValidateAPIKey(ctx, plainKey)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
 	assert.False(t, result.Valid)
-	assert.Equal(t, "key not found", result.Reason)
+	assert.Equal(t, "key revoked or expired", result.Reason)
 }
 
 func TestValidateAPIKey_ExpiredKey(t *testing.T) {
@@ -128,13 +128,13 @@ func TestValidateAPIKey_ExpiredKey(t *testing.T) {
 	err := store.AddKey(ctx, username, keyID, plainKey, hashData, "Expired Key", "", groups, &expiresAt)
 	require.NoError(t, err)
 
-	// Validate the expired key
+	// Validate the expired key - should return "key revoked or expired" (not "key not found")
 	result, err := svc.ValidateAPIKey(ctx, plainKey)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
 	assert.False(t, result.Valid)
-	assert.Equal(t, "key not found", result.Reason)
+	assert.Equal(t, "key revoked or expired", result.Reason)
 }
 
 func TestValidateAPIKey_EmptyGroups(t *testing.T) {

@@ -98,10 +98,11 @@ func TestAPIKeyOperations(t *testing.T) {
 		err := store.Revoke(ctx, "key-id-1")
 		require.NoError(t, err)
 
-		// Getting by hash should now fail
+		// Getting revoked key should return ErrInvalidKey (not ErrKeyNotFound)
+		// per MetadataStore contract: "Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked"
 		plaintext := "test-plaintext-key-1"
 		_, err = store.GetByKey(ctx, plaintext)
-		require.ErrorIs(t, err, api_keys.ErrKeyNotFound)
+		require.ErrorIs(t, err, api_keys.ErrInvalidKey)
 	})
 
 	t.Run("UpdateLastUsed", func(t *testing.T) {
