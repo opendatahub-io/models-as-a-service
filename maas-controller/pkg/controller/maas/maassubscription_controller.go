@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -169,6 +170,9 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				},
 			}
 		}
+
+		// Sort subscription names for stable annotation value across reconciles
+		sort.Strings(subNames)
 
 		// Build the aggregated TokenRateLimitPolicy (one per model, covering all subscriptions)
 		policyName := fmt.Sprintf("maas-trlp-%s", modelRef.Name)

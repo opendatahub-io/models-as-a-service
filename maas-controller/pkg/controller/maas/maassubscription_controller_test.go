@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -451,7 +452,10 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 	}
 
 	// Verify it has a single, simple predicate
-	limitMap := limitEntry.(map[string]interface{})
+	limitMap, ok := limitEntry.(map[string]interface{})
+	if !ok {
+		t.Fatalf("limitEntry is not map[string]interface{}: %T", limitEntry)
+	}
 	whenSlice, found, err := unstructured.NestedSlice(limitMap, "when")
 	if err != nil || !found {
 		t.Fatalf("when predicates not found: found=%v err=%v", found, err)
@@ -461,7 +465,10 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		t.Errorf("expected 1 when predicate, got %d", len(whenSlice))
 	}
 
-	predMap := whenSlice[0].(map[string]interface{})
+	predMap, ok := whenSlice[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("whenSlice[0] is not map[string]interface{}: %T", whenSlice[0])
+	}
 	pred, ok := predMap["predicate"].(string)
 	if !ok {
 		t.Fatalf("predicate not a string: %T", predMap["predicate"])
@@ -473,13 +480,13 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 	}
 
 	// Verify no membership/header checks in predicate
-	if contains(pred, "groups_str") || contains(pred, "request.headers") || contains(pred, "exists(") {
+	if strings.Contains(pred, "groups_str") || strings.Contains(pred, "request.headers") || strings.Contains(pred, "exists(") {
 		t.Errorf("predicate should not contain membership/header checks: %s", pred)
 	}
 
 	// Verify no deny rules
 	for key := range limitsMap {
-		if contains(key, "deny-") {
+		if strings.Contains(key, "deny-") {
 			t.Errorf("found deny rule %q, expected none", key)
 		}
 	}
@@ -534,19 +541,31 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 	// Verify sub-a limit entry
 	subAKey := "sub-a-" + modelName + "-tokens"
 	if limitA, ok := limitsMap[subAKey]; ok {
-		limitAMap := limitA.(map[string]interface{})
-		whenSlice, _, _ := unstructured.NestedSlice(limitAMap, "when")
+		limitAMap, ok := limitA.(map[string]interface{})
+		if !ok {
+			t.Fatalf("sub-a limitEntry is not map[string]interface{}: %T", limitA)
+		}
+		whenSlice, found, err := unstructured.NestedSlice(limitAMap, "when")
+		if err != nil || !found {
+			t.Fatalf("sub-a when predicates not found: found=%v err=%v", found, err)
+		}
 		if len(whenSlice) != 1 {
 			t.Errorf("sub-a: expected 1 when predicate, got %d", len(whenSlice))
 		}
-		predMap := whenSlice[0].(map[string]interface{})
-		pred := predMap["predicate"].(string)
+		predMap, ok := whenSlice[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("sub-a whenSlice[0] is not map[string]interface{}: %T", whenSlice[0])
+		}
+		pred, ok := predMap["predicate"].(string)
+		if !ok {
+			t.Fatalf("sub-a predicate not a string: %T", predMap["predicate"])
+		}
 		expected := `auth.identity.selected_subscription == "sub-a"`
 		if pred != expected {
 			t.Errorf("sub-a predicate = %q, want %q", pred, expected)
 		}
 		// No exclusion logic (no reference to sub-b or team-b)
-		if contains(pred, "sub-b") || contains(pred, "team-b") {
+		if strings.Contains(pred, "sub-b") || strings.Contains(pred, "team-b") {
 			t.Errorf("sub-a predicate should not reference sub-b: %s", pred)
 		}
 	} else {
@@ -556,19 +575,31 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 	// Verify sub-b limit entry
 	subBKey := "sub-b-" + modelName + "-tokens"
 	if limitB, ok := limitsMap[subBKey]; ok {
-		limitBMap := limitB.(map[string]interface{})
-		whenSlice, _, _ := unstructured.NestedSlice(limitBMap, "when")
+		limitBMap, ok := limitB.(map[string]interface{})
+		if !ok {
+			t.Fatalf("sub-b limitEntry is not map[string]interface{}: %T", limitB)
+		}
+		whenSlice, found, err := unstructured.NestedSlice(limitBMap, "when")
+		if err != nil || !found {
+			t.Fatalf("sub-b when predicates not found: found=%v err=%v", found, err)
+		}
 		if len(whenSlice) != 1 {
 			t.Errorf("sub-b: expected 1 when predicate, got %d", len(whenSlice))
 		}
-		predMap := whenSlice[0].(map[string]interface{})
-		pred := predMap["predicate"].(string)
+		predMap, ok := whenSlice[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("sub-b whenSlice[0] is not map[string]interface{}: %T", whenSlice[0])
+		}
+		pred, ok := predMap["predicate"].(string)
+		if !ok {
+			t.Fatalf("sub-b predicate not a string: %T", predMap["predicate"])
+		}
 		expected := `auth.identity.selected_subscription == "sub-b"`
 		if pred != expected {
 			t.Errorf("sub-b predicate = %q, want %q", pred, expected)
 		}
 		// No exclusion logic (no reference to sub-a or team-a)
-		if contains(pred, "sub-a") || contains(pred, "team-a") {
+		if strings.Contains(pred, "sub-a") || strings.Contains(pred, "team-a") {
 			t.Errorf("sub-b predicate should not reference sub-a: %s", pred)
 		}
 	} else {
@@ -577,25 +608,12 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 
 	// Verify no deny rules
 	for key := range limitsMap {
-		if contains(key, "deny-") {
+		if strings.Contains(key, "deny-") {
 			t.Errorf("found deny rule %q, expected none", key)
 		}
 	}
 }
 
-// Helper function to check if a string contains a substring
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
 
 // Helper to get map keys
 func getKeys(m map[string]interface{}) []string {
