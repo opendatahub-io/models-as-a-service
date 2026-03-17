@@ -270,6 +270,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 		})
 	}
 }
+
 // TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion verifies that when multiple
 // MaaSAuthPolicies reference the same model, deleting one does not delete the aggregated
 // AuthPolicy, but deleting the last one does.
@@ -382,4 +383,3 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		t.Errorf("AuthPolicy should be deleted after deleting last parent policy, but got error: %v", err)
 	}
 }
-

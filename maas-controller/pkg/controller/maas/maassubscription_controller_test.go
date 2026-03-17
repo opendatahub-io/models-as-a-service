@@ -273,6 +273,7 @@ func TestMaaSSubscriptionReconciler_DeleteAnnotation(t *testing.T) {
 		})
 	}
 }
+
 // TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion verifies that when multiple
 // MaaSSubscriptions reference the same model, deleting one does not delete the aggregated
 // TokenRateLimitPolicy, but deleting the last one does.

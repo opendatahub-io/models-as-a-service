@@ -58,20 +58,6 @@ type MaaSAuthPolicyReconciler struct {
 	ClusterAudience string
 }
 
-func (r *MaaSAuthPolicyReconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return defaultGatewayName
-}
-
-func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
-	if r.ClusterAudience != "" {
-		return r.ClusterAudience
-	}
-	return defaultClusterAudience
-}
-
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies/finalizers,verbs=update

@@ -293,7 +293,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModelRef referencing this LLMInferenceService should have been enqueued")
 	}
 	for _, watchReq := range requests {
-		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: watchReq.NamespacedName}); err != nil {
+		if _, err := r.Reconcile(ctx, ctrl.Request(watchReq)); err != nil {
 			t.Fatalf("Reconcile (triggered by LLMInferenceService watch): %v", err)
 		}
 	}
@@ -355,7 +355,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModelRef referencing this LLMInferenceService should have been enqueued")
 	}
 	for _, watchReq := range requests {
-		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: watchReq.NamespacedName}); err != nil {
+		if _, err := r.Reconcile(ctx, ctrl.Request(watchReq)); err != nil {
 			t.Fatalf("Reconcile (triggered by LLMInferenceService watch): %v", err)
 		}
 	}
