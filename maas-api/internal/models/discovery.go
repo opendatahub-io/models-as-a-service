@@ -36,6 +36,12 @@ const (
 	httpMaxIdleConns        = 100
 	httpIdleConnTimeout     = 90 * time.Second
 	maxDiscoveryConcurrency = 10
+
+	// accessCheckTimeout bounds the total duration of FilterModelsByAccess.
+	// This limits the staleness window between when access is checked and when
+	// the response reaches the client. Models whose probes don't complete within
+	// this window are excluded (fail-closed).
+	accessCheckTimeout = 15 * time.Second
 )
 
 // Manager runs access validation (probe model endpoints) for models listed from MaaSModelRef.
@@ -65,12 +71,27 @@ func NewManager(log *logger.Logger) (*Manager, error) {
 }
 
 // FilterModelsByAccess returns only models the user can access by probing each model's
-// /v1/models endpoint with the given Authorization and x-maas-subscription headers (passed through as-is). 2xx or 405 → include, 401/403/404 → exclude.
+// /v1/models endpoint with the given Authorization and x-maas-subscription headers (passed through as-is).
+// 2xx or 405 → include, 401/403/404 → exclude.
 // Models with nil URL are skipped. Concurrency is limited by maxDiscoveryConcurrency.
+//
+// The result includes a CheckedAt timestamp indicating when the access probes completed.
+// Because authorization policies propagate asynchronously through the gateway, there is an
+// inherent eventual-consistency window: a model listed here may become inaccessible (or vice versa)
+// by the time the client acts on the response. Actual enforcement always happens at the gateway
+// when the model is invoked for inference. Callers should set Cache-Control: no-store and expose
+// a freshness timestamp via response headers so clients can assess freshness.
+//
+// The access check is bounded by accessCheckTimeout to limit the staleness window.
 func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, authHeader string, subscriptionHeader string) []Model {
 	if len(models) == 0 {
 		return models
 	}
+
+	// Bound the total access-check duration to limit the staleness window.
+	ctx, cancel := context.WithTimeout(ctx, accessCheckTimeout)
+	defer cancel()
+
 	m.logger.Debug("FilterModelsByAccess: validating access for models", "count", len(models), "subscriptionHeaderProvided", subscriptionHeader != "")
 	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null when no models are accessible
 	out := []Model{}
