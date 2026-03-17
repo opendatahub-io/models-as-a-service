@@ -574,7 +574,8 @@ deploy_via_kustomize() {
   deploy_postgresql
 
   log_info "Applying kustomize manifests..."
-  kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$overlay")
+  # Patch the maas-api URL placeholder with actual namespace
+  kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$overlay" | sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g")
 
   # Apply gateway policies separately so they stay in openshift-ingress (overlay
   # namespace would otherwise overwrite them to $NAMESPACE)
