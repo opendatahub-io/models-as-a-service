@@ -23,7 +23,6 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
@@ -52,7 +51,7 @@ func serve() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cluster, err := config.NewClusterConfig(cfg.Namespace, constant.DefaultResyncPeriod)
+	cluster, err := config.NewClusterConfig(constant.DefaultResyncPeriod)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
@@ -146,9 +145,6 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	}
 
 	v1Routes := router.Group("/v1")
-
-	tierMapper := tier.NewMapper(log, cluster.ConfigMapLister, cfg.Name, cfg.Namespace)
-	v1Routes.POST("/tiers/lookup", tier.NewHandler(tierMapper).TierLookup)
 
 	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister)
 

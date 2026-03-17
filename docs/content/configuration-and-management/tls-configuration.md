@@ -118,7 +118,7 @@ spec:
 
 #### Authorino → maas-api (Outbound TLS)
 
-Enables Authorino to make HTTPS calls to `maas-api` for metadata lookups (e.g., API key validation). Requires the cluster CA bundle and SSL environment variables.
+Enables Authorino to make HTTPS calls to `maas-api` for API key validation and metadata lookups. Requires the cluster CA bundle and SSL environment variables.
 
 ```bash
 # Configure SSL environment variables for outbound HTTPS

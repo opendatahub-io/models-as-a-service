@@ -111,11 +111,11 @@ OPTIONS:
 
   --enable-tls-backend
       Enable TLS backend for Authorino and MaaS API (default: enabled)
-      Configures HTTPS tier lookup URL
+      Configures HTTPS for Authorino to maas-api communication
 
   --disable-tls-backend
       Disable TLS backend for Authorino and MaaS API
-      Uses HTTP tier lookup URL instead
+      Uses HTTP for Authorino to maas-api communication
 
   --namespace <namespace>
       Target namespace for deployment

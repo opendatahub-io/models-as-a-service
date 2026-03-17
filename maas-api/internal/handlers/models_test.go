@@ -317,7 +317,7 @@ func TestListingModels(t *testing.T) {
 	require.NoError(t, errMgr)
 
 	// Set up test fixtures
-	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
 	// Create a mock subscription selector that auto-selects for single subscription users
@@ -420,7 +420,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	modelMgr, errMgr := models.NewManager(testLogger)
 	require.NoError(t, errMgr)
 
-	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
 	// Create subscription lister with premium and free subscriptions
