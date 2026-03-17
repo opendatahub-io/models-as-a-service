@@ -252,7 +252,7 @@ func userHasAccess(sub *subscription, username string, groups []string) bool {
 }
 
 // subscriptionIncludesModel checks if the subscription's modelRefs includes the requested model.
-// requestedModel format: "namespace/name"
+// requestedModel format: "namespace/name".
 func subscriptionIncludesModel(sub *subscription, requestedModel string) bool {
 	if requestedModel == "" {
 		return true // no model specified, so subscription is valid
