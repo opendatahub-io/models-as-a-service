@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -276,9 +277,19 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 		}
 
-		// Convert map to slice
-		for _, model := range modelsByKey {
-			modelList = append(modelList, *model)
+		// Convert map to slice with deterministic ordering
+		keys := make([]modelKey, 0, len(modelsByKey))
+		for k := range modelsByKey {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].id != keys[j].id {
+				return keys[i].id < keys[j].id
+			}
+			return keys[i].url < keys[j].url
+		})
+		for _, k := range keys {
+			modelList = append(modelList, *modelsByKey[k])
 		}
 
 		h.logger.Debug("Access validation complete", "listed", len(list), "accessible", len(modelList), "subscriptions", len(subscriptionsToUse))

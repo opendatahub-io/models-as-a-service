@@ -66,6 +66,11 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 		}
 	}
 
+	// Sort for deterministic ordering
+	sort.Slice(accessible, func(i, j int) bool {
+		return accessible[i].Name < accessible[j].Name
+	})
+
 	return accessible, nil
 }
 
