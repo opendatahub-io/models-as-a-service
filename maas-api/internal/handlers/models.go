@@ -85,7 +85,14 @@ func (h *ModelsHandler) selectSubscriptionsForListing(
 		}
 		return []*subscription.SelectResponse{result}, false
 	}
-	// If no selector configured, use the requested subscription header as-is (for backward compat)
+
+	// If no selector configured and no subscription header provided, return empty
+	// (don't create synthetic subscription metadata)
+	if requestedSubscription == "" {
+		return nil, false
+	}
+
+	// Use the requested subscription header as-is (for backward compat with legacy deployments)
 	return []*subscription.SelectResponse{{Name: requestedSubscription}}, false
 }
 
@@ -239,57 +246,64 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			return
 		}
 
-		// Filter models by subscription(s) and aggregate subscriptions
-		// Deduplication key is (model ID, URL) - models with the same ID and URL are
-		// the same instance and should have their subscriptions aggregated into an array.
-		type modelKey struct {
-			id  string
-			url string
-		}
-		modelsByKey := make(map[modelKey]*models.Model)
+		// Handle legacy case: no subscription system configured
+		if len(subscriptionsToUse) == 0 {
+			// No subscription filtering - return all accessible models without subscription metadata
+			h.logger.Debug("No subscription system configured, filtering models without subscription header")
+			modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, "")
+		} else {
+			// Filter models by subscription(s) and aggregate subscriptions
+			// Deduplication key is (model ID, URL) - models with the same ID and URL are
+			// the same instance and should have their subscriptions aggregated into an array.
+			type modelKey struct {
+				id  string
+				url string
+			}
+			modelsByKey := make(map[modelKey]*models.Model)
 
-		for _, sub := range subscriptionsToUse {
-			h.logger.Debug("Filtering models by subscription", "subscription", sub.Name, "modelCount", len(list))
-			filteredModels := h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, sub.Name)
+			for _, sub := range subscriptionsToUse {
+				h.logger.Debug("Filtering models by subscription", "subscription", sub.Name, "modelCount", len(list))
+				filteredModels := h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, sub.Name)
 
-			for _, model := range filteredModels {
-				subInfo := models.SubscriptionInfo{
-					Name:        sub.Name,
-					DisplayName: sub.DisplayName,
-					Description: sub.Description,
-				}
+				for _, model := range filteredModels {
+					subInfo := models.SubscriptionInfo{
+						Name:        sub.Name,
+						DisplayName: sub.DisplayName,
+						Description: sub.Description,
+					}
 
-				// Create key from model ID and URL
-				urlStr := ""
-				if model.URL != nil {
-					urlStr = model.URL.String()
-				}
-				key := modelKey{id: model.ID, url: urlStr}
+					// Create key from model ID and URL
+					urlStr := ""
+					if model.URL != nil {
+						urlStr = model.URL.String()
+					}
+					key := modelKey{id: model.ID, url: urlStr}
 
-				if existingModel, exists := modelsByKey[key]; exists {
-					// Model already exists - append subscription if not already present
-					h.addSubscriptionIfNew(existingModel, subInfo)
-				} else {
-					// New model - create entry with subscriptions array
-					model.Subscriptions = []models.SubscriptionInfo{subInfo}
-					modelsByKey[key] = &model
+					if existingModel, exists := modelsByKey[key]; exists {
+						// Model already exists - append subscription if not already present
+						h.addSubscriptionIfNew(existingModel, subInfo)
+					} else {
+						// New model - create entry with subscriptions array
+						model.Subscriptions = []models.SubscriptionInfo{subInfo}
+						modelsByKey[key] = &model
+					}
 				}
 			}
-		}
 
-		// Convert map to slice with deterministic ordering
-		keys := make([]modelKey, 0, len(modelsByKey))
-		for k := range modelsByKey {
-			keys = append(keys, k)
-		}
-		sort.Slice(keys, func(i, j int) bool {
-			if keys[i].id != keys[j].id {
-				return keys[i].id < keys[j].id
+			// Convert map to slice with deterministic ordering
+			keys := make([]modelKey, 0, len(modelsByKey))
+			for k := range modelsByKey {
+				keys = append(keys, k)
 			}
-			return keys[i].url < keys[j].url
-		})
-		for _, k := range keys {
-			modelList = append(modelList, *modelsByKey[k])
+			sort.Slice(keys, func(i, j int) bool {
+				if keys[i].id != keys[j].id {
+					return keys[i].id < keys[j].id
+				}
+				return keys[i].url < keys[j].url
+			})
+			for _, k := range keys {
+				modelList = append(modelList, *modelsByKey[k])
+			}
 		}
 
 		h.logger.Debug("Access validation complete", "listed", len(list), "accessible", len(modelList), "subscriptions", len(subscriptionsToUse))
