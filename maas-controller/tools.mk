@@ -8,8 +8,10 @@ $(LOCALBIN):
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
 GOLANGCI_LINT_VERSION ?= v2.6.2
-$(GOLANGCI_LINT): $(LOCALBIN)
+# Target the versioned binary so version bumps trigger reinstall
+$(GOLANGCI_LINT)-$(GOLANGCI_LINT_VERSION): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+$(GOLANGCI_LINT): $(GOLANGCI_LINT)-$(GOLANGCI_LINT_VERSION)
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary (ideally with version)

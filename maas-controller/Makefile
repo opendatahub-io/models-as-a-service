@@ -52,10 +52,14 @@ $(CONTROLLER_GEN): | $(BUILD_DIR)
 	GOBIN=$(abspath $(BUILD_DIR)) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
 
 LINT_FIX ?= false
-.PHONY: lint
 lint: $(GOLANGCI_LINT) ## Run golangci-lint (use LINT_FIX=true to fix lint issues)
+ifeq ($(LINT_FIX),true)
 	$(GOLANGCI_LINT) fmt
-	$(GOLANGCI_LINT) run $(if $(filter true,$(LINT_FIX)),--fix)
+	$(GOLANGCI_LINT) run --fix
+else
+	$(GOLANGCI_LINT) fmt --diff
+	$(GOLANGCI_LINT) run
+endif
 
 # Generate deepcopy code for API types
 generate: $(CONTROLLER_GEN)
