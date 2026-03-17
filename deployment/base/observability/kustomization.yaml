@@ -2,14 +2,22 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-# NOTE: servicemonitor.yaml (Limitador) is NOT included here.
+# NOTE: limitador-servicemonitor.yaml (Limitador) is NOT included here.
 # When Kuadrant CR has spec.observability.enable=true, the operator creates its own
 # PodMonitor (kuadrant-limitador-monitor). Deploying our ServiceMonitor would cause
 # duplicate metrics. The install-observability.sh script conditionally deploys it
 # only when Kuadrant observability is disabled.
-- telemetry-policy.yaml
-- istio-telemetry.yaml
+#
+# NOTE: authorino-server-metrics-servicemonitor.yaml is also conditional — deployed
+# by install-observability.sh only when no existing monitor scrapes /server-metrics.
+#
+# NOTE: istio-gateway-service.yaml and istio-gateway-servicemonitor.yaml are NOT
+# included here. They are applied conditionally by install-observability.sh only
+# when the gateway deployment exists.
+- gateway-telemetry-policy.yaml
+- istio-gateway-telemetry.yaml
 
 labels:
 - pairs:
     app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-observability

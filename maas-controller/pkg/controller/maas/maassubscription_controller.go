@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-logr/logr"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,9 +34,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -81,15 +84,17 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
+	statusSnapshot := subscription.Status.DeepCopy()
+
 	// Reconcile TokenRateLimitPolicy for each model
 	// IMPORTANT: TokenRateLimitPolicy targets the HTTPRoute for each model
 	if err := r.reconcileTokenRateLimitPolicies(ctx, log, subscription); err != nil {
 		log.Error(err, "failed to reconcile TokenRateLimitPolicies")
-		r.updateStatus(ctx, subscription, "Failed", fmt.Sprintf("Failed to reconcile: %v", err))
+		r.updateStatus(ctx, subscription, "Failed", fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
 	}
 
-	r.updateStatus(ctx, subscription, "Active", "Successfully reconciled")
+	r.updateStatus(ctx, subscription, "Active", "Successfully reconciled", statusSnapshot)
 	return ctrl.Result{}, nil
 }
 
@@ -308,6 +313,10 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			if !isManaged(existing) {
 				log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
 			} else {
+				// Snapshot the existing object before modifications so we can detect
+				// no-op updates.
+				snapshot := existing.DeepCopy()
+
 				mergedAnnotations := existing.GetAnnotations()
 				if mergedAnnotations == nil {
 					mergedAnnotations = make(map[string]string)
@@ -328,10 +337,15 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
 					return fmt.Errorf("failed to update spec: %w", err)
 				}
-				if err := r.Update(ctx, existing); err != nil {
-					return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s: %w", modelRef.Name, err)
+
+				if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
+					log.Info("TokenRateLimitPolicy unchanged, skipping update", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name)
+				} else {
+					if err := r.Update(ctx, existing); err != nil {
+						return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s/%s: %w", modelRef.Namespace, modelRef.Name, err)
+					}
+					log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name, "subscriptions", subNames)
 				}
-				log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Name, "subscriptions", subNames)
 			}
 		}
 	}
@@ -389,31 +403,26 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 	return ctrl.Result{}, nil
 }
 
-func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase, message string) {
+func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase, message string, statusSnapshot *maasv1alpha1.MaaSSubscriptionStatus) {
 	subscription.Status.Phase = phase
-	condition := metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionTrue,
-		Reason:             "Reconciled",
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}
+
+	status := metav1.ConditionTrue
+	reason := "Reconciled"
 	if phase == "Failed" {
-		condition.Status = metav1.ConditionFalse
-		condition.Reason = "ReconcileFailed"
+		status = metav1.ConditionFalse
+		reason = "ReconcileFailed"
 	}
 
-	// Update condition
-	found := false
-	for i, c := range subscription.Status.Conditions {
-		if c.Type == condition.Type {
-			subscription.Status.Conditions[i] = condition
-			found = true
-			break
-		}
-	}
-	if !found {
-		subscription.Status.Conditions = append(subscription.Status.Conditions, condition)
+	apimeta.SetStatusCondition(&subscription.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: subscription.GetGeneration(),
+	})
+
+	if equality.Semantic.DeepEqual(*statusSnapshot, subscription.Status) {
+		return
 	}
 
 	if err := r.Status().Update(ctx, subscription); err != nil {
@@ -429,7 +438,10 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	generatedTRLP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaaSSubscription{}).
+		For(&maasv1alpha1.MaaSSubscription{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		))).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
 		// (fixes race condition where MaaSSubscription is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(

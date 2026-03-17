@@ -43,12 +43,12 @@ The observability stack is defined in `deployment/base/observability/`. It inclu
 
 | Resource | Purpose |
 |----------|---------|
-| **TelemetryPolicy** (`telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
-| **Istio Telemetry** (`istio-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
+| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
+| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
 
 **Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Tier` is injected):
 
-    ./scripts/install-observability.sh [--namespace NAMESPACE]
+    ./scripts/observability/install-observability.sh [--namespace NAMESPACE]
 
 When using the full deployment script, this is applied automatically:
 
@@ -59,7 +59,7 @@ When using the full deployment script, this is applied automatically:
     - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and tier lookup must be deployed first. The AuthPolicy injects `X-MaaS-Tier`, which Istio Telemetry reads to label latency by tier. Without it, the `tier` label on gateway latency will be empty.
     - **Namespace**: Use `--namespace` if your MaaS API is deployed to a namespace other than `maas-api` (e.g. `--namespace opendatahub`)
 
-**Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/components/observability/monitors/` if your deployment includes that component.
+**Optional:** The Istio gateway (Envoy) ServiceMonitor is included in `deployment/base/observability/` and deployed automatically by `install-observability.sh`.
 
 ## Metrics Collection
 
@@ -219,7 +219,7 @@ ServiceMonitors are deployed by `install-observability.sh` to configure OpenShif
 
 **Conditionally Deployed (auto-detected by `install-observability.sh`):**
 
-- **Limitador** (`servicemonitor.yaml`): Scrapes rate limiting metrics from Limitador pods in `kuadrant-system`. **Skipped when Kuadrant's own PodMonitor is already present.** When Kuadrant CR has `spec.observability.enable: true`, the operator creates its own `kuadrant-limitador-monitor` PodMonitor that scrapes the same Limitador pod. Deploying both would cause duplicate metrics.
+- **Limitador** (`limitador-servicemonitor.yaml`): Scrapes rate-limiting metrics from Limitador pods in `kuadrant-system`. **Skipped when Kuadrant's own PodMonitor is already present.** When Kuadrant CR has `spec.observability.enable: true`, the operator creates its own `kuadrant-limitador-monitor` PodMonitor that scrapes the same Limitador pod. Deploying both would cause duplicate metrics.
 - **Authorino Server Metrics** (`authorino-server-metrics-servicemonitor.yaml`): Scrapes auth evaluation metrics from Authorino's `/server-metrics` endpoint in `kuadrant-system`. **Skipped if a Kuadrant-provided monitor already scrapes `/server-metrics`.** This collects `auth_server_authconfig_duration_seconds`, `auth_server_authconfig_response_status`, and other auth server metrics that are **not** scraped by the Kuadrant-provided `authorino-operator-monitor` (which only covers `/metrics` for controller-runtime stats).
 
 **Already Provided by Kuadrant (when `observability.enable: true`):**
@@ -331,16 +331,16 @@ Personal usage view for individual developers:
 
 Monitoring is installed by `install-observability.sh`. Dashboards are installed by a **separate helper** that discovers Grafana cluster-wide:
 
-    ./scripts/install-grafana-dashboards.sh
+    ./scripts/observability/install-grafana-dashboards.sh
 
 **Behavior:** Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning (and, for multiple, lists them) and exits without error. Use flags to target a specific instance:
 
-    ./scripts/install-grafana-dashboards.sh --grafana-namespace maas-api
-    ./scripts/install-grafana-dashboards.sh --grafana-label app=grafana
+    ./scripts/observability/install-grafana-dashboards.sh --grafana-namespace maas-api
+    ./scripts/observability/install-grafana-dashboards.sh --grafana-label app=grafana
 
 To deploy only the dashboard manifests manually (same namespace as your Grafana):
 
-    kustomize build deployment/components/observability/dashboards | \
+    kustomize build deployment/components/observability/grafana | \
       sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
       kubectl apply -f -
 
@@ -391,7 +391,7 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
 2. The Istio Telemetry resource extracts this header and adds it as a `tier` label to the `REQUEST_DURATION` metric
 3. Prometheus scrapes these metrics from the Istio gateway
 
-**Configuration** (`deployment/base/observability/istio-telemetry.yaml`):
+**Configuration** (`deployment/base/observability/istio-gateway-telemetry.yaml`):
 
     apiVersion: telemetry.istio.io/v1
     kind: Telemetry
@@ -487,7 +487,7 @@ The Grafana datasource uses a ServiceAccount token to authenticate with Promethe
 **To rotate the token:**
 
     # Delete the existing datasource and create a new one (or rotate the token per your Grafana setup).
-    # To re-deploy only MaaS dashboard definitions: ./scripts/install-grafana-dashboards.sh
+    # To re-deploy only MaaS dashboard definitions: ./scripts/observability/install-grafana-dashboards.sh
 
 !!! tip "Production Recommendation"
     For production deployments, consider automating token rotation using a CronJob or external secrets operator to avoid dashboard outages.
