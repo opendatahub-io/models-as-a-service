@@ -162,7 +162,7 @@ url: https://maas-api.placehold.svc...  # Still has placeholder!
 **Solution**:
 1. Check that `params.env` has `app-namespace=<your-namespace>`
 2. Verify the overlay includes the component: `components: [../../components/shared-patches]`
-3. Check Kustomize version (needs v3.7.0+)
+3. Check Kustomize version (needs v5.7.0+)
 
 ### Kustomize version too old
 ```
