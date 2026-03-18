@@ -4,7 +4,11 @@ info:
     description: Models as a Service Billing and Management API
     version: "1.0"
 servers:
-    - url: http://localhost:8080
+    - url: '{serverUrl}'
+      variables:
+        serverUrl:
+          default: http://localhost:8080
+          description: API server URL (e.g. https://maas-api.example.com)
 security:
   - bearerAuth: []
 paths:

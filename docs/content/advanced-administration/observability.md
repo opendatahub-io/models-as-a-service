@@ -18,7 +18,7 @@ The observability stack consists of:
 
 - **Limitador**: Rate limiting service that exposes usage and rate-limit metrics (with labels from TelemetryPolicy)
 - **Authorino**: Authentication/authorization service that exposes auth evaluation metrics (`auth_server_*`)
-- **Istio Telemetry**: Adds `tier` to gateway latency metrics for per-tier latency (P50/P95/P99)
+- **Istio Telemetry**: Adds `subscription` to gateway latency metrics for per-subscription latency (P50/P95/P99)
 - **vLLM / llm-d / Simulator**: Expose inference metrics (TTFT, ITL, queue depth, token throughput, KV-cache usage); llm-d also exposes EPP routing metrics
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
 - **ServiceMonitors**: Deployed to configure Prometheus metric scraping
@@ -46,7 +46,7 @@ The observability stack is defined in `deployment/base/observability/`. It inclu
 | **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
 | **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
 
-**Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Tier` is injected):
+**Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Subscription` is injected):
 
     ./scripts/observability/install-observability.sh [--namespace NAMESPACE]
 
@@ -56,7 +56,7 @@ When using the full deployment script, this is applied automatically:
 
 !!! note "Prerequisites"
     - **Tools**: `kubectl`, `kustomize`, `jq`, `yq` must be installed
-    - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and tier lookup must be deployed first. The AuthPolicy injects `X-MaaS-Tier`, which Istio Telemetry reads to label latency by tier. Without it, the `tier` label on gateway latency will be empty.
+    - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and subscription selection must be deployed first. The AuthPolicy injects `X-MaaS-Subscription`, which Istio Telemetry reads to label latency by subscription. Without it, the `subscription` label on gateway latency will be empty.
     - **Namespace**: Use `--namespace` if your MaaS API is deployed to a namespace other than `maas-api` (e.g. `--namespace opendatahub`)
 
 **Optional:** The Istio gateway (Envoy) ServiceMonitor is included in `deployment/base/observability/` and deployed automatically by `install-observability.sh`.
@@ -81,14 +81,14 @@ When Kuadrant TelemetryPolicy and TokenRateLimitPolicy are applied, Limitador ex
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `authorized_hits` | Counter | `user`, `tier`, `model`, `limitador_namespace` | Total tokens consumed per request (from `usage.total_tokens` in the model response; input + output combined). The `model` label is extracted via `responseBodyJSON("/model")`. |
-| `authorized_calls` | Counter | `user`, `tier`, `limitador_namespace` | Requests allowed (not rate-limited). |
-| `limited_calls` | Counter | `user`, `tier`, `limitador_namespace` | Requests denied due to token rate limits. |
+| `authorized_hits` | Counter | `user`, `subscription`, `model`, `limitador_namespace` | Total tokens consumed per request (from `usage.total_tokens` in the model response; input + output combined). The `model` label is extracted via `responseBodyJSON("/model")`. |
+| `authorized_calls` | Counter | `user`, `subscription`, `limitador_namespace` | Requests allowed (not rate-limited). |
+| `limited_calls` | Counter | `user`, `subscription`, `limitador_namespace` | Requests denied due to token rate limits. |
 
 !!! note "`model` label availability"
-    The `model` label is currently available **only on `authorized_hits`**. The `authorized_calls` and `limited_calls` metrics carry `user` and `tier` labels but not `model`, due to how the wasm-shim constructs the CEL evaluation context for these counters. This is a known upstream limitation tracked for improvement in Kuadrant.
+    The `model` label is currently available **only on `authorized_hits`**. The `authorized_calls` and `limited_calls` metrics carry `user` and `subscription` labels but not `model`, due to how the wasm-shim constructs the CEL evaluation context for these counters. This is a known upstream limitation tracked for improvement in Kuadrant.
 
-Gateway latency is labeled by **tier only** via Istio Telemetry (see [Per-Tier Latency Tracking](#per-tier-latency-tracking)); per-user latency is not exposed on the gateway histogram to keep cardinality bounded.
+Gateway latency is labeled by **subscription only** via Istio Telemetry (see [Per-Subscription Latency Tracking](#per-subscription-latency-tracking)); per-user latency is not exposed on the gateway histogram to keep cardinality bounded.
 
 ### Authorino Metrics
 
@@ -191,7 +191,7 @@ When using llm-d, the inference gateway's Endpoint Picker (EPP) exposes addition
     EPP metrics are not currently scraped or visualized by MaaS. When deploying llm-d with the EPP, refer to the [llm-d monitoring docs](https://llm-d.ai/docs/usage/monitoring) and the [inference gateway dashboard](https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/v1.0.1/tools/dashboards/inference_gateway.json) for EPP-specific visualization.
 
 !!! note "Input/Output Token Split"
-    vLLM metrics provide input vs output token breakdown **per model** (`vllm:prompt_tokens_total` / `vllm:generation_tokens_total` counters, or `vllm:request_prompt_tokens` / `vllm:request_generation_tokens` histograms). However, these do not carry `user` or `tier` labels. For per-user billing with input/output split, upstream changes to the Kuadrant wasm-shim are required (see [Known Limitations](#known-limitations)).
+    vLLM metrics provide input vs output token breakdown **per model** (`vllm:prompt_tokens_total` / `vllm:generation_tokens_total` counters, or `vllm:request_prompt_tokens` / `vllm:request_generation_tokens` histograms). However, these do not carry `user` or `subscription` labels. For per-user billing with input/output split, upstream changes to the Kuadrant wasm-shim are required (see [Known Limitations](#known-limitations)).
 
 #### Dashboard Metric Queries
 
@@ -277,11 +277,11 @@ Provides a comprehensive view of system health, usage across all users, and reso
 | **Component Health** | Limitador up, Authorino pods, MaaS API pods, Gateway pods, Firing Alerts |
 | **Key Metrics** | Total Tokens, Total Requests, Token Rate, Request Rate, Inference Success Rate, Active Users, P50 Response Latency, Rate Limit Ratio |
 | **Auth Evaluation** | Auth Evaluation Latency (P50/P95/P99), Auth Success/Deny Rate |
-| **Traffic Analysis** | Token/Request Rate by Model, Error Rates (4xx excl. 429, 5xx, 429 Rate Limited), Token/Request Rate by Tier, P95 Latency |
+| **Traffic Analysis** | Token/Request Rate by Model, Error Rates (4xx excl. 429, 5xx, 429 Rate Limited), Token/Request Rate by Subscription, P95 Latency |
 | **Error Breakdown** | Rate Limited Requests, Unauthorized Requests |
 | **Model Metrics** | vLLM queue depth, inference latency, KV cache usage, token throughput, prompt vs generation token ratio, queue wait time, TTFT, ITL |
 | **Top Users** | By token usage, by declined requests |
-| **Detailed Breakdown** | Token Rate by User, Request Volume by User & Tier |
+| **Detailed Breakdown** | Token Rate by User, Request Volume by User & Subscription |
 | **Resource Allocation** | CPU/Memory/GPU per model pod |
 
 !!! note "Template Variables"
@@ -306,7 +306,7 @@ Personal usage view for individual developers:
 |---------|---------|
 | **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Inference Success Rate |
 | **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
-| **Detailed Analysis** | Token Volume by Model, Rate Limited by Tier |
+| **Detailed Analysis** | Token Volume by Model, Rate Limited by Subscription |
 
 !!! note "Inference Success Rate"
     Both dashboards use `rate()` on vLLM counters (`request_success_total`, `e2e_request_latency_seconds_count`) instead of raw counter values. This handles pod restarts correctly (counters reset independently and raw division produces incorrect results). When no traffic is present, `rate()/rate()` produces `NaN`; the dashboards use `((ratio) >= 0) OR vector(1)` to filter `NaN` and default to 100% (healthy) when no traffic exists.
@@ -315,7 +315,7 @@ Personal usage view for individual developers:
     Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
 
 !!! tip "Per-User Token Billing"
-    The **Platform Admin dashboard** shows token consumption aggregated by **tier** and **model** for system-level visibility. Per-user token consumption for billing is available via:
+    The **Platform Admin dashboard** shows token consumption aggregated by **subscription** and **model** for system-level visibility. Per-user token consumption for billing is available via:
 
     - **AI Engineer dashboard**: Individual users see their own token usage
     - **Prometheus API**: Query `sum by (user) (increase(authorized_hits[24h]))` for billing periods
@@ -362,33 +362,33 @@ To import into Grafana:
 
 | Metric | Description | Labels |
 |--------|-------------|--------|
-| `authorized_hits` | Total tokens consumed (input + output combined, from `usage.total_tokens` in model responses) | `user`, `tier`, `model` |
-| `authorized_calls` | Total requests allowed | `user`, `tier` |
-| `limited_calls` | Total requests rate-limited | `user`, `tier` |
+| `authorized_hits` | Total tokens consumed (input + output combined, from `usage.total_tokens` in model responses) | `user`, `subscription`, `model` |
+| `authorized_calls` | Total requests allowed | `user`, `subscription` |
+| `limited_calls` | Total requests rate-limited | `user`, `subscription` |
 
 !!! tip "When to use which metric"
     - **Billing/Cost**: Use `authorized_hits` - represents actual token consumption, with `model` label for per-model breakdown
-    - **API Usage**: Use `authorized_calls` - represents number of API calls (per user, per tier)
-    - **Rate Limiting**: Use `limited_calls` - shows quota violations (per user, per tier)
+    - **API Usage**: Use `authorized_calls` - represents number of API calls (per user, per subscription)
+    - **Rate Limiting**: Use `limited_calls` - shows quota violations (per user, per subscription)
 
 !!! note "Total tokens only (input/output split not yet available)"
-    Token consumption is reported as **total tokens** (prompt + completion) per request. The pipeline reads `usage.total_tokens` from the model response via Kuadrant's TokenRateLimitPolicy. Separate input-token (`prompt_tokens`) and output-token (`completion_tokens`) counters are **not yet available** at the gateway level; this would require upstream changes in the Kuadrant wasm-shim to send separate `hits_addend` values for each token type. Chargeback and usage tracking per user, per subscription (tier), and per model are supported using `authorized_hits`.
+    Token consumption is reported as **total tokens** (prompt + completion) per request. The pipeline reads `usage.total_tokens` from the model response via Kuadrant's TokenRateLimitPolicy. Separate input-token (`prompt_tokens`) and output-token (`completion_tokens`) counters are **not yet available** at the gateway level; this would require upstream changes in the Kuadrant wasm-shim to send separate `hits_addend` values for each token type. Chargeback and usage tracking per user, per subscription, and per model are supported using `authorized_hits`.
 
 ### Latency Metrics
 
 | Metric | Description | Labels |
 |--------|-------------|--------|
-| `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name`, `tier` |
+| `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name`, `subscription` |
 | `vllm:e2e_request_latency_seconds` | Model inference latency | `model_name` |
 
-#### Per-Tier Latency Tracking
+#### Per-Subscription Latency Tracking
 
-The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to gateway latency metrics. This enables tracking request latency per access tier (e.g. free, premium, enterprise). Gateway latency is labeled by **tier only** (not by user) to keep metric cardinality bounded and to align with latency-by-tier requirements (e.g. P50/P95/P99 per tier). Per-user metrics remain available from Limitador (`authorized_hits`, `authorized_calls`, `limited_calls`).
+The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimension to gateway latency metrics. This enables tracking request latency per subscription (e.g. free, premium, enterprise). Gateway latency is labeled by **subscription only** (not by user) to keep metric cardinality bounded and to align with latency-by-subscription requirements (e.g. P50/P95/P99 per subscription). Per-user metrics remain available from Limitador (`authorized_hits`, `authorized_calls`, `limited_calls`).
 
 **How it works:**
 
-1. The `gateway-auth-policy` injects the `X-MaaS-Tier` header from the resolved tier
-2. The Istio Telemetry resource extracts this header and adds it as a `tier` label to the `REQUEST_DURATION` metric
+1. The `gateway-auth-policy` injects the `X-MaaS-Subscription` header from the resolved subscription
+2. The Istio Telemetry resource extracts this header and adds it as a `subscription` label to the `REQUEST_DURATION` metric
 3. Prometheus scrapes these metrics from the Istio gateway
 
 **Configuration** (`deployment/base/observability/istio-gateway-telemetry.yaml`):
@@ -396,7 +396,7 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
     apiVersion: telemetry.istio.io/v1
     kind: Telemetry
     metadata:
-      name: latency-per-tier
+      name: latency-per-subscription
       namespace: openshift-ingress
     spec:
       selector:
@@ -410,12 +410,12 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
             metric: REQUEST_DURATION
             mode: CLIENT_AND_SERVER
           tagOverrides:
-            tier:
+            subscription:
               operation: UPSERT
-              value: request.headers["x-maas-tier"]
+              value: request.headers["x-maas-subscription"]
 
 !!! note "Security"
-    The `X-MaaS-Tier` header should be injected server-side by AuthPolicy. Ensure your AuthPolicy injects this header from the tier lookup (not client input) for accurate metrics attribution.
+    The `X-MaaS-Subscription` header should be injected server-side by AuthPolicy. Ensure your AuthPolicy injects this header from the subscription selection (not client input) for accurate metrics attribution.
 
 ### Common Queries
 
@@ -430,16 +430,16 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
     # Top 10 users by tokens consumed
     topk(10, sum by (user) (authorized_hits))
 
-    # Token consumption by tier
-    sum by (tier) (authorized_hits)
+    # Token consumption by subscription
+    sum by (subscription) (authorized_hits)
 
 **Request-based queries (capacity/usage):**
 
     # Total requests per user
     sum by (user) (authorized_calls)
 
-    # Request rate per tier (requests/sec)
-    sum by (tier) (rate(authorized_calls[5m]))
+    # Request rate per subscription (requests/sec)
+    sum by (subscription) (rate(authorized_calls[5m]))
 
     # Top 10 users by request count
     topk(10, sum by (user) (authorized_calls))
@@ -455,11 +455,11 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
     # Rate limit ratio (percentage of requests rejected by rate limiting)
     (sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)
 
-    # Rate limit ratio by tier
-    (sum by (tier) (limited_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))) OR vector(0)
+    # Rate limit ratio by subscription
+    (sum by (subscription) (limited_calls) / (sum by (subscription) (authorized_calls) + sum by (subscription) (limited_calls))) OR vector(0)
 
-    # Rate limit violations per second by tier
-    sum by (tier) (rate(limited_calls[5m]))
+    # Rate limit violations per second by subscription
+    sum by (subscription) (rate(limited_calls[5m]))
 
     # Users hitting rate limits most
     topk(10, sum by (user) (limited_calls))
@@ -472,11 +472,11 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
     # P50 (median) latency
     histogram_quantile(0.5, sum by (le) (rate(istio_request_duration_milliseconds_bucket[5m])))
 
-    # P99 latency per tier
-    histogram_quantile(0.99, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=""}[5m])))
+    # P99 latency per subscription
+    histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=""}[5m])))
 
-!!! tip "Filtering by tier"
-    For per-tier latency queries, use `tier!=""` to exclude requests where the `X-MaaS-Tier` header was not injected. Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
+!!! tip "Filtering by subscription"
+    For per-subscription latency queries, use `subscription!=""` to exclude requests where the `X-MaaS-Subscription` header was not injected. Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
 
 ## Maintenance
 
@@ -500,7 +500,7 @@ Some features require upstream changes and are currently blocked:
 
 | Feature | Blocker | Workaround |
 |---------|---------|------------|
-| **`model` label on `authorized_calls` / `limited_calls`** | Kuadrant wasm-shim does not pass `responseBodyJSON` context for these counters | Use `authorized_hits` for per-model breakdown; `authorized_calls`/`limited_calls` support per-user and per-tier |
+| **`model` label on `authorized_calls` / `limited_calls`** | Kuadrant wasm-shim does not pass `responseBodyJSON` context for these counters | Use `authorized_hits` for per-model breakdown; `authorized_calls`/`limited_calls` support per-user and per-subscription |
 | **Input/output token split** | Kuadrant TokenRateLimitPolicy sends a single `hits_addend` (total tokens); no mechanism for separate prompt/completion counters | Total tokens available via `authorized_hits`; the response body contains `usage.prompt_tokens` and `usage.completion_tokens` but the wasm-shim does not split them |
 | **Input/output token breakdown per user** | vLLM does not label its own metrics with `user` | Total tokens per user available via `authorized_hits{user="..."}`; vLLM prompt/generation token metrics are per-model only |
 | **Kuadrant policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` etc. are defined in Kuadrant dev but not yet shipped in RHCL 1.x | Enable `observability.enable: true` on the Kuadrant CR; the ServiceMonitors are created but policy-specific gauges will appear in a future operator release |
@@ -511,27 +511,27 @@ Some features require upstream changes and are currently blocked:
 !!! note "Total Tokens vs Token Breakdown"
     Total token consumption per user **is available** via `authorized_hits{user="..."}`. The blocked feature is the input/output split (prompt vs generation tokens) at the gateway level, which requires the wasm-shim to send two separate counter updates to Limitador.
 
-### Available Per-User and Per-Tier Metrics
+### Available Per-User and Per-Subscription Metrics
 
 | Feature | Metric | Label |
 |---------|--------|-------|
-| **Latency per tier** | `istio_request_duration_milliseconds_bucket` | `tier` |
+| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription` |
 | **Token consumption per user** | `authorized_hits` | `user` |
-| **Token consumption per tier** | `authorized_hits` | `tier` |
+| **Token consumption per subscription** | `authorized_hits` | `subscription` |
 | **Token consumption per model** | `authorized_hits` | `model` |
 | **Requests per user** | `authorized_calls` | `user` |
-| **Requests per tier** | `authorized_calls` | `tier` |
+| **Requests per subscription** | `authorized_calls` | `subscription` |
 | **Rate limited per user** | `limited_calls` | `user` |
-| **Rate limited per tier** | `limited_calls` | `tier` |
+| **Rate limited per subscription** | `limited_calls` | `subscription` |
 
 ### Requirements Alignment
 
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| **Usage dashboards** (token consumption per user, per subscription/tier, per model) | Met | Grafana dashboard + `authorized_hits` with `user`, `tier`, `model`; Prometheus scrapes Limitador `/metrics`. |
-| **Latency by tier** (P50/P95/P99) | Met | `istio_request_duration_milliseconds_bucket` with `tier` label; tier-only avoids unbounded cardinality. |
-| **Request tracking** (per user, per tier) | Met | `authorized_calls` with `user` and `tier` labels; `limited_calls` for rate-limit violations. |
-| **Export for chargeback** (CSV/API) | Not provided (RFE) | Per-user token data exists in Prometheus (`authorized_hits{user="..."}`) but no dedicated billing API or export endpoint is implemented. **RFE recommendation**: Add `/maas-api/v1/usage` endpoint that queries Prometheus and returns per-user, per-tier, per-model token consumption in CSV/JSON for finance and chargeback systems. |
+| **Usage dashboards** (token consumption per user, per subscription, per model) | Met | Grafana dashboard + `authorized_hits` with `user`, `subscription`, `model`; Prometheus scrapes Limitador `/metrics`. |
+| **Latency by subscription** (P50/P95/P99) | Met | `istio_request_duration_milliseconds_bucket` with `subscription` label; subscription-only avoids unbounded cardinality. |
+| **Request tracking** (per user, per subscription) | Met | `authorized_calls` with `user` and `subscription` labels; `limited_calls` for rate-limit violations. |
+| **Export for chargeback** (CSV/API) | Not provided (RFE) | Per-user token data exists in Prometheus (`authorized_hits{user="..."}`) but no dedicated billing API or export endpoint is implemented. **RFE recommendation**: Add `/maas-api/v1/usage` endpoint that queries Prometheus and returns per-user, per-subscription, per-model token consumption in CSV/JSON for finance and chargeback systems. |
 | **Input/output token split** | Not available | Only total tokens (`authorized_hits`); separate input and output counters require upstream Kuadrant wasm-shim changes to send split `hits_addend` values. |
 | **`model` label on request/rate-limit counters** | Partial | `model` available on `authorized_hits` only; requires upstream Kuadrant fix to propagate `responseBodyJSON` context to `authorized_calls`/`limited_calls` counters. |
 | **Policy enforcement health** | Future | Kuadrant operator metrics (`kuadrant_policies_enforced`, `kuadrant_ready`, etc.) defined upstream but not yet shipped in RHCL 1.x; `limitador_up` and `datastore_partitioned` are available now. |

@@ -55,8 +55,6 @@ sequenceDiagram
 
 If the API is not configured with a MaaSModelRef lister and namespace, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.
 
-For how to add new MaaSModelRef **kinds** (backend types) in the future, see [MaaSModelRef kinds (future)](maas-model-kinds.md).
-
 ## Registering models
 
 To have models appear via the **MaaSModelRef** flow:
@@ -87,5 +85,5 @@ You can use the [maas-system samples](https://github.com/opendatahub-io/models-a
 ## Related documentation
 
 - [MaaS Controller README](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) — install and MaaSModelRef/MaaSAuthPolicy/MaaSSubscription
-- [Model setup](./model-setup.md) — configuring LLMInferenceServices (gateway reference, tier annotation) as backends for MaaSModelRef
+- [Model setup](./model-setup.md) — configuring LLMInferenceServices (gateway reference) as backends for MaaSModelRef
 - [Architecture](../architecture.md) — overall MaaS architecture
