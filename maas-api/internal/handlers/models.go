@@ -92,6 +92,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		result, err = h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription, "")
 		if err != nil {
 			var multipleSubsErr *subscription.MultipleSubscriptionsError
+			var ambiguousErr *subscription.SubscriptionAmbiguousError
 			var accessDeniedErr *subscription.AccessDeniedError
 			var notFoundErr *subscription.SubscriptionNotFoundError
 			var noSubErr *subscription.NoSubscriptionError
@@ -101,6 +102,19 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			if errors.As(err, &multipleSubsErr) {
 				h.logger.Debug("User has multiple subscriptions, x-maas-subscription header required",
 					"subscriptionCount", len(multipleSubsErr.Subscriptions),
+				)
+				c.JSON(http.StatusForbidden, gin.H{
+					"error": gin.H{
+						"message": err.Error(),
+						"type":    "permission_error",
+					}})
+				return
+			}
+
+			if errors.As(err, &ambiguousErr) {
+				h.logger.Debug("Subscription name is ambiguous",
+					"subscription", ambiguousErr.Subscription,
+					"namespaces", ambiguousErr.Namespaces,
 				)
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{

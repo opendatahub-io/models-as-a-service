@@ -145,6 +145,14 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			return nil, fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", ref.Namespace, ref.Name, err)
 		}
 
+		// Validate model namespace and name for CEL injection prevention
+		if err := validateCELValue(ref.Namespace, "model namespace"); err != nil {
+			return nil, fmt.Errorf("invalid model namespace in modelRef %s/%s: %w", ref.Namespace, ref.Name, err)
+		}
+		if err := validateCELValue(ref.Name, "model name"); err != nil {
+			return nil, fmt.Errorf("invalid model name in modelRef %s/%s: %w", ref.Namespace, ref.Name, err)
+		}
+
 		// Find ALL auth policies for this model (not just the current one)
 		allPolicies, err := findAllAuthPoliciesForModel(ctx, r.Client, ref.Namespace, ref.Name)
 		if err != nil {

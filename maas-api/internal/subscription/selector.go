@@ -77,9 +77,10 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	// Branch 1: Explicit subscription selection (with validation)
 	// Support both formats: "namespace/name" (preferred) and bare "name" (legacy)
 	if requestedSubscription != "" {
+		// First, try exact qualified match (namespace/name)
 		for _, sub := range subscriptions {
 			qualifiedName := fmt.Sprintf("%s/%s", sub.Namespace, sub.Name)
-			if qualifiedName == requestedSubscription || sub.Name == requestedSubscription {
+			if qualifiedName == requestedSubscription {
 				if !userHasAccess(&sub, username, groups) {
 					return nil, &AccessDeniedError{Subscription: requestedSubscription}
 				}
@@ -90,6 +91,43 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				return toResponse(&sub), nil
 			}
 		}
+
+		// If no qualified match found and request is bare name (no '/'), try bare name matching
+		if !strings.Contains(requestedSubscription, "/") {
+			var matches []subscription
+			for _, sub := range subscriptions {
+				if sub.Name == requestedSubscription {
+					matches = append(matches, sub)
+				}
+			}
+
+			if len(matches) == 0 {
+				return nil, &SubscriptionNotFoundError{Subscription: requestedSubscription}
+			}
+
+			if len(matches) > 1 {
+				// Multiple subscriptions with same bare name in different namespaces
+				namespaces := make([]string, len(matches))
+				for i, m := range matches {
+					namespaces[i] = m.Namespace
+				}
+				return nil, &SubscriptionAmbiguousError{
+					Subscription: requestedSubscription,
+					Namespaces:   namespaces,
+				}
+			}
+
+			// Exactly one match - use it
+			if !userHasAccess(&matches[0], username, groups) {
+				return nil, &AccessDeniedError{Subscription: requestedSubscription}
+			}
+			if requestedModel != "" && !subscriptionIncludesModel(&matches[0], requestedModel) {
+				return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
+			}
+			return toResponse(&matches[0]), nil
+		}
+
+		// Request had '/' but no match found
 		return nil, &SubscriptionNotFoundError{Subscription: requestedSubscription}
 	}
 
@@ -336,6 +374,17 @@ type MultipleSubscriptionsError struct {
 
 func (e *MultipleSubscriptionsError) Error() string {
 	return "user has access to multiple subscriptions, must specify subscription using X-MaaS-Subscription header"
+}
+
+// SubscriptionAmbiguousError indicates multiple subscriptions with the same bare name exist.
+type SubscriptionAmbiguousError struct {
+	Subscription string
+	Namespaces   []string
+}
+
+func (e *SubscriptionAmbiguousError) Error() string {
+	return fmt.Sprintf("subscription name '%s' is ambiguous (exists in multiple namespaces: %s), use qualified name 'namespace/name'",
+		e.Subscription, strings.Join(e.Namespaces, ", "))
 }
 
 // ModelNotInSubscriptionError indicates the requested model is not included in the subscription.
