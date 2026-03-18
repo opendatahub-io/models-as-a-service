@@ -32,7 +32,7 @@ Before deploying MaaS, Authorino's listener TLS must be enabled. This is a platf
 For step-by-step commands, see [TLS Configuration: Authorino TLS Configuration](configuration-and-management/tls-configuration.md#authorino-tls-configuration).
 
 !!! tip "Automated configuration"
-    The `deploy-rhoai-stable.sh` script automatically configures all remaining TLS settings after deployment, including Gateway TLS bootstrap and Authorino → maas-api outbound TLS.
+    The `deploy.sh` script automatically configures all remaining TLS settings after deployment, including Gateway TLS bootstrap and Authorino → maas-api outbound TLS.
 
 ## Quick Start
 
@@ -41,6 +41,10 @@ For step-by-step commands, see [TLS Configuration: Authorino TLS Configuration](
 For OpenShift clusters, use the unified automated deployment script:
 
 ```bash
+# Clone the repository
+git clone https://github.com/opendatahub-io/models-as-a-service.git
+cd models-as-a-service
+
 export MAAS_REF="main"  # Use the latest release tag, or "main" for development
 
 # Deploy using RHOAI operator (default)

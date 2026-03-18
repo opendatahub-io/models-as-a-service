@@ -36,6 +36,7 @@ The MaaS (Models as a Service) API provides a tier-based token management system
 | `/v1/api-keys/{id}`   | DELETE | Revoke specific API key                      | None              | Revoked API key metadata (200 OK) |
 | `/v1/tiers/lookup`    | POST   | Lookup tier for user groups (internal)       | `{"groups"}`      | `{"tier", "displayName"}`   |
 | `/internal/v1/api-keys/validate` | POST | Validate API key (Authorino callback) | `{"key"}`         | `{"valid", "userId", "groups"}` |
+| `/internal/v1/subscriptions/select` | POST | Select subscription for user (Authorino callback) | `{"username", "groups", "requestedSubscription"}` | `{"name", "organizationId", "costCenter", "labels"}` |
 
 ## Core Architecture Components
 

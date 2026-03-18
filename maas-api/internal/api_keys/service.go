@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -50,7 +51,7 @@ type CreateAPIKeyResponse struct {
 }
 
 // CreateAPIKey creates a new API key (sk-oai-* format).
-// Keys can be permanent (expiresIn=nil) or expiring (expiresIn set).
+// If expiresIn is not provided, defaults to APIKeyMaxExpirationDays.
 // Per Feature Refinement "Key Format & Security":
 // - Generates cryptographically secure key with sk-oai-* prefix
 // - Stores ONLY the SHA-256 hash (plaintext never stored)
@@ -58,16 +59,22 @@ type CreateAPIKeyResponse struct {
 // - Stores user groups for subscription-based authorization.
 // Admins can create keys for other users by specifying a different username.
 func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups []string, name, description string, expiresIn *time.Duration) (*CreateAPIKeyResponse, error) {
-	// Validate expiration based on policy
-	if s.config != nil && s.config.APIKeyExpirationPolicy == "required" && expiresIn == nil {
-		return nil, errors.New("expiration is required by system policy")
+	// Default to max expiration if not provided
+	if expiresIn == nil {
+		maxDays := constant.DefaultAPIKeyMaxExpirationDays
+		if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
+			maxDays = s.config.APIKeyMaxExpirationDays
+		}
+		defaultExpiration := time.Duration(maxDays) * 24 * time.Hour
+		expiresIn = &defaultExpiration
 	}
-	if expiresIn != nil && *expiresIn <= 0 {
+
+	if *expiresIn <= 0 {
 		return nil, errors.New("expiration must be positive")
 	}
 
 	// Validate against maximum expiration limit
-	if s.config != nil && expiresIn != nil {
+	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
 		maxDuration := time.Duration(s.config.APIKeyMaxExpirationDays) * 24 * time.Hour
 		if *expiresIn > maxDuration {
 			return nil, fmt.Errorf("requested expiration (%v) exceeds maximum allowed (%d days)",
@@ -75,12 +82,8 @@ func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups 
 		}
 	}
 
-	// Calculate absolute expiration timestamp
-	var expiresAt *time.Time
-	if expiresIn != nil {
-		expiry := time.Now().UTC().Add(*expiresIn)
-		expiresAt = &expiry
-	}
+	// Calculate absolute expiration timestamp (always set since we default to max)
+	expiresAt := time.Now().UTC().Add(*expiresIn)
 
 	// Generate the API key
 	plaintext, hash, prefix, err := GenerateAPIKey()
@@ -94,23 +97,21 @@ func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups 
 	// Store in database (hash only, plaintext NEVER stored)
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
-	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, expiresAt); err != nil {
+	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, &expiresAt); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
 	s.logger.Info("Created API key", "user", username, "groups", userGroups, "id", keyID)
 
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
+	formatted := expiresAt.Format(time.RFC3339)
 	response := &CreateAPIKeyResponse{
 		Key:       plaintext, // SHOWN ONCE, NEVER AGAIN
 		KeyPrefix: prefix,
 		ID:        keyID,
 		Name:      name,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-	}
-	if expiresAt != nil {
-		formatted := expiresAt.Format(time.RFC3339)
-		response.ExpiresAt = &formatted
+		ExpiresAt: &formatted,
 	}
 
 	return response, nil
