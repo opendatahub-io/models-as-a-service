@@ -309,9 +309,11 @@ def _get_cr(kind, name, namespace=None):
             continue
 
         # Non-transient error or final attempt - return None (existing behavior)
+        log.error(
+            f"Failed to get {kind}/{name} in namespace '{namespace}' after {max_retries} retries. "
+            f"Last error: {result.stderr.strip()}"
+        )
         return None
-
-    return None
 
 
 def _cr_exists(kind, name, namespace=None):
@@ -648,7 +650,7 @@ def _wait_for_maas_subscription_ready(name, namespace=None, timeout=30):
 
 
 def _wait_for_token_rate_limit_policy(model_ref, model_namespace="llm", timeout=60):
-    """Wait for TokenRateLimitPolicy to be created for a model.
+    """Wait for TokenRateLimitPolicy to be created and enforced for a model.
 
     Args:
         model_ref: Name of the model (e.g., "e2e-distinct-simulated")
@@ -656,7 +658,7 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace="llm", timeout=
         timeout: Maximum wait time in seconds (default: 60)
 
     Raises:
-        TimeoutError: If TRLP isn't created within timeout
+        TimeoutError: If TRLP isn't created and enforced within timeout
     """
     trlp_name = f"maas-trlp-{model_ref}"
     deadline = time.time() + timeout
@@ -664,17 +666,27 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace="llm", timeout=
 
     while time.time() < deadline:
         result = subprocess.run(
-            ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace],
+            ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace, "-o", "json"],
             capture_output=True, text=True
         )
         if result.returncode == 0:
-            log.info(f"✅ TokenRateLimitPolicy {trlp_name} exists")
-            return
-        log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
+            try:
+                trlp = json.loads(result.stdout)
+                conditions = trlp.get("status", {}).get("conditions", [])
+                # Check if TRLP is enforced
+                enforced = next((c for c in conditions if c.get("type") in ["Enforced", "Ready"]), None)
+                if enforced and enforced.get("status") == "True":
+                    log.info(f"✅ TokenRateLimitPolicy {trlp_name} is enforced")
+                    return
+                log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
+            except (json.JSONDecodeError, KeyError) as e:
+                log.debug(f"Failed to parse TRLP status: {e}")
+        else:
+            log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
         time.sleep(3)
 
     raise TimeoutError(
-        f"TokenRateLimitPolicy {trlp_name} was not created in {model_namespace} within {timeout}s"
+        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s"
     )
 
 
@@ -798,7 +810,8 @@ def _list_crs(kind, namespace=None):
             f"Guidance: Ensure the CRD exists, namespace is correct, and you have permissions."
         )
 
-    # Should never reach here, but satisfy type checker
+    # Unreachable: loop always exits via return (line 684) or raise (line 695)
+    # Included for type checker and defensive programming
     return []
 
 
@@ -2182,8 +2195,10 @@ class TestE2ESubscriptionFlow:
 
             # Additional wait for Envoy to pick up new AuthPolicies
             # When an HTTPRoute gets its first AuthPolicy, it may take extra time
-            log.info("Waiting for Envoy to propagate new AuthPolicies...")
-            time.sleep(10)
+            # Configurable via E2E_ENVOY_PROPAGATION_WAIT environment variable
+            envoy_wait = int(os.environ.get("E2E_ENVOY_PROPAGATION_WAIT", "10"))
+            log.info(f"Waiting {envoy_wait}s for Envoy to propagate new AuthPolicies...")
+            time.sleep(envoy_wait)
 
             # Create subscriptions with different MaaSModelRefs
             _create_test_subscription(subscription_1, DISTINCT_MODEL_REF, users=[sa_user], token_limit=100)
