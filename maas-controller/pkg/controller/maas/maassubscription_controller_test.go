@@ -28,9 +28,21 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+// subscriptionModelRefIndexer is the field indexer function for MaaSSubscription.
+// Extracted as a helper to be reused across tests with fake clients.
+func subscriptionModelRefIndexer(obj client.Object) []string {
+	sub := obj.(*maasv1alpha1.MaaSSubscription)
+	var refs []string
+	for _, modelRef := range sub.Spec.ModelRefs {
+		refs = append(refs, modelRef.Namespace+"/"+modelRef.Name)
+	}
+	return refs
+}
 
 // newPreexistingTRLP builds a Kuadrant TokenRateLimitPolicy as an unstructured object
 // with a sentinel value in spec.targetRef.name. Tests use this to detect whether
@@ -104,6 +116,7 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 				WithRESTMapper(testRESTMapper()).
 				WithObjects(model, route, maasSub, existingTRLP).
 				WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 				Build()
 
 			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
@@ -161,6 +174,7 @@ func TestMaaSSubscriptionReconciler_DuplicateReconciliation(t *testing.T) {
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(model, route, subA, subB).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
@@ -244,6 +258,7 @@ func TestMaaSSubscriptionReconciler_DeleteAnnotation(t *testing.T) {
 				WithScheme(scheme).
 				WithRESTMapper(testRESTMapper()).
 				WithObjects(maasSub, existingTRLP).
+				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 				Build()
 
 			// Simulate deletion: the fake client sets DeletionTimestamp while the
@@ -340,6 +355,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(model, route, sub1, sub2).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
@@ -382,18 +398,21 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	if err != nil || !found {
 		t.Fatalf("failed to get spec.limits from TRLP: found=%v err=%v", found, err)
 	}
-	// Check that sub2's limit exists
-	if _, exists := limits[fmt.Sprintf("%s-%s-tokens", sub2Name, modelName)]; !exists {
-		t.Errorf("TRLP should contain limits for %s after sub1 deletion", sub2Name)
+	// Check that sub2's limit exists (map keys use namespace__name format)
+	sub2Key := fmt.Sprintf("%s__%s-%s-tokens", subNS, sub2Name, modelName)
+	if _, exists := limits[sub2Key]; !exists {
+		t.Errorf("TRLP should contain limits for %s after sub1 deletion", sub2Key)
 	}
 	// Check that sub1's limit is removed
-	if _, exists := limits[fmt.Sprintf("%s-%s-tokens", sub1Name, modelName)]; exists {
-		t.Errorf("TRLP should NOT contain limits for %s after its deletion", sub1Name)
+	sub1Key := fmt.Sprintf("%s__%s-%s-tokens", subNS, sub1Name, modelName)
+	if _, exists := limits[sub1Key]; exists {
+		t.Errorf("TRLP should NOT contain limits for %s after its deletion", sub1Key)
 	}
-	// Verify subscription annotation only contains sub2
+	// Verify subscription annotation only contains sub2 (annotations use namespace/name format)
 	annotations := trlp.GetAnnotations()
-	if subs, ok := annotations["maas.opendatahub.io/subscriptions"]; !ok || subs != sub2Name {
-		t.Errorf("TRLP annotation should only contain %s, got: %s", sub2Name, subs)
+	expectedSubID := fmt.Sprintf("%s/%s", subNS, sub2Name)
+	if subs, ok := annotations["maas.opendatahub.io/subscriptions"]; !ok || subs != expectedSubID {
+		t.Errorf("TRLP annotation should only contain %s, got: %s", expectedSubID, subs)
 	}
 
 	// Now delete sub2 (the last one)

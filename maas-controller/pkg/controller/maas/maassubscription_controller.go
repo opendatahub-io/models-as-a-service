@@ -56,7 +56,12 @@ type MaaSSubscriptionReconciler struct {
 //+kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
-const maasSubscriptionFinalizer = "maas.opendatahub.io/subscription-cleanup"
+const (
+	maasSubscriptionFinalizer = "maas.opendatahub.io/subscription-cleanup"
+	// modelRefIndexKey is the field index key for looking up MaaSSubscriptions by model reference.
+	// The index value format is "namespace/name" of the model.
+	modelRefIndexKey = "spec.modelRef"
+)
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -140,6 +145,12 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		return nil
 	}
 
+	// Fetch the HTTPRoute to set as owner for garbage collection
+	route := &gatewayapiv1.HTTPRoute{}
+	if err := r.Get(ctx, types.NamespacedName{Name: httpRouteName, Namespace: httpRouteNS}, route); err != nil {
+		return fmt.Errorf("failed to fetch HTTPRoute %s/%s: %w", httpRouteNS, httpRouteName, err)
+	}
+
 	limitsMap := map[string]interface{}{}
 	var allGroupNames, allUserNames []string
 	var subNames []string
@@ -216,16 +227,19 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	headerExists := `request.headers.exists(h, h == "x-maas-subscription")`
 
 	for i, si := range subs {
-		subNames = append(subNames, si.sub.Name)
-		allGroupNames = append(allGroupNames, si.groupNames...)
-		allUserNames = append(allUserNames, si.userNames...)
-
 		membershipCheck := buildMembershipCheck(si.groupNames, si.userNames)
 		if membershipCheck == "" {
 			log.Info("skipping subscription with no owner groups/users — rate limit would be unreachable",
 				"subscription", si.sub.Name, "model", si.mRef.Name)
 			continue
 		}
+
+		// Namespace-qualify subscription to prevent cross-namespace collisions
+		subID := fmt.Sprintf("%s/%s", si.sub.Namespace, si.sub.Name)
+		subIDKey := strings.ReplaceAll(subID, "/", "__")
+		subNames = append(subNames, subID)
+		allGroupNames = append(allGroupNames, si.groupNames...)
+		allUserNames = append(allUserNames, si.userNames...)
 
 		// Collect higher-tier groups/users for exclusions
 		var excludeGroups, excludeUsers []string
@@ -235,13 +249,13 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		}
 
 		// Build branch selection: explicit header OR auto-select with exclusions.
-		explicitBranch := fmt.Sprintf(`%s == "%s"`, headerCheck, si.sub.Name)
+		explicitBranch := fmt.Sprintf(`%s == "%s"`, headerCheck, subID)
 		autoBranch := "!" + headerExists
 		if exclusionCheck := buildMembershipCheck(excludeGroups, excludeUsers); exclusionCheck != "" {
 			autoBranch += " && !(" + exclusionCheck + ")"
 		}
 
-		limitsMap[fmt.Sprintf("%s-%s-tokens", si.sub.Name, si.mRef.Name)] = map[string]interface{}{
+		limitsMap[fmt.Sprintf("%s-%s-tokens", subIDKey, si.mRef.Name)] = map[string]interface{}{
 			"rates": si.rates,
 			"when": []interface{}{
 				map[string]interface{}{"predicate": membershipCheck},
@@ -253,7 +267,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		}
 
 		// Deny users who explicitly select this subscription but don't belong to it.
-		limitsMap[fmt.Sprintf("deny-not-member-%s-%s", si.sub.Name, si.mRef.Name)] = map[string]interface{}{
+		limitsMap[fmt.Sprintf("deny-not-member-%s-%s", subIDKey, si.mRef.Name)] = map[string]interface{}{
 			"rates": []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
 			"when": []interface{}{
 				map[string]interface{}{"predicate": explicitBranch},
@@ -305,6 +319,11 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		"maas.opendatahub.io/subscriptions": strings.Join(subNames, ","),
 	})
 
+	// Set HTTPRoute as owner for garbage collection (TRLP deleted when route is deleted)
+	if err := controllerutil.SetControllerReference(route, policy, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set owner reference on TokenRateLimitPolicy %s/%s: %w", policy.GetNamespace(), policy.GetName(), err)
+	}
+
 	spec := map[string]interface{}{
 		"targetRef": map[string]interface{}{
 			"group": "gateway.networking.k8s.io",
@@ -329,6 +348,11 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	} else if err != nil {
 		return fmt.Errorf("failed to get existing TokenRateLimitPolicy: %w", err)
 	} else {
+		// Ensure owner reference is set on existing policy (may be missing on old policies)
+		if err := controllerutil.SetControllerReference(route, existing, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set owner reference on existing TokenRateLimitPolicy %s/%s: %w", existing.GetNamespace(), existing.GetName(), err)
+		}
+
 		if !isManaged(existing) {
 			log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
 		} else {
@@ -454,6 +478,25 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Register field indexer for efficient lookup of MaaSSubscriptions by model reference.
+	// This avoids cluster-wide scans when finding subscriptions for a specific model.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&maasv1alpha1.MaaSSubscription{},
+		modelRefIndexKey,
+		func(obj client.Object) []string {
+			sub := obj.(*maasv1alpha1.MaaSSubscription)
+			var refs []string
+			for _, modelRef := range sub.Spec.ModelRefs {
+				// Index value format: "namespace/name"
+				refs = append(refs, modelRef.Namespace+"/"+modelRef.Name)
+			}
+			return refs
+		},
+	); err != nil {
+		return fmt.Errorf("failed to setup field indexer for MaaSSubscription: %w", err)
+	}
+
 	// Watch generated TokenRateLimitPolicies so we re-reconcile when someone manually edits them.
 	generatedTRLP := &unstructured.Unstructured{}
 	generatedTRLP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
