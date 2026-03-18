@@ -171,7 +171,7 @@ paths:
             tags:
                 - api-keys-v2
             summary: Create a new hash-based API key
-            description: Creates a new OpenAI-compatible API key (sk-oai-* format). Supports both permanent keys (no expiration) and expiring keys (with expiresIn parameter). The plaintext key is shown ONLY ONCE at creation time and cannot be retrieved again.
+            description: Creates a new OpenAI-compatible API key (sk-oai-* format). If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (default 90 days). The plaintext key is shown ONLY ONCE at creation time and cannot be retrieved again.
             operationId: api-keys-v2#create
             requestBody:
                 required: true
@@ -190,19 +190,19 @@ paths:
                                     description: Optional description
                                 expiresIn:
                                     type: string
-                                    description: Optional expiration duration (e.g., "30d", "90d", "1h"). Omit for permanent key.
+                                    description: Expiration duration (e.g., "30d", "90d", "1h"). Defaults to API_KEY_MAX_EXPIRATION_DAYS if not provided.
                         examples:
-                            permanent_key:
-                                summary: Permanent API key (no expiration)
+                            default_expiration:
+                                summary: API key with default expiration (API_KEY_MAX_EXPIRATION_DAYS)
                                 value:
-                                    name: my-permanent-key
+                                    name: my-api-key
                                     description: Production API key
-                            expiring_key:
-                                summary: Expiring API key (90 days)
+                            custom_expiration:
+                                summary: API key with custom expiration (30 days)
                                 value:
-                                    name: my-expiring-key
-                                    description: 90-day test key
-                                    expiresIn: 90d
+                                    name: my-short-lived-key
+                                    description: 30-day test key
+                                    expiresIn: 30d
             responses:
                 "201":
                     description: Created response.
@@ -230,7 +230,7 @@ paths:
                                     expiresAt:
                                         type: string
                                         format: date-time
-                                        description: Expiration timestamp (RFC3339), omitted for permanent keys
+                                        description: Expiration timestamp (RFC3339)
                 "400":
                     description: Bad Request response.
                 "401":
@@ -642,7 +642,7 @@ components:
                 expirationDate:
                     type: string
                     format: date-time
-                    description: When the API key expires (empty for permanent keys)
+                    description: When the API key expires
                 status:
                     type: string
                     enum: [active, revoked, expired]

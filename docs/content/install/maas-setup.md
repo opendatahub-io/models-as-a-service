@@ -28,7 +28,6 @@ The tools you will need:
 
 * `kubectl` or `oc` client (this guide uses `kubectl`)
 * `kustomize`
-* `envsubst`
 
 ## Install Gateway AuthPolicy
 

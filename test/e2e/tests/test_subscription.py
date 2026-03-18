@@ -690,9 +690,9 @@ class TestSubscriptionEnforcement:
 
     def test_auth_pass_no_subscription_gets_403(self):
         """API key with auth pass but no matching subscription should get 403.
-        
+
         The AuthPolicy includes a subscription-error-check rule that calls
-        /v1/subscriptions/select. If no subscription matches the user's groups,
+        /internal/v1/subscriptions/select. If no subscription matches the user's groups,
         the request is denied with 403 "no matching subscription found for user".
         
         To test this, we temporarily add system:authenticated to the premium model's
