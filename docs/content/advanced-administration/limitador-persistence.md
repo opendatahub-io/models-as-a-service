@@ -11,11 +11,11 @@ For persistent, production-ready rate limiting where counts are maintained acros
 
 ## Table of Contents
 
-. [Requirements for Persistent Counts](#requirements-for-persistent-counts)
-. [Example Limitador CR Configuration](#example-limitador-cr-configuration)
-. [Local Validation Script](#local-validation-script-basic-dev-only-redis)
-. [How to Validate Persistence](#how-to-validate-persistence)
-. [Related Documentation](#related-documentation)
+1. [Requirements for Persistent Counts](#requirements-for-persistent-counts)
+2. [Example Limitador CR Configuration](#example-limitador-cr-configuration)
+3. [Local Validation Script](#local-validation-script-basic-dev-only-redis)
+4. [How to Validate Persistence](#how-to-validate-persistence)
+5. [Related Documentation](#related-documentation)
 
 ---
 
