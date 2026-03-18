@@ -21,10 +21,8 @@ func TestLoad_DefaultValues(t *testing.T) {
 
 	// Unset all env vars that Load() reads to ensure clean defaults.
 	for _, key := range []string{
-		"DEBUG_MODE", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME",
-		"NAMESPACE", "GATEWAY_NAMESPACE", "ADDRESS",
-		"API_KEY_EXPIRATION_POLICY", "PORT",
-		"TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
+		"DEBUG_MODE", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME", "NAMESPACE", "GATEWAY_NAMESPACE", "ADDRESS",
+		"API_KEY_EXPIRATION_POLICY", "PORT", "TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
 	} {
 		t.Setenv(key, "")
 		os.Unsetenv(key)
@@ -380,6 +378,12 @@ func TestBindFlags(t *testing.T) {
 	}
 }
 
+// TestValidate covers Config.Validate:
+// required fields (DBConnectionURL),
+// TLS consistency (secure without certs, cert without key),
+// APIKeyExpirationPolicy values,
+// APIKeyMaxExpirationDays bounds,
+// and default address assignment.
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -423,29 +427,71 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid insecure config sets default address :8080",
 			cfg: Config{
-				DBConnectionURL:        "postgresql://localhost/test",
-				Secure:                 false,
-				APIKeyExpirationPolicy: "optional",
+				DBConnectionURL:         "postgresql://localhost/test",
+				Secure:                  false,
+				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 30,
 			},
 		},
 		{
 			name: "valid secure config with self-signed sets default address :8443",
 			cfg: Config{
-				DBConnectionURL:        "postgresql://localhost/test",
-				TLS:                    TLSConfig{SelfSigned: true, MinVersion: TLSVersion(tls.VersionTLS12)},
-				APIKeyExpirationPolicy: "optional",
+				DBConnectionURL:         "postgresql://localhost/test",
+				TLS:                     TLSConfig{SelfSigned: true, MinVersion: TLSVersion(tls.VersionTLS12)},
+				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 30,
 			},
 		},
 		{
 			name: "valid secure config with certs",
 			cfg: Config{
-				DBConnectionURL:        "postgresql://localhost/test",
-				TLS:                    TLSConfig{Cert: "/cert.pem", Key: "/key.pem", MinVersion: TLSVersion(tls.VersionTLS12)},
-				APIKeyExpirationPolicy: "optional",
+				DBConnectionURL:         "postgresql://localhost/test",
+				TLS:                     TLSConfig{Cert: "/cert.pem", Key: "/key.pem", MinVersion: TLSVersion(tls.VersionTLS12)},
+				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 30,
 			},
+		},
+		{
+			name: "APIKeyMaxExpirationDays valid minimum value",
+			cfg: Config{
+				DBConnectionURL:         "postgresql://localhost/test",
+				APIKeyExpirationPolicy:  "optional",
+				APIKeyMaxExpirationDays: 1,
+			},
+		},
+		{
+			name: "APIKeyMaxExpirationDays valid default value",
+			cfg: Config{
+				DBConnectionURL:         "postgresql://localhost/test",
+				APIKeyExpirationPolicy:  "optional",
+				APIKeyMaxExpirationDays: 30,
+			},
+		},
+		{
+			name: "APIKeyMaxExpirationDays valid large value",
+			cfg: Config{
+				DBConnectionURL:         "postgresql://localhost/test",
+				APIKeyExpirationPolicy:  "optional",
+				APIKeyMaxExpirationDays: 365,
+			},
+		},
+		{
+			name: "APIKeyMaxExpirationDays zero returns error",
+			cfg: Config{
+				DBConnectionURL:         "postgresql://localhost/test",
+				APIKeyExpirationPolicy:  "optional",
+				APIKeyMaxExpirationDays: 0,
+			},
+			expectError: "must be at least 1",
+		},
+		{
+			name: "APIKeyMaxExpirationDays negative returns error",
+			cfg: Config{
+				DBConnectionURL:         "postgresql://localhost/test",
+				APIKeyExpirationPolicy:  "optional",
+				APIKeyMaxExpirationDays: -1,
+			},
+			expectError: "must be at least 1",
 		},
 	}
 
@@ -528,65 +574,3 @@ func TestHandleDeprecatedFlags(t *testing.T) {
 		}
 	})
 }
-
-func TestConfig_Validate_APIKeyMaxExpirationDays(t *testing.T) {
-	tests := []struct {
-		name      string
-		maxDays   int
-		wantError bool
-		errorMsg  string
-	}{
-		{
-			name:      "valid minimum value",
-			maxDays:   1,
-			wantError: false,
-		},
-		{
-			name:      "valid default value",
-			maxDays:   30,
-			wantError: false,
-		},
-		{
-			name:      "valid large value",
-			maxDays:   365,
-			wantError: false,
-		},
-		{
-			name:      "invalid zero value",
-			maxDays:   0,
-			wantError: true,
-			errorMsg:  "must be at least 1",
-		},
-		{
-			name:      "invalid negative value",
-			maxDays:   -1,
-			wantError: true,
-			errorMsg:  "must be at least 1",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c := &Config{
-				DBConnectionURL:         "postgresql://test:test@localhost/test",
-				APIKeyExpirationPolicy:  "optional",
-				APIKeyMaxExpirationDays: tt.maxDays,
-			}
-
-			err := c.Validate()
-
-			if tt.wantError {
-				if err == nil {
-					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
-					return
-				}
-				if tt.errorMsg != "" && !strings.Contains(err.Error(), tt.errorMsg) {
-					t.Errorf("expected error containing %q, got %q", tt.errorMsg, err.Error())
-				}
-			} else if err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-		})
-	}
-}
-
