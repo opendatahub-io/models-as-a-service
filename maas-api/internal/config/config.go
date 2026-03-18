@@ -5,8 +5,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/env"
 
@@ -125,6 +127,13 @@ func (c *Config) Validate() error {
 		} else {
 			c.Address = DefaultInsecureAddr
 		}
+	}
+
+	if strings.TrimSpace(c.MaaSSubscriptionNamespace) == "" {
+		return errors.New("MAAS_SUBSCRIPTION_NAMESPACE must be non-empty")
+	}
+	if errs := validation.IsDNS1123Label(c.MaaSSubscriptionNamespace); len(errs) > 0 {
+		return fmt.Errorf("MAAS_SUBSCRIPTION_NAMESPACE %q is invalid: %v", c.MaaSSubscriptionNamespace, errs)
 	}
 
 	// Validate API key max expiration days
