@@ -291,10 +291,7 @@ func toResponse(sub *subscription) *SelectResponse {
 	// Convert internal modelRef to public ModelRef
 	modelRefs := make([]ModelRef, len(sub.ModelRefs))
 	for i, ref := range sub.ModelRefs {
-		modelRefs[i] = ModelRef{
-			Namespace: ref.Namespace,
-			Name:      ref.Name,
-		}
+		modelRefs[i] = ModelRef(ref)
 	}
 
 	return &SelectResponse{
