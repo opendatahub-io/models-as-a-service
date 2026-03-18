@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -364,21 +365,35 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	if err := c.Delete(context.Background(), sub1); err != nil {
 		t.Fatalf("Delete sub1: %v", err)
 	}
-	// Reconcile sub1 deletion - this will delete the aggregated TRLP
+	// Reconcile sub1 deletion - this should rebuild the TRLP in-place without sub1's limits
 	if _, err := r.Reconcile(context.Background(), req1); err != nil {
 		t.Fatalf("Reconcile sub1 deletion: %v", err)
 	}
 
-	// Reconcile sub2 so it recreates the TRLP without sub1's limits
-	if _, err := r.Reconcile(context.Background(), req2); err != nil {
-		t.Fatalf("Reconcile sub2 after sub1 deletion: %v", err)
-	}
-
-	// Aggregated TRLP should exist again (rebuilt by sub2)
+	// Aggregated TRLP should still exist (rebuilt in-place by sub1's deletion handler)
 	trlp = &unstructured.Unstructured{}
 	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: modelNamespace}, trlp); err != nil {
-		t.Errorf("TokenRateLimitPolicy should be rebuilt by sub2 after sub1 deletion: %v", err)
+		t.Fatalf("TokenRateLimitPolicy should still exist after sub1 deletion (rebuilt in-place): %v", err)
+	}
+
+	// Verify TRLP only contains sub2's limits (sub1's limits should be removed)
+	limits, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	if err != nil || !found {
+		t.Fatalf("failed to get spec.limits from TRLP: found=%v err=%v", found, err)
+	}
+	// Check that sub2's limit exists
+	if _, exists := limits[fmt.Sprintf("%s-%s-tokens", sub2Name, modelName)]; !exists {
+		t.Errorf("TRLP should contain limits for %s after sub1 deletion", sub2Name)
+	}
+	// Check that sub1's limit is removed
+	if _, exists := limits[fmt.Sprintf("%s-%s-tokens", sub1Name, modelName)]; exists {
+		t.Errorf("TRLP should NOT contain limits for %s after its deletion", sub1Name)
+	}
+	// Verify subscription annotation only contains sub2
+	annotations := trlp.GetAnnotations()
+	if subs, ok := annotations["maas.opendatahub.io/subscriptions"]; !ok || subs != sub2Name {
+		t.Errorf("TRLP annotation should only contain %s, got: %s", sub2Name, subs)
 	}
 
 	// Now delete sub2 (the last one)
@@ -392,7 +407,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	// Aggregated TRLP should NOW BE DELETED (no remaining parents)
 	trlp = &unstructured.Unstructured{}
 	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
-	err := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: modelNamespace}, trlp)
+	err = c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: modelNamespace}, trlp)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("TokenRateLimitPolicy should be deleted after deleting last parent subscription, but got error: %v", err)
 	}
