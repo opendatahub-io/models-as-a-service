@@ -113,8 +113,8 @@ The MaaS Platform architecture is designed to be modular and scalable. It is com
 
 - **maas-default-gateway**: The single entry point for all traffic (both API requests and inference requests).
 - **RHCL (Red Hat Connectivity Link)**: The policy engine that handles authentication and authorization for all requests. Routes requests to appropriate backend based on path:
-  - `/maas-api/*` → MaaS API (validates OpenShift tokens for API key management)
-  - Inference paths (`/v1/models`, `/v1/chat/completions`) → Model Serving (validates API keys via maas-api callback)
+  - `/maas-api/*` and `/v1/models` → MaaS API (validates OpenShift tokens for API key management and model listing)
+  - Inference paths (`/{namespace}/{model}/v1/chat/completions`) → Model Serving (validates API keys via maas-api callback)
 - **maas-controller**: Kubernetes operator that reconciles MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription CRDs. Generates per-HTTPRoute AuthPolicy and TokenRateLimitPolicy resources.
 - **MaaS API**: The central component for model listing, API key management, and subscription selection. Serves GET /v1/models, /v1/api-keys/*, /v1/subscriptions/select, and /internal/v1/api-keys/validate (Authorino callback).
 - **Open Data Hub (Red Hat OpenShift AI)**: The model serving platform that handles inference requests.
