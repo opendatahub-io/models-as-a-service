@@ -67,7 +67,7 @@ Replace `simulator-subscription` with your MaaSSubscription metadata name, or re
 Get a list of models available to your subscription:
 
 ```bash
-MODELS=$(curl "${MAAS_API_URL}/v1/models" \
+MODELS=$(curl "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${API_KEY}")
 
@@ -101,7 +101,7 @@ Get detailed information about a specific model:
 
 ```bash
 MODEL_ID="simulator"
-MODEL_INFO=$(curl "${MAAS_API_URL}/v1/models" \
+MODEL_INFO=$(curl "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
     jq --arg model "$MODEL_ID" '.data[] | select(.id == $model)')
 
@@ -118,7 +118,7 @@ Make a simple chat completion request:
 
 ```bash
 # First, get the model URL from the models endpoint
-MODELS=$(curl "${MAAS_API_URL}/v1/models" \
+MODELS=$(curl "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${API_KEY}")
 MODEL_URL=$(echo $MODELS | jq -r '.data[0].url')
@@ -255,6 +255,6 @@ curl -I -sSk \
 **Solution**: Check which models are available in your subscription:
 
 ```bash
-curl -X GET "${MAAS_API_URL}/v1/models" \
+curl -X GET "${MAAS_API_URL}/maas-api/v1/models" \
   -H "Authorization: Bearer ${API_KEY}"
 ```
