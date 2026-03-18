@@ -1,10 +1,7 @@
 # Release Notes
 
-This section contains release notes and migration guides for the MaaS Platform.
+## v0.1.0
 
-## Migration Guides
+*Initial release.*
 
-
-## Release History
-
-Release notes for specific versions will be added here as releases are published.
+<!-- Add release notes for v0.1.0 here -->

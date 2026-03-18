@@ -54,7 +54,7 @@ The Gateway must exist before enabling modelsAsService in your DataScienceCluste
     ./scripts/setup-authorino-tls.sh
     ```
 
-```bash
+```yaml
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 # Use default ingress cert for HTTPS, or set CERT_NAME to your TLS secret name
 CERT_NAME=${CERT_NAME:-$(kubectl get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)}

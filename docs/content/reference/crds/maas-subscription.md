@@ -1,13 +1,13 @@
 # MaaSSubscription
 
-Defines a subscription plan with per-model token rate limits. Creates Kuadrant TokenRateLimitPolicies enforced by Limitador.
+Defines a subscription plan with per-model token rate limits. Creates Kuadrant TokenRateLimitPolicies enforced by Limitador. Must be created in the `models-as-a-service` namespace.
 
 ## MaaSSubscriptionSpec
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | owner | OwnerSpec | Yes | Who owns this subscription |
-| modelRefs | []ModelSubscriptionRef | Yes | Models included with per-model token rate limits |
+| modelRefs | []ModelSubscriptionRef | Yes | Models included with per-model token rate limits (each specifies `name` and `namespace`) |
 | tokenMetadata | TokenMetadata | No | Metadata for token attribution and metering |
 | priority | int32 | No | Subscription priority when user has multiple (higher = higher priority; default: 0) |
 
@@ -22,7 +22,8 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| name | string | Yes | Name of the model |
+| name | string | Yes | Name of the MaaSModelRef |
+| namespace | string | Yes | Namespace where the MaaSModelRef lives |
 | tokenRateLimits | []TokenRateLimit | No | Token-based rate limits for this model |
 | tokenRateLimitRef | string | No | Reference to an existing TokenRateLimit resource |
 | billingRate | BillingRate | No | Cost per token |

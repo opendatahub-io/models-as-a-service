@@ -44,6 +44,6 @@ API keys and tokens are per-identity, not per-model. Token validity and model ac
 
 ### Related Documentation
 
-- [Quota Configuration Overview](quota-configuration-overview.md) - How to configure subscription access
+- [Quota and Access Configuration](quota-and-access-configuration.md) - How to configure subscription and access
 - [Model Setup](model-setup.md) - How to configure models for MaaS
 - [Token Management](token-management.md) - Understanding token lifecycle

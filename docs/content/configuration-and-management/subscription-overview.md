@@ -2,6 +2,8 @@
 
 When planning authorization for Models as a Service, it is important to understand how **policies** (MaaSAuthPolicy) and **subscriptions** (MaaSSubscription) work together. Both use RBAC references (subjects or owners). A user must have **both** a matching policy (access) and a matching subscription (quota) to use a model.
 
+MaaSAuthPolicy and MaaSSubscription are namespace-scoped to `models-as-a-service`; they reference MaaSModelRefs (in e.g. `llm`) by `name` and `namespace` in their `modelRefs`.
+
 ```mermaid
 flowchart TD
     User([User / App]) -- "Request (Model + SubID)" --> Gateway{MaaS API Gateway}
@@ -59,11 +61,7 @@ The team can use only the 5 models specified in the policy. Their usage is gover
 
 For configuration details, see:
 
-- [Access Configuration Overview](access-configuration-overview.md) — How to configure access (MaaSAuthPolicy)
-- [Quota Configuration Overview](quota-configuration-overview.md) — How to configure subscriptions and rate limits
-- [MaaSAuthPolicy Configuration](maas-auth-policy-configuration.md) — Detailed MaaSAuthPolicy configuration
-- [MaaS Models](maas-models.md) — How MaaS identifies models on the cluster
-- [Model Reference Overview](model-reference-overview.md) — How to register models
+- [Quota and Access Configuration](quota-and-access-configuration.md) — Step-by-step configuration for MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription
 
 Additional references:
 

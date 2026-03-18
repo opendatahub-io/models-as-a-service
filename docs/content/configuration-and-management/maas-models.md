@@ -47,4 +47,4 @@ flowchart LR
 - **MaaSAuthPolicy** and **MaaSSubscription** — Reference models by name and use that information to enforce access and quota.
 - **Control plane** — The MaaS controller reconciles model references and populates the data that policies and subscriptions depend on.
 
-For configuration details and how to create and use MaaSModelRef, see [Model Reference Overview](model-reference-overview.md) in the Administration Guide.
+For configuration details and how to create and use MaaSModelRef, see [Quota and Access Configuration](quota-and-access-configuration.md) in the Administration Guide.

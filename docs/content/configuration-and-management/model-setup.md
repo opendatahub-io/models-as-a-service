@@ -3,7 +3,7 @@
 This guide explains how to configure models so they appear in the MaaS platform and are subject to authentication, rate limiting, and token-based consumption tracking.
 
 !!! tip "Subscription model (recommended)"
-    When using the **MaaS controller**, model access and rate limits are controlled by **MaaSModelRef**, **MaaSAuthPolicy**, and **MaaSSubscription** CRDs. See [Quota Configuration Overview](quota-configuration-overview.md) and [Model Listing Flow](model-listing-flow.md).
+    When using the **MaaS controller**, model access and rate limits are controlled by **MaaSModelRef**, **MaaSAuthPolicy**, and **MaaSSubscription** CRDs. See [Quota and Access Configuration](quota-and-access-configuration.md) and [Model Listing Flow](model-listing-flow.md).
 
 ## How the model list is built
 
@@ -216,7 +216,7 @@ curl -sSk -H "Authorization: Bearer $TOKEN" \
 ## References
 
 - [Access and Quota Overview](subscription-overview.md) - Configure policies and subscriptions
-- [Quota Configuration Overview](quota-configuration-overview.md) - Detailed subscription setup
+- [Quota and Access Configuration](quota-and-access-configuration.md) - Detailed configuration
 - [Model Access Behavior](model-access-behavior.md) - Expected behaviors when modifying model access
 - [Architecture Overview](../architecture.md) - Understand the overall MaaS architecture
 - [KServe LLMInferenceService Documentation](https://kserve.github.io/website/) - Official KServe documentation

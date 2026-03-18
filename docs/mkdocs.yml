@@ -53,8 +53,7 @@ plugins:
 nav:
   - Home:
     - index.md
-    - Release Notes:
-      - Overview: release-notes/index.md
+    - Release Notes: release-notes/index.md
   - Concepts:
     - Architecture: architecture.md
     - Access and Quota Overview: configuration-and-management/subscription-overview.md
@@ -71,10 +70,7 @@ nav:
       - Troubleshooting: install/troubleshooting.md
   - Administration Guide:
     - Configuration & Management:
-      - Access Configuration Overview: configuration-and-management/access-configuration-overview.md
-      - Quota Configuration Overview: configuration-and-management/quota-configuration-overview.md
-      - Model Reference Overview: configuration-and-management/model-reference-overview.md
-      - MaaSAuthPolicy Configuration: configuration-and-management/maas-auth-policy-configuration.md
+      - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
       - Token Management: configuration-and-management/token-management.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
     - Migration:
@@ -88,6 +84,7 @@ nav:
     - Advanced Administration:
       - Observability: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
+      - Subscription Cardinality: advanced-administration/subscription-cardinality.md
   - User Guide:
     - Self Service Model Access: user-guide/self-service-model-access.md
   - API Reference:

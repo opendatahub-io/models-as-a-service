@@ -111,7 +111,7 @@ To expose an existing model through MaaS, you must:
 2. Create a **MaaSModelRef** that references the LLMInferenceService
 3. Create **MaaSAuthPolicy** and **MaaSSubscription** to define access and rate limits
 
-See [Quota Configuration Overview](../configuration-and-management/quota-configuration-overview.md) for step-by-step instructions.
+See [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md) for step-by-step instructions.
 
 **Gateway reference** — If the model does not yet use the MaaS gateway:
 
