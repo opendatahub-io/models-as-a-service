@@ -1,28 +1,23 @@
-# Install Open Data Hub or Red Hat OpenShift AI
+# Install Open Data Hub
 
-This guide covers the installation of either Open Data Hub (ODH) or Red Hat OpenShift AI (RHOAI),
-with the required configuration to enable the Models-as-a-Service capability (MaaS).
+This guide covers the installation of Open Data Hub (ODH) with the required configuration
+to enable the Models-as-a-Service capability (MaaS).
 
-!!! note "Choose Your Platform"
-    You should choose either **Open Data Hub** or **Red Hat OpenShift AI** - do not install both.
-    The installation steps are similar with a few platform-specific differences noted throughout.
+!!! note "Red Hat OpenShift AI"
+    Red Hat OpenShift AI (RHOAI) is also compatible. The installation steps are similar;
+    platform-specific differences are noted in the tabs throughout this guide.
 
 ## Prerequisites
 
 You need a Red Hat OpenShift cluster version 4.19.9 or later. Older OpenShift versions are not suitable.
 
-MaaS requires the Model Serving component configured for deploying models with `LLMInferenceService`
-resources. The prerequisites for this setup are a Gateway API controller (Kuadrant or RHCL) and the
-LeaderWorkerSet API (LWS).
+**Required tools:** See [Prerequisites Overview](prerequisites.md#required-tools).
 
-**Tools you will need:**
+This section walks through the installation of the required Operators:
 
-* `kubectl` or `oc` client (this guide uses `kubectl`)
-
-**For ODH installations only:**
-
-* `curl`
-* `jq`
+* LeaderWorkerSet
+* Kuadrant (or RHCL)
+* Platform operator (ODH or RHOAI)
 
 !!! note "Documentation References"
     This guide is provided for convenience. In case of any issues or more advanced setups:
@@ -32,11 +27,24 @@ LeaderWorkerSet API (LWS).
 
 ## Install LeaderWorkerSet API
 
+=== "Open Data Hub"
+
+    Install the latest version of LWS by using the _kubectl_ method from
+    [LWS official documentation](https://lws.sigs.k8s.io/docs/installation/#install-by-kubectl):
+
+    ```shell
+    GH_LATEST_LWS_ENTRY_URL="https://api.github.com/repos/kubernetes-sigs/lws/releases"
+    LATEST_LWS_VERSION=$(curl -sSf ${GH_LATEST_LWS_ENTRY_URL} | jq -r 'sort_by(.tag_name|ltrimstr("v")|split(".")|map(tonumber)) | last | .tag_name')
+
+    kubectl apply --server-side -f https://github.com/kubernetes-sigs/lws/releases/download/${LATEST_LWS_VERSION}/manifests.yaml
+    ```
+
 === "Red Hat OpenShift AI"
 
     Install Red Hat LeaderWorkerSet API (LWS) Operator from OpenShift's built-in OperatorHub:
 
     ```yaml
+    kubectl apply -f - <<EOF
     apiVersion: v1
     kind: Namespace
     metadata:
@@ -62,11 +70,19 @@ LeaderWorkerSet API (LWS).
       name: leader-worker-set
       source: redhat-operators
       sourceNamespace: openshift-marketplace
+    EOF
+    ```
+
+    Wait for the subscription to install successfully:
+
+    ```shell
+    kubectl wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/leader-worker-set -n openshift-lws-operator --timeout=300s
     ```
 
     Once the LWS operator is ready, set up the LWS API:
 
     ```yaml
+    kubectl apply -f - <<EOF
     apiVersion: operator.openshift.io/v1
     kind: LeaderWorkerSetOperator
     metadata:
@@ -74,44 +90,37 @@ LeaderWorkerSet API (LWS).
       namespace: openshift-lws-operator
     spec:
       managementState: Managed
+    EOF
     ```
 
     Check [Red Hat LWS documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/ai_workloads/leader-worker-set-operator)
     if you need further guidance.
 
-=== "Open Data Hub"
-
-    Install the latest version of LWS by using the _kubectl_ method from
-    [LWS official documentation](https://lws.sigs.k8s.io/docs/installation/#install-by-kubectl):
-
-    ```shell
-    GH_LATEST_LWS_ENTRY_URL="https://api.github.com/repos/kubernetes-sigs/lws/releases"
-    LATEST_LWS_VERSION=$(curl -sSf ${GH_LATEST_LWS_ENTRY_URL} | jq -r 'sort_by(.tag_name|ltrimstr("v")|split(".")|map(tonumber)) | last | .tag_name')
-
-    kubectl apply --server-side -f https://github.com/kubernetes-sigs/lws/releases/download/${LATEST_LWS_VERSION}/manifests.yaml
-    ```
-
 ### Verification
 
 Check that LWS deployments are ready:
 
-=== "Red Hat OpenShift AI"
-
-    ```shell
-    kubectl get deployments --namespace openshift-lws-operator
-
-    NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
-    lws-controller-manager   2/2     2            2           61s
-    openshift-lws-operator   1/1     1            1           4m26s
-    ```
-
 === "Open Data Hub"
 
     ```shell
-    kubectl get deployments --namespace lws-system
+    kubectl get deployments --namespace lws-system -w
+    ```
 
+    ```
     NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
     lws-controller-manager   2/2     2            2           35s
+    ```
+
+=== "Red Hat OpenShift AI"
+
+    ```shell
+    kubectl get deployments --namespace openshift-lws-operator -w
+    ```
+
+    ```
+    NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
+    lws-controller-manager   2/2     2            2           61s
+    openshift-lws-operator   1/1     1            1           4m26s
     ```
 
 ## Install Gateway API Controller
@@ -119,24 +128,117 @@ Check that LWS deployments are ready:
 Initialize OpenShift's provided Gateway API implementation:
 
 ```yaml
+kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: openshift-default
 spec:
   controllerName: "openshift.io/gateway-controller/v1"
+EOF
 ```
 
 Wait until the GatewayClass resource is accepted:
 
 ```shell
-kubectl get gatewayclass openshift-default
+kubectl get gatewayclass openshift-default -w
+```
 
+```
 NAME                CONTROLLER                           ACCEPTED   AGE
 openshift-default   openshift.io/gateway-controller/v1   True       52s
 ```
 
 Now install the Gateway API controller for your platform:
+
+=== "Open Data Hub"
+
+    Install Kuadrant using the OLM method. MaaS requires Kuadrant v1.3.1 or later.
+
+    Create the `kuadrant-system` namespace and OperatorGroup:
+
+    ```yaml
+    kubectl create namespace kuadrant-system
+
+    kubectl apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1
+    kind: OperatorGroup
+    metadata:
+      name: kuadrant-operator-group
+      namespace: kuadrant-system
+    spec: {}
+    EOF
+    ```
+
+    !!! note
+        A single OperatorGroup should exist in any given namespace. Check for the
+        existence of multiple OperatorGroups if Kuadrant operator is not deployed
+        successfully.
+
+    Configure Kuadrant's CatalogSource:
+
+    ```yaml
+    GH_LATEST_KUADRANT_ENTRY_URL="https://api.github.com/repos/Kuadrant/kuadrant-operator/releases/latest"
+    LATEST_KUADRANT_VERSION=$(curl -sSf ${GH_LATEST_KUADRANT_ENTRY_URL} | jq -r '.tag_name')
+
+    kubectl apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: CatalogSource
+    metadata:
+      name: kuadrant-operator-catalog
+      namespace: kuadrant-system
+    spec:
+      displayName: Kuadrant Operators
+      image: quay.io/kuadrant/kuadrant-operator-catalog:${LATEST_KUADRANT_VERSION}
+      sourceType: grpc
+    EOF
+    ```
+
+    Deploy the Kuadrant operator, configuring it to work with OpenShift's Gateway API:
+
+    ```yaml
+    kubectl apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: kuadrant-operator
+      namespace: kuadrant-system
+    spec:
+      channel: stable
+      installPlanApproval: Automatic
+      name: kuadrant-operator
+      source: kuadrant-operator-catalog
+      sourceNamespace: kuadrant-system
+      config:
+        env:
+        - name: "ISTIO_GATEWAY_CONTROLLER_NAMES"
+          value: "openshift.io/gateway-controller/v1"
+    EOF
+    ```
+
+    Wait for the subscription to install successfully:
+
+    ```shell
+    kubectl wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s
+    ```
+
+    Wait for the operator webhook to be ready:
+
+    ```shell
+    kubectl wait --for=condition=Available --timeout=120s deployment/kuadrant-operator-controller-manager -n kuadrant-system
+    ```
+
+    Once the Kuadrant operator is ready, create a Kuadrant instance:
+
+    ```yaml
+    kubectl apply -f - <<EOF
+    apiVersion: kuadrant.io/v1beta1
+    kind: Kuadrant
+    metadata:
+      name: kuadrant
+      namespace: kuadrant-system
+    EOF
+    ```
 
 === "Red Hat OpenShift AI"
 
@@ -144,6 +246,7 @@ Now install the Gateway API controller for your platform:
     MaaS requires RHCL v1.2 or later:
 
     ```yaml
+    kubectl apply -f - <<EOF
     apiVersion: v1
     kind: Namespace
     metadata:
@@ -166,92 +269,39 @@ Now install the Gateway API controller for your platform:
       name: rhcl-operator
       source: redhat-operators
       sourceNamespace: openshift-marketplace
+    EOF
     ```
 
-    Once the RHCL operator is ready, create a Connectivity Link instance:
+    Wait for the subscription to install successfully:
+
+    ```shell
+    kubectl wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/kuadrant-operator -n kuadrant-system --timeout=300s
+    ```
+
+    Wait for the operator webhook to be ready:
+
+    ```shell
+    kubectl wait --for=condition=Available --timeout=120s deployment/kuadrant-operator-controller-manager -n kuadrant-system
+    ```
+
+    Watch for the remaining RHCL components to be ready:
+
+    ```shell
+    kubectl get deployments -n kuadrant-system -w
+    ```
+
+    ```
+    NAME                                    READY   UP-TO-DATE   AVAILABLE   AGE
+    authorino-operator                      1/1     1            1           23m
+    dns-operator-controller-manager         1/1     1            1           23m
+    kuadrant-console-plugin                 1/1     1            1           23m
+    kuadrant-operator-controller-manager    1/1     1            1           23m
+    limitador-operator-controller-manager   1/1     1            1           23m
+    ```
+
+    Once the RHCL operator is ready, create a Kuadrant instance:
 
     ```yaml
-    apiVersion: kuadrant.io/v1beta1
-    kind: Kuadrant
-    metadata:
-      name: kuadrant
-      namespace: kuadrant-system
-    ```
-
-=== "Open Data Hub"
-
-    Install Kuadrant using the OLM method. MaaS requires Kuadrant v1.3.1 or later.
-
-    Create the `kuadrant-system` namespace:
-
-    ```shell
-    kubectl create namespace kuadrant-system
-    ```
-
-    Create an OperatorGroup:
-
-    ```shell
-    kubectl apply -f - <<EOF
-    apiVersion: operators.coreos.com/v1
-    kind: OperatorGroup
-    metadata:
-      name: kuadrant-operator-group
-      namespace: kuadrant-system
-    spec: {}
-    EOF
-    ```
-
-    !!! note
-        A single OperatorGroup should exist in any given namespace. Check for the
-        existence of multiple OperatorGroups if Kuadrant operator is not deployed
-        successfully.
-
-    Configure Kuadrant's CatalogSource:
-
-    ```shell
-    # Find latest Kuadrant operator version:
-    GH_LATEST_KUADRANT_ENTRY_URL="https://api.github.com/repos/Kuadrant/kuadrant-operator/releases/latest"
-    LATEST_KUADRANT_VERSION=$(curl -sSf ${GH_LATEST_KUADRANT_ENTRY_URL} | jq -r '.tag_name')
-
-    # Install the CatalogSource
-    kubectl apply -f - <<EOF
-    apiVersion: operators.coreos.com/v1alpha1
-    kind: CatalogSource
-    metadata:
-      name: kuadrant-operator-catalog
-      namespace: kuadrant-system
-    spec:
-      displayName: Kuadrant Operators
-      image: quay.io/kuadrant/kuadrant-operator-catalog:${LATEST_KUADRANT_VERSION}
-      sourceType: grpc
-    EOF
-    ```
-
-    Deploy the Kuadrant operator, configuring it to work with OpenShift's Gateway API:
-
-    ```shell
-    kubectl apply -f - <<EOF
-    apiVersion: operators.coreos.com/v1alpha1
-    kind: Subscription
-    metadata:
-      name: kuadrant-operator
-      namespace: kuadrant-system
-    spec:
-      channel: stable
-      installPlanApproval: Automatic
-      name: kuadrant-operator
-      source: kuadrant-operator-catalog
-      sourceNamespace: kuadrant-system
-      config:
-        env:
-        - name: "ISTIO_GATEWAY_CONTROLLER_NAMES"
-          value: "openshift.io/gateway-controller/v1"
-    EOF
-    ```
-
-    Once the Kuadrant operator is ready, create a Kuadrant instance:
-
-    ```shell
     kubectl apply -f - <<EOF
     apiVersion: kuadrant.io/v1beta1
     kind: Kuadrant
@@ -266,8 +316,10 @@ Now install the Gateway API controller for your platform:
 Check that Gateway API controller deployments are ready:
 
 ```shell
-kubectl get deployments -n kuadrant-system
+kubectl get deployments -n kuadrant-system -w
+```
 
+```
 NAME                                    READY   UP-TO-DATE   AVAILABLE   AGE
 authorino-operator                      1/1     1            1           80s
 dns-operator-controller-manager         1/1     1            1           77s
@@ -278,39 +330,67 @@ limitador-operator-controller-manager   1/1     1            1           73s
 
 For RHOAI installations, you should also see:
 
-```shell
+```
 authorino                               1/1     1            1           81s
 limitador-limitador                     1/1     1            1           82s
 ```
 
-## Install Platform with Model Serving
+## Install Platform Operator
 
-First, set up the inference Gateway required by Model Serving:
+Install the platform operator (ODH or RHOAI) and initialize the platform with DSCInitialization. The DataScienceCluster and Gateway setup are in [Install MaaS Components](maas-setup.md).
 
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: openshift-ai-inference
-  namespace: openshift-ingress
-spec:
-  gatewayClassName: openshift-default
-  listeners:
-  - name: http
-    port: 80
-    protocol: HTTP
-    allowedRoutes:
-      namespaces:
-        from: All
-  infrastructure:
-    labels:
-      serving.kserve.io/gateway: kserve-ingress-gateway
-```
+=== "Open Data Hub"
 
-!!! info "Gateway Architecture"
-    MaaS uses a segregated gateway approach where models explicitly opt-in to MaaS capabilities. The `openshift-ai-inference` gateway above is for standard KServe inference, while `maas-default-gateway` (created later) enables token authentication and rate limiting. For details, see [Model Setup - Gateway Architecture](../configuration-and-management/model-setup.md#gateway-architecture).
+    Install the Open Data Hub Project (ODH) operator, which is available in OpenShift's
+    preconfigured CatalogSource of community operators. MaaS requires ODH v3.0 or later:
 
-Now install the platform operator for your environment:
+    ```yaml
+    kubectl apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: opendatahub-operator
+      namespace: openshift-operators
+    spec:
+      channel: fast-3
+      installPlanApproval: Automatic
+      name: opendatahub-operator
+      source: community-operators
+      sourceNamespace: openshift-marketplace
+    EOF
+    ```
+
+    Wait for the subscription to install successfully:
+
+    ```shell
+    kubectl wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/opendatahub-operator -n openshift-operators --timeout=300s
+    ```
+
+    Initialize the ODH platform with DSCInitialization:
+
+    ```yaml
+    kubectl apply -f - <<EOF
+    apiVersion: dscinitialization.opendatahub.io/v2
+    kind: DSCInitialization
+    metadata:
+      name: default-dsci
+    spec:
+      applicationsNamespace: opendatahub
+      monitoring:
+        managementState: Managed
+        namespace: opendatahub
+        metrics: {}
+      trustedCABundle:
+        managementState: Managed
+    EOF
+    ```
+
+    Wait for the operator webhook to be ready:
+
+    ```shell
+    
+    
+    ```
 
 === "Red Hat OpenShift AI"
 
@@ -318,6 +398,7 @@ Now install the platform operator for your environment:
     MaaS requires RHOAI v3.0 or later:
 
     ```yaml
+    kubectl apply -f - <<EOF
     apiVersion: v1
     kind: Namespace
     metadata:
@@ -340,214 +421,24 @@ Now install the platform operator for your environment:
       name: rhods-operator
       source: redhat-operators
       sourceNamespace: openshift-marketplace
-    ```
-
-    Once ready, the RHOAI Operator should automatically create a `DSCInitialization` resource.
-    Install the Model Serving component by creating the following `DataScienceCluster` resource:
-
-    ```yaml
-    apiVersion: datasciencecluster.opendatahub.io/v2
-    kind: DataScienceCluster
-    metadata:
-      name: default-dsc
-    spec:
-      components:
-        # Components required for MaaS:
-        kserve:
-          managementState: Managed
-          rawDeploymentServiceConfig: Headed
-          # Enable Models-as-a-Service via operator
-          modelsAsService:
-            managementState: Managed
-
-        # Components recommended for MaaS:
-        dashboard:
-          managementState: Managed
-    ```
-
-=== "Open Data Hub"
-
-    Install the Open Data Hub Project (ODH) operator, which is available in OpenShift's
-    preconfigured CatalogSource of community operators. MaaS requires ODH v3.0 or later:
-
-    ```shell
-    kubectl apply -f - <<EOF
-    apiVersion: operators.coreos.com/v1alpha1
-    kind: Subscription
-    metadata:
-      name: opendatahub-operator
-      namespace: openshift-operators
-    spec:
-      channel: fast-3
-      name: opendatahub-operator
-      source: community-operators
-      sourceNamespace: openshift-marketplace
     EOF
     ```
 
-    Install the ODH Model Serving component by creating two resources:
-
-    1. A `DSCInitialization` resource to initialize the ODH platform
-    2. A `DataScienceCluster` resource to install ODH components
+    Wait for the subscription to install successfully:
 
     ```shell
-    kubectl apply -f - <<EOF
-    apiVersion: dscinitialization.opendatahub.io/v2
-    kind: DSCInitialization
-    metadata:
-      name: default-dsci
-    spec:
-      applicationsNamespace: opendatahub
-      monitoring:
-        managementState: Managed
-        namespace: opendatahub
-        metrics: {}
-      trustedCABundle:
-        managementState: Managed
-    ---
-    apiVersion: datasciencecluster.opendatahub.io/v2
-    kind: DataScienceCluster
-    metadata:
-      name: default-dsc
-    spec:
-      components:
-        # Components required for MaaS:
-        kserve:
-          managementState: Managed
-          rawDeploymentServiceConfig: Headed
-          # Enable Models-as-a-Service via operator
-          modelsAsService:
-            managementState: Managed
-
-        # Components recommended for MaaS:
-        dashboard:
-          managementState: Managed
-    EOF
+    kubectl wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/rhoai3-operator -n redhat-ods-operator --timeout=300s
     ```
 
-!!! note "MaaS via Operator"
-    When `modelsAsService.managementState` is set to `Managed`, the operator will deploy
-    the MaaS API, MaaS API AuthPolicy, and NetworkPolicy automatically. However, the **Gateway**,
-    **Gateway AuthPolicy**, **TokenRateLimitPolicy**, and **RateLimitPolicy** must still be
-    installed manually following the instructions below and in [maas-setup.md](maas-setup.md).
-
-## Create MaaS Gateway
-
-A Gateway with the name `maas-default-gateway` is **required** for MaaS to function. The configuration
-below provides an example Gateway you can use:
-
-!!! warning "Example Gateway Configuration"
-    The Gateway configuration below is provided as an example. Depending on your cluster setup,
-    you may need additional configuration such as TLS certificates, specific listener settings,
-    or custom infrastructure labels. Consult your cluster administrator if you're unsure about
-    Gateway requirements for your environment.
-
-```shell
-# Get your cluster's domain
-CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-
-kubectl apply -f - <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: maas-default-gateway
-  namespace: openshift-ingress
-spec:
-  gatewayClassName: openshift-default
-  listeners:
-   - name: http
-     hostname: maas.${CLUSTER_DOMAIN}
-     port: 80
-     protocol: HTTP
-     allowedRoutes:
-       namespaces:
-         from: All
-EOF
-```
-
-Wait for the Gateway to be programmed:
-
-```shell
-kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=60s
-```
-
-!!! note
-    The `maas-default-gateway` created above satisfies the Gateway requirement for MaaS. When
-    following the next steps, you can skip the Gateway creation and proceed directly to installing
-    the Gateway AuthPolicy and usage policies in [maas-setup.md](maas-setup.md).
-
-## Verification
-
-Check that all MaaS components are running:
-
-=== "Red Hat OpenShift AI"
+    Wait for the operator webhook to be ready:
 
     ```shell
-    # Check RHOAI Model Serving deployments
-    kubectl get deployments -n redhat-ods-applications
-
-    NAME                        READY   UP-TO-DATE   AVAILABLE   AGE
-    kserve-controller-manager   1/1     1            1           73s
-    odh-model-controller        1/1     1            1           79s
-    rhods-dashboard             2/2     2            2           78s
-    maas-api                    1/1     1            1           60s  # Only if MaaS enabled
+    kubectl wait --for=condition=Available --timeout=120s deployment/rhods-operator-controller-manager -n redhat-ods-operator
     ```
 
-=== "Open Data Hub"
-
-    ```shell
-    # Check MaaS API deployment
-    kubectl get deployment maas-api -n opendatahub
-
-    # Check HTTPRoute
-    kubectl get httproute maas-api-route -n opendatahub
-
-    # Check AuthPolicy
-    kubectl get authpolicy maas-api-auth-policy -n opendatahub
-
-    # Check NetworkPolicy (allows Authorino to reach MaaS API)
-    kubectl get networkpolicy maas-authorino-allow -n opendatahub
-    ```
-
-    All resources should exist and the MaaS API deployment should show `READY 1/1`.
-
-## Test MaaS API Connectivity
-
-Verify that Authorino can communicate with the MaaS API:
-
-=== "Red Hat OpenShift AI"
-
-    ```shell
-    # Get Authorino pod
-    AUTHORINO_POD=$(kubectl get pods -n kuadrant-system -l authorino-resource=authorino -o jsonpath='{.items[0].metadata.name}')
-
-    # Test connectivity
-    kubectl exec -n kuadrant-system $AUTHORINO_POD -- curl -s \
-      http://maas-api.redhat-ods-applications.svc.cluster.local:8080/health
-    ```
-
-=== "Open Data Hub"
-
-    ```shell
-    # Get Authorino pod
-    AUTHORINO_POD=$(kubectl get pods -n kuadrant-system -l authorino-resource=authorino -o jsonpath='{.items[0].metadata.name}')
-
-    # Test connectivity
-    kubectl exec -n kuadrant-system $AUTHORINO_POD -- curl -s \
-      http://maas-api.opendatahub.svc.cluster.local:8080/health
-    ```
-
-Expected output:
-
-```json
-{"status":"healthy"}
-```
-
-For end-to-end validation and troubleshooting, see the [Validation Guide](validation.md).
+    Once ready, the RHOAI Operator automatically creates a `DSCInitialization` resource.
 
 ## Next Steps
 
-Once your platform with MaaS is installed:
-
-1. [Install MaaS Components](maas-setup.md) - Install Gateway AuthPolicy and usage policies
-2. [Deploy a Model](../configuration-and-management/model-setup.md) - Deploy your first LLMInferenceService
+1. [Install MaaS Components](maas-setup.md) - Database, Gateways, and Configure DataScienceCluster
+2. [Deploy a Model](../configuration-and-management/model-setup.md) - Deploy your first model

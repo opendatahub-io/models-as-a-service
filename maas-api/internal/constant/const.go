@@ -16,7 +16,7 @@ const (
 
 	// API Key configuration defaults.
 	// DefaultAPIKeyMaxExpirationDays is the default maximum allowed expiration for API keys.
-	DefaultAPIKeyMaxExpirationDays = 30
+	DefaultAPIKeyMaxExpirationDays = 90
 
 	// LLMInferenceService annotation keys for model metadata.
 	AnnotationGenAIUseCase = "opendatahub.io/genai-use-case"

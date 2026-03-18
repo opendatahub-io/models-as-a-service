@@ -1,13 +1,16 @@
 # MaaS Controller Makefile
 # Build and deploy the MaaS control plane (MaaSModelRef, MaaSAuthPolicy, MaaSSubscription)
 
-.PHONY: build run test tidy install uninstall image-build image-push docker-build generate manifests verify-codegen help
+include tools.mk
+
+.PHONY: build run test tidy lint install uninstall image-build image-push docker-build generate manifests verify-codegen help
 
 help:
 	@echo "MaaS Controller make targets:"
 	@echo "  make build        - build manager binary to bin/manager"
 	@echo "  make run          - build and run manager locally"
 	@echo "  make test         - run tests"
+	@echo "  make lint         - run golangci-lint"
 	@echo "  make generate     - generate deepcopy code for API types"
 	@echo "  make manifests    - generate CRD manifests"
 	@echo "  make install      - apply deployment/base/maas-controller/default (CRDs, RBAC, deployment)"
@@ -47,6 +50,16 @@ tidy:
 # Install controller-gen into local bin (pinned version)
 $(CONTROLLER_GEN): | $(BUILD_DIR)
 	GOBIN=$(abspath $(BUILD_DIR)) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
+
+LINT_FIX ?= false
+lint: $(GOLANGCI_LINT) ## Run golangci-lint (use LINT_FIX=true to fix lint issues)
+ifeq ($(LINT_FIX),true)
+	$(GOLANGCI_LINT) fmt
+	$(GOLANGCI_LINT) run --fix
+else
+	$(GOLANGCI_LINT) fmt --diff
+	$(GOLANGCI_LINT) run
+endif
 
 # Generate deepcopy code for API types
 generate: $(CONTROLLER_GEN)
