@@ -176,7 +176,14 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, name, req.Description, expiresIn, req.Ephemeral)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		// Return 400 for validation errors, 500 for internal errors
+		if strings.Contains(err.Error(), "cannot exceed") ||
+			strings.Contains(err.Error(), "must be positive") ||
+			strings.Contains(err.Error(), "exceeds maximum allowed") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create API key"})
 		return
 	}
 

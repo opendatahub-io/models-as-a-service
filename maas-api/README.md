@@ -270,7 +270,7 @@ API_KEY_RESPONSE=$(curl -sSk \
 echo $API_KEY_RESPONSE | jq -r .
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 
-# Create an ephemeral key with custom name and expiration
+# Create an ephemeral key with custom name and expiration (max 1hr)
 API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
@@ -278,7 +278,7 @@ API_KEY_RESPONSE=$(curl -sSk \
   -d '{
     "ephemeral": true,
     "name": "playground-session",
-    "expiresIn": "2h"
+    "expiresIn": "30m"
   }' \
   "${HOST}/maas-api/v1/api-keys")
 ```

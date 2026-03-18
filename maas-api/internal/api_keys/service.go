@@ -63,14 +63,21 @@ func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
 	expiresIn *time.Duration, ephemeral bool,
 ) (*CreateAPIKeyResponse, error) {
-	// Default to max expiration if not provided (handled in handler for ephemeral keys)
+	// Default expiration if not provided
 	if expiresIn == nil {
-		maxDays := constant.DefaultAPIKeyMaxExpirationDays
-		if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
-			maxDays = s.config.APIKeyMaxExpirationDays
+		if ephemeral {
+			// Ephemeral keys default to 1 hour
+			d := 1 * time.Hour
+			expiresIn = &d
+		} else {
+			// Regular keys default to max expiration days
+			maxDays := constant.DefaultAPIKeyMaxExpirationDays
+			if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
+				maxDays = s.config.APIKeyMaxExpirationDays
+			}
+			defaultExpiration := time.Duration(maxDays) * 24 * time.Hour
+			expiresIn = &defaultExpiration
 		}
-		defaultExpiration := time.Duration(maxDays) * 24 * time.Hour
-		expiresIn = &defaultExpiration
 	}
 
 	if *expiresIn <= 0 {

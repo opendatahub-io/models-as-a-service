@@ -1243,7 +1243,7 @@ func TestCreateEphemeralAPIKey(t *testing.T) {
 
 		handler.CreateAPIKey(c)
 
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
 		var response map[string]string
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
