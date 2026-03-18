@@ -44,7 +44,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--channel <channel>` - Operator channel override (default: fast-3 for ODH, fast-3.x for RHOAI)
 
 **Requirements:**
-- OpenShift cluster (4.16+)
+- OpenShift cluster (4.19.9+)
 - `oc` CLI installed and logged in
 - `kubectl` installed
 - `jq` installed
