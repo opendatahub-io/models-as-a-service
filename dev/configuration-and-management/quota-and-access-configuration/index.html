@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/token-management/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/quota-and-access-configuration/">
       
       
-        <link rel="prev" href="../quota-and-access-configuration/">
+        <link rel="prev" href="../../install/troubleshooting/">
       
       
-        <link rel="next" href="../tls-configuration/">
+        <link rel="next" href="../token-management/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Token Management - ODH Models-as-a-Service Documentation</title>
+        <title>Quota and Access Configuration - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#understanding-token-management" class="md-skip">
+        <a href="#quota-and-access-configuration" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Token Management
+              Quota and Access Configuration
             
           </span>
         </div>
@@ -304,7 +304,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../quota-and-access-configuration/" class="md-tabs__link">
+        <a href="./" class="md-tabs__link">
           
   
   
@@ -1254,34 +1254,6 @@
                 
   
   
-  
-  
-    <li class="md-nav__item">
-      <a href="../quota-and-access-configuration/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Quota and Access Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
     
   
   
@@ -1301,7 +1273,7 @@
   <span class="md-ellipsis">
     
   
-    Token Management
+    Quota and Access Configuration
   
 
     
@@ -1319,7 +1291,7 @@
   <span class="md-ellipsis">
     
   
-    Token Management
+    Quota and Access Configuration
   
 
     
@@ -1345,10 +1317,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#table-of-contents" class="md-nav__link">
+  <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Table of Contents
+        Prerequisites
       
     </span>
   </a>
@@ -1356,10 +1328,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#overview-what-youll-accomplish" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Overview: What You'll Accomplish
       
     </span>
   </a>
@@ -1367,22 +1339,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-api-key-creation-works" class="md-nav__link">
+  <a href="#configuration-steps" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How API Key Creation Works
+        Configuration Steps
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="How API Key Creation Works">
+    <nav class="md-nav" aria-label="Configuration Steps">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#key-concepts" class="md-nav__link">
+  <a href="#1-register-models-maasmodelref" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Key Concepts
+        1. Register Models (MaaSModelRef)
       
     </span>
   </a>
@@ -1390,10 +1362,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#api-key-creation-flow" class="md-nav__link">
+  <a href="#2-grant-access-maasauthpolicy" class="md-nav__link">
     <span class="md-ellipsis">
       
-        API Key Creation Flow
+        2. Grant Access (MaaSAuthPolicy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-define-subscriptions-maassubscription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Define Subscriptions (MaaSSubscription)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-validate-the-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Validate the Configuration
       
     </span>
   </a>
@@ -1406,22 +1400,88 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-api-key-validation-works" class="md-nav__link">
+  <a href="#adding-groups" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How API Key Validation Works
+        Adding Groups
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="How API Key Validation Works">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multiple-subscriptions-per-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multiple Subscriptions per User
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#validation-flow" class="md-nav__link">
+  <a href="#403-forbidden-must-specify-x-maas-subscription" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Validation Flow
+        403 Forbidden: "must specify X-MaaS-Subscription"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#403-forbidden-no-access-to-subscription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        403 Forbidden: "no access to subscription"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#429-too-many-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        429 Too Many Requests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-not-appearing-in-get-v1models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model not appearing in GET /v1/models
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policies-not-enforced" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Policies not enforced
       
     </span>
   </a>
@@ -1430,95 +1490,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#model-discovery" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Model Discovery
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Model Discovery">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How It Works
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#practical-usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Practical Usage
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#api-key-lifecycle-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API Key Lifecycle Management
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="API Key Lifecycle Management">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#key-expiration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Expiration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#key-revocation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Revocation
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#frequently-asked-questions-faq" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frequently Asked Questions (FAQ)
-      
-    </span>
-  </a>
   
 </li>
       
@@ -1537,6 +1508,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../token-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Token Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -2234,10 +2233,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#table-of-contents" class="md-nav__link">
+  <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Table of Contents
+        Prerequisites
       
     </span>
   </a>
@@ -2245,10 +2244,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#overview-what-youll-accomplish" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Overview: What You'll Accomplish
       
     </span>
   </a>
@@ -2256,22 +2255,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-api-key-creation-works" class="md-nav__link">
+  <a href="#configuration-steps" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How API Key Creation Works
+        Configuration Steps
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="How API Key Creation Works">
+    <nav class="md-nav" aria-label="Configuration Steps">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#key-concepts" class="md-nav__link">
+  <a href="#1-register-models-maasmodelref" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Key Concepts
+        1. Register Models (MaaSModelRef)
       
     </span>
   </a>
@@ -2279,10 +2278,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#api-key-creation-flow" class="md-nav__link">
+  <a href="#2-grant-access-maasauthpolicy" class="md-nav__link">
     <span class="md-ellipsis">
       
-        API Key Creation Flow
+        2. Grant Access (MaaSAuthPolicy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-define-subscriptions-maassubscription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Define Subscriptions (MaaSSubscription)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-validate-the-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Validate the Configuration
       
     </span>
   </a>
@@ -2295,22 +2316,88 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-api-key-validation-works" class="md-nav__link">
+  <a href="#adding-groups" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How API Key Validation Works
+        Adding Groups
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="How API Key Validation Works">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multiple-subscriptions-per-user" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multiple Subscriptions per User
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#validation-flow" class="md-nav__link">
+  <a href="#403-forbidden-must-specify-x-maas-subscription" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Validation Flow
+        403 Forbidden: "must specify X-MaaS-Subscription"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#403-forbidden-no-access-to-subscription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        403 Forbidden: "no access to subscription"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#429-too-many-requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        429 Too Many Requests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-not-appearing-in-get-v1models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model not appearing in GET /v1/models
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policies-not-enforced" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Policies not enforced
       
     </span>
   </a>
@@ -2319,95 +2406,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#model-discovery" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Model Discovery
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Model Discovery">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How It Works
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#practical-usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Practical Usage
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#api-key-lifecycle-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API Key Lifecycle Management
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="API Key Lifecycle Management">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#key-expiration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Expiration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#key-revocation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Revocation
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#frequently-asked-questions-faq" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frequently Asked Questions (FAQ)
-      
-    </span>
-  </a>
   
 </li>
       
@@ -2442,185 +2440,227 @@
   
 
 
-<h1 id="understanding-token-management">Understanding Token Management</h1>
-<p>This guide explains the authentication and credential management used to access models in the MaaS Platform.</p>
-<div class="admonition tip">
-<p class="admonition-title">API keys (current)</p>
-<p>The platform uses <strong>API keys</strong> (<code>sk-oai-*</code>) stored in PostgreSQL for programmatic access. Create keys via <code>POST /v1/api-keys</code> (authenticate with your OpenShift token) and use them with the <code>Authorization: Bearer</code> header. When users have multiple subscriptions, include the <code>X-MaaS-Subscription</code> header. See <a href="../quota-and-access-configuration/">Quota and Access Configuration</a>.</p>
-</div>
+<h1 id="quota-and-access-configuration">Quota and Access Configuration</h1>
+<p>This guide provides step-by-step instructions for configuring MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription. For conceptual overview, see <a href="../subscription-overview/">Access and Quota Overview</a> and <a href="../maas-models/">MaaS Models</a>.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+<li><strong>MaaS platform installed</strong> — See <a href="../../install/maas-setup/">Install MaaS Components</a></li>
+<li><strong>LLMInferenceService</strong> for your model (or external model endpoints)</li>
+<li>Cluster admin or equivalent permissions to create CRs in the <code>models-as-a-service</code> and model namespaces</li>
+</ul>
 <div class="admonition note">
-<p class="admonition-title">Prerequisites</p>
-<p>This document assumes you have configured subscriptions (MaaSAuthPolicy, MaaSSubscription).
-See <a href="../quota-and-access-configuration/">Quota and Access Configuration</a> for setup.</p>
+<p class="admonition-title">Deploy a sample model</p>
+<p>Command to deploy simulator model as <code>free-model</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>kustomize<span class="w"> </span>build<span class="w"> </span><span class="s1">&#39;https://github.com/opendatahub-io/models-as-a-service//docs/samples/maas-system/free/llm?ref=main&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>sed<span class="w"> </span><span class="s1">&#39;s/facebook-opt-125m-simulated/free-model/g&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+</code></pre></div>
 </div>
-<hr />
-<h2 id="table-of-contents">Table of Contents</h2>
+<h2 id="overview-what-youll-accomplish">Overview: What You'll Accomplish</h2>
+<p>Before running the configuration steps, here is the flow you will set up:</p>
 <ol>
-<li><a href="#overview">Overview</a></li>
-<li><a href="#how-api-key-creation-works">How API Key Creation Works</a></li>
-<li><a href="#how-api-key-validation-works">How API Key Validation Works</a></li>
-<li><a href="#model-discovery">Model Discovery</a></li>
-<li><a href="#practical-usage">Practical Usage</a></li>
-<li><a href="#api-key-lifecycle-management">API Key Lifecycle Management</a></li>
-<li><a href="#frequently-asked-questions-faq">Frequently Asked Questions (FAQ)</a></li>
-<li><a href="#related-documentation">Related Documentation</a></li>
+<li>
+<p><strong>Register models</strong> — Create a MaaSModelRef for each model so MaaS knows about it and can expose it through the API. The controller reconciles each ref and populates the endpoint.</p>
+</li>
+<li>
+<p><strong>Grant access</strong> — Create MaaSAuthPolicy resources that define <em>which</em> groups or users can use <em>which</em> models. A user must match a policy to see and call a model.</p>
+</li>
+<li>
+<p><strong>Define subscriptions</strong> — Create MaaSSubscription resources that define <em>quota</em> (token rate limits) for groups or users. A user must have both access (policy) and quota (subscription) to use a model.</p>
+</li>
+<li>
+<p><strong>Validate</strong> — Confirm the CRs are reconciled, policies are enforced, and you can list models and run inference.</p>
+</li>
 </ol>
-<hr />
-<h2 id="overview">Overview</h2>
-<p>The platform uses a secure, API key–based authentication system. You authenticate with your OpenShift credentials to create long-lived API keys, which are stored as SHA-256 hashes in a PostgreSQL database. This approach provides several key benefits:</p>
-<ul>
-<li><strong>Long-Lived Credentials</strong>: API keys remain valid until you revoke them or they expire (configurable), unlike short-lived Kubernetes tokens.</li>
-<li><strong>Subscription-Based Access Control</strong>: Keys inherit your group membership at creation time; the gateway uses these groups for subscription lookup and rate limits.</li>
-<li><strong>Auditability</strong>: Every request is tied to a specific key and identity; <code>last_used_at</code> tracks usage.</li>
-<li><strong>Show-Once Security</strong>: The plaintext key is returned only at creation; only the hash is stored.</li>
-</ul>
-<p>The process is simple:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Authenticate with OpenShift → Create an API key via POST /v1/api-keys → Use the key with Authorization: Bearer for model access
+<h2 id="configuration-steps">Configuration Steps</h2>
+<p>Set the namespace and name of your LLMInferenceService (used in the commands below):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">MODEL_NS</span><span class="o">=</span>llm
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">MODEL_NAME</span><span class="o">=</span>free-model<span class="w">  </span><span class="c1"># From the Prerequisites deploy; or: kubectl get llminferenceservice -n $MODEL_NS -o jsonpath=&#39;{.items[0].metadata.name}&#39;</span>
 </code></pre></div>
-<hr />
-<h2 id="how-api-key-creation-works">How API Key Creation Works</h2>
-<p>When you create an API key, you trade your OpenShift identity for a long-lived credential that can be used for programmatic access.</p>
-<h3 id="key-concepts">Key Concepts</h3>
-<ul>
-<li><strong>Subscription</strong>: Your access is determined by MaaSAuthPolicy and MaaSSubscription, which map groups to models and rate limits.</li>
-<li><strong>User Groups</strong>: At creation time, your current group membership is stored with the key. These groups are used for subscription-based authorization when the key is validated.</li>
-<li><strong>API Key</strong>: A cryptographically secure string with <code>sk-oai-*</code> prefix. The plaintext is shown once; only the SHA-256 hash is stored in PostgreSQL.</li>
-<li><strong>Expiration</strong>: Keys have a configurable TTL via <code>expiresIn</code> (e.g., <code>30d</code>, <code>90d</code>, <code>1h</code>). If omitted, the key defaults to the configured maximum (e.g., 90 days).</li>
-</ul>
-<h3 id="api-key-creation-flow">API Key Creation Flow</h3>
-<p>This diagram illustrates the process of creating an API key.</p>
-<pre class="mermaid"><code>sequenceDiagram
-    participant User as OpenShift User
-    participant Gateway
-    participant AuthPolicy as AuthPolicy (Authorino)
-    participant MaaS as maas-api
-    participant DB as PostgreSQL
-
-    Note over User,MaaS: API Key Creation
-    User-&gt;&gt;Gateway: 1. POST /v1/api-keys (Bearer OpenShift token)
-    Gateway-&gt;&gt;AuthPolicy: Route request
-    AuthPolicy-&gt;&gt;AuthPolicy: Validate OpenShift token (TokenReview)
-    AuthPolicy-&gt;&gt;MaaS: 2. Forward request + user context (username, groups)
-    MaaS-&gt;&gt;MaaS: Generate sk-oai-* key, hash with SHA-256
-    MaaS-&gt;&gt;DB: 3. Store hash + metadata (username, groups, name, expiresAt)
-    DB--&gt;&gt;MaaS: Stored
-    MaaS--&gt;&gt;User: 4. Return plaintext key ONCE (never stored)
-
-    Note over User,DB: Key is ready for model access</code></pre>
-<hr />
-<h2 id="how-api-key-validation-works">How API Key Validation Works</h2>
-<p>When you use an API key for inference, the gateway validates it via the MaaS API before allowing the request.</p>
-<h3 id="validation-flow">Validation Flow</h3>
-<pre class="mermaid"><code>sequenceDiagram
-    participant User as Client
-    participant Gateway
-    participant AuthPolicy as MaaSAuthPolicy (Authorino)
-    participant MaaS as maas-api
-    participant DB as PostgreSQL
-    participant Model as Model Backend
-
-    Note over User,MaaS: Inference Request
-    User-&gt;&gt;Gateway: 1. Request with Authorization: Bearer sk-oai-*
-    Gateway-&gt;&gt;AuthPolicy: Route to MaaSAuthPolicy
-    AuthPolicy-&gt;&gt;MaaS: 2. POST /internal/v1/api-keys/validate (key)
-    MaaS-&gt;&gt;MaaS: Hash key, lookup by hash
-    MaaS-&gt;&gt;DB: 3. SELECT by key_hash
-    DB--&gt;&gt;MaaS: username, groups, status
-    MaaS-&gt;&gt;MaaS: Check status (active/revoked/expired)
-    MaaS--&gt;&gt;AuthPolicy: 4. valid: true, userId, groups
-    AuthPolicy-&gt;&gt;AuthPolicy: Subscription lookup, rate limits
-    AuthPolicy-&gt;&gt;Model: 5. Authorized request (identity headers)
-    Model--&gt;&gt;Gateway: Response
-    Gateway--&gt;&gt;User: Response</code></pre>
-<p>The validation endpoint (<code>/internal/v1/api-keys/validate</code>) is called by Authorino on every request that bears an <code>sk-oai-*</code> token. It:</p>
-<ol>
-<li>Hashes the incoming key and looks it up in the database</li>
-<li>Returns <code>valid: true</code> with <code>userId</code> and <code>groups</code> if the key is active and not expired</li>
-<li>Returns <code>valid: false</code> with a reason if the key is invalid, revoked, or expired</li>
-</ol>
-<hr />
-<h2 id="model-discovery">Model Discovery</h2>
-<p>The <code>/v1/models</code> endpoint allows you to discover which models you're authorized to access. This endpoint works with any valid authentication token — you can use your OpenShift token or an API key.</p>
-<h3 id="how-it-works">How It Works</h3>
-<p>When you call <strong>GET /v1/models</strong> with an <strong>Authorization</strong> header, the API passes that header <strong>as-is</strong> to each model's <code>/v1/models</code> endpoint to validate access. Only models that return 2xx or 405 are included in the list. No token exchange or modification is performed; the same header you send is used for the probe.</p>
-<pre class="mermaid"><code>flowchart LR
-    A[Your Request\nAuthorization header] --&gt; B[List MaaSModelRefs]
-    B --&gt; C[Probe each model endpoint\nwith same header]
-    C --&gt; D[Return only models\nthat allow access]</code></pre>
-<p>This means you can:</p>
-<ol>
-<li><strong>Authenticate with OpenShift or OIDC</strong> — use your existing identity and the same token you would use for inference.</li>
-<li><strong>Use an API key</strong> — use your <code>sk-oai-*</code> key in the Authorization header.</li>
-<li><strong>Call <code>/v1/models</code> immediately</strong> — see only the models you can access, without creating an API key first (if using OpenShift token).</li>
-</ol>
-<hr />
-<h2 id="practical-usage">Practical Usage</h2>
-<p>For step-by-step instructions on obtaining and using API keys to access models, including practical examples and troubleshooting, see the <a href="../../user-guide/self-service-model-access/">Self-Service Model Access Guide</a>.</p>
-<p>That guide provides:</p>
-<ul>
-<li>Complete walkthrough for getting your OpenShift token</li>
-<li>How to create an API key via <code>POST /v1/api-keys</code></li>
-<li>Examples of making inference requests with your API key</li>
-<li>Troubleshooting common authentication issues</li>
-</ul>
-<hr />
-<h2 id="api-key-lifecycle-management">API Key Lifecycle Management</h2>
-<p>API keys are long-lived by default but support expiration and revocation.</p>
-<h3 id="key-expiration">Key Expiration</h3>
-<p>Keys have a configurable TTL:</p>
-<ul>
-<li><strong>Default</strong>: Omit <code>expiresIn</code> in the create request; the key uses the configured maximum (e.g., 90 days).</li>
-<li><strong>Custom TTL</strong>: Set <code>expiresIn</code> when creating (e.g., <code>"90d"</code>, <code>"30d"</code>, <code>"1h"</code>). The response includes <code>expiresAt</code> (RFC3339).</li>
-</ul>
-<p>When a key expires, validation returns <code>valid: false</code> with reason <code>"key revoked or expired"</code>. Create a new key to continue.</p>
-<h3 id="key-revocation">Key Revocation</h3>
-<p><strong>Revoke a single key:</strong> Send a <code>DELETE</code> request to <code>/v1/api-keys/:id</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MAAS_API_URL</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys/</span><span class="si">${</span><span class="nv">KEY_ID</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span>
+<h3 id="1-register-models-maasmodelref">1. Register Models (MaaSModelRef)</h3>
+<p>Create a MaaSModelRef for each model you want to expose through MaaS. The MaaSModelRef must be in the <strong>same namespace</strong> as the LLMInferenceService. The <code>spec.modelRef.name</code> must match the LLMInferenceService name.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="l l-Scalar l-Scalar-Plain">kubectl apply -f - &lt;&lt;EOF</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="l l-Scalar l-Scalar-Plain">apiVersion</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModelRef</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MODEL_NAME}-ref</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MODEL_NS}</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MODEL_NAME}</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="l l-Scalar l-Scalar-Plain">EOF</span>
 </code></pre></div>
-<p><strong>Bulk revoke all keys for a user:</strong> Send a <code>POST</code> request to <code>/v1/api-keys/bulk-revoke</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MAAS_API_URL</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys/bulk-revoke&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;username&quot;: &quot;alice&quot;}&#39;</span>
+<p>Verify the controller has reconciled and set the endpoint:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># Check status.endpoint and status.phase</span>
 </code></pre></div>
-<p>Revocation updates the key status to <code>revoked</code> in the database. The next validation request will reject the key. Authorino may cache validation results briefly; revocation is effective as soon as the cache expires.</p>
+<h3 id="2-grant-access-maasauthpolicy">2. Grant Access (MaaSAuthPolicy)</h3>
+<p>Create an MaaSAuthPolicy to define which groups/users can access which models:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="l l-Scalar l-Scalar-Plain">kubectl apply -f - &lt;&lt;EOF</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="l l-Scalar l-Scalar-Plain"># MaaSAuthPolicy must be deployed to the models-as-a-service namespace</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="l l-Scalar l-Scalar-Plain">apiVersion</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSAuthPolicy</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">free-access</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models-as-a-service</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">modelRefs</span><span class="p">:</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MODEL_NAME}-ref</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">      </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MODEL_NS}</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">  </span><span class="nt">subjects</span><span class="p">:</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">    </span><span class="nt">groups</span><span class="p">:</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">free-users</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">    </span><span class="nt">users</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="l l-Scalar l-Scalar-Plain">EOF</span>
+</code></pre></div>
+<p>Verify the MaaSAuthPolicy is active (AuthPolicy created and enforced):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># List generated AuthPolicy (may take a moment for controller to reconcile)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>authpolicy<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span><span class="w"> </span>-l<span class="w"> </span>maas.opendatahub.io/model<span class="o">=</span><span class="si">${</span><span class="nv">MODEL_NAME</span><span class="si">}</span>-ref
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># Wait for AuthPolicy to be enforced (re-run if the controller has not reconciled yet)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="nv">AUTH_POLICY</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>authpolicy<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span><span class="w"> </span>-l<span class="w"> </span>maas.opendatahub.io/model<span class="o">=</span><span class="si">${</span><span class="nv">MODEL_NAME</span><span class="si">}</span>-ref<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="o">[[</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$AUTH_POLICY</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span><span class="nv">Enforced</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>authpolicy/<span class="si">${</span><span class="nv">AUTH_POLICY</span><span class="si">}</span><span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span><span class="w"> </span>--timeout<span class="o">=</span>120s
+</code></pre></div>
+<p><strong>Multiple policies per model</strong>: You can create multiple MaaSAuthPolicies that reference the same model. The controller aggregates them — a user matching any policy gets access.</p>
+<h3 id="3-define-subscriptions-maassubscription">3. Define Subscriptions (MaaSSubscription)</h3>
+<p>Create a MaaSSubscription to define per-model token rate limits for owner groups:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="l l-Scalar l-Scalar-Plain">kubectl apply -f - &lt;&lt;EOF</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="l l-Scalar l-Scalar-Plain"># MaaSSubscription must be deployed to the models-as-a-service namespace</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="l l-Scalar l-Scalar-Plain">apiVersion</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSSubscription</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">free-subscription</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models-as-a-service</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span><span class="nt">owner</span><span class="p">:</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">    </span><span class="nt">groups</span><span class="p">:</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">free-users</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">    </span><span class="nt">users</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">  </span><span class="nt">modelRefs</span><span class="p">:</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MODEL_NAME}-ref</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">      </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MODEL_NS}</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">      </span><span class="nt">tokenRateLimits</span><span class="p">:</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">limit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="w">          </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1m</span>
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="l l-Scalar l-Scalar-Plain">EOF</span>
+</code></pre></div>
+<p>Verify the MaaSSubscription is active (TokenRateLimitPolicy created and enforced):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># List generated TokenRateLimitPolicy (may take a moment for controller to reconcile)</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tokenratelimitpolicy<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span><span class="w"> </span>-l<span class="w"> </span>maas.opendatahub.io/model<span class="o">=</span><span class="si">${</span><span class="nv">MODEL_NAME</span><span class="si">}</span>-ref
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Wait for TokenRateLimitPolicy to be enforced (re-run if the controller has not reconciled yet)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="nv">TRLP</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>tokenratelimitpolicy<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span><span class="w"> </span>-l<span class="w"> </span>maas.opendatahub.io/model<span class="o">=</span><span class="si">${</span><span class="nv">MODEL_NAME</span><span class="si">}</span>-ref<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="o">[[</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TRLP</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span><span class="nv">Enforced</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>tokenratelimitpolicy/<span class="si">${</span><span class="nv">TRLP</span><span class="si">}</span><span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span><span class="w"> </span>--timeout<span class="o">=</span>120s
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Namespace requirements</p>
+<p>Both <strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong> must be installed in the <code>models-as-a-service</code> namespace. Each <code>modelRefs</code> entry must specify the <code>namespace</code> where the MaaSModelRef lives (e.g. <code>llm</code>).</p>
+</div>
 <div class="admonition warning">
-<p class="admonition-title">Important</p>
-<p><strong>For Platform Administrators</strong>: Admins can revoke any user's keys via <code>DELETE /v1/api-keys/:id</code> (if they own or have admin access) or <code>POST /v1/api-keys/bulk-revoke</code> with the target username. This is an effective way to immediately cut off access for a specific user in response to a security event.</p>
+<p class="admonition-title">Using the <code>users</code> field</p>
+<p>The <code>subjects.users</code> (MaaSAuthPolicy) and <code>owner.users</code> (MaaSSubscription) fields should be used only for <strong>Service Accounts</strong> and similar programmatic identities, not for many individual human users. Having too many distinct users can cause <a href="../../advanced-administration/subscription-cardinality/">cardinality issues</a> in rate limiting and policy enforcement. Prefer <code>groups</code> for human users.</p>
 </div>
-<hr />
-<h2 id="frequently-asked-questions-faq">Frequently Asked Questions (FAQ)</h2>
-<p><strong>Q: My subscription access is wrong. How do I fix it?</strong></p>
-<p>A: Your access is determined by your group membership in OpenShift at the time the API key was created. Those groups are stored with the key and used for subscription lookup. If your groups have changed, create a new API key to pick up the new membership.</p>
-<hr />
-<p><strong>Q: How long should my API keys be valid for?</strong></p>
-<p>A: For interactive use or long-running integrations, keys with long TTL (e.g., 90d) or the default maximum are common. For higher security, use shorter TTLs (e.g., 30d) and rotate keys periodically.</p>
-<hr />
-<p><strong>Q: Can I have multiple active API keys at once?</strong></p>
-<p>A: Yes. Each call to <code>POST /v1/api-keys</code> creates a new, independent key. You can list and manage them via <code>POST /v1/api-keys/search</code> (with optional filters and pagination) or <code>GET /v1/api-keys/:id</code> for a specific key.</p>
-<hr />
-<p><strong>Q: What happens if the maas-api service is down?</strong></p>
-<p>A: You will not be able to create or validate API keys. Inference requests that use API keys will fail until the service is back. OpenShift token–based requests may still work if the gateway is configured for both auth methods.</p>
-<hr />
-<p><strong>Q: Can I use one API key to access multiple different models?</strong></p>
-<p>A: Yes. Your API key inherits your group membership at creation time. If your subscription is authorized to use multiple models, a single key works for all of them.</p>
-<hr />
-<p><strong>Q: What's the difference between my OpenShift token and an API key?</strong></p>
-<p>A: Your <strong>OpenShift token</strong> is your identity token from authentication (e.g., OpenShift or OIDC). An <strong>API key</strong> is a long-lived credential created via <code>POST /v1/api-keys</code> and stored as a hash in PostgreSQL. For <strong>GET /v1/models</strong>, the API passes your Authorization header as-is to each model endpoint; you can use either. For inference, use a token your gateway accepts (OpenShift token or API key as configured).</p>
-<hr />
-<p><strong>Q: Do I need an API key to list available models?</strong></p>
-<p>A: No. Call <strong>GET /v1/models</strong> with your OpenShift/OIDC token (or an API key) in the Authorization header. The API uses that same header to probe each model endpoint and returns only models you can access.</p>
-<hr />
-<p><strong>Q: Where is my API key stored?</strong></p>
-<p>A: Only the SHA-256 hash of your key is stored in PostgreSQL. The plaintext key is returned once at creation and is never stored. If you lose it, you must create a new key.</p>
-<hr />
+<p><strong>Premium example</strong> with higher limits:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="l l-Scalar l-Scalar-Plain">kubectl apply -f - &lt;&lt;EOF</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="l l-Scalar l-Scalar-Plain"># MaaSSubscription must be deployed to the models-as-a-service namespace</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="l l-Scalar l-Scalar-Plain">apiVersion</span><span class="p p-Indicator">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSSubscription</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">premium-subscription</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models-as-a-service</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">owner</span><span class="p">:</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">    </span><span class="nt">groups</span><span class="p">:</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">premium-users</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">    </span><span class="nt">users</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">  </span><span class="nt">modelRefs</span><span class="p">:</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MODEL_NAME}-ref</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">      </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MODEL_NS}</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="w">      </span><span class="nt">tokenRateLimits</span><span class="p">:</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">limit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100000</span>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a><span class="w">          </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">24h</span>
+<a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="w">  </span><span class="nt">tokenMetadata</span><span class="p">:</span>
+<a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="w">    </span><span class="nt">organizationId</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;premium-org&quot;</span>
+<a id="__codelineno-8-21" name="__codelineno-8-21" href="#__codelineno-8-21"></a><span class="w">    </span><span class="nt">costCenter</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ai-team&quot;</span>
+<a id="__codelineno-8-22" name="__codelineno-8-22" href="#__codelineno-8-22"></a><span class="l l-Scalar l-Scalar-Plain">EOF</span>
+</code></pre></div>
+<h3 id="4-validate-the-configuration">4. Validate the Configuration</h3>
+<p><strong>Check CRs and generated policies:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasauthpolicy,maassubscription<span class="w"> </span>-n<span class="w"> </span>models-as-a-service
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>authpolicy,tokenratelimitpolicy<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span>
+</code></pre></div>
+<p><strong>Create groups and add users</strong> (OpenShift example):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Create groups if they do not exist</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oc<span class="w"> </span>adm<span class="w"> </span>groups<span class="w"> </span>new<span class="w"> </span>free-users<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>oc<span class="w"> </span>adm<span class="w"> </span>groups<span class="w"> </span>new<span class="w"> </span>premium-users<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1"># Add users to each group</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>oc<span class="w"> </span>adm<span class="w"> </span>groups<span class="w"> </span>add-users<span class="w"> </span>free-users<span class="w"> </span>alice@example.com
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>oc<span class="w"> </span>adm<span class="w"> </span>groups<span class="w"> </span>add-users<span class="w"> </span>premium-users<span class="w"> </span>bob@example.com
+</code></pre></div>
+<p><strong>Create API keys and verify access:</strong></p>
+<p>Create an API key as a user in <code>free-users</code> and another as a user in <code>premium-users</code>. Follow the <a href="../../install/validation/">Validation</a> guide to:</p>
+<ol>
+<li>Get the gateway endpoint and create an API key for each user</li>
+<li>List models and run inference with each API key</li>
+<li>Test with both groups to confirm access and different rate limits — free-users (100 tokens/min) vs premium-users (100,000 tokens/24h)</li>
+</ol>
+<h2 id="adding-groups">Adding Groups</h2>
+<p>To grant a user access to a subscription, add them to the appropriate Kubernetes group:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Create groups if they do not exist</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>oc<span class="w"> </span>adm<span class="w"> </span>groups<span class="w"> </span>new<span class="w"> </span>free-users<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>oc<span class="w"> </span>adm<span class="w"> </span>groups<span class="w"> </span>new<span class="w"> </span>premium-users<span class="w"> </span><span class="m">2</span>&gt;/dev/null<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="c1"># Add users (method depends on your IdP; OpenShift example)</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>oc<span class="w"> </span>adm<span class="w"> </span>groups<span class="w"> </span>add-users<span class="w"> </span>free-users<span class="w"> </span>alice@example.com
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>oc<span class="w"> </span>adm<span class="w"> </span>groups<span class="w"> </span>add-users<span class="w"> </span>premium-users<span class="w"> </span>bob@example.com
+</code></pre></div>
+<p>Users will get subscription access on their next request (after group membership propagates).</p>
+<h2 id="multiple-subscriptions-per-user">Multiple Subscriptions per User</h2>
+<p>When a user belongs to multiple groups that each have a subscription:</p>
+<ol>
+<li><strong>Single subscription</strong> — No <code>X-MaaS-Subscription</code> header needed</li>
+<li><strong>Multiple subscriptions</strong> — Client <strong>must</strong> send <code>X-MaaS-Subscription: &lt;subscription-name&gt;</code> to specify which subscription's rate limits apply</li>
+</ol>
+<p>Example for a user in both <code>free-users</code> and <code>premium-users</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Use free subscription limits</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;X-MaaS-Subscription: free-subscription&quot;</span><span class="w"> </span>...
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># Use premium subscription limits</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;X-MaaS-Subscription: premium-subscription&quot;</span><span class="w"> </span>...
+</code></pre></div>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="403-forbidden-must-specify-x-maas-subscription">403 Forbidden: "must specify X-MaaS-Subscription"</h3>
+<p><strong>Cause:</strong> User has multiple subscriptions and did not send the header.</p>
+<p><strong>Fix:</strong> Add <code>X-MaaS-Subscription: &lt;subscription-name&gt;</code> to the request.</p>
+<h3 id="403-forbidden-no-access-to-subscription">403 Forbidden: "no access to subscription"</h3>
+<p><strong>Cause:</strong> User requested a subscription they do not belong to (group membership).</p>
+<p><strong>Fix:</strong> Ensure the user is in a group listed in the subscription's <code>spec.owner.groups</code>.</p>
+<h3 id="429-too-many-requests">429 Too Many Requests</h3>
+<p><strong>Cause:</strong> User exceeded token rate limit for the model.</p>
+<p><strong>Fix:</strong> Wait for the rate limit window to reset, or upgrade to a subscription with higher limits.</p>
+<h3 id="model-not-appearing-in-get-v1models">Model not appearing in GET /v1/models</h3>
+<p><strong>Cause:</strong> MaaSModelRef missing, not reconciled, or access probe failed.</p>
+<p><strong>Fix:</strong></p>
+<ul>
+<li>Verify MaaSModelRef exists in the model namespace (e.g. <code>llm</code>) and has <code>status.phase: Ready</code></li>
+<li>Check MaaSAuthPolicy in <code>models-as-a-service</code> includes the user's groups and references the MaaSModelRef with correct <code>name</code> (e.g. <code>${MODEL_NAME}-ref</code>) and <code>namespace</code></li>
+<li>Ensure MaaSSubscription in <code>models-as-a-service</code> exists for the model and user's groups</li>
+</ul>
+<h3 id="policies-not-enforced">Policies not enforced</h3>
+<p><strong>Cause:</strong> Kuadrant controller may need to re-sync.</p>
+<p><strong>Fix:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span>control-plane<span class="o">=</span>controller-manager<span class="w"> </span>-n<span class="w"> </span>kuadrant-system
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span><span class="nv">Enforced</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>tokenratelimitpolicy/&lt;policy-name&gt;<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>--timeout<span class="o">=</span>2m
+</code></pre></div>
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
-<li><strong><a href="../quota-and-access-configuration/">Quota and Access Configuration</a></strong>: For operators - subscription setup, access control, and rate limiting</li>
-<li><strong><a href="../../user-guide/self-service-model-access/">Self-Service Model Access</a></strong>: Step-by-step guide for creating and using API keys</li>
+<li><a href="../subscription-overview/">Access and Quota Overview</a> — How policies and subscriptions work together</li>
+<li><a href="../maas-models/">MaaS Models</a> — Conceptual overview</li>
+<li><a href="../token-management/">Token Management</a></li>
+<li><a href="../../install/validation/">Validation</a></li>
 </ul>
-<hr />
 
 
 
@@ -2653,7 +2693,7 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 21, 2025 16:44:09 UTC">November 21, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
   </span>
 
     

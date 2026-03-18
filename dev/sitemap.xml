@@ -21,6 +21,10 @@
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/subscription-cardinality/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/group-membership-known-issues/</loc>
          <lastmod>2026-03-18</lastmod>
     </url>
@@ -30,6 +34,10 @@
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/maas-model-kinds/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/maas-models/</loc>
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>
@@ -45,19 +53,15 @@
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>
-         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tier-concepts/</loc>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/quota-and-access-configuration/</loc>
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>
-         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tier-configuration/</loc>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/subscription-known-issues/</loc>
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>
-         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tier-modification-known-issues/</loc>
-         <lastmod>2026-03-18</lastmod>
-    </url>
-    <url>
-         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tier-overview/</loc>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/subscription-overview/</loc>
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>
@@ -73,6 +77,10 @@
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/model-setup/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/platform-setup/</loc>
          <lastmod>2026-03-18</lastmod>
     </url>
@@ -81,11 +89,39 @@
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/troubleshooting/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/validation/</loc>
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/migration/tier-to-subscription/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/api-reference/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/maas-api-overview/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/crds/maas-auth-policy/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/crds/maas-model-ref/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/crds/maas-subscription/</loc>
+         <lastmod>2026-03-18</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/release-notes/</loc>
          <lastmod>2026-03-18</lastmod>
     </url>
     <url>

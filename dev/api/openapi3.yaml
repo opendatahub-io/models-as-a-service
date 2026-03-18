@@ -1,0 +1,693 @@
+openapi: 3.0.3
+info:
+    title: Models as a Service API
+    description: Models as a Service Billing and Management API
+    version: "1.0"
+servers:
+    - url: '{serverUrl}'
+      variables:
+        serverUrl:
+          default: http://localhost:8080
+          description: API server URL (e.g. https://maas-api.example.com)
+security:
+  - bearerAuth: []
+paths:
+    /health:
+        get:
+            tags:
+                - health
+            summary: Check the health status of the MaaS API service
+            description: Check if the API service is running and ready to handle requests. Used by load balancers and monitoring.
+            operationId: health#healthcheck
+            security: []  # Health endpoint doesn't require authentication
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/HealthResponse'
+                            example:
+                                status: healthy
+    /v1/models:
+        get:
+            tags:
+                - models
+            summary: Lists available large language models in OpenAI-compatible format
+            description: Lists available large language models in OpenAI-compatible format
+            operationId: models#list_llms
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ModelListResponse'
+                            example:
+                                object: list
+                                data:
+                                    - created: 1672531200
+                                      id: llama-2-7b-chat
+                                      object: model
+                                      owned_by: model-namespace
+                                      ready: true
+                                      url: https://api.example.com/v1/models/llama-2-7b-chat
+                                    - created: 1672531200
+                                      id: mistral-7b-instruct
+                                      object: model
+                                      owned_by: model-namespace
+                                      ready: true
+                                      url: https://api.example.com/v1/models/mistral-7b-instruct
+                                    - created: 1672531200
+                                      id: granite-8b-code-instruct
+                                      object: model
+                                      owned_by: model-namespace
+                                      ready: false
+                                    - created: 1672531200
+                                      id: llama-3-8b-instruct
+                                      object: model
+                                      owned_by: model-namespace
+                                      ready: true
+                                      url: https://api.example.com/v1/models/llama-3-8b-instruct
+                "500":
+                    description: Internal Server Error response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                            example:
+                                error: Failed to retrieve LLM models
+    /v1/tiers/lookup:
+        post:
+            tags:
+                - tiers
+            summary: Determines the highest subscription tier based on user group memberships
+            description: Finds the highest subscription tier based on user groups. Checks group memberships against tier mappings and returns the best match.
+            operationId: tiers#lookup
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/TierLookupRequest'
+                        examples:
+                            basic_user:
+                                summary: Basic authenticated user
+                                value:
+                                    groups:
+                                        - system:authenticated
+                            premium_user:
+                                summary: Premium user with multiple groups
+                                value:
+                                    groups:
+                                        - system:authenticated
+                                        - premium-users
+                                        - beta-testers
+                            enterprise_user:
+                                summary: Enterprise user
+                                value:
+                                    groups:
+                                        - system:authenticated
+                                        - enterprise-users
+                                        - admin-users
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/TierLookupResponse'
+                            examples:
+                                basic_tier:
+                                    summary: Basic tier response
+                                    value:
+                                        tier: basic
+                                premium_tier:
+                                    summary: Premium tier response
+                                    value:
+                                        tier: premium
+                                enterprise_tier:
+                                    summary: Enterprise tier response
+                                    value:
+                                        tier: enterprise
+                "400":
+                    description: Bad Request response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/TierErrorResponse'
+                            examples:
+                                invalid_json:
+                                    summary: Invalid JSON body
+                                    value:
+                                        error: bad_request
+                                        message: "invalid request body: invalid character '}' looking for beginning of value"
+                                missing_groups:
+                                    summary: Missing groups field
+                                    value:
+                                        error: bad_request
+                                        message: "invalid request body: Key: 'LookupRequest.Groups' Error:Tag: 'required'"
+                                empty_groups:
+                                    summary: Empty groups array
+                                    value:
+                                        error: bad_request
+                                        message: "invalid request body: Key: 'LookupRequest.Groups' Error:Tag: 'min'"
+                "404":
+                    description: Not Found response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/TierErrorResponse'
+                            example:
+                                error: not_found
+                                message: "no tier found for groups: [unknown-group]"
+                "500":
+                    description: Internal Server Error response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/TierErrorResponse'
+                            example:
+                                error: internal_error
+                                message: "failed to lookup tier: connection to configmap failed"
+    /v1/api-keys:
+        post:
+            tags:
+                - api-keys-v2
+            summary: Create a new hash-based API key
+            description: Creates a new OpenAI-compatible API key (sk-oai-* format). If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (default 90 days). The plaintext key is shown ONLY ONCE at creation time and cannot be retrieved again.
+            operationId: api-keys-v2#create
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required:
+                                - name
+                            properties:
+                                name:
+                                    type: string
+                                    description: Human-readable name for the API key
+                                description:
+                                    type: string
+                                    description: Optional description
+                                expiresIn:
+                                    type: string
+                                    description: Expiration duration (e.g., "30d", "90d", "1h"). Defaults to API_KEY_MAX_EXPIRATION_DAYS if not provided.
+                        examples:
+                            default_expiration:
+                                summary: API key with default expiration (API_KEY_MAX_EXPIRATION_DAYS)
+                                value:
+                                    name: my-api-key
+                                    description: Production API key
+                            custom_expiration:
+                                summary: API key with custom expiration (30 days)
+                                value:
+                                    name: my-short-lived-key
+                                    description: 30-day test key
+                                    expiresIn: 30d
+            responses:
+                "201":
+                    description: Created response.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    key:
+                                        type: string
+                                        description: Plaintext API key (SHOWN ONCE, NEVER AGAIN)
+                                    keyPrefix:
+                                        type: string
+                                        description: Display prefix for UI (e.g., sk-oai-abc)
+                                    id:
+                                        type: string
+                                        description: Unique identifier for the key
+                                    name:
+                                        type: string
+                                        description: Name of the key
+                                    createdAt:
+                                        type: string
+                                        format: date-time
+                                        description: Creation timestamp (RFC3339)
+                                    expiresAt:
+                                        type: string
+                                        format: date-time
+                                        description: Expiration timestamp (RFC3339)
+                "400":
+                    description: Bad Request response.
+                "401":
+                    description: Unauthorized response.
+    /v1/api-keys/search:
+        post:
+            tags:
+                - api-keys-v2
+            summary: Search and filter API keys
+            description: Search API keys with flexible filtering, sorting, and pagination. Supports filtering by username (admin-only), status, sorting by multiple fields, and pagination.
+            operationId: api-keys-v2#search
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                filters:
+                                    type: object
+                                    properties:
+                                        username:
+                                            type: string
+                                            description: Filter by username (admin-only)
+                                        status:
+                                            type: array
+                                            items:
+                                                type: string
+                                                enum: [active, revoked, expired]
+                                            description: Filter by status (active, revoked, expired). Defaults to active only.
+                                sort:
+                                    type: object
+                                    properties:
+                                        by:
+                                            type: string
+                                            enum: [created_at, expires_at, last_used_at, name]
+                                            description: Field to sort by
+                                        order:
+                                            type: string
+                                            enum: [asc, desc]
+                                            description: Sort order
+                                pagination:
+                                    type: object
+                                    properties:
+                                        limit:
+                                            type: integer
+                                            minimum: 1
+                                            maximum: 100
+                                            default: 50
+                                        offset:
+                                            type: integer
+                                            minimum: 0
+                                            default: 0
+                        examples:
+                            default_search:
+                                summary: Default search (active keys, newest first)
+                                value:
+                                    filters:
+                                        status: ["active"]
+                                    sort:
+                                        by: "created_at"
+                                        order: "desc"
+                                    pagination:
+                                        limit: 50
+                                        offset: 0
+                            admin_search:
+                                summary: Admin searching user's keys
+                                value:
+                                    filters:
+                                        username: "alice"
+                                        status: ["active", "revoked"]
+                                    sort:
+                                        by: "name"
+                                        order: "asc"
+                                    pagination:
+                                        limit: 20
+                                        offset: 0
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ApiKeyListResponse'
+                            example:
+                                object: list
+                                data:
+                                    - id: key_abc123
+                                      name: my-production-key
+                                      creationDate: "2024-01-15T10:30:00Z"
+                                      status: active
+                                    - id: key_def456
+                                      name: my-test-key
+                                      creationDate: "2024-01-14T09:15:00Z"
+                                      expirationDate: "2024-04-14T09:15:00Z"
+                                      status: active
+                                has_more: true
+                "400":
+                    description: Bad Request. Invalid search parameters.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "401":
+                    description: Unauthorized response.
+    /v1/api-keys/bulk-revoke:
+        post:
+            tags:
+                - api-keys-v2
+            summary: Bulk revoke API keys for a user
+            description: Revokes all active API keys for a specific user. Regular users can only bulk revoke their own keys. Admins can bulk revoke any user's keys.
+            operationId: api-keys-v2#bulk-revoke
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required:
+                                - username
+                            properties:
+                                username:
+                                    type: string
+                                    description: Username whose keys should be revoked
+                        examples:
+                            revoke_own:
+                                summary: User revoking own keys
+                                value:
+                                    username: "alice"
+                            admin_revoke:
+                                summary: Admin revoking user's keys
+                                value:
+                                    username: "bob"
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    revokedCount:
+                                        type: integer
+                                        description: Number of keys that were revoked
+                                    message:
+                                        type: string
+                                        description: Success message
+                            example:
+                                revokedCount: 5
+                                message: "Successfully revoked 5 active API key(s) for user alice"
+                "400":
+                    description: Bad Request. Invalid request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "401":
+                    description: Unauthorized response.
+                "403":
+                    description: Forbidden. User trying to revoke another user's keys.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                            example:
+                                error: "Access denied: you can only bulk revoke your own API keys"
+    /v1/api-keys/{id}:
+        get:
+            tags:
+                - api-keys-v2
+            summary: Get a specific API key by ID
+            description: Returns metadata for a single API key by its ID.
+            operationId: api-keys-v2#get
+            parameters:
+                - in: path
+                  name: id
+                  schema:
+                      type: string
+                  required: true
+                  description: ID of the API key to retrieve
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ApiKey'
+                "404":
+                    description: Not Found. API key not found.
+                "401":
+                    description: Unauthorized response.
+        delete:
+            tags:
+                - api-keys-v2
+            summary: Revoke a specific API key
+            description: Revokes a specific API key by changing its status to 'revoked'. The key will no longer be valid for authentication but remains visible in API key lists for audit purposes.
+            operationId: api-keys-v2#delete
+            parameters:
+                - in: path
+                  name: id
+                  schema:
+                      type: string
+                  required: true
+                  description: ID of the API key to revoke
+            responses:
+                "200":
+                    description: OK. Key successfully revoked.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ApiKey'
+                            example:
+                                id: key_abc123
+                                name: my-production-key
+                                creationDate: "2024-01-15T10:30:00Z"
+                                status: revoked
+                "404":
+                    description: Not Found. API key not found.
+                "401":
+                    description: Unauthorized response.
+                "403":
+                    description: Forbidden. User trying to revoke another user's key.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT  # optional, for documentation purposes only
+  
+  schemas:
+        # Simple error response used by Gin handlers
+        ErrorResponse:
+            type: object
+            properties:
+                error:
+                    type: string
+                    description: Error message
+                    example: Failed to retrieve models
+            required:
+                - error
+        
+        # Health check response
+        HealthResponse:
+            type: object
+            properties:
+                status:
+                    type: string
+                    description: Health status
+                    example: healthy
+            required:
+                - status
+        
+        # Model list response
+        ModelListResponse:
+            type: object
+            properties:
+                object:
+                    type: string
+                    description: Object type, always "list"
+                    example: list
+                data:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Model'
+                    description: Array of model objects
+                    example:
+                        - created: 1672531200
+                          id: llama-2-7b-chat
+                          object: model
+                          owned_by: model-namespace
+                          ready: true
+                          url: https://api.example.com/v1/models/llama-2-7b-chat
+                        - created: 1672531200
+                          id: mistral-7b-instruct
+                          object: model
+                          owned_by: model-namespace
+                          ready: true
+                          url: https://api.example.com/v1/models/mistral-7b-instruct
+            example:
+                object: list
+                data:
+                    - created: 1672531200
+                      id: llama-2-7b-chat
+                      object: model
+                      owned_by: model-namespace
+                      ready: true
+                      url: https://api.example.com/v1/models/llama-2-7b-chat
+                    - created: 1672531200
+                      id: mistral-7b-instruct
+                      object: model
+                      owned_by: model-namespace
+                      ready: true
+                      url: https://api.example.com/v1/models/mistral-7b-instruct
+            required:
+                - object
+                - data
+        
+        # Model schema
+        Model:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: The model identifier
+                    example: llama-2-7b-chat
+                object:
+                    type: string
+                    description: The object type, always "model"
+                    example: model
+                created:
+                    type: integer
+                    description: The Unix timestamp (in seconds) when the model was created
+                    example: 1672531200
+                    format: int64
+                owned_by:
+                    type: string
+                    description: The organization that owns the model
+                    example: model-namespace
+                ready:
+                    type: boolean
+                    description: Model ready status
+                    example: true
+                url:
+                    type: string
+                    description: Model URL (optional)
+                    example: https://api.example.com/v1/models/llama-2-7b-chat
+            example:
+                created: 1672531200
+                id: llama-2-7b-chat
+                object: model
+                owned_by: model-namespace
+                ready: true
+                url: https://api.example.com/v1/models/llama-2-7b-chat
+            required:
+                - id
+                - object
+                - created
+                - owned_by
+                - ready
+        
+        # Tier lookup
+        TierLookupRequest:
+            type: object
+            properties:
+                groups:
+                    type: array
+                    items:
+                        type: string
+                    description: Array of user groups to lookup
+                    example:
+                        - system:authenticated
+                        - premium-users
+                    minItems: 1
+            required:
+                - groups
+        
+        # Tier lookup response
+        TierLookupResponse:
+            type: object
+            properties:
+                tier:
+                    type: string
+                    description: Matched tier name
+                    example: premium
+            required:
+                - tier
+        
+        # Tier error response
+        TierErrorResponse:
+            type: object
+            properties:
+                error:
+                    type: string
+                    description: Error code
+                    example: bad_request
+                message:
+                    type: string
+                    description: Human-readable error message
+                    example: invalid request body
+            required:
+                - error
+                - message
+
+        # API Key metadata
+        ApiKey:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: Unique identifier for the API key
+                name:
+                    type: string
+                    description: User-friendly name for the API key
+                description:
+                    type: string
+                    description: Optional description providing context about the key's purpose
+                username:
+                    type: string
+                    description: Username that owns this API key
+                groups:
+                    type: array
+                    items:
+                        type: string
+                    description: User's groups at creation time (immutable snapshot for authorization)
+                creationDate:
+                    type: string
+                    format: date-time
+                    description: When the API key was created
+                expirationDate:
+                    type: string
+                    format: date-time
+                    description: When the API key expires
+                status:
+                    type: string
+                    enum: [active, revoked, expired]
+                    description: Current status of the API key
+                lastUsedAt:
+                    type: string
+                    format: date-time
+                    description: When the API key was last used for validation
+            required:
+                - id
+                - name
+                - creationDate
+                - status
+
+        # API Key List Response (paginated)
+        ApiKeyListResponse:
+            type: object
+            properties:
+                object:
+                    type: string
+                    description: Object type, always "list"
+                    example: list
+                data:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/ApiKey'
+                    description: Array of API key metadata objects
+                has_more:
+                    type: boolean
+                    description: Whether there are more results beyond this page
+                    example: true
+            required:
+                - object
+                - data
+                - has_more
+tags:
+    - name: api-keys
+      description: "\U0001F5DD️ Named API Key Management service. Long-lived, trackable tokens for applications."
+    - name: models
+      description: "\U0001F916 Model management service"
+    - name: tiers
+      description: "\U0001F3F7️Tier lookup service"
+    - name: health
+      description: ❤️ Health check service
