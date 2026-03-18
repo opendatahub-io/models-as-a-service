@@ -87,7 +87,7 @@ class TestModelsEndpoint:
     4. test_models_filtered_by_subscription
        → Models correctly filtered by specified subscription
 
-    5. test_deduplication_same_model_multiple_refs (xfail - deduplication bug)
+    5. test_deduplication_same_model_multiple_refs
        → Same modelRef listed twice should deduplicate to 1 entry
 
     6. test_different_modelrefs_same_model_id (xfail - deduplication bug)
@@ -545,7 +545,6 @@ class TestModelsEndpoint:
 
             _delete_sa(sa_name, namespace=sa_ns)
 
-    @pytest.mark.xfail(reason="Known bug: API does not deduplicate - same modelRef 2x returns 2+ duplicates instead of 1", strict=True)
     def test_deduplication_same_model_multiple_refs(self):
         """
         Test 6: Same modelRef listed twice should deduplicate to 1 entry.
