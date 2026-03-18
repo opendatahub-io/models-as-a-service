@@ -79,16 +79,12 @@ func TestGenerateAPIKey_Uniqueness(t *testing.T) {
 func TestHashAPIKey(t *testing.T) {
 	// Compute the PBKDF2 hash for the test key
 	testKey := "sk-oai-test123"
-	hashData, err := api_keys.HashAPIKey(testKey)
-	if err != nil {
-		t.Fatalf("HashAPIKey() returned error: %v", err)
-	}
+	hashData := api_keys.HashAPIKey(testKey)
 
 	// Verify hash length (32 bytes = 64 hex chars)
 	if len(hashData.Hash) != 64 {
 		t.Errorf("HashAPIKey() hash length = %d, want 64", len(hashData.Hash))
 	}
-
 
 	// Verify iterations
 	if hashData.Iterations != 600000 {
@@ -96,10 +92,7 @@ func TestHashAPIKey(t *testing.T) {
 	}
 
 	// Verify different keys produce different hashes (with constant salt)
-	differentHashData, err := api_keys.HashAPIKey("sk-oai-different")
-	if err != nil {
-		t.Fatalf("HashAPIKey() for different key returned error: %v", err)
-	}
+	differentHashData := api_keys.HashAPIKey("sk-oai-different")
 	if hashData.Hash == differentHashData.Hash {
 		t.Error("HashAPIKey() produced same hash for different keys")
 	}
@@ -127,27 +120,18 @@ func BenchmarkGenerateAPIKey(b *testing.B) {
 
 func TestHashComparison(t *testing.T) {
 	key := "sk-oai-test-verification"
-	
+
 	// Hash the key
-	hashData, err := api_keys.HashAPIKey(key)
-	if err != nil {
-		t.Fatalf("HashAPIKey() returned error: %v", err)
-	}
+	hashData := api_keys.HashAPIKey(key)
 
 	// Test correct key verification using direct hash comparison
-	correctHash, err := api_keys.HashAPIKey(key)
-	if err != nil {
-		t.Errorf("HashAPIKey() returned error: %v", err)
-	}
+	correctHash := api_keys.HashAPIKey(key)
 	if correctHash.Hash != hashData.Hash {
 		t.Error("Hash comparison should return true for correct key")
 	}
 
 	// Test wrong key verification using direct hash comparison
-	wrongHash, err := api_keys.HashAPIKey("sk-oai-wrong-key")
-	if err != nil {
-		t.Errorf("HashAPIKey() returned error for wrong key: %v", err)
-	}
+	wrongHash := api_keys.HashAPIKey("sk-oai-wrong-key")
 	if wrongHash.Hash == hashData.Hash {
 		t.Error("Hash comparison should return false for wrong key")
 	}
@@ -158,17 +142,17 @@ func BenchmarkHashAPIKey(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = api_keys.HashAPIKey(key)
+		_ = api_keys.HashAPIKey(key)
 	}
 }
 
 func BenchmarkHashComparison(b *testing.B) {
 	key := "sk-oai-benchmark-verification-test"
-	hashData, _ := api_keys.HashAPIKey(key)
+	hashData := api_keys.HashAPIKey(key)
 
 	b.ResetTimer()
 	for b.Loop() {
-		computed, _ := api_keys.HashAPIKey(key)
+		computed := api_keys.HashAPIKey(key)
 		_ = computed.Hash == hashData.Hash
 	}
 }

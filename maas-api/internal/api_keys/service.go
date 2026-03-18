@@ -95,9 +95,8 @@ func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups 
 	keyID := uuid.New().String()
 
 	// Store in database (hash only, plaintext NEVER stored)
-	// Note: prefix is used for indexing but plaintext is not stored
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
-	if err := s.store.AddKey(ctx, username, keyID, plaintext, hashData, name, description, userGroups, &expiresAt); err != nil {
+	if err := s.store.AddKey(ctx, username, keyID, hashData, name, description, userGroups, &expiresAt); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 

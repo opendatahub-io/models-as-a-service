@@ -38,9 +38,8 @@ var _ MetadataStore = (*MockStore)(nil)
 
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
-// Note: plaintextKey parameter is unused - only hashData.Hash is stored.
 func (m *MockStore) AddKey(
-	ctx context.Context, username, keyID, plaintextKey string, hashData *APIKeyHashData,
+	ctx context.Context, username, keyID string, hashData *APIKeyHashData,
 	name, description string, userGroups []string, expiresAt *time.Time,
 ) error {
 	if keyID == "" {
@@ -355,13 +354,12 @@ func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 	return &meta, nil
 }
 
+// GetByKey finds a key by its plaintext value (PBKDF2 hash comparison).
+// Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked/expired.
 func (m *MockStore) GetByKey(ctx context.Context, providedKey string) (*ApiKey, error) {
-	// Compute hash ONCE before acquiring lock (PBKDF2 is expensive: ~1.3s per hash)
+	// Compute hash ONCE before acquiring lock (PBKDF2 is expensive: ~1.3s per hash).
 	// Since we use constant salt, the same key always produces the same hash.
-	computedHash, err := HashAPIKey(providedKey)
-	if err != nil {
-		return nil, ErrKeyNotFound
-	}
+	computedHash := HashAPIKey(providedKey)
 
 	// Use RLock for read-only operation - allows concurrent readers
 	m.mu.RLock()

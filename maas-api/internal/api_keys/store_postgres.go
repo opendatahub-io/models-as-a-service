@@ -38,10 +38,8 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 
 // AddKey stores an API key with PBKDF2 hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
-// Note: plaintextKey parameter is unused - only hashData.Hash is stored.
-// The plaintext is accepted for interface consistency but never persisted.
 func (s *PostgresStore) AddKey(
-	ctx context.Context, username, keyID, plaintextKey string, hashData *APIKeyHashData,
+	ctx context.Context, username, keyID string, hashData *APIKeyHashData,
 	name, description string, userGroups []string, expiresAt *time.Time,
 ) error {
 	if keyID == "" {
@@ -340,10 +338,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 // Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked/expired.
 func (s *PostgresStore) GetByKey(ctx context.Context, providedKey string) (*ApiKey, error) {
 	// Compute PBKDF2 hash with constant salt for direct lookup
-	hashData, err := HashAPIKey(providedKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute key hash: %w", err)
-	}
+	hashData := HashAPIKey(providedKey)
 	
 	// Direct hash lookup - O(1) with index on key_hash
 	// Fetch without filtering on status/expiry to properly distinguish error cases
@@ -360,7 +355,7 @@ func (s *PostgresStore) GetByKey(ctx context.Context, providedKey string) (*ApiK
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
 
-	err = row.Scan(
+	err := row.Scan(
 		&k.ID, &k.Username, &k.Name, &description, pq.Array(&k.Groups),
 		&k.Status, &expiresAt, &lastUsedAt, &createdAt,
 	)

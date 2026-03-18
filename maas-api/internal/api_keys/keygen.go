@@ -65,10 +65,7 @@ func GenerateAPIKey() (plaintext string, hashData *APIKeyHashData, prefix string
 	plaintext = KeyPrefix + encoded
 
 	// 4. Compute PBKDF2-HMAC-SHA256 hash for storage
-	hashData, err = HashAPIKey(plaintext)
-	if err != nil {
-		return "", nil, "", fmt.Errorf("failed to hash API key: %w", err)
-	}
+	hashData = HashAPIKey(plaintext)
 
 	// 5. Create display prefix (first 12 chars + ellipsis)
 	if len(encoded) >= displayPrefixLength {
@@ -80,16 +77,16 @@ func GenerateAPIKey() (plaintext string, hashData *APIKeyHashData, prefix string
 	return plaintext, hashData, prefix, nil
 }
 
-// HashAPIKey computes PBKDF2-HMAC-SHA256 hash with constant salt
+// HashAPIKey computes PBKDF2-HMAC-SHA256 hash with constant salt.
 // This is the canonical hashing function - used by both key creation and validation.
 // Uses operator-defined constant salt (acceptable for machine-generated high-entropy keys).
-func HashAPIKey(key string) (*APIKeyHashData, error) {
+func HashAPIKey(key string) *APIKeyHashData {
 	// Use constant salt for operator deployment
 	salt := []byte(ConstantSalt)
 
 	// Compute PBKDF2-HMAC-SHA256
 	hash := pbkdf2.Key([]byte(key), salt, Iterations, HashBytes, sha256.New)
-	
+
 	// Note: The hex-encoded hash is stored in an immutable Go string.
 	// Go strings cannot be reliably cleared from memory by user code.
 	// The raw byte slice is cleared below for defense-in-depth, but the
@@ -104,10 +101,8 @@ func HashAPIKey(key string) (*APIKeyHashData, error) {
 		hash[i] = 0
 	}
 
-	return result, nil
+	return result
 }
-
-
 
 // IsValidKeyFormat checks if a key has the correct sk-oai-* prefix and valid base62 body.
 func IsValidKeyFormat(key string) bool {

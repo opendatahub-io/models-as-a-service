@@ -26,10 +26,9 @@ type MetadataStore interface {
 	// AddKey stores an API key with PBKDF2 hash-only storage (no plaintext).
 	// Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 	// userGroups is an array of user's groups (used for authorization).
-	// hashData contains PBKDF2 hash, salt, and iteration count.
-	// plaintextKey is used only for deriving the search prefix (not stored).
+	// hashData contains PBKDF2 hash and iteration count.
 	AddKey(
-		ctx context.Context, username string, keyID string, plaintextKey string,
+		ctx context.Context, username string, keyID string,
 		hashData *APIKeyHashData, name, description string, userGroups []string, expiresAt *time.Time,
 	) error
 
