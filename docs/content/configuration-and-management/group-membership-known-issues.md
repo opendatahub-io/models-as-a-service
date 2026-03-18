@@ -28,7 +28,7 @@ T+1h:   Alice can still access models until she revokes the key and creates a ne
 When a user belongs to groups covered by **multiple MaaSSubscription CRs** for the same model, the system cannot automatically determine which subscription to apply.
 
 !!! note "X-MaaS-Subscription header"
-    The user (or client) must specify which subscription to use via the **X-MaaS-Subscription** header on each request. Without this header, requests may fail or use an ambiguous default.
+    The user (or client) must specify which subscription to use via the **X-MaaS-Subscription** header on each request. Without this header, the request will fail with an error listing the available subscriptions.
 
 **Example:** User is in both `team-a` (subscription `sub-team-a`) and `team-b` (subscription `sub-team-b`). Both subscriptions grant access to model `llama-3`. The client must send:
 

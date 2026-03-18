@@ -12,8 +12,8 @@ The MaaS Platform is an end-to-end solution that leverages Kuadrant (Red Hat Con
 
 **All requests flow through the maas-default-gateway and RHCL components**, which then route requests based on the path:
 
-- `/maas-api/*` requests → MaaS API (API key management, model listing, subscription selection)
-- Inference requests (`/v1/models`, `/v1/chat/completions`) → Model Serving (validates API key via RHCL callback to maas-api)
+- `/maas-api/*` and `/v1/models` requests → MaaS API (API key management, model listing, subscription selection)
+- Inference requests (`/{namespace}/{model}/v1/chat/completions`) → Model Serving (validates API key via RHCL callback to maas-api)
 
 ```mermaid
 graph TB
