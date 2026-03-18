@@ -43,8 +43,8 @@ The observability stack is defined in `deployment/base/observability/`. It inclu
 
 | Resource | Purpose |
 |----------|---------|
-| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
-| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
+| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `subscription`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `subscription`. |
+| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `subscription` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-subscription P50/P95/P99. |
 
 **Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Subscription` is injected):
 
@@ -57,7 +57,7 @@ When using the full deployment script, this is applied automatically:
 !!! note "Prerequisites"
     - **Tools**: `kubectl`, `kustomize`, `jq`, `yq` must be installed
     - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and subscription selection must be deployed first. The AuthPolicy injects `X-MaaS-Subscription`, which Istio Telemetry reads to label latency by subscription. Without it, the `subscription` label on gateway latency will be empty.
-    - **Namespace**: Use `--namespace` if your MaaS API is deployed to a namespace other than `maas-api` (e.g. `--namespace opendatahub`)
+    - **Namespace**: Use `--namespace` to specify the MaaS API namespace (default: `opendatahub` for ODH, `redhat-ods-applications` for RHOAI)
 
 **Optional:** The Istio gateway (Envoy) ServiceMonitor is included in `deployment/base/observability/` and deployed automatically by `install-observability.sh`.
 
