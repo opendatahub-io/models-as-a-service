@@ -169,7 +169,7 @@ url: https://maas-api.placehold.svc...  # Still has placeholder!
 Error: components not supported in this version
 ```
 
-**Solution**: Upgrade to Kustomize v3.7.0 or later (released 2020). OpenShift 4.x includes a modern version.
+**Solution**: Upgrade to Kustomize v5.7.0 or later. OpenShift 4.x includes a modern version.
 
 ## Related Files
 
