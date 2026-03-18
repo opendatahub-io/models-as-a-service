@@ -88,7 +88,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		}
 
 		var err error
-		//nolint:unqueryvet // Select is a method, not a SQL query
+		//nolint:unqueryvet,nolintlint // Select is a method, not a SQL query
 		result, err = h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription, "")
 		if err != nil {
 			var multipleSubsErr *subscription.MultipleSubscriptionsError
@@ -166,7 +166,8 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			return
 		}
 		// Use the selected subscription (which may be auto-selected if user only has one)
-		selectedSubscription = result.Name
+		// Use qualified "namespace/name" format for accurate authorization checks
+		selectedSubscription = result.Namespace + "/" + result.Name
 	} else {
 		// If no selector configured, use the requested subscription header as-is
 		selectedSubscription = requestedSubscription

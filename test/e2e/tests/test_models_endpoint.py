@@ -550,14 +550,11 @@ class TestModelsEndpoint:
         Test 6: Same modelRef listed twice should deduplicate to 1 entry.
 
         Creates a subscription with the SAME modelRef listed TWICE (different rate limits).
-        The API should deduplicate and return only 1 entry regardless of how many times
+        The API correctly deduplicates and returns only 1 entry regardless of how many times
         the same modelRef is listed.
 
-        Currently fails because:
-        - API returns 2+ duplicate entries instead of 1 deduplicated entry
-        - No deduplication logic in maas-api/internal/handlers/models.go
-
-        See: BUG_MODELS_ENDPOINT_NO_DEDUPLICATION.md
+        This test now passes after deduplication was implemented in
+        maas-api/internal/handlers/models.go.
         """
         log.info("Test 6: Same modelRef twice should deduplicate (INTENDED behavior)")
 

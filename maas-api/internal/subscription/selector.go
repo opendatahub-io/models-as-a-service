@@ -101,14 +101,23 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				}
 			}
 
-			if len(matches) == 0 {
+			// Filter matches by access before exposing namespace information
+			var accessibleMatches []subscription
+			for _, sub := range matches {
+				if userHasAccess(&sub, username, groups) {
+					accessibleMatches = append(accessibleMatches, sub)
+				}
+			}
+
+			if len(accessibleMatches) == 0 {
+				// No accessible matches - don't expose namespaces of inaccessible subscriptions
 				return nil, &SubscriptionNotFoundError{Subscription: requestedSubscription}
 			}
 
-			if len(matches) > 1 {
-				// Multiple subscriptions with same bare name in different namespaces
-				namespaces := make([]string, len(matches))
-				for i, m := range matches {
+			if len(accessibleMatches) > 1 {
+				// Multiple accessible subscriptions with same bare name in different namespaces
+				namespaces := make([]string, len(accessibleMatches))
+				for i, m := range accessibleMatches {
 					namespaces[i] = m.Namespace
 				}
 				return nil, &SubscriptionAmbiguousError{
@@ -117,14 +126,11 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				}
 			}
 
-			// Exactly one match - use it
-			if !userHasAccess(&matches[0], username, groups) {
-				return nil, &AccessDeniedError{Subscription: requestedSubscription}
-			}
-			if requestedModel != "" && !subscriptionIncludesModel(&matches[0], requestedModel) {
+			// Exactly one accessible match - use it
+			if requestedModel != "" && !subscriptionIncludesModel(&accessibleMatches[0], requestedModel) {
 				return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
 			}
-			return toResponse(&matches[0]), nil
+			return toResponse(&accessibleMatches[0]), nil
 		}
 
 		// Request had '/' but no match found

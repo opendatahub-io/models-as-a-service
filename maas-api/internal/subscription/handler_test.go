@@ -206,34 +206,45 @@ func TestHandler_SelectSubscription_AccessDenied(t *testing.T) {
 	lister := &mockLister{subscriptions: subscriptions}
 	router := setupTestRouter(lister)
 
-	reqBody := subscription.SelectRequest{
-		Groups:                []string{"basic-users"},
-		Username:              "alice",
-		RequestedSubscription: "premium-sub", // Alice doesn't have access
-	}
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		t.Fatalf("failed to marshal request: %v", err)
+	testAccessDenied := func(t *testing.T, requestedSubscription, expectedError string) {
+		t.Helper()
+		reqBody := subscription.SelectRequest{
+			Groups:                []string{"basic-users"},
+			Username:              "alice",
+			RequestedSubscription: requestedSubscription,
+		}
+		jsonBody, err := json.Marshal(reqBody)
+		if err != nil {
+			t.Fatalf("failed to marshal request: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", w.Code)
+		}
+
+		var response subscription.SelectResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if response.Error != expectedError {
+			t.Errorf("expected error code %q, got %q", expectedError, response.Error)
+		}
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	t.Run("bare name without access returns not_found (security: don't leak namespace info)", func(t *testing.T) {
+		testAccessDenied(t, "premium-sub", "not_found")
+	})
 
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
-	}
-
-	var response subscription.SelectResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-
-	if response.Error != "access_denied" {
-		t.Errorf("expected error code 'access_denied', got %q", response.Error)
-	}
+	t.Run("qualified name without access returns access_denied", func(t *testing.T) {
+		testAccessDenied(t, "test-ns/premium-sub", "access_denied")
+	})
 }
 
 func TestHandler_SelectSubscription_InvalidRequest(t *testing.T) {

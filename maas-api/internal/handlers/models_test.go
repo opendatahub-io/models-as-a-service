@@ -402,8 +402,9 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	testLogger := logger.Development()
 
 	// Create mock servers that require specific subscription headers
-	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "premium")
-	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "free")
+	// Use qualified names (namespace/name) to match the format sent by the handler
+	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "test-namespace/premium")
+	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "test-namespace/free")
 
 	// Build MaaSModelRef unstructured list
 	maasModelRefItems := []*unstructured.Unstructured{
