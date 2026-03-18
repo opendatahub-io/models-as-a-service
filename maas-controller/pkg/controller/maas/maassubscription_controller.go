@@ -107,7 +107,15 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 	// Model-centric approach: for each model referenced by this subscription,
 	// find ALL subscriptions for that model and build a single aggregated TokenRateLimitPolicy.
 	// Kuadrant only allows one TokenRateLimitPolicy per HTTPRoute target.
+
+	// Deduplicate model references to prevent reconciling the same model multiple times
+	seen := make(map[string]struct{}, len(subscription.Spec.ModelRefs))
 	for _, modelRef := range subscription.Spec.ModelRefs {
+		k := modelRef.Namespace + "/" + modelRef.Name
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
 		if err := r.reconcileTRLPForModel(ctx, log, modelRef.Namespace, modelRef.Name); err != nil {
 			return err
 		}
@@ -348,14 +356,13 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	} else if err != nil {
 		return fmt.Errorf("failed to get existing TokenRateLimitPolicy: %w", err)
 	} else {
-		// Ensure owner reference is set on existing policy (may be missing on old policies)
-		if err := controllerutil.SetControllerReference(route, existing, r.Scheme); err != nil {
-			return fmt.Errorf("failed to set owner reference on existing TokenRateLimitPolicy %s/%s: %w", existing.GetNamespace(), existing.GetName(), err)
-		}
-
 		if !isManaged(existing) {
 			log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
 		} else {
+			// Ensure owner reference is set on managed existing policy.
+			if err := controllerutil.SetControllerReference(route, existing, r.Scheme); err != nil {
+				return fmt.Errorf("failed to set owner reference on existing TokenRateLimitPolicy %s/%s: %w", existing.GetNamespace(), existing.GetName(), err)
+			}
 			// Snapshot the existing object before modifications so we can detect
 			// no-op updates.
 			snapshot := existing.DeepCopy()
@@ -431,7 +438,13 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 		// For each model referenced by this subscription, rebuild the aggregated TokenRateLimitPolicy
 		// without the deleted subscription's limits. If no other subscriptions reference the model,
 		// the TRLP will be deleted. This ensures zero-downtime rate limiting during subscription removal.
+		seen := make(map[string]struct{}, len(subscription.Spec.ModelRefs))
 		for _, modelRef := range subscription.Spec.ModelRefs {
+			k := modelRef.Namespace + "/" + modelRef.Name
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
 			log.Info("Rebuilding TokenRateLimitPolicy without deleted subscription", "model", modelRef.Namespace+"/"+modelRef.Name, "subscription", subscription.Name)
 			if err := r.reconcileTRLPForModel(ctx, log, modelRef.Namespace, modelRef.Name); err != nil {
 				log.Error(err, "failed to reconcile TokenRateLimitPolicy during deletion, will retry", "model", modelRef.Namespace+"/"+modelRef.Name)
