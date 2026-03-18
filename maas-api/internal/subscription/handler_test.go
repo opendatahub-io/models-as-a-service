@@ -556,3 +556,353 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 		})
 	}
 }
+
+// createTestSubscriptionWithModels creates a subscription with specific model references.
+func createTestSubscriptionWithModels(name string, namespace string, groups []string, models []struct{ ns, name string }, priority int32, orgID, costCenter string) *unstructured.Unstructured {
+	groupsSlice := make([]any, len(groups))
+	for i, g := range groups {
+		groupsSlice[i] = map[string]any{"name": g}
+	}
+
+	modelRefsSlice := make([]any, len(models))
+	for i, m := range models {
+		modelRefsSlice[i] = map[string]any{
+			"namespace": m.ns,
+			"name":      m.name,
+			"tokenRateLimits": []any{
+				map[string]any{
+					"limit":  int64(1000),
+					"window": "1m",
+				},
+			},
+		}
+	}
+
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "maas.opendatahub.io/v1alpha1",
+			"kind":       "MaaSSubscription",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": namespace,
+			},
+			"spec": map[string]any{
+				"owner": map[string]any{
+					"groups": groupsSlice,
+				},
+				"priority":  int64(priority),
+				"modelRefs": modelRefsSlice,
+				"tokenMetadata": map[string]any{
+					"organizationId": orgID,
+					"costCenter":     costCenter,
+					"labels": map[string]any{
+						"env": "test",
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestHandler_SelectSubscription_ModelBasedAutoSelection tests auto-selection based on model availability.
+func TestHandler_SelectSubscription_ModelBasedAutoSelection(t *testing.T) {
+	// Create subscriptions with different models
+	subscriptions := []*unstructured.Unstructured{
+		createTestSubscriptionWithModels("gold", "tenant-a", []string{"premium-users"}, []struct{ ns, name string }{
+			{ns: "models", name: "llm"},
+			{ns: "models", name: "embedding"},
+		}, 10, "org-gold", "cc-gold"),
+		createTestSubscriptionWithModels("silver", "tenant-a", []string{"premium-users"}, []struct{ ns, name string }{
+			{ns: "models", name: "small-model"},
+		}, 10, "org-silver", "cc-silver"),
+	}
+
+	lister := &mockLister{subscriptions: subscriptions}
+	router := setupTestRouter(lister)
+
+	tests := []struct {
+		name           string
+		groups         []string
+		username       string
+		requestedModel string
+		expectedName   string
+		expectedError  string
+		description    string
+	}{
+		{
+			name:           "auto-select when only gold has llm model",
+			groups:         []string{"premium-users"},
+			username:       "alice",
+			requestedModel: "models/llm",
+			expectedName:   "gold",
+			description:    "User has access to both gold and silver, but only gold has models/llm. Should auto-select gold.",
+		},
+		{
+			name:           "auto-select when only silver has small-model",
+			groups:         []string{"premium-users"},
+			username:       "alice",
+			requestedModel: "models/small-model",
+			expectedName:   "silver",
+			description:    "User has access to both gold and silver, but only silver has models/small-model. Should auto-select silver.",
+		},
+		{
+			name:           "auto-select when only gold has embedding model",
+			groups:         []string{"premium-users"},
+			username:       "alice",
+			requestedModel: "models/embedding",
+			expectedName:   "gold",
+			description:    "User has access to both gold and silver, but only gold has models/embedding. Should auto-select gold.",
+		},
+		{
+			name:           "error when no subscription has the requested model",
+			groups:         []string{"premium-users"},
+			username:       "alice",
+			requestedModel: "models/nonexistent",
+			expectedError:  "not_found",
+			description:    "User has access to gold and silver, but neither has models/nonexistent. Should return not_found error.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := subscription.SelectRequest{
+				Groups:         tt.groups,
+				Username:       tt.username,
+				RequestedModel: tt.requestedModel,
+			}
+			jsonBody, err := json.Marshal(reqBody)
+			if err != nil {
+				t.Fatalf("failed to marshal request: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBuffer(jsonBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Errorf("%s: expected status 200, got %d", tt.description, w.Code)
+			}
+
+			var response subscription.SelectResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatalf("failed to unmarshal response: %v", err)
+			}
+
+			if tt.expectedError != "" {
+				// Expecting an error response
+				if response.Error != tt.expectedError {
+					t.Errorf("%s: expected error code %q, got %q", tt.description, tt.expectedError, response.Error)
+				}
+			} else {
+				// Expecting a success response
+				if response.Name != tt.expectedName {
+					t.Errorf("%s: expected subscription %q, got %q", tt.description, tt.expectedName, response.Name)
+				}
+			}
+		})
+	}
+}
+
+// TestHandler_SelectSubscription_ModelValidation tests that explicit subscription selection validates model access.
+func TestHandler_SelectSubscription_ModelValidation(t *testing.T) {
+	// Create subscriptions with different models
+	subscriptions := []*unstructured.Unstructured{
+		createTestSubscriptionWithModels("gold", "tenant-a", []string{"premium-users"}, []struct{ ns, name string }{
+			{ns: "models", name: "llm"},
+		}, 10, "org-gold", "cc-gold"),
+		createTestSubscriptionWithModels("silver", "tenant-a", []string{"premium-users"}, []struct{ ns, name string }{
+			{ns: "models", name: "small-model"},
+		}, 10, "org-silver", "cc-silver"),
+	}
+
+	lister := &mockLister{subscriptions: subscriptions}
+	router := setupTestRouter(lister)
+
+	tests := []struct {
+		name                  string
+		groups                []string
+		username              string
+		requestedSubscription string
+		requestedModel        string
+		expectedName          string
+		expectedError         string
+		description           string
+	}{
+		{
+			name:                  "explicit selection with correct model",
+			groups:                []string{"premium-users"},
+			username:              "alice",
+			requestedSubscription: "gold",
+			requestedModel:        "models/llm",
+			expectedName:          "gold",
+			description:           "User explicitly selects gold subscription which has models/llm. Should succeed.",
+		},
+		{
+			name:                  "explicit selection with wrong model",
+			groups:                []string{"premium-users"},
+			username:              "alice",
+			requestedSubscription: "silver",
+			requestedModel:        "models/llm",
+			expectedError:         "model_not_in_subscription",
+			description:           "User explicitly selects silver subscription but it doesn't have models/llm. Should return model_not_in_subscription error.",
+		},
+		{
+			name:                  "explicit selection gold with small-model",
+			groups:                []string{"premium-users"},
+			username:              "alice",
+			requestedSubscription: "gold",
+			requestedModel:        "models/small-model",
+			expectedError:         "model_not_in_subscription",
+			description:           "User explicitly selects gold subscription but it doesn't have models/small-model. Should return model_not_in_subscription error.",
+		},
+		{
+			name:                  "explicit selection silver with small-model",
+			groups:                []string{"premium-users"},
+			username:              "alice",
+			requestedSubscription: "silver",
+			requestedModel:        "models/small-model",
+			expectedName:          "silver",
+			description:           "User explicitly selects silver subscription which has models/small-model. Should succeed.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := subscription.SelectRequest{
+				Groups:                tt.groups,
+				Username:              tt.username,
+				RequestedSubscription: tt.requestedSubscription,
+				RequestedModel:        tt.requestedModel,
+			}
+			jsonBody, err := json.Marshal(reqBody)
+			if err != nil {
+				t.Fatalf("failed to marshal request: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBuffer(jsonBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Errorf("%s: expected status 200, got %d", tt.description, w.Code)
+			}
+
+			var response subscription.SelectResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatalf("failed to unmarshal response: %v", err)
+			}
+
+			if tt.expectedError != "" {
+				// Expecting an error response
+				if response.Error != tt.expectedError {
+					t.Errorf("%s: expected error code %q, got %q. Message: %s", tt.description, tt.expectedError, response.Error, response.Message)
+				}
+			} else {
+				// Expecting a success response
+				if response.Name != tt.expectedName {
+					t.Errorf("%s: expected subscription %q, got %q", tt.description, tt.expectedName, response.Name)
+				}
+			}
+		})
+	}
+}
+
+// TestHandler_SelectSubscription_MultipleSubscriptionsSameModel tests behavior when multiple subscriptions have the same model.
+func TestHandler_SelectSubscription_MultipleSubscriptionsSameModel(t *testing.T) {
+	// Create two subscriptions that both have the same model
+	subscriptions := []*unstructured.Unstructured{
+		createTestSubscriptionWithModels("gold", "tenant-a", []string{"premium-users"}, []struct{ ns, name string }{
+			{ns: "models", name: "llm"},
+		}, 10, "org-gold", "cc-gold"),
+		createTestSubscriptionWithModels("platinum", "tenant-a", []string{"premium-users"}, []struct{ ns, name string }{
+			{ns: "models", name: "llm"},
+		}, 20, "org-platinum", "cc-platinum"),
+	}
+
+	lister := &mockLister{subscriptions: subscriptions}
+	router := setupTestRouter(lister)
+
+	tests := []struct {
+		name                  string
+		groups                []string
+		username              string
+		requestedSubscription string
+		requestedModel        string
+		expectedName          string
+		expectedError         string
+		description           string
+	}{
+		{
+			name:           "error when both subscriptions have the model",
+			groups:         []string{"premium-users"},
+			username:       "alice",
+			requestedModel: "models/llm",
+			expectedError:  "multiple_subscriptions",
+			description:    "User has access to both gold and platinum, and both have models/llm. Should require explicit selection.",
+		},
+		{
+			name:                  "explicit selection works when both have model",
+			groups:                []string{"premium-users"},
+			username:              "alice",
+			requestedSubscription: "gold",
+			requestedModel:        "models/llm",
+			expectedName:          "gold",
+			description:           "User explicitly selects gold when both subscriptions have the model. Should honor explicit selection.",
+		},
+		{
+			name:                  "explicit selection of higher priority subscription",
+			groups:                []string{"premium-users"},
+			username:              "alice",
+			requestedSubscription: "platinum",
+			requestedModel:        "models/llm",
+			expectedName:          "platinum",
+			description:           "User explicitly selects platinum (higher priority) when both subscriptions have the model. Should honor explicit selection.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := subscription.SelectRequest{
+				Groups:                tt.groups,
+				Username:              tt.username,
+				RequestedSubscription: tt.requestedSubscription,
+				RequestedModel:        tt.requestedModel,
+			}
+			jsonBody, err := json.Marshal(reqBody)
+			if err != nil {
+				t.Fatalf("failed to marshal request: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBuffer(jsonBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Errorf("%s: expected status 200, got %d", tt.description, w.Code)
+			}
+
+			var response subscription.SelectResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatalf("failed to unmarshal response: %v", err)
+			}
+
+			if tt.expectedError != "" {
+				// Expecting an error response
+				if response.Error != tt.expectedError {
+					t.Errorf("%s: expected error code %q, got %q. Message: %s", tt.description, tt.expectedError, response.Error, response.Message)
+				}
+			} else {
+				// Expecting a success response
+				if response.Name != tt.expectedName {
+					t.Errorf("%s: expected subscription %q, got %q", tt.description, tt.expectedName, response.Name)
+				}
+			}
+		})
+	}
+}
