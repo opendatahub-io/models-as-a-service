@@ -177,7 +177,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 
 		// Construct API URLs using configured namespace
 		apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
-		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/v1/subscriptions/select", r.MaaSAPINamespace)
+		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", r.MaaSAPINamespace)
 
 		rule := map[string]interface{}{
 			"metadata": map[string]interface{}{
@@ -253,12 +253,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			},
 		}
 
-		// Check for subscription selection errors and deny if present
-		authRules["subscription-error-check"] = map[string]interface{}{
+		// Fail-close: require successful subscription selection (name must be present)
+		authRules["subscription-valid"] = map[string]interface{}{
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]interface{}{
-				"rego": `allow { not object.get(input.auth.metadata["subscription-info"], "error", false) }`,
+				"rego": `allow { object.get(input.auth.metadata["subscription-info"], "name", "") != "" }`,
 			},
 		}
 
@@ -324,7 +324,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 								"keyId": map[string]interface{}{
 									"selector": "auth.metadata.apiKeyValidation.keyId",
 								},
-								// Subscription metadata from /v1/subscriptions/select endpoint
+								// Subscription metadata from /internal/v1/subscriptions/select endpoint
 								"selected_subscription": map[string]interface{}{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
 								},
@@ -459,8 +459,6 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 
 // deleteModelAuthPolicy deletes the aggregated AuthPolicy for a model in the given namespace.
 func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
-	// Check if there are any remaining (non-deleted) MaaSAuthPolicies that reference this model.
-	// If yes, don't delete the aggregated AuthPolicy - they will rebuild it.
 	// Always delete the aggregated AuthPolicy so remaining MaaSAuthPolicies rebuild it
 	// without the subjects from the deleted policy. If we skip deletion, the aggregated
 	// AuthPolicy will contain stale subjects from the deleted MaaSAuthPolicy.

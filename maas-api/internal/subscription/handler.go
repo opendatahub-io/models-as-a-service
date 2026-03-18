@@ -26,7 +26,7 @@ func NewHandler(log *logger.Logger, selector *Selector) *Handler {
 	}
 }
 
-// SelectSubscription handles POST /v1/subscriptions/select requests.
+// SelectSubscription handles POST /internal/v1/subscriptions/select requests.
 //
 // This endpoint is called by Authorino during AuthPolicy evaluation to determine
 // which subscription a user should be assigned to. The request contains authenticated

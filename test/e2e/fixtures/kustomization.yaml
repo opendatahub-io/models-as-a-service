@@ -1,0 +1,15 @@
+# E2E Test Fixtures Kustomization
+# Combines public samples (free, premium) with e2e-only test fixtures
+# (unconfigured, distinct, distinct-2) for comprehensive testing.
+# Use this for CI/e2e tests instead of the public samples kustomization.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Public samples (free + premium tiers)
+  - ../../../docs/samples/maas-system/free
+  - ../../../docs/samples/maas-system/premium
+  # E2E-only test fixtures
+  - unconfigured  # No auth/subscription (validates 403)
+  - distinct      # Distinct model ID (validates multiple distinct models)
+  - distinct-2    # Second distinct model ID (validates multiple distinct models)

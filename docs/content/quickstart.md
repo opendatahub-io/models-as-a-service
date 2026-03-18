@@ -32,7 +32,7 @@ Before deploying MaaS, Authorino's listener TLS must be enabled. This is a platf
 For step-by-step commands, see [TLS Configuration: Authorino TLS Configuration](configuration-and-management/tls-configuration.md#authorino-tls-configuration).
 
 !!! tip "Automated configuration"
-    The `deploy-rhoai-stable.sh` script automatically configures all remaining TLS settings after deployment, including Gateway TLS bootstrap and Authorino → maas-api outbound TLS.
+    The `deploy.sh` script automatically configures all remaining TLS settings after deployment, including Gateway TLS bootstrap and Authorino → maas-api outbound TLS.
 
 ## Quick Start
 
