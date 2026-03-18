@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: maas-common-config
+
+# Shared ConfigMap for all MaaS overlays
+# This provides common parameters (images, gateway config, namespace)
+# NOTE: Each consuming overlay must define its own patches and replacements
+# because kustomize only merges resources, not transformers, when referenced.
+
+configMapGenerator:
+- envs:
+  - params.env
+  name: maas-parameters
+generatorOptions:
+  disableNameSuffixHash: true
