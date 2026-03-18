@@ -52,7 +52,7 @@ func serve() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cluster, err := config.NewClusterConfig(cfg.Namespace, constant.DefaultResyncPeriod)
+	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
