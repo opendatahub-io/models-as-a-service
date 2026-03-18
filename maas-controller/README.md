@@ -35,7 +35,7 @@ Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway leve
 ### CRDs and what they generate
 
 As MaaS API and controller are conventionally deployed in the operator namespace (e.g., `opendatahub`), MaaS CRs need to be separated so that they can be managed with lower cluster privileges. Therefore,
-- **MaasModelRef** is located in the same namespace as the **HTTPRoute** and **LLMInderenceService** it refers to; and
+- **MaasModelRef** is located in the same namespace as the **HTTPRoute** and **LLMInferenceService** it refers to; and
 - **MaaSAuthPolicy** and **MaaSSubscription** are located in a dedicated subscription namespace (default: `models-as-a-service`). Set `--maas-subscription-namespace` or the `MAAS_SUBSCRIPTION_NAMESPACE` env var in `maas-controller` deployment to use another namespace. MaaS controller will only watch and reconcile those CRs this configured namespace.
 
 | You create | Controller generates | Per | Targets |
@@ -182,7 +182,7 @@ deny-unsubscribed (0):        matches "NOT in premium-user AND NOT in free-user"
 
 ## Authentication
 
-Until API token minting is in place, the controller uses **OpenShift tokens directly** for inference:
+The platform supports two authentication methods for inference. **API keys** (recommended) can be created via `POST /maas-api/v1/api-keys`. Alternatively, **OpenShift tokens** can be used directly:
 
 ```bash
 export TOKEN=$(oc whoami -t)

@@ -220,7 +220,7 @@ flowchart LR
 
 ## 9. Authentication (Current Behavior)
 
-For **GET /v1/models**, the API forwards the client’s **Authorization** header as-is to each model endpoint (no token exchange). For inference, until MaaS API token minting is in place, use the **OpenShift token**:
+For **GET /v1/models**, the API forwards the client’s **Authorization** header as-is to each model endpoint (no token exchange). For inference, use an **API key** (created via `POST /maas-api/v1/api-keys`) or an **OpenShift token**:
 
 ```bash
 export TOKEN=$(oc whoami -t)
