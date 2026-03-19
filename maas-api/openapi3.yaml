@@ -63,7 +63,7 @@ paths:
                   example: "true"
             responses:
                 "400":
-                    description: Bad Request. Both X-MaaS-Subscription and X-MaaS-Return-All-Models headers provided.
+                    description: Bad Request. Returned when X-MaaS-Subscription is provided while X-MaaS-Return-All-Models is set to "true" (cannot specify both).
                     content:
                         application/json:
                             schema:

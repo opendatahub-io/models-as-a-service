@@ -246,11 +246,17 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			return
 		}
 
-		// Handle legacy case: no subscription system configured
+		// Distinguish between "no subscription system" and "user has zero subscriptions"
 		if len(subscriptionsToUse) == 0 {
-			// No subscription filtering - return all accessible models without subscription metadata
-			h.logger.Debug("No subscription system configured, filtering models without subscription header")
-			modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, "")
+			if h.subscriptionSelector == nil {
+				// Legacy case: no subscription system configured
+				h.logger.Debug("No subscription system configured, filtering models without subscription header")
+				modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, "")
+			} else {
+				// User has zero accessible subscriptions - return empty list
+				h.logger.Debug("User has zero accessible subscriptions, returning empty model list")
+				// modelList is already initialized to empty slice at line 235
+			}
 		} else {
 			// Filter models by subscription(s) and aggregate subscriptions
 			// Deduplication key is (model ID, URL) - models with the same ID and URL are
