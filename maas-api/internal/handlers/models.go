@@ -78,6 +78,7 @@ func (h *ModelsHandler) selectSubscriptionsForListing(
 
 	// Single subscription selection (existing behavior)
 	if h.subscriptionSelector != nil {
+		//nolint:unqueryvet,nolintlint // Select is a method, not a SQL query
 		result, err := h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription, "")
 		if err != nil {
 			h.handleSubscriptionSelectionError(c, err)
