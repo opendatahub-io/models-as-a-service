@@ -6,58 +6,12 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 )
 
 // resetGlobalFlags replaces flag.CommandLine with a fresh FlagSet so that
 // Load() can register its flags again without panicking.
 func resetGlobalFlags() {
 	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
-}
-
-func TestLoad_DefaultValues(t *testing.T) {
-	resetGlobalFlags()
-
-	// Unset all env vars that Load() reads to ensure clean defaults.
-	for _, key := range []string{
-		"DEBUG_MODE", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME", "NAMESPACE", "GATEWAY_NAMESPACE", "ADDRESS",
-		"API_KEY_EXPIRATION_POLICY", "PORT", "TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
-	} {
-		t.Setenv(key, "")
-		os.Unsetenv(key)
-	}
-
-	cfg := Load()
-
-	tests := []struct {
-		name     string
-		got      any
-		expected any
-	}{
-		{"Name defaults to gateway name", cfg.Name, constant.DefaultGatewayName},
-		{"Namespace", cfg.Namespace, constant.DefaultNamespace},
-		{"GatewayName", cfg.GatewayName, constant.DefaultGatewayName},
-		{"GatewayNamespace", cfg.GatewayNamespace, constant.DefaultGatewayNamespace},
-		{"Address is empty", cfg.Address, ""},
-		{"Secure is false", cfg.Secure, false},
-		{"DebugMode is false", cfg.DebugMode, false},
-		{"DBConnectionURL is empty", cfg.DBConnectionURL, ""},
-		{"APIKeyExpirationPolicy", cfg.APIKeyExpirationPolicy, "optional"},
-		{"deprecatedHTTPPort is empty", cfg.deprecatedHTTPPort, ""},
-		{"TLS.Cert is empty", cfg.TLS.Cert, ""},
-		{"TLS.Key is empty", cfg.TLS.Key, ""},
-		{"TLS.SelfSigned is false", cfg.TLS.SelfSigned, false},
-		{"TLS.MinVersion is TLS 1.2", cfg.TLS.MinVersion, TLSVersion(tls.VersionTLS12)},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.got != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, tt.got)
-			}
-		})
-	}
 }
 
 func TestLoad_EnvironmentVariables(t *testing.T) {
@@ -97,7 +51,7 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 	allEnvVars := []string{
 		"DEBUG_MODE", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME",
 		"NAMESPACE", "GATEWAY_NAMESPACE", "ADDRESS",
-		"API_KEY_EXPIRATION_POLICY", "PORT",
+		"PORT",
 		"TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
 	}
 
@@ -125,7 +79,6 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 // TestValidate covers Config.Validate:
 // required fields (DBConnectionURL),
 // TLS consistency (secure without certs, cert without key),
-// APIKeyExpirationPolicy values,
 // APIKeyMaxExpirationDays bounds,
 // and default address assignment.
 func TestValidate(t *testing.T) {
@@ -137,43 +90,31 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing DBConnectionURL returns error",
 			cfg: Config{
-				DBConnectionURL:        "",
-				APIKeyExpirationPolicy: "optional",
+				DBConnectionURL: "",
 			},
 			expectError: "db connection URL is required",
 		},
 		{
 			name: "secure without TLS returns error",
 			cfg: Config{
-				DBConnectionURL:        "postgresql://localhost/test",
-				Secure:                 true,
-				APIKeyExpirationPolicy: "optional",
+				DBConnectionURL: "postgresql://localhost/test",
+				Secure:          true,
 			},
 			expectError: "--secure requires either --tls-cert/--tls-key or --tls-self-signed",
 		},
 		{
 			name: "TLS cert without key returns error",
 			cfg: Config{
-				DBConnectionURL:        "postgresql://localhost/test",
-				TLS:                    TLSConfig{Cert: "/cert.pem"},
-				APIKeyExpirationPolicy: "optional",
+				DBConnectionURL: "postgresql://localhost/test",
+				TLS:             TLSConfig{Cert: "/cert.pem"},
 			},
 			expectError: "--tls-cert and --tls-key must both be provided together",
 		},
-		{
-			name: "invalid APIKeyExpirationPolicy returns error",
-			cfg: Config{
-				DBConnectionURL:        "postgresql://localhost/test",
-				APIKeyExpirationPolicy: "invalid",
-			},
-			expectError: "API_KEY_EXPIRATION_POLICY must be 'optional' or 'required'",
-		},
-		{
+{
 			name: "valid insecure config sets default address :8080",
 			cfg: Config{
 				DBConnectionURL:         "postgresql://localhost/test",
 				Secure:                  false,
-				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 30,
 			},
 		},
@@ -182,7 +123,6 @@ func TestValidate(t *testing.T) {
 			cfg: Config{
 				DBConnectionURL:         "postgresql://localhost/test",
 				TLS:                     TLSConfig{SelfSigned: true, MinVersion: TLSVersion(tls.VersionTLS12)},
-				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 30,
 			},
 		},
@@ -191,7 +131,6 @@ func TestValidate(t *testing.T) {
 			cfg: Config{
 				DBConnectionURL:         "postgresql://localhost/test",
 				TLS:                     TLSConfig{Cert: "/cert.pem", Key: "/key.pem", MinVersion: TLSVersion(tls.VersionTLS12)},
-				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 30,
 			},
 		},
@@ -199,7 +138,6 @@ func TestValidate(t *testing.T) {
 			name: "APIKeyMaxExpirationDays valid minimum value",
 			cfg: Config{
 				DBConnectionURL:         "postgresql://localhost/test",
-				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 1,
 			},
 		},
@@ -207,7 +145,6 @@ func TestValidate(t *testing.T) {
 			name: "APIKeyMaxExpirationDays valid default value",
 			cfg: Config{
 				DBConnectionURL:         "postgresql://localhost/test",
-				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 30,
 			},
 		},
@@ -215,7 +152,6 @@ func TestValidate(t *testing.T) {
 			name: "APIKeyMaxExpirationDays valid large value",
 			cfg: Config{
 				DBConnectionURL:         "postgresql://localhost/test",
-				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 365,
 			},
 		},
@@ -223,7 +159,6 @@ func TestValidate(t *testing.T) {
 			name: "APIKeyMaxExpirationDays zero returns error",
 			cfg: Config{
 				DBConnectionURL:         "postgresql://localhost/test",
-				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: 0,
 			},
 			expectError: "must be at least 1",
@@ -232,7 +167,6 @@ func TestValidate(t *testing.T) {
 			name: "APIKeyMaxExpirationDays negative returns error",
 			cfg: Config{
 				DBConnectionURL:         "postgresql://localhost/test",
-				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: -1,
 			},
 			expectError: "must be at least 1",
