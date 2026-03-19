@@ -21,6 +21,12 @@ type SelectResponse struct {
 	Message string `json:"message,omitempty"` // Human-readable error message
 }
 
+// SubscriptionInfo represents a subscription in list responses.
+type SubscriptionInfo struct {
+	SubscriptionIDHeader    string `json:"subscription_id_header"`
+	SubscriptionDescription string `json:"subscription_description"`
+}
+
 // ErrorResponse represents an error response (deprecated - use SelectResponse instead).
 type ErrorResponse struct {
 	Error   string `json:"error"`   // Error code (e.g., "bad_request", "not_found")

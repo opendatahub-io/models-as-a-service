@@ -9,6 +9,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -44,6 +45,9 @@ type subscription struct {
 	OrganizationID string
 	CostCenter     string
 	Labels         map[string]string
+	ModelRefNames  []string
+	DisplayName    string
+	Description    string
 }
 
 // Select implements the subscription selection logic.
@@ -137,6 +141,12 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		Name: obj.GetName(),
 	}
 
+	// Parse annotations for display metadata
+	if annotations := obj.GetAnnotations(); annotations != nil {
+		sub.DisplayName = annotations[constant.AnnotationDisplayName]
+		sub.Description = annotations[constant.AnnotationDescription]
+	}
+
 	// Parse owner
 	if owner, found, _ := unstructured.NestedMap(spec, "owner"); found {
 		// Parse groups
@@ -163,10 +173,13 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		}
 	}
 
-	// Parse modelRefs to calculate maxLimit
+	// Parse modelRefs to extract model names and calculate maxLimit
 	if modelRefs, found, _ := unstructured.NestedSlice(spec, "modelRefs"); found {
 		for _, modelRef := range modelRefs {
 			if modelMap, ok := modelRef.(map[string]any); ok {
+				if name, ok := modelMap["name"].(string); ok {
+					sub.ModelRefNames = append(sub.ModelRefNames, name)
+				}
 				if limits, found, _ := unstructured.NestedSlice(modelMap, "tokenRateLimits"); found {
 					for _, limitRaw := range limits {
 						if limitMap, ok := limitRaw.(map[string]any); ok {
@@ -231,6 +244,55 @@ func sortSubscriptionsByPriority(subs []subscription) {
 		}
 		return subs[i].MaxLimit > subs[j].MaxLimit
 	})
+}
+
+// ListAccessible returns all subscriptions the user has access to.
+func (s *Selector) ListAccessible(username string, groups []string) ([]SubscriptionInfo, error) {
+	subscriptions, err := s.loadSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
+	}
+
+	result := []SubscriptionInfo{}
+	for _, sub := range subscriptions {
+		if userHasAccess(&sub, username, groups) {
+			result = append(result, toSubscriptionInfo(&sub))
+		}
+	}
+	return result, nil
+}
+
+// ListAccessibleForModel returns subscriptions the user has access to
+// that include the specified model in their modelRefs.
+func (s *Selector) ListAccessibleForModel(username string, groups []string, modelID string) ([]SubscriptionInfo, error) {
+	subscriptions, err := s.loadSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
+	}
+
+	result := []SubscriptionInfo{}
+	for _, sub := range subscriptions {
+		if userHasAccess(&sub, username, groups) && slices.Contains(sub.ModelRefNames, modelID) {
+			result = append(result, toSubscriptionInfo(&sub))
+		}
+	}
+	return result, nil
+}
+
+// toSubscriptionInfo converts internal subscription to a list response item.
+// Uses display-name annotation with fallback to description annotation, then name.
+func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
+	desc := sub.DisplayName
+	if desc == "" {
+		desc = sub.Description
+	}
+	if desc == "" {
+		desc = sub.Name
+	}
+	return SubscriptionInfo{
+		SubscriptionIDHeader:    sub.Name,
+		SubscriptionDescription: desc,
+	}
 }
 
 // toResponse converts internal subscription to API response.
