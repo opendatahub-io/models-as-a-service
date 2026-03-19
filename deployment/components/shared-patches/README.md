@@ -106,6 +106,30 @@ api-key-max-expiration-days=30
 
 To change these values, edit `params.env` - all overlays will pick up the changes automatically.
 
+### Security Best Practice: Image Digest Pinning
+
+For production deployments, use **immutable image digests** instead of mutable tags like `:latest`:
+
+```env
+# ❌ Mutable tag (development/testing only)
+maas-api-image=quay.io/opendatahub/maas-api:latest
+
+# ✅ Immutable digest (production recommended)
+maas-api-image=quay.io/opendatahub/maas-api:v1.2.3@sha256:abc123...
+```
+
+**Why?**
+- Mutable tags (`:latest`, `:v1.0`) can point to different images over time
+- Digest pinning (`@sha256:...`) ensures exact image reproducibility
+- Prevents supply chain attacks where tags are overwritten
+
+**How to get digests:**
+```bash
+# Pull and inspect the image
+podman pull quay.io/opendatahub/maas-api:latest
+podman inspect quay.io/opendatahub/maas-api:latest | grep Digest
+```
+
 ## Testing
 
 Verify the component works correctly:
@@ -148,14 +172,14 @@ kustomize build deployment/overlays/tls-backend | grep "image:" | grep maas-api
 ## Troubleshooting
 
 ### Component not found error
-```
+```text
 Error: unable to find one of 'kustomization.yaml', 'kustomization.yml' or 'Kustomization'
 ```
 
 **Solution**: Check that the relative path to the component is correct. From an overlay, it should be `../../components/shared-patches`.
 
 ### Replacement not working
-```
+```yaml
 url: https://maas-api.placehold.svc...  # Still has placeholder!
 ```
 
@@ -165,7 +189,7 @@ url: https://maas-api.placehold.svc...  # Still has placeholder!
 3. Check Kustomize version (needs v5.7.0+)
 
 ### Kustomize version too old
-```
+```text
 Error: components not supported in this version
 ```
 
