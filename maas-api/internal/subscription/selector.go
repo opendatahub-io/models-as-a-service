@@ -75,7 +75,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	sortSubscriptionsByPriority(subscriptions)
 
 	// Branch 1: Explicit subscription selection (with validation)
-	// Support both formats: "namespace/name" (preferred) and bare "name" (legacy)
+	// Support both formats: "namespace/name" and bare "name"
 	if requestedSubscription != "" {
 		// First, try exact qualified match (namespace/name)
 		for _, sub := range subscriptions {
@@ -137,7 +137,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		return nil, &SubscriptionNotFoundError{Subscription: requestedSubscription}
 	}
 
-	// Branch 2: Auto-selection (only if user has exactly one subscription)
+	// Branch 2: Auto-selection
 	var accessibleSubs []subscription
 	for _, sub := range subscriptions {
 		if userHasAccess(&sub, username, groups) {
