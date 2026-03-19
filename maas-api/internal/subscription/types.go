@@ -20,6 +20,8 @@ type SelectResponse struct {
 	// Success fields (populated when selection succeeds)
 	Name           string            `json:"name,omitempty"`           // Subscription name
 	Namespace      string            `json:"namespace,omitempty"`      // Subscription namespace
+	DisplayName    string            `json:"displayName,omitempty"`    // Human-friendly display name for UI
+	Description    string            `json:"description,omitempty"`    // Subscription description
 	ModelRefs      []ModelRef        `json:"modelRefs,omitempty"`      // Models included in this subscription
 	OrganizationID string            `json:"organizationId,omitempty"` // Organization ID for billing
 	CostCenter     string            `json:"costCenter,omitempty"`     // Cost center for attribution

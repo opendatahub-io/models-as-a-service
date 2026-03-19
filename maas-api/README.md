@@ -151,7 +151,7 @@ kustomize build ${PROJECT_DIR}/docs/samples/models/simulator | kubectl apply --s
 MaaS API supports two types of tokens:
 
 1.  **Ephemeral Tokens** - Stateless tokens that provide better security posture as they can be easily refreshed by the caller using OpenShift Identity. These tokens can live as long as API keys (up to the configured expiration), making them suitable for both temporary and long-term access scenarios.
-2.  **API Keys** - Named, long-lived tokens for applications (stored in SQLite database). Suitable for services or applications that need persistent access with metadata tracking.
+2.  **API Keys** - Named, long-lived tokens for applications (stored in PostgreSQL database). Suitable for services or applications that need persistent access with metadata tracking.
 
 ##### Ephemeral Tokens
 
@@ -181,18 +181,18 @@ TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token)
 
 ##### API Keys
 
-The API uses hash-based API keys with OpenAI-compatible format (`sk-oai-*`). These keys support both permanent and expiring modes.
+The API uses hash-based API keys with OpenAI-compatible format (`sk-oai-*`). Keys expire after a configurable duration (default: 90 days via `API_KEY_MAX_EXPIRATION_DAYS`).
 
 ```shell
 HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
 
-# Create a permanent API key (no expiration)
+# Create an API key (defaults to API_KEY_MAX_EXPIRATION_DAYS, typically 90 days)
 API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{
-    "name": "my-permanent-key",
+    "name": "my-api-key",
     "description": "Production API key for my application"
   }' \
   "${HOST}/maas-api/v1/api-keys")
@@ -200,15 +200,15 @@ API_KEY_RESPONSE=$(curl -sSk \
 echo $API_KEY_RESPONSE | jq -r .
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 
-# Create an expiring API key (90 days)
+# Create an API key with custom expiration (30 days)
 API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{
-    "name": "my-expiring-key",
-    "description": "90-day test key",
-    "expiresIn": "90d"
+    "name": "my-short-lived-key",
+    "description": "30-day test key",
+    "expiresIn": "30d"
   }' \
   "${HOST}/maas-api/v1/api-keys")
 
@@ -251,6 +251,40 @@ maas-api uses PostgreSQL for persistent storage of API key metadata. The databas
     When using `scripts/deploy.sh` for development, PostgreSQL is deployed automatically with the secret created.
 
 For production deployments, see the [Database Prerequisites](../docs/content/install/prerequisites.md#database-prerequisite) guide.
+
+#### Listing models with subscription filtering
+
+The `/v1/models` endpoint supports subscription filtering and aggregation:
+
+    HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
+
+    # List models from all accessible subscriptions
+    curl ${HOST}/v1/models \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "X-MaaS-Return-All-Models: true" | jq .
+
+    # List models from a specific subscription
+    curl ${HOST}/v1/models \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "X-MaaS-Subscription: my-subscription" | jq .
+
+**Subscription Aggregation**: When the same model (same ID and URL) is accessible via multiple subscriptions, it appears once in the response with an array of all subscriptions providing access:
+
+    {
+      "object": "list",
+      "data": [
+        {
+          "id": "model-name",
+          "url": "https://...",
+          "subscriptions": [
+            {"name": "subscription-a", "displayName": "Subscription A"},
+            {"name": "subscription-b", "displayName": "Subscription B"}
+          ]
+        }
+      ]
+    }
 
 #### Calling the model and hitting the rate limit
 

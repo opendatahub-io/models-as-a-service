@@ -1,6 +1,10 @@
 #!/bin/bash
 
-# Source helper functions for JWT decoding
+# Verifies model inference and rate limiting through the MaaS API gateway.
+# Requires the maas-api-auth-policy to support API key authentication
+# (deployment/base/maas-api/policies/auth-policy.yaml).
+
+# Source shared helper functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/deployment-helpers.sh"
 
@@ -73,7 +77,7 @@ echo ""
 echo -e "${BLUE}Gateway URL:${NC} ${GATEWAY_URL}"
 echo ""
 
-echo -e "${BLUE}Obtaining token from MaaS API...${NC}"
+echo -e "${BLUE}Obtaining API key from MaaS API...${NC}"
 
 OC_TOKEN=$(oc whoami -t 2>/dev/null)
 if [ -z "$OC_TOKEN" ]; then
@@ -82,40 +86,44 @@ if [ -z "$OC_TOKEN" ]; then
     exit 1
 fi
 
+KEY_NAME="verify-test-$(date +%s)"
+
 TOKEN_RESPONSE=$(curl -sSk \
     -H "Authorization: Bearer $OC_TOKEN" \
     -H "Content-Type: application/json" \
     -X POST \
-    -d '{"expiration": "1h"}' \
+    -d "{\"expiresIn\": \"1h\", \"name\": \"$KEY_NAME\"}" \
     -w "\nHTTP_STATUS:%{http_code}\n" \
-    "${API_BASE}/maas-api/v1/tokens" 2>&1)
+    "${API_BASE}/maas-api/v1/api-keys" 2>&1)
 
 http_status=$(echo "$TOKEN_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
 response_body=$(echo "$TOKEN_RESPONSE" | sed '/HTTP_STATUS:/d')
 
 if [ "$http_status" != "201" ]; then
-    echo -e "${RED}Failed to obtain token from MaaS API!${NC}"
+    echo -e "${RED}Failed to create API key from MaaS API!${NC}"
     echo -e "${RED}HTTP Status: $http_status${NC}"
     echo -e "${RED}Response: $response_body${NC}"
     exit 1
 fi
 
-TOKEN=$(echo "$response_body" | jq -r '.token' 2>/dev/null)
-if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-    echo -e "${RED}Failed to parse token from response!${NC}"
+TOKEN=$(echo "$response_body" | jq -r '.key' 2>/dev/null)
+KEY_ID=$(echo "$response_body" | jq -r '.id' 2>/dev/null)
+if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ] || [ -z "$KEY_ID" ] || [ "$KEY_ID" = "null" ]; then
+    echo -e "${RED}Failed to parse API key from response!${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✓ Token obtained successfully from MaaS API${NC}"
+cleanup_api_key() {
+    if [ -n "${KEY_ID:-}" ] && [ "${KEY_ID}" != "null" ]; then
+        curl -sSk -o /dev/null -w "" \
+            -H "Authorization: Bearer $OC_TOKEN" \
+            -X DELETE \
+            "${API_BASE}/maas-api/v1/api-keys/${KEY_ID}" 2>/dev/null || true
+    fi
+}
+trap cleanup_api_key EXIT INT TERM
 
-# Use helper function to decode JWT payload
-TOKEN_PAYLOAD=$(decode_jwt_payload "$TOKEN")
-if [ -z "$TOKEN_PAYLOAD" ]; then
-    echo -e "${YELLOW}Warning:${NC} Failed to decode MaaS token payload"
-    USER_NAME="unknown"
-else
-    USER_NAME=$(echo "$TOKEN_PAYLOAD" | jq -r '.sub // "unknown"' 2>/dev/null)
-fi
+echo -e "${GREEN}✓ API key created successfully (name: $KEY_NAME)${NC}"
 
 echo -e "${BLUE}Discovering available models...${NC}"
 MODELS_RESPONSE=$(curl -sSk \
@@ -316,8 +324,8 @@ echo -e "${CYAN}======================================${NC}"
 echo ""
 
 echo -e "${BLUE}Authentication:${NC}"
-echo -e "  ${GREEN}✓${NC} MaaS API token endpoint is working"
-echo -e "  ${GREEN}✓${NC} Token authentication successful"
+echo -e "  ${GREEN}✓${NC} MaaS API key endpoint is working"
+echo -e "  ${GREEN}✓${NC} API key authentication successful"
 echo ""
 
 echo -e "${BLUE}Model Discovery:${NC}"
@@ -347,7 +355,6 @@ fi
 echo ""
 
 echo -e "${BLUE}Gateway URL:${NC} ${GATEWAY_URL}"
-echo -e "${BLUE}User:${NC} $USER_NAME"
 echo ""
 
 if [ "$MODEL_COUNT" -gt 0 ]; then
@@ -357,3 +364,4 @@ if [ "$MODEL_COUNT" -gt 0 ]; then
     done
     echo ""
 fi
+
