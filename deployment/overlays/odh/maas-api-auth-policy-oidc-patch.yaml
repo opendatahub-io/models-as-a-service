@@ -1,0 +1,38 @@
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: maas-api-auth-policy
+spec:
+  rules:
+    authentication:
+      # Match JWT-shaped bearer tokens first so external OIDC can coexist
+      # with opaque OpenShift tokens handled by TokenReview.
+      oidc-identities:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
+        jwt:
+          issuerUrl: https://oidc.example.invalid/realms/maas
+        priority: 1
+      openshift-identities:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
+        priority: 2
+    response:
+      success:
+        headers:
+          X-MaaS-Username-OC:
+            plain:
+              $patch: replace
+              expression: >-
+                has(auth.identity.preferred_username) ?
+                auth.identity.preferred_username :
+                (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)
+          X-MaaS-Group-OC:
+            plain:
+              $patch: replace
+              expression: >-
+                has(auth.identity.groups) ?
+                (size(auth.identity.groups) > 0 ?
+                '["system:authenticated","' + auth.identity.groups.join('","') + '"]' :
+                '["system:authenticated"]') :
+                '["' + auth.identity.user.groups.join('","') + '"]'

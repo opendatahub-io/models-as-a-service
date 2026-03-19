@@ -1,0 +1,136 @@
+{
+  "realm": "__REALM__",
+  "enabled": true,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "groups": [
+    {
+      "name": "premium-group"
+    },
+    {
+      "name": "enterprise-group"
+    },
+    {
+      "name": "admin-group"
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "groups",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "claim.name": "groups"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "__CLIENT_ID__",
+      "name": "MaaS CLI",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "preferred_username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "preferred_username",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ],
+      "defaultClientScopes": [
+        "profile",
+        "email",
+        "roles",
+        "groups"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Premium",
+      "email": "alice@example.com",
+      "groups": [
+        "/premium-group"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "letmein",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "erin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Erin",
+      "lastName": "Enterprise",
+      "email": "erin@example.com",
+      "groups": [
+        "/enterprise-group"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "letmein",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "ada",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Ada",
+      "lastName": "Admin",
+      "email": "ada@example.com",
+      "groups": [
+        "/admin-group"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "letmein",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

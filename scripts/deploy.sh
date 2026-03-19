@@ -529,6 +529,10 @@ deploy_via_operator() {
     configure_tls_backend
   fi
 
+  # Patch the operator-managed AuthPolicy to restore API key auth and,
+  # when configured, enable OIDC JWT validation.
+  configure_maas_api_authpolicy
+
   # Configure audience for non-standard clusters (Hypershift/ROSA)
   configure_cluster_audience
 
@@ -589,6 +593,10 @@ deploy_via_kustomize() {
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
     configure_tls_backend
   fi
+
+  # Patch the live AuthPolicy after kustomize apply so OIDC and API key
+  # behavior matches operator mode when configured.
+  configure_maas_api_authpolicy
 
   # Configure audience for non-standard clusters (HyperShift/ROSA)
   configure_cluster_audience
@@ -1344,6 +1352,163 @@ patch_operator_csv() {
 #──────────────────────────────────────────────────────────────
 # AUDIENCE CONFIGURATION FOR HYPERSHIFT/ROSA CLUSTERS
 #──────────────────────────────────────────────────────────────
+
+# get_odh_overlay_param
+#   Reads a value from deployment/overlays/odh/params.env.
+get_odh_overlay_param() {
+  local key="$1"
+  local project_root
+  project_root="$(find_project_root)" || return 1
+
+  local params_file="$project_root/deployment/overlays/odh/params.env"
+  [[ -f "$params_file" ]] || return 1
+
+  awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$params_file"
+}
+
+# configure_maas_api_authpolicy
+#   Patches the operator-managed maas-api AuthPolicy to restore API key auth
+#   and optionally enable OIDC JWT validation from params.env.
+configure_maas_api_authpolicy() {
+  log_info "Configuring MaaS API AuthPolicy..."
+
+  local authpolicy_name="maas-api-auth-policy"
+  local wait_timeout=120
+  local elapsed=0
+
+  log_info "  Waiting for AuthPolicy '$authpolicy_name' to be created (timeout: ${wait_timeout}s)..."
+  while [[ $elapsed -lt $wait_timeout ]]; do
+    if kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
+      log_info "  Found AuthPolicy '$authpolicy_name'"
+      break
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+
+  if ! kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
+    log_warn "AuthPolicy '$authpolicy_name' not found after ${wait_timeout}s, skipping auth configuration"
+    return 0
+  fi
+
+  local oidc_issuer_url="${OIDC_ISSUER_URL:-}"
+  if [[ -z "$oidc_issuer_url" ]]; then
+    oidc_issuer_url=$(get_odh_overlay_param "oidc-issuer-url" 2>/dev/null || echo "")
+  fi
+
+  local oidc_enabled="false"
+  if [[ -n "$oidc_issuer_url" && "$oidc_issuer_url" != "https://oidc.example.invalid/realms/maas" ]]; then
+    oidc_enabled="true"
+  fi
+
+  local oidc_block=""
+  local openshift_priority=1
+  if [[ "$oidc_enabled" == "true" ]]; then
+    log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url"
+    openshift_priority=2
+    oidc_block=$(cat <<EOF
+      oidc-identities:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
+        jwt:
+          issuerUrl: $oidc_issuer_url
+        priority: 1
+EOF
+)
+  else
+    log_info "  OIDC issuer not configured, keeping OpenShift + API key auth only"
+  fi
+
+  log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
+  kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+    opendatahub.io/managed="false" --overwrite 2>/dev/null || true
+
+  log_info "  Patching AuthPolicy with API key and optional OIDC auth..."
+  if ! kubectl patch authpolicy "$authpolicy_name" -n "$NAMESPACE" --type=merge --patch-file <(cat <<EOF
+spec:
+  rules:
+    authentication:
+      api-keys:
+        when:
+          - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+        plain:
+          selector: request.headers.authorization
+        priority: 0
+$oidc_block
+      openshift-identities:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
+        kubernetesTokenReview:
+          audiences:
+            - https://kubernetes.default.svc
+            - maas-default-gateway-sa
+        priority: $openshift_priority
+    metadata:
+      apiKeyValidation:
+        when:
+          - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+        http:
+          url: https://maas-api.$NAMESPACE.svc.cluster.local:8443/internal/v1/api-keys/validate
+          method: POST
+          contentType: application/json
+          body:
+            expression: '{"key": request.headers.authorization.replace("Bearer ", "")}'
+        priority: 0
+    authorization:
+      api-key-valid:
+        when:
+          - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+        patternMatching:
+          patterns:
+            - selector: auth.metadata.apiKeyValidation.valid
+              operator: eq
+              value: "true"
+        priority: 0
+    response:
+      success:
+        headers:
+          X-MaaS-Username:
+            when:
+              - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+            plain:
+              selector: auth.metadata.apiKeyValidation.username
+            priority: 0
+          X-MaaS-Username-OC:
+            when:
+              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
+            plain:
+              expression: >-
+                has(auth.identity.preferred_username) ?
+                auth.identity.preferred_username :
+                (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)
+            key: X-MaaS-Username
+            priority: 1
+          X-MaaS-Group:
+            when:
+              - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+            plain:
+              expression: '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'
+            priority: 0
+          X-MaaS-Group-OC:
+            when:
+              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
+            plain:
+              expression: >-
+                has(auth.identity.groups) ?
+                (size(auth.identity.groups) > 0 ?
+                '["system:authenticated","' + auth.identity.groups.join('","') + '"]' :
+                '["system:authenticated"]') :
+                '["' + auth.identity.user.groups.join('","') + '"]'
+            key: X-MaaS-Group
+            priority: 1
+EOF
+  ); then
+    log_warn "  Failed to patch AuthPolicy with API key/OIDC configuration"
+    return 0
+  fi
+
+  log_info "  AuthPolicy patched successfully"
+}
 
 # configure_cluster_audience
 #   Configures the AuthPolicy with the correct OIDC audience for the cluster.
