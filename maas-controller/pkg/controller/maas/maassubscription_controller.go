@@ -292,7 +292,10 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				"kind":  "HTTPRoute",
 				"name":  httpRouteName,
 			},
-			"limits": limitsMap,
+			"defaults": map[string]interface{}{
+				"strategy": "merge",
+				"limits":   limitsMap,
+			},
 		}
 		if err := unstructured.SetNestedMap(policy.Object, spec, "spec"); err != nil {
 			return fmt.Errorf("failed to set spec: %w", err)
