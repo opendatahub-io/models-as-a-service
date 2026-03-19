@@ -81,7 +81,7 @@ func (s *Service) CreateAPIKey(
 	}
 
 	if *expiresIn <= 0 {
-		return nil, errors.New("expiration must be positive")
+		return nil, ErrExpirationNotPositive
 	}
 
 	// Validate against maximum expiration limit
@@ -89,14 +89,14 @@ func (s *Service) CreateAPIKey(
 		// Ephemeral keys have a strict 1-hour maximum to prevent abuse
 		maxEphemeralDuration := 1 * time.Hour
 		if *expiresIn > maxEphemeralDuration {
-			return nil, fmt.Errorf("ephemeral key expiration (%v) cannot exceed 1 hour", *expiresIn)
+			return nil, fmt.Errorf("ephemeral key expiration (%v) cannot exceed 1 hour: %w", *expiresIn, ErrExpirationExceedsMax)
 		}
 	} else if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
 		// Regular keys use configured max expiration
 		maxDuration := time.Duration(s.config.APIKeyMaxExpirationDays) * 24 * time.Hour
 		if *expiresIn > maxDuration {
-			return nil, fmt.Errorf("requested expiration (%v) exceeds maximum allowed (%d days)",
-				*expiresIn, s.config.APIKeyMaxExpirationDays)
+			return nil, fmt.Errorf("requested expiration (%v) exceeds maximum allowed (%d days): %w",
+				*expiresIn, s.config.APIKeyMaxExpirationDays, ErrExpirationExceedsMax)
 		}
 	}
 

@@ -328,6 +328,104 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 }
 
 // ============================================================
+// EPHEMERAL KEY EXPIRATION TESTS
+// ============================================================
+
+// assertExpirationWithinTolerance verifies that expiresAt is within tolerance of expectedDuration from now.
+func assertExpirationWithinTolerance(t *testing.T, expiresAtStr string, expectedDuration time.Duration, now time.Time) {
+	t.Helper()
+	expiresAt, err := time.Parse(time.RFC3339, expiresAtStr)
+	require.NoError(t, err)
+
+	expectedExpiry := now.Add(expectedDuration)
+	diff := expiresAt.Sub(expectedExpiry).Abs()
+	assert.LessOrEqual(t, diff, 5*time.Second,
+		"expiration should be ~%v from now, got diff: %v", expectedDuration, diff)
+}
+
+func TestEphemeralKeyExpiration(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("DefaultExpirationIsOneHour", func(t *testing.T) {
+		svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, logger.Development())
+		now := time.Now().UTC()
+
+		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "ephemeral-test", "", nil, true)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.True(t, result.Ephemeral)
+		require.NotNil(t, result.ExpiresAt)
+		assertExpirationWithinTolerance(t, *result.ExpiresAt, 1*time.Hour, now)
+	})
+
+	t.Run("CustomExpirationWithinLimit", func(t *testing.T) {
+		svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, logger.Development())
+		expiresIn := 30 * time.Minute
+		now := time.Now().UTC()
+
+		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "short-lived", "", &expiresIn, true)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.NotNil(t, result.ExpiresAt)
+		assertExpirationWithinTolerance(t, *result.ExpiresAt, 30*time.Minute, now)
+	})
+
+	t.Run("ExactlyOneHour", func(t *testing.T) {
+		svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, logger.Development())
+		expiresIn := 1 * time.Hour
+
+		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "exactly-one-hour", "", &expiresIn, true)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.True(t, result.Ephemeral)
+	})
+
+	// Table-driven tests for invalid expiration cases
+	invalidExpirationTests := []struct {
+		name        string
+		expiresIn   time.Duration
+		expectedErr error
+		errContains string
+	}{
+		{
+			name:        "ExceedsOneHourLimit",
+			expiresIn:   2 * time.Hour,
+			expectedErr: api_keys.ErrExpirationExceedsMax,
+			errContains: "cannot exceed 1 hour",
+		},
+		{
+			name:        "ZeroExpiration",
+			expiresIn:   0,
+			expectedErr: api_keys.ErrExpirationNotPositive,
+			errContains: "must be positive",
+		},
+		{
+			name:        "NegativeExpiration",
+			expiresIn:   -1 * time.Hour,
+			expectedErr: api_keys.ErrExpirationNotPositive,
+			errContains: "must be positive",
+		},
+	}
+
+	for _, tt := range invalidExpirationTests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, logger.Development())
+			expiresIn := tt.expiresIn
+
+			result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "test-key", "", &expiresIn, true)
+
+			require.Error(t, err)
+			assert.Nil(t, result)
+			assert.ErrorIs(t, err, tt.expectedErr)
+			assert.Contains(t, err.Error(), tt.errContains)
+		})
+	}
+}
+
+// ============================================================
 // TEST HELPERS
 // ============================================================
 

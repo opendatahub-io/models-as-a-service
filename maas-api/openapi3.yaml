@@ -328,6 +328,14 @@ paths:
                         application/json:
                             schema:
                                 type: object
+                                required:
+                                    - key
+                                    - keyPrefix
+                                    - id
+                                    - name
+                                    - createdAt
+                                    - expiresAt
+                                    - ephemeral
                                 properties:
                                     key:
                                         type: string
