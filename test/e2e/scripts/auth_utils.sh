@@ -231,7 +231,7 @@ run_auth_debug_report() {
   maas_api_ns=$(kubectl get deployment maas-controller -n $DEPLOYMENT_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name=="MAAS_API_NAMESPACE") | .value' 2>/dev/null || echo "$DEPLOYMENT_NAMESPACE")
   [[ -z "$maas_api_ns" ]] && maas_api_ns="$DEPLOYMENT_NAMESPACE"
 
-  local sub_select_url="https://maas-api.${maas_api_ns}.svc.cluster.local:8443/v1/subscriptions/select"
+  local sub_select_url="https://maas-api.${maas_api_ns}.svc.cluster.local:8443/internal/v1/subscriptions/select"
   _section "Subscription Selector Endpoint Validation"
   _append "Expected URL (from maas-controller config): $sub_select_url"
   _append ""

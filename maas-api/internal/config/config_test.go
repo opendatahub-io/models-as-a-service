@@ -46,7 +46,6 @@ func TestConfig_Validate_APIKeyMaxExpirationDays(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &config.Config{
 				DBConnectionURL:         "postgresql://test:test@localhost/test",
-				APIKeyExpirationPolicy:  "optional",
 				APIKeyMaxExpirationDays: tt.maxDays,
 			}
 

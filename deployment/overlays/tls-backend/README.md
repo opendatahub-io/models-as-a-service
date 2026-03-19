@@ -7,7 +7,8 @@ Enables end-to-end TLS for maas-api using OpenShift serving certificates.
 | File | Purpose |
 |------|---------|
 | `kustomization.yaml` | References base TLS overlay and policies, applies HTTPS patches |
-| `configure-authorino-tls.sh` | Configures Authorino TLS settings and CA bundle for HTTPS tier lookup |
+
+Authorino TLS is configured by `scripts/setup-authorino-tls.sh` (run automatically by `deploy.sh` or manually).
 
 
 ## Traffic Flow
@@ -38,7 +39,7 @@ Authorino → maas-api :8443 → /v1/tiers/lookup
 
 The deployment script automatically:
 1. Applies the kustomize overlay
-2. Configures Authorino for TLS using `configure-authorino-tls.sh`
+2. Configures Authorino for TLS using `scripts/setup-authorino-tls.sh`
 3. Restarts deployments to pick up certificates
 
 ### Manual Deployment (Advanced)
@@ -48,12 +49,14 @@ The deployment script automatically:
 kustomize build deployment/overlays/tls-backend | kubectl apply -f -
 
 # Configure Authorino for TLS (operator-managed, can't be patched via Kustomize)
-./deployment/overlays/tls-backend/configure-authorino-tls.sh
+./scripts/setup-authorino-tls.sh
 
 # Restart to pick up certificates
 kubectl rollout restart deployment/maas-api -n maas-api
 kubectl rollout restart deployment/authorino -n kuadrant-system
 ```
+
+**Note:** `scripts/setup-authorino-tls.sh` patches Authorino's service, CR, and deployment. Use `--disable-tls-backend` with `deploy.sh` to skip if you manage Authorino TLS separately.
 
 ## Why the script?
 

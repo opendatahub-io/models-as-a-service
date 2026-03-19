@@ -241,17 +241,17 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 }
 
 // CreateAPIKeyRequest is the request body for creating an API key.
-// Keys can be permanent (no expiresIn) or expiring (with expiresIn).
+// If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS.
 // Users can only create keys for themselves - the key inherits the user's groups.
 type CreateAPIKeyRequest struct {
 	Name        string          `binding:"required"           json:"name"`
 	Description string          `json:"description,omitempty"`
-	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"` // Optional - nil means permanent
+	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"` // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS
 }
 
 // CreateAPIKey handles POST /v1/api-keys
 // Creates a new API key (sk-oai-* format) per Feature Refinement.
-// Keys can be permanent (no expiresIn) or expiring (with expiresIn).
+// If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS.
 // Per "Keys Shown Only Once": key is returned ONCE at creation and never again.
 // Users can only create keys for themselves - the key inherits the user's groups.
 func (h *Handler) CreateAPIKey(c *gin.Context) {
