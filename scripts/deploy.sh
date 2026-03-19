@@ -570,6 +570,13 @@ deploy_via_kustomize() {
     kubectl create namespace "$NAMESPACE"
   fi
 
+  # Ensure subscription namespace exists (for MaaSAuthPolicy and MaaSSubscription CRs)
+  local subscription_namespace="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+  if ! kubectl get namespace "$subscription_namespace" &>/dev/null; then
+    log_info "Creating subscription namespace: $subscription_namespace"
+    kubectl create namespace "$subscription_namespace"
+  fi
+
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
 
