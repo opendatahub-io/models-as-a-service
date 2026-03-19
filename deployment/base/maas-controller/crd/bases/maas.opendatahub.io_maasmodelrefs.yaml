@@ -55,6 +55,22 @@ spec:
           spec:
             description: MaaSModelSpec defines the desired state of MaaSModelRef
             properties:
+              credentialRef:
+                description: |-
+                  CredentialRef references a Kubernetes Secret containing the provider API key.
+                  The Secret must contain a data key "api-key" with the credential value.
+                  Only used when modelRef.kind=ExternalModel.
+                properties:
+                  name:
+                    description: Name is the name of the Secret
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace of the Secret. Defaults
+                      to the MaaSModelRef namespace if omitted.
+                    type: string
+                required:
+                - name
+                type: object
               endpointOverride:
                 description: |-
                   EndpointOverride, when set, overrides the endpoint URL that the controller
@@ -64,6 +80,11 @@ spec:
               modelRef:
                 description: ModelRef references the actual model endpoint
                 properties:
+                  endpoint:
+                    description: |-
+                      Endpoint is the FQDN for the external provider.
+                      e.g. "api.openai.com". Only used when kind=ExternalModel.
+                    type: string
                   kind:
                     description: Kind determines which fields are available
                     enum:
@@ -72,6 +93,11 @@ spec:
                     type: string
                   name:
                     description: Name is the name of the model resource
+                    type: string
+                  provider:
+                    description: |-
+                      Provider identifies the API format and auth type for external models.
+                      e.g. "openai", "anthropic". Only used when kind=ExternalModel.
                     type: string
                 required:
                 - kind
