@@ -55,6 +55,89 @@ sequenceDiagram
 
 If the API is not configured with a MaaSModelRef lister and namespace, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.
 
+## Subscription Filtering and Aggregation
+
+The `/v1/models` endpoint supports filtering and aggregating models across subscriptions using request headers.
+
+### Request Headers
+
+- **`X-MaaS-Subscription`** (optional): Filter models to a specific subscription by name
+- **`X-MaaS-Return-All-Models`** (optional): When set to `"true"`, returns models from all subscriptions the user has access to
+
+!!! warning "Conflicting headers"
+    You cannot specify both `X-MaaS-Subscription` and `X-MaaS-Return-All-Models` headers in the same request. This returns `400 Bad Request`.
+
+### Behavior Modes
+
+#### Default (no header)
+Returns models from a single subscription:
+- If the user has access to only one subscription, models from that subscription are returned
+- If the user has access to multiple subscriptions, returns `403 Forbidden` with message: "user has access to multiple subscriptions, must specify subscription using X-MaaS-Subscription header"
+
+#### Single Subscription (`X-MaaS-Subscription: <name>`)
+Returns only models accessible via the specified subscription:
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+     -H "X-MaaS-Subscription: premium-subscription" \
+     https://maas.example.com/maas-api/v1/models
+```
+
+#### All Subscriptions (`X-MaaS-Return-All-Models: true`)
+Returns models from all subscriptions the user has access to, with subscription metadata attached. If the user has access to zero subscriptions, returns HTTP 200 with an empty data array (not an error), allowing clients to handle this deterministically:
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+     -H "X-MaaS-Return-All-Models: true" \
+     https://maas.example.com/maas-api/v1/models
+```
+
+### Subscription Metadata
+
+All models in the response include a `subscriptions` array with metadata for each subscription providing access to that model:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "llama-2-7b-chat",
+      "created": 1672531200,
+      "object": "model",
+      "owned_by": "model-namespace",
+      "url": "https://maas.example.com/llm/llama-2-7b-chat",
+      "ready": true,
+      "subscriptions": [
+        {
+          "name": "basic-subscription",
+          "displayName": "Basic Tier",
+          "description": "Basic subscription with standard rate limits"
+        },
+        {
+          "name": "premium-subscription",
+          "displayName": "Premium Tier",
+          "description": "Premium subscription with higher rate limits"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Deduplication Behavior
+
+When `X-MaaS-Return-All-Models: true` is used, models are deduplicated by `(id, url)` key:
+
+- **Same id + same URL**: Single entry with subscriptions aggregated into the `subscriptions` array
+- **Same id + different URLs**: Separate entries (different model endpoints)
+
+**Example:**
+- Model `gpt-3.5` at URL `https://example.com/gpt-3.5` is accessible via subscriptions A and B
+  - Result: One entry with `subscriptions: [{name: "A"}, {name: "B"}]`
+- Model `gpt-3.5` at URL `https://example.com/gpt-3.5-premium` is only in subscription B
+  - Result: Separate entry with `subscriptions: [{name: "B"}]`
+
+!!! tip "Subscription metadata fields"
+    The `displayName` and `description` fields are read from the MaaSSubscription CRD's `spec.displayName` and `spec.description` fields. If these fields are not set in the CRD, they will be empty strings in the response.
+
 ## Registering models
 
 To have models appear via the **MaaSModelRef** flow:

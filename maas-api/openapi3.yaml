@@ -34,41 +34,149 @@ paths:
             tags:
                 - models
             summary: Lists available large language models in OpenAI-compatible format
-            description: Lists available large language models in OpenAI-compatible format
+            description: |
+                Lists available large language models in OpenAI-compatible format.
+
+                By default, returns models from a single subscription. If the user has access to multiple
+                subscriptions, they must specify which one using the X-MaaS-Subscription header, or use
+                X-MaaS-Return-All-Models to return models from all accessible subscriptions.
             operationId: models#list_llms
+            parameters:
+                - in: header
+                  name: X-MaaS-Subscription
+                  schema:
+                      type: string
+                  required: false
+                  description: |
+                      Filter models to a specific subscription. Required when user has access to multiple
+                      subscriptions and X-MaaS-Return-All-Models is not set.
+                  example: premium-subscription
+                - in: header
+                  name: X-MaaS-Return-All-Models
+                  schema:
+                      type: string
+                      enum: ["true", "false"]
+                  required: false
+                  description: |
+                      When set to "true", returns models from all subscriptions the user has access to.
+                      Cannot be used together with X-MaaS-Subscription.
+                  example: "true"
             responses:
+                "400":
+                    description: Bad Request. Returned when X-MaaS-Subscription is provided while X-MaaS-Return-All-Models is set to "true" (cannot specify both).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                            example:
+                                error:
+                                    message: "Cannot specify both X-MaaS-Subscription and X-MaaS-Return-All-Models headers"
+                                    type: "invalid_request_error"
+                "401":
+                    description: Unauthorized. Missing or invalid Authorization header.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                            example:
+                                error:
+                                    message: "Authorization required"
+                                    type: "authentication_error"
+                "403":
+                    description: |
+                        Forbidden. Subscription access error. Possible cases:
+                        - User has multiple subscriptions but didn't specify which one (X-MaaS-Subscription header required)
+                        - Access denied to the requested subscription
+                        - Requested subscription not found
+                        - User has no accessible subscriptions
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                            examples:
+                                multiple_subscriptions:
+                                    summary: Multiple subscriptions without header
+                                    value:
+                                        error:
+                                            message: "user has access to multiple subscriptions, must specify subscription using X-MaaS-Subscription header"
+                                            type: "permission_error"
+                                access_denied:
+                                    summary: Access denied to subscription
+                                    value:
+                                        error:
+                                            message: "access denied to subscription"
+                                            type: "permission_error"
+                                not_found:
+                                    summary: Subscription not found
+                                    value:
+                                        error:
+                                            message: "subscription not found"
+                                            type: "permission_error"
+                                no_subscription:
+                                    summary: No accessible subscriptions
+                                    value:
+                                        error:
+                                            message: "no subscription found for user"
+                                            type: "permission_error"
                 "200":
                     description: OK response.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ModelListResponse'
-                            example:
-                                object: list
-                                data:
-                                    - created: 1672531200
-                                      id: llama-2-7b-chat
-                                      object: model
-                                      owned_by: model-namespace
-                                      ready: true
-                                      url: https://api.example.com/v1/models/llama-2-7b-chat
-                                    - created: 1672531200
-                                      id: mistral-7b-instruct
-                                      object: model
-                                      owned_by: model-namespace
-                                      ready: true
-                                      url: https://api.example.com/v1/models/mistral-7b-instruct
-                                    - created: 1672531200
-                                      id: granite-8b-code-instruct
-                                      object: model
-                                      owned_by: model-namespace
-                                      ready: false
-                                    - created: 1672531200
-                                      id: llama-3-8b-instruct
-                                      object: model
-                                      owned_by: model-namespace
-                                      ready: true
-                                      url: https://api.example.com/v1/models/llama-3-8b-instruct
+                            examples:
+                                single_subscription:
+                                    summary: Response with single subscription (default)
+                                    value:
+                                        object: list
+                                        data:
+                                            - created: 1672531200
+                                              id: llama-2-7b-chat
+                                              object: model
+                                              owned_by: model-namespace
+                                              ready: true
+                                              url: https://api.example.com/v1/models/llama-2-7b-chat
+                                              kind: LLMInferenceService
+                                              subscriptions:
+                                                  - name: basic-subscription
+                                            - created: 1672531200
+                                              id: mistral-7b-instruct
+                                              object: model
+                                              owned_by: model-namespace
+                                              ready: true
+                                              url: https://api.example.com/v1/models/mistral-7b-instruct
+                                              kind: LLMInferenceService
+                                              subscriptions:
+                                                  - name: basic-subscription
+                                aggregated_subscriptions:
+                                    summary: Response with X-MaaS-Return-All-Models (subscription aggregation)
+                                    value:
+                                        object: list
+                                        data:
+                                            - created: 1672531200
+                                              id: llama-2-7b-chat
+                                              object: model
+                                              owned_by: model-namespace
+                                              ready: true
+                                              url: https://api.example.com/v1/models/llama-2-7b-chat
+                                              kind: LLMInferenceService
+                                              subscriptions:
+                                                  - name: basic-subscription
+                                                    displayName: Basic Tier
+                                                  - name: premium-subscription
+                                                    displayName: Premium Tier
+                                                    description: Premium subscription with higher rate limits
+                                            - created: 1672531200
+                                              id: granite-8b-code-instruct
+                                              object: model
+                                              owned_by: model-namespace
+                                              ready: true
+                                              url: https://api.example.com/v1/models/granite-8b-code-instruct
+                                              kind: LLMInferenceService
+                                              subscriptions:
+                                                  - name: premium-subscription
+                                                    displayName: Premium Tier
+                                                    description: Premium subscription with higher rate limits
                 "500":
                     description: Internal Server Error response.
                     content:
@@ -470,9 +578,20 @@ components:
             type: object
             properties:
                 error:
-                    type: string
-                    description: Error message
-                    example: Failed to retrieve models
+                    type: object
+                    description: Error details
+                    properties:
+                        message:
+                            type: string
+                            description: Human-readable error message
+                            example: Failed to retrieve models
+                        type:
+                            type: string
+                            description: Error type classification
+                            example: server_error
+                    required:
+                        - message
+                        - type
             required:
                 - error
         
@@ -500,19 +619,6 @@ components:
                     items:
                         $ref: '#/components/schemas/Model'
                     description: Array of model objects
-                    example:
-                        - created: 1672531200
-                          id: llama-2-7b-chat
-                          object: model
-                          owned_by: model-namespace
-                          ready: true
-                          url: https://api.example.com/v1/models/llama-2-7b-chat
-                        - created: 1672531200
-                          id: mistral-7b-instruct
-                          object: model
-                          owned_by: model-namespace
-                          ready: true
-                          url: https://api.example.com/v1/models/mistral-7b-instruct
             example:
                 object: list
                 data:
@@ -522,12 +628,18 @@ components:
                       owned_by: model-namespace
                       ready: true
                       url: https://api.example.com/v1/models/llama-2-7b-chat
+                      kind: LLMInferenceService
+                      subscriptions:
+                          - name: basic-subscription
                     - created: 1672531200
                       id: mistral-7b-instruct
                       object: model
                       owned_by: model-namespace
                       ready: true
                       url: https://api.example.com/v1/models/mistral-7b-instruct
+                      kind: LLMInferenceService
+                      subscriptions:
+                          - name: basic-subscription
             required:
                 - object
                 - data
@@ -561,6 +673,22 @@ components:
                     type: string
                     description: Model URL (optional)
                     example: https://api.example.com/v1/models/llama-2-7b-chat
+                kind:
+                    type: string
+                    description: The model reference kind (e.g., "LLMInferenceService")
+                    example: LLMInferenceService
+                subscriptions:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/SubscriptionInfo'
+                    description: |
+                        Array of subscriptions that provide access to this model.
+                        When X-MaaS-Return-All-Models is used, models accessible via multiple
+                        subscriptions will have multiple entries in this array.
+                    example:
+                        - name: premium-subscription
+                          displayName: Premium Tier
+                          description: Premium subscription with higher rate limits
             example:
                 created: 1672531200
                 id: llama-2-7b-chat
@@ -568,12 +696,36 @@ components:
                 owned_by: model-namespace
                 ready: true
                 url: https://api.example.com/v1/models/llama-2-7b-chat
+                kind: LLMInferenceService
+                subscriptions:
+                    - name: premium-subscription
+                      displayName: Premium Tier
+                      description: Premium subscription with higher rate limits
             required:
                 - id
                 - object
                 - created
                 - owned_by
                 - ready
+
+        # Subscription metadata
+        SubscriptionInfo:
+            type: object
+            properties:
+                name:
+                    type: string
+                    description: The subscription name
+                    example: premium-subscription
+                displayName:
+                    type: string
+                    description: Human-readable display name for the subscription
+                    example: Premium Tier
+                description:
+                    type: string
+                    description: Description of the subscription
+                    example: Premium subscription with higher rate limits
+            required:
+                - name
         
         # Tier lookup
         TierLookupRequest:

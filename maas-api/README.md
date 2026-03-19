@@ -252,6 +252,40 @@ maas-api uses PostgreSQL for persistent storage of API key metadata. The databas
 
 For production deployments, see the [Database Prerequisites](../docs/content/install/prerequisites.md#database-prerequisite) guide.
 
+#### Listing models with subscription filtering
+
+The `/v1/models` endpoint supports subscription filtering and aggregation:
+
+    HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
+
+    # List models from all accessible subscriptions
+    curl ${HOST}/v1/models \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "X-MaaS-Return-All-Models: true" | jq .
+
+    # List models from a specific subscription
+    curl ${HOST}/v1/models \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "X-MaaS-Subscription: my-subscription" | jq .
+
+**Subscription Aggregation**: When the same model (same ID and URL) is accessible via multiple subscriptions, it appears once in the response with an array of all subscriptions providing access:
+
+    {
+      "object": "list",
+      "data": [
+        {
+          "id": "model-name",
+          "url": "https://...",
+          "subscriptions": [
+            {"name": "subscription-a", "displayName": "Subscription A"},
+            {"name": "subscription-b", "displayName": "Subscription B"}
+          ]
+        }
+      ]
+    }
+
 #### Calling the model and hitting the rate limit
 
 Using model discovery:
