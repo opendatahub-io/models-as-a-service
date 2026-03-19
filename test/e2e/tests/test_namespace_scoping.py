@@ -147,7 +147,7 @@ def _delete_namespace(name: str):
 
 def _call_subscriptions_select(api_key: str, username: str, groups: list, requested_subscription: str = "") -> requests.Response:
     """Call MaaS API POST /v1/subscriptions/select. Returns the response (always 200 with body)."""
-    url = f"{_maas_api_url()}/v1/subscriptions/select"
+    url = f"{_maas_api_url()}/internal/v1/subscriptions/select"
     headers = {"Authorization": f"Bearer {api_key}"}
     payload = {"username": username, "groups": groups}
     if requested_subscription:
