@@ -283,7 +283,7 @@ paths:
             tags:
                 - api-keys-v2
             summary: Create a new hash-based API key
-            description: Creates a new OpenAI-compatible API key (sk-oai-* format). If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (default 90 days). The plaintext key is shown ONLY ONCE at creation time and cannot be retrieved again.
+            description: Creates a new OpenAI-compatible API key (sk-oai-* format). Name is required for regular keys but optional for ephemeral keys. If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (default 90 days) for regular keys, or 1 hour for ephemeral keys. The plaintext key is shown ONLY ONCE at creation time and cannot be retrieved again.
             operationId: api-keys-v2#create
             requestBody:
                 required: true
@@ -291,18 +291,20 @@ paths:
                     application/json:
                         schema:
                             type: object
-                            required:
-                                - name
                             properties:
                                 name:
                                     type: string
-                                    description: Human-readable name for the API key
+                                    description: Human-readable name for the API key. Required for regular keys, optional for ephemeral keys.
                                 description:
                                     type: string
                                     description: Optional description
                                 expiresIn:
                                     type: string
-                                    description: Expiration duration (e.g., "30d", "90d", "1h"). Defaults to API_KEY_MAX_EXPIRATION_DAYS if not provided.
+                                    description: Expiration duration (e.g., "30d", "90d", "1h"). Defaults to API_KEY_MAX_EXPIRATION_DAYS for regular keys, 1 hour for ephemeral keys.
+                                ephemeral:
+                                    type: boolean
+                                    description: Create a short-lived programmatic key. Defaults to false. Ephemeral keys have 1hr default and maximum expiration (enforced), and optional name.
+                                    default: false
                         examples:
                             default_expiration:
                                 summary: API key with default expiration (API_KEY_MAX_EXPIRATION_DAYS)
@@ -315,6 +317,10 @@ paths:
                                     name: my-short-lived-key
                                     description: 30-day test key
                                     expiresIn: 30d
+                            ephemeral_key:
+                                summary: Ephemeral key for programmatic use (1hr expiration)
+                                value:
+                                    ephemeral: true
             responses:
                 "201":
                     description: Created response.
@@ -322,6 +328,14 @@ paths:
                         application/json:
                             schema:
                                 type: object
+                                required:
+                                    - key
+                                    - keyPrefix
+                                    - id
+                                    - name
+                                    - createdAt
+                                    - expiresAt
+                                    - ephemeral
                                 properties:
                                     key:
                                         type: string
@@ -343,6 +357,9 @@ paths:
                                         type: string
                                         format: date-time
                                         description: Expiration timestamp (RFC3339)
+                                    ephemeral:
+                                        type: boolean
+                                        description: Whether this is a short-lived programmatic key
                 "400":
                     description: Bad Request response.
                 "401":
@@ -352,7 +369,7 @@ paths:
             tags:
                 - api-keys-v2
             summary: Search and filter API keys
-            description: Search API keys with flexible filtering, sorting, and pagination. Supports filtering by username (admin-only), status, sorting by multiple fields, and pagination.
+            description: Search API keys with flexible filtering, sorting, and pagination. Supports filtering by username (admin-only), status, sorting by multiple fields, and pagination. Ephemeral keys are excluded by default.
             operationId: api-keys-v2#search
             requestBody:
                 required: false
@@ -373,6 +390,10 @@ paths:
                                                 type: string
                                                 enum: [active, revoked, expired]
                                             description: Filter by status (active, revoked, expired). Defaults to active only.
+                                        includeEphemeral:
+                                            type: boolean
+                                            description: Include ephemeral keys in results. Defaults to false.
+                                            default: false
                                 sort:
                                     type: object
                                     properties:
@@ -398,7 +419,7 @@ paths:
                                             default: 0
                         examples:
                             default_search:
-                                summary: Default search (active keys, newest first)
+                                summary: Default search (active keys, newest first, excludes ephemeral)
                                 value:
                                     filters:
                                         status: ["active"]
@@ -420,6 +441,12 @@ paths:
                                     pagination:
                                         limit: 20
                                         offset: 0
+                            include_ephemeral:
+                                summary: Include ephemeral keys in search
+                                value:
+                                    filters:
+                                        status: ["active"]
+                                        includeEphemeral: true
             responses:
                 "200":
                     description: OK response.
@@ -434,11 +461,13 @@ paths:
                                       name: my-production-key
                                       creationDate: "2024-01-15T10:30:00Z"
                                       status: active
+                                      ephemeral: false
                                     - id: key_def456
                                       name: my-test-key
                                       creationDate: "2024-01-14T09:15:00Z"
                                       expirationDate: "2024-04-14T09:15:00Z"
                                       status: active
+                                      ephemeral: false
                                 has_more: true
                 "400":
                     description: Bad Request. Invalid search parameters.
@@ -559,6 +588,7 @@ paths:
                                 name: my-production-key
                                 creationDate: "2024-01-15T10:30:00Z"
                                 status: revoked
+                                ephemeral: false
                 "404":
                     description: Not Found. API key not found.
                 "401":
@@ -807,11 +837,15 @@ components:
                     type: string
                     format: date-time
                     description: When the API key was last used for validation
+                ephemeral:
+                    type: boolean
+                    description: Whether this is a short-lived programmatic token
             required:
                 - id
                 - name
                 - creationDate
                 - status
+                - ephemeral
 
         # API Key List Response (paginated)
         ApiKeyListResponse:

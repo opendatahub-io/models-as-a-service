@@ -2,130 +2,130 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/architecture/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/quickstart/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/limitador-persistence/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/observability/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/subscription-cardinality/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/group-membership-known-issues/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/maas-controller-overview/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/maas-model-kinds/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/maas-models/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-access-behavior/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-listing-flow/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-setup/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/quota-and-access-configuration/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/subscription-known-issues/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/subscription-overview/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tls-configuration/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/token-management/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/maas-setup/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/model-setup/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/platform-setup/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/prerequisites/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/troubleshooting/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/install/validation/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/migration/tier-to-subscription/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/api-reference/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/maas-api-overview/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/crds/maas-auth-policy/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/crds/maas-model-ref/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/reference/crds/maas-subscription/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/release-notes/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/user-guide/self-service-model-access/</loc>
-         <lastmod>2026-03-19</lastmod>
+         <lastmod>2026-03-20</lastmod>
     </url>
 </urlset>
