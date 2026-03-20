@@ -2,232 +2,296 @@
 
 ## Overview
 
-The MaaS Platform is designed as a cloud-native, Kubernetes-based solution that provides policy-based access control, rate limiting, and tier-based subscriptions for AI model serving. The architecture follows microservices principles and leverages OpenShift/Kubernetes native components for scalability and reliability.
+The MaaS Platform is a Kubernetes-native layer for AI model serving built on [Gateway API](https://gateway-api.sigs.k8s.io/) and policy controllers ([Kuadrant](https://docs.kuadrant.io/), [Authorino](https://docs.kuadrant.io/1.0.x/authorino/), [Limitador](https://docs.kuadrant.io/1.0.x/limitador/)). It provides policy-based authentication and authorization, plus subscription-based rate limiting. Future work includes improved request routing and discovery.
 
 ## Architecture
 
 ### 🏗️ High-Level Architecture
 
-The MaaS Platform is an end-to-end solution that leverages Kuadrant (Red Hat Connectivity Link) and Open Data Hub (Red Hat OpenShift AI)'s Model Serving capabilities to provide a fully managed, scalable, and secure self-service platform for AI model serving.
+The MaaS Platform is an end-to-end solution built on [Kuadrant](https://docs.kuadrant.io/).
 
-**All requests flow through the maas-default-gateway and RHCL components**, which then route requests based on the path:
+All traffic flows through the Gateway    **maas-default-gateway** (Gateway API). Then utilizes [Authorino](https://docs.kuadrant.io/1.0.x/authorino/) to enforcing authentication, authorization and [Limitador](https://docs.kuadrant.io/1.0.x/limitador/) to enforce and track token usage. Auth policies use **caching** (e.g., subscription selection results, API key validation) to reduce latency on the hot path.
 
-- `/maas-api/*` requests → MaaS API (token retrieval, validates OpenShift Token via RHCL)
-- Inference requests (`/v1/models`, `/v1/chat/completions`) → Model Serving (validates Service Account Token via RHCL)
+**Main Flows:**
+
+- **Key Minting** — For obtaining API keys to authenticate programmatic access. 
+- **Inference** — For calling models to generate completions.
 
 ```mermaid
 graph TB
-    subgraph "User Layer"
-        User[Users]
+    subgraph UserLayer["User Layer"]
+        User[User]
     end
     
-    subgraph "Gateway & Policy Layer"
-        GatewayAPI["maas-default-gateway<br/>All Traffic Entry Point"]
-        AuthPolicy["<b>Auth Policy</b><br/>Authorino<br/>Token Validation"]
-        RateLimit["<b>Rate Limiting</b><br/>Limitador<br/>Usage Quotas"]
+    subgraph GatewayPolicyLayer["Gateway & Policy Layer"]
+        Gateway[Gateway]
+        AuthPolicy[AuthPolicy]
+        MaaSAuthPolicy[MaaSAuthPolicy]
+        MaaSSubscription[MaaSSubscription]
     end
     
-    subgraph "Token Management Path"
-        MaaSAPI["MaaS API<br/>Token Retrieval"]
+    subgraph TokenManagementLayer["Token Management Layer"]
+        MaaSAPI[MaaS API]
     end
     
-    subgraph "Model Serving Path"
-        PathInference["Inference Service"]
-        ModelServing["RHOAI Model Serving"]
+    subgraph ModelServingLayer["Model Serving Layer"]
+        InferenceService[Inference Service]
+        LLM[LLM]
     end
     
-    User -->|"All Requests"| GatewayAPI
-    GatewayAPI -->|"All Traffic"| AuthPolicy
+    User -->|"Request Key"| Gateway
+    Gateway --> AuthPolicy
+    AuthPolicy --> MaaSAPI
+    MaaSAPI -->|"Return API Key"| User
     
-    AuthPolicy -->|"/maas-api<br/>Auth Only"| MaaSAPI
-    MaaSAPI -->|"Returns Token"| User
+    User -->|"Inference"| Gateway
+    Gateway --> MaaSAuthPolicy
+    MaaSAuthPolicy -.->|"Validate API Key"| MaaSAPI
+    MaaSAuthPolicy -->|"Rate Limit"| MaaSSubscription
+    MaaSSubscription --> InferenceService
+    InferenceService --> LLM
+    LLM -->|"Return Response"| User
     
-    AuthPolicy -->|"Inference Traffic<br/>Auth + Rate Limit"| RateLimit
-    RateLimit --> PathInference
-    PathInference --> ModelServing
-    ModelServing -->|"Returns Response"| User
+    linkStyle 0,1,2,3 stroke:#1976d2,stroke-width:2px
+    linkStyle 4,5,6,7,8,9,10 stroke:#388e3c,stroke-width:2px
     
     style MaaSAPI fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
-    style GatewayAPI fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
-    style AuthPolicy fill:#f57c00,stroke:#333,stroke-width:2px,color:#fff
-    style RateLimit fill:#f57c00,stroke:#333,stroke-width:2px,color:#fff
-    style PathInference fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
-    style ModelServing fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
+    style Gateway fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
+    style AuthPolicy fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style MaaSAuthPolicy fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style MaaSSubscription fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style InferenceService fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
+    style LLM fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
 ```
 
-### Architecture Details
+### Key Minting Flow — Request & Validation
 
-The MaaS Platform architecture is designed to be modular and scalable. It is composed of the following components:
+**Flow summary:**
 
-- **maas-default-gateway**: The single entry point for all traffic (both token requests and inference requests).
-- **RHCL (Red Hat Connectivity Link)**: The policy engine that handles authentication and authorization for all requests. Routes requests to appropriate backend based on path:
-  - `/maas-api/*` → MaaS API (validates OpenShift tokens)
-  - Inference paths (`/v1/models`, `/v1/chat/completions`) → Model Serving (validates Service Account tokens)
-- **MaaS API**: The central component for token generation and management, accessed via `/maas-api` path.
-- **Open Data Hub (Red Hat OpenShift AI)**: The model serving platform that handles inference requests.
-
-### Detailed Component Architecture
-
-#### MaaS API Component Details
-
-The MaaS API provides a self-service platform for users to request tokens for their inference requests. All requests to the MaaS API pass through the `maas-default-gateway` where authentication is performed against the user's OpenShift token via the Auth Policy component. By leveraging Kubernetes native objects like ConfigMaps and ServiceAccounts, it offers model owners a simple way to configure access to their models based on a familiar group-based access control model.
+1. User sends `POST /v1/api-keys` with Bearer `{oc-token}`.
+2. Gateway routes the request to AuthPolicy (Authorino).
+3. AuthPolicy validates the OpenShift token via TokenReview.
+4. Gateway forwards the authenticated request and user context to the Key Minting Service.
 
 ```mermaid
 graph TB
-    subgraph "External Access"
-        User[Users]
-        AdminUI[Admin/User UI]
+    subgraph UserLayer["User"]
+        U[User]
     end
     
-    subgraph "Gateway & Auth"
-        Gateway[**maas-default-gateway**<br/>Entry Point]
-        AuthPolicy[**Auth Policy**<br/>Validates OpenShift Token]
+    subgraph GatewayLayer["Gateway & Policy"]
+        G[Gateway]
+        AP[AuthPolicy<br/>Authorino]
     end
     
-    subgraph "MaaS API Service"
-        API[**MaaS API**<br/>Go + Gin Framework]
-        TierMapping[**Tier Mapping Logic**]
-        TokenGen[**Service Account Token Generation**]
+    subgraph KeyMintingLayer["MaaS API"]
+        KMS[MaaS API]
     end
     
-    subgraph "Configuration"
-        ConfigMap[**ConfigMap**<br/>tier-to-group-mapping]
-        K8sGroups[**Kubernetes Groups**<br/>tier-free-users<br/>tier-premium-users<br/>tier-enterprise-users]
+    U -->|"1. POST /v1/api-keys<br/>Bearer {oc-token}"| G
+    G -->|"2. Route /maas-api"| AP
+    AP -->|"3. TokenReview<br/>validate OpenShift token"| G
+    G -->|"4. Forward + user context"| KMS
+    
+    style KMS fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style G fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
+    style AP fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+```
+
+!!! Tip "Future Plans"
+    Today, validation uses the **OpenShift token flow** (TokenReview). Future plans include optional integration with other OIDC providers (e.g., external IdPs, Keycloak).
+
+
+### Key Minting Service (Default Implementation)
+
+**Flow summary:**
+
+1. Gateway forwards the authenticated request and user context to the Key Minting Service (MaaS API).
+2. The service generates a random `sk-oai-*` key and hashes it with SHA-256.
+3. Only the hash and metadata (username, groups, name, optional `expiresAt` when TTL is set) are stored in PostgreSQL.
+4. The plaintext key is returned to the user **once**, along with `expiresAt` when a TTL was specified; the key cannot be retrieved again.
+
+Keys can be permanent (no expiration) or have an optional **TTL** (`expiresIn`, e.g., `30d`, `90d`, `1h`); the response includes `expiresAt` when a TTL is set.
+
+```mermaid
+graph TB
+    subgraph UserLayer["User"]
+        U[User]
     end
     
-    subgraph "free namespace"
-        FreeSA1[**ServiceAccount**<br/>freeuser1-sa]
-        FreeSA2[**ServiceAccount**<br/>freeuser2-sa]
+    subgraph GatewayLayer["Gateway & Policy"]
+        G[Gateway]
     end
     
-    subgraph "premium namespace"
-        PremiumSA1[**ServiceAccount**<br/>prem-user1-sa]
+    subgraph KeyMintingService["Key Minting Service (Default)"]
+        API[MaaS API]
+        Gen[Generate sk-oai-* key]
+        Hash[Hash with SHA-256]
     end
     
-    subgraph "enterprise namespace"
-        EnterpriseSA1[**ServiceAccount**<br/>ent-user1-sa]
+    subgraph Storage["Storage (Default)"]
+        DB[(PostgreSQL<br/>key hashes + metadata + TTL)]
     end
     
-    User -->|"Request with<br/>OpenShift Token"| Gateway
-    AdminUI -->|"Request with<br/>OpenShift Token"| Gateway
-    Gateway -->|"/maas-api path"| AuthPolicy
-    AuthPolicy -->|"Authenticated Request"| API
-    
-    API --> TierMapping
-    API --> TokenGen
-    
-    TierMapping --> ConfigMap
-    ConfigMap -->|Maps Groups to Tiers| K8sGroups
-    TokenGen --> FreeSA1
-    TokenGen --> FreeSA2
-    TokenGen --> PremiumSA1
-    TokenGen --> EnterpriseSA1
-    
-    K8sGroups -->|Group Membership| TierMapping
+    U --> G
+    G -->|"Forward + user context"| API
+    API --> Gen
+    Gen --> Hash
+    Hash -->|"Store hash + expiresAt"| DB
+    API -->|"Return key ONCE"| U
     
     style API fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
-    style ConfigMap fill:#f57c00,stroke:#333,stroke-width:2px,color:#fff
-    style K8sGroups fill:#f57c00,stroke:#333,stroke-width:2px,color:#fff
-    style FreeSA1 fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
-    style FreeSA2 fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
-    style PremiumSA1 fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
-    style EnterpriseSA1 fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
+    style G fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
+    style DB fill:#336791,stroke:#333,stroke-width:2px,color:#fff
 ```
 
-**Key Features:**
+!!! tip "Future Plans"
+    This is the **default implementation**. Future plans include integration with other key store providers (e.g., HashiCorp Vault, cloud secret managers).
 
-- **Tier-to-Group Mapping**: Uses ConfigMap in the same namespace as MaaS API to map Kubernetes groups to tiers
-- **Configurable Tiers**: Out of the box, the MaaS Platform comes with three default tiers: free, premium, and enterprise. These tiers are configurable and can be extended to support more tiers as needed.
-- **Service Account Tokens**: Generates tokens for the appropriate tier's service account based on user's group membership
-- **Future Enhancements**: Planned improvements for more sophisticated token management and the ability to integrate with external identity providers.
+!!! note "PostgreSQL"
+    A **PostgreSQL database is required** and is **not included** with the MaaS deployment. The deploy script provides a basic PostgreSQL deployment for development and testing—**this is not intended for production use**. For production, provision and configure your own PostgreSQL instance.
 
-#### Inference Service Component Details
+### Inference Flow — Through MaaS Objects
 
-Once a user has obtained their token through the MaaS API, they can use it to make inference requests to the Gateway API. RHCL's Application Connectivity Policies then validate the token and enforce access control and rate limiting policies:
+**Flow summary:**
+
+1. User sends inference request with API key and `X-MaaS-Subscription` header.
+2. Gateway routes to MaaSAuthPolicy (Authorino).
+3. MaaSAuthPolicy validates the key via MaaS API and selects subscription; on failure returns 401/403.
+4. MaaSSubscription (Limitador) checks token rate limits; on exceed returns 429.
+5. Request reaches Inference Service and LLM; completion returned to user.
 
 ```mermaid
 graph TB
-    subgraph "Client Layer"
-        Client[Client Applications<br/>with Service Account Token]
+    subgraph UserLayer["User"]
+        U[User]
     end
     
-    subgraph "Gateway Layer"
-        GatewayAPI[**maas-default-gateway**<br/>maas.CLUSTER_DOMAIN]
-        Envoy[**Envoy Proxy**]
+    subgraph GatewayLayer["Gateway & Policy"]
+        G[Gateway]
+        MAP[MaaSAuthPolicy<br/>Authorino]
+        MS[MaaSSubscription<br/>Limitador]
     end
     
-    subgraph "RHCL Policy Engine"
-        Kuadrant[**Kuadrant**<br/>Policy Attachment]
-        Authorino[**Authorino**<br/>Authentication Service]
-        Limitador[**Limitador**<br/>Rate Limiting Service]
+    subgraph MaaSLayer["Token Management"]
+        API[MaaS API]
     end
     
-    subgraph "Policy Components"
-        AuthPolicy[**AuthPolicy**<br/>gateway-auth-policy]
-        RateLimitPolicy[**RateLimitPolicy**<br/>gateway-rate-limits]
-        TokenRateLimitPolicy[**TokenRateLimitPolicy**<br/>gateway-level]
+    subgraph ModelLayer["Model Serving"]
+        INV[Inference Service]
+        LLM[LLM]
     end
     
-    subgraph "Model Access Control"
-        RBAC[**Kubernetes RBAC**<br/>Service Account Permissions]
-        LLMInferenceService[**LLMInferenceService**<br/>Model Access Control]
-    end
+    U -->|"1. Inference + API key<br/>X-MaaS-Subscription"| G
+    G -->|"2. Route"| MAP
+    MAP -.->|"3. Validate key"| API
+    MAP -->|"4. Auth OK"| MS
+    MS -->|"5. Within limits"| INV
+    INV -->|"6. Forward"| LLM
+    LLM -->|"7. Completion"| U
     
-    subgraph "Model Serving"
-        RHOAI[**RHOAI Platform**]
-        Models[**LLM Models**<br/>Qwen, Granite, Llama]
-    end
+    MAP -.->|"401/403"| U
+    MS -.->|"429"| U
     
-    subgraph "Observability"
-        Prometheus[**Prometheus**<br/>Metrics Collection]
-    end
+    linkStyle 7 stroke:#c62828,stroke-width:2px,stroke-dasharray:5,5
+    linkStyle 8 stroke:#c62828,stroke-width:2px,stroke-dasharray:5,5
     
-    Client -->|Inference Request + Service Account Token| GatewayAPI
-    GatewayAPI --> Envoy
-    
-    Envoy --> Kuadrant
-    Kuadrant --> Authorino
-    Kuadrant --> Limitador
-    
-    Authorino --> AuthPolicy
-    Limitador --> RateLimitPolicy
-    Limitador --> TokenRateLimitPolicy
-    
-    Envoy -->|Check Model Access| RBAC
-    RBAC --> LLMInferenceService
-    LLMInferenceService -->|POST Permission Check| RHOAI
-    RHOAI --> Models
-    
-    Limitador -->|Usage Metrics| Prometheus
-    
-    style GatewayAPI fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
-    style Kuadrant fill:#f57c00,stroke:#333,stroke-width:2px,color:#fff
-    style Authorino fill:#f57c00,stroke:#333,stroke-width:2px,color:#fff
-    style Limitador fill:#f57c00,stroke:#333,stroke-width:2px,color:#fff
-    style AuthPolicy fill:#d32f2f,stroke:#333,stroke-width:2px,color:#fff
-    style RateLimitPolicy fill:#d32f2f,stroke:#333,stroke-width:2px,color:#fff
-    style TokenRateLimitPolicy fill:#d32f2f,stroke:#333,stroke-width:2px,color:#fff
-    style RBAC fill:#d32f2f,stroke:#333,stroke-width:2px,color:#fff
-    style LLMInferenceService fill:#d32f2f,stroke:#333,stroke-width:2px,color:#fff
-    style RHOAI fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
-    style Models fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
-    style Prometheus fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style API fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style G fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
+    style MAP fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style MS fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style INV fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
+    style LLM fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
 ```
 
-**Policy Engine Flow:**
+### Auth & Validation Flow (Deep Dive)
 
-1. **User Request**: A user makes an inference request to the Gateway API with a valid token.
-2. **Service Account Authentication**: Authorino validates service account tokens using gateway-auth-policy
-3. **Rate Limiting**: Limitador enforces usage quotas per tier/user using gateway and per-route policies
-4. **Model Access Control**: RBAC checks if service account has POST access to the specific LLMInferenceService
-5. **Request Forwarding**: Only requests with proper model access are forwarded to RHOAI
-6. **Metrics Collection**: Limitador sends usage data to Prometheus for observability dashboards
+The MaaSAuthPolicy delegates to the MaaS API for key validation and subscription selection. The `X-MaaS-Subscription` header is **required** when a user has access to multiple subscriptions.
+
+**Flow summary:**
+
+1. Authorino calls MaaS API to validate the API key.
+2. MaaS API performs basic token validation (format, not revoked, not expired) and returns username + groups.
+3. Authorino calls MaaS API to check subscription (groups, username, `X-MaaS-Subscription` header required when user has multiple subscriptions).
+4. If user has multiple subscriptions and header is missing, or lacks access to requested subscription → return error (403).
+5. On success, returns selected subscription; Authorino caches the result (e.g., 60s TTL).
+
+```mermaid
+graph TB
+    subgraph AuthLayer["MaaSAuthPolicy (Authorino)"]
+        A[Authorino]
+    end
+    
+    subgraph MaaSLayer["MaaS API"]
+        Validate[Validate API Key]
+        SubSelect[Check Subscription]
+    end
+    
+    subgraph Storage["Storage"]
+        DB[(PostgreSQL)]
+    end
+    
+    A -->|"1. Validate key"| Validate
+    Validate -->|"Lookup hash, check not expired"| DB
+    DB -->|"metadata"| Validate
+    
+    A -->|"2. Check subscription"| SubSelect
+    SubSelect -.->|"3. Missing header + multiple subs → 403<br/>No access to requested sub → 403"| A
+    SubSelect -->|"4. Selected subscription"| A
+    
+    linkStyle 4 stroke:#c62828,stroke-width:2px,stroke-dasharray:5,5
+    
+    style Validate fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style SubSelect fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style DB fill:#336791,stroke:#333,stroke-width:2px,color:#fff
+```
+
+!!! note "X-MaaS-Subscription header"
+    When a user belongs to multiple subscriptions, the `X-MaaS-Subscription` header is **required** to select which subscription to use. If omitted, the MaaS API returns an error and the request is denied with 403.
+
+### Observability Flow
+
+Token usage and rate-limit data flow from Limitador into Prometheus and onward to dashboards.
+
+**Flow summary:**
+
+1. Limitador stores token usage counters (e.g., `authorized_hits`, `authorized_calls`, `limited_calls`) with labels (`user`, `model`).
+2. A ServiceMonitor (or Kuadrant PodMonitor) configures Prometheus to scrape Limitador's `/metrics` endpoint.
+3. Prometheus stores the metrics in its time-series database.
+4. Grafana (or other visualization tools) queries Prometheus to build dashboards for usage, billing, and operational health.
+
+```mermaid
+graph LR
+    subgraph RateLimiting["Rate Limiting"]
+        Limitador[Limitador<br/>Token usage counters<br/>authorized_hits, authorized_calls, limited_calls]
+    end
+    
+    subgraph Scraping["Metric Scraping"]
+        SM[ServiceMonitor<br/>or PodMonitor]
+    end
+    
+    subgraph Storage["Metrics Storage"]
+        Prometheus[(Prometheus)]
+    end
+    
+    subgraph Visualization["Visualization"]
+        Grafana[Grafana<br/>Dashboards]
+    end
+    
+    Limitador -->|"/metrics"| SM
+    SM -->|"Scrape"| Prometheus
+    Prometheus -->|"Query"| Grafana
+    
+    style Limitador fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style Prometheus fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style Grafana fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
+```
 
 ## 🔄 Component Flows
 
-### 1. Token Retrieval Flow (MaaS API)
+### 1. API Key Creation Flow (MaaS API)
 
-The MaaS API generates service account tokens based on user group membership and tier configuration:
+Users create API keys by authenticating with their OpenShift token. The MaaS API generates a key, stores only the hash in PostgreSQL, and returns the plaintext once:
 
 ```mermaid
 sequenceDiagram
@@ -235,61 +299,50 @@ sequenceDiagram
     participant Gateway as Gateway API
     participant Authorino
     participant MaaS as MaaS API
-    participant TierMapper as Tier Mapper
-    participant K8s as Kubernetes API
+    participant DB as PostgreSQL
 
-    User->>Gateway: POST /maas-api/v1/tokens<br/>Authorization: Bearer {openshift-token}
+    User->>Gateway: POST /maas-api/v1/api-keys<br/>Authorization: Bearer {openshift-token}
     Gateway->>Authorino: Enforce MaaS API AuthPolicy
-    Authorino->>K8s: TokenReview (validate OpenShift token)
-    K8s-->>Authorino: User identity (username, groups)
+    Authorino->>Authorino: TokenReview (validate OpenShift token)
     Authorino->>Gateway: Authenticated
     Gateway->>MaaS: Forward request with user context
 
-    Note over MaaS,TierMapper: Determine User Tier
-    MaaS->>TierMapper: GetTierForGroups(user.groups)
-    TierMapper->>K8s: Get ConfigMap(tier-to-group-mapping)
-    K8s-->>TierMapper: Tier configuration
-    TierMapper-->>MaaS: User tier (e.g., "premium")
+    Note over MaaS,DB: Create API Key
+    MaaS->>MaaS: Generate sk-oai-* key, hash with SHA-256
+    MaaS->>DB: Store hash + metadata (user, groups, name)
+    DB-->>MaaS: Stored
 
-    Note over MaaS,K8s: Ensure Tier Resources
-    MaaS->>K8s: Create Namespace({instance}-tier-{tier}) if needed
-    MaaS->>K8s: Create ServiceAccount({username-hash}) if needed
-
-    Note over MaaS,K8s: Generate Token
-    MaaS->>K8s: CreateToken(namespace, SA name, TTL)
-    K8s-->>MaaS: TokenRequest with token and expiration
-
-    MaaS-->>User: {<br/>  "token": "...",<br/>  "expiration": "4h",<br/>  "expiresAt": 1234567890<br/>}
+    MaaS-->>User: { "key": "sk-oai-...", "id": "...", ... }<br/>Plaintext shown ONLY ONCE
 ```
 
-### 3. Model Inference Flow
+### 2. Model Inference Flow
 
-The inference flow routes validated requests to RHOAI models:
-
-The Gateway API and RHCL components validate service account tokens and enforce policies:
+Inference requests use the API key. Authorino validates it via HTTP callback (with caching); Limitador enforces subscription-based token limits:
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant GatewayAPI
-    participant Kuadrant
     participant Authorino
+    participant MaaS as MaaS API
     participant Limitador
-    participant AuthPolicy
-    participant RateLimitPolicy
     participant LLMInferenceService
     
-    Client->>GatewayAPI: Inference Request + Service Account Token
-    GatewayAPI->>Kuadrant: Applying Policies
-    Kuadrant->>Authorino: Validate Service Account Token
-    Authorino->>AuthPolicy: Check Token Validity
-    AuthPolicy-->>Authorino: Token Valid + Tier Info
-    Authorino-->>Kuadrant: Authentication Success
-    Kuadrant->>Limitador: Check Rate Limits
-    Limitador->>RateLimitPolicy: Apply Tier-based Limits
-    RateLimitPolicy-->>Limitador: Rate Limit Status
-    Limitador-->>Kuadrant: Rate Check Result
-    Kuadrant-->>GatewayAPI: Policy Decision (Allow/Deny)
-    GatewayAPI ->> LLMInferenceService: Forward Request
+    Client->>GatewayAPI: Inference + API Key + X-MaaS-Subscription
+    GatewayAPI->>Authorino: Validate credentials
+    
+    alt API key (sk-oai-*)
+        Authorino->>MaaS: POST /internal/v1/api-keys/validate
+        MaaS->>MaaS: Lookup hash in PostgreSQL
+        MaaS-->>Authorino: { valid, userId, groups }
+    end
+    
+    Authorino->>MaaS: POST /v1/subscriptions/select (subscription check)
+    MaaS-->>Authorino: Selected subscription
+    
+    Authorino->>GatewayAPI: Auth success (cached)
+    GatewayAPI->>Limitador: Check TokenRateLimitPolicy
+    Limitador-->>GatewayAPI: Within limits
+    GatewayAPI->>LLMInferenceService: Forward request
     LLMInferenceService-->>Client: Response
 ```

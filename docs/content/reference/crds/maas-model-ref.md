@@ -1,0 +1,26 @@
+# MaaSModelRef
+
+Identifies an AI/ML model on the cluster. The MaaS API lists models from MaaSModelRef resources (using `status.endpoint` and `status.phase`).
+
+## MaaSModelRefSpec
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| modelRef | ModelReference | Yes | Reference to the model endpoint |
+
+## ModelReference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| kind | string | Yes | One of: `LLMInferenceService`, `ExternalModel` |
+| name | string | Yes | Name of the model resource (e.g. LLMInferenceService name). Must be in the same namespace as the MaaSModelRef. |
+
+## MaaSModelRefStatus
+
+| Field | Type | Description |
+|-------|------|-------------|
+| phase | string | One of: `Pending`, `Ready`, `Unhealthy`, `Failed` |
+| endpoint | string | Endpoint URL for the model |
+| httpRouteName | string | Name of the HTTPRoute associated with this model |
+| httpRouteNamespace | string | Namespace of the HTTPRoute |
+| conditions | []Condition | Latest observations of the model's state |

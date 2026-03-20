@@ -59,16 +59,27 @@ Tests for the API Key Management endpoints (`/v1/api-keys`):
 
 ```bash
 cd test/e2e
-./run_api_key_tests.sh
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+export GATEWAY_HOST="maas.apps.your-cluster.example.com"
+# Or: export MAAS_API_BASE_URL="https://maas.apps.your-cluster.example.com/maas-api"
+
+# Ensure that you are logged into your openshift cluster prior to execution
+# export E2E_SKIP_TLS_VERIFY=true # Disables TLS verification
+pytest tests/test_api_keys.py -v \
+    --html=reports/api-keys-report.html --self-contained-html
 ```
 
 **Environment Variables:**
 - `MAAS_API_BASE_URL` - MaaS API URL (auto-discovered from `oc get route maas-api`)
 - `TOKEN` - User token (auto-obtained via `oc whoami -t`)
 - `ADMIN_OC_TOKEN` - Optional admin token for authorization tests (if not set, admin tests are skipped)
+- `API_KEY_MAX_EXPIRATION_DAYS` - Max expiration policy for expiration tests (default: 90, matching maas-api default)
 
 **Test Coverage:**
-- ✅ Create, list, revoke API keys
+- ✅ Create, search, revoke API keys
 - ✅ Admin authorization (manage other users' keys)
 - ✅ Non-admin authorization (403 on other users' keys)
 - ✅ Validation endpoint (active and revoked keys)
