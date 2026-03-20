@@ -3,7 +3,7 @@ ARG GOLANG_VERSION=1.25
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 
-FROM --platform=$TARGETPLATFORM registry.access.redhat.com/ubi9/go-toolset:$GOLANG_VERSION AS builder
+FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset:$GOLANG_VERSION AS builder
 ARG CGO_ENABLED=1
 ARG TARGETOS
 ARG TARGETARCH
