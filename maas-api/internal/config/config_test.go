@@ -45,8 +45,9 @@ func TestConfig_Validate_APIKeyMaxExpirationDays(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &config.Config{
-				DBConnectionURL:         "postgresql://test:test@localhost/test",
-				APIKeyMaxExpirationDays: tt.maxDays,
+				DBConnectionURL:           "postgresql://test:test@localhost/test",
+				MaaSSubscriptionNamespace: "maas-subscription-namespace",
+				APIKeyMaxExpirationDays:   tt.maxDays,
 			}
 
 			err := c.Validate()
