@@ -65,7 +65,13 @@ if [[ -z "${MAAS_API_BASE_URL}" ]]; then
   MAAS_API_BASE_URL="${SCHEME}://${HOST}/maas-api"
 fi
 
+# Extract HOST from MAAS_API_BASE_URL if not already set
+if [[ -z "${HOST}" && -n "${MAAS_API_BASE_URL}" ]]; then
+  HOST=$(echo "${MAAS_API_BASE_URL}" | sed -E 's|^[^:]+://([^/]+).*|\1|')
+fi
+
 export HOST
+export GATEWAY_HOST="${HOST}"  # Required by test_subscription.py
 export MAAS_API_BASE_URL
 
 echo "[smoke] MAAS_API_BASE_URL=${MAAS_API_BASE_URL}"
@@ -76,39 +82,80 @@ fi
 USER="$(oc whoami)"
 echo "[smoke] Performing smoke test for user: ${USER}"
 
-# 1) Mint a MaaS token using your cluster token
+# 1) Get OC token directly (no more /v1/tokens minting endpoint)
 mkdir -p "${DIR}/reports"
 LOG="${DIR}/reports/smoke-${USER}.log"
 : > "${LOG}"
 
-FREE_OC_TOKEN="$(oc whoami -t || true)"
-TOKEN_RESPONSE="$(curl -skS \
-  -H "Authorization: Bearer ${FREE_OC_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"expiration":"10m"}' \
-  "${MAAS_API_BASE_URL}/v1/tokens" || true)"
-
-TOKEN="$(echo "${TOKEN_RESPONSE}" | jq -r .token 2>/dev/null || true)"
-if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
-  echo "[smoke] ERROR: could not mint MaaS token" | tee -a "${LOG}"
-  echo "${TOKEN_RESPONSE}" | tee -a "${LOG}"
+TOKEN="$(oc whoami -t || true)"
+if [[ -z "${TOKEN}" ]]; then
+  echo "[smoke] ERROR: could not get OC token via 'oc whoami -t'" | tee -a "${LOG}"
+  echo "[smoke] Make sure you are logged into OpenShift" | tee -a "${LOG}"
   exit 1
 fi
 export TOKEN
 
 # Log a masked preview of the token to the log (not the console)
-echo "[token] minted: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
+echo "[token] using OC token: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
 
-# 2) Get models, derive URL/ID if catalog returns them
-MODELS_JSON="$(curl -skS -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" || true)"
-MODEL_URL="$(echo "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.url // empty' 2>/dev/null || true)"
-MODEL_ID="$(echo  "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.id  // empty' 2>/dev/null || true)"
+# Admin token setup - use current user if possible, add to odh-admins
+setup_admin_token() {
+  if [[ -n "${ADMIN_OC_TOKEN:-}" ]]; then
+    echo "[smoke] ADMIN_OC_TOKEN already set externally"
+    export ADMIN_OC_TOKEN
+    return 0
+  fi
+
+  echo "[smoke] Setting up admin token for admin tests..."
+  
+  local current_user
+  current_user=$(oc whoami)
+  
+  # Check if user has admin permissions
+  if ! oc auth can-i patch groups &>/dev/null; then
+    echo "[smoke] Current user lacks admin permissions - admin tests will be skipped"
+    return 0
+  fi
+
+  # Add current user to odh-admins group so maas-api recognizes them as admin
+  if oc get group odh-admins &>/dev/null; then
+    oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
+    echo "[smoke] Added $current_user to odh-admins group"
+  else
+    echo "[smoke] odh-admins group not found - admin tests will be skipped"
+    return 0
+  fi
+
+  # Use current user's token
+  ADMIN_OC_TOKEN="$(oc whoami -t 2>/dev/null || true)"
+  if [[ -n "${ADMIN_OC_TOKEN}" ]]; then
+    export ADMIN_OC_TOKEN
+    echo "[smoke] ADMIN_OC_TOKEN configured - admin tests will run"
+  else
+    echo "[smoke] Failed to get token (cert-based auth?) - admin tests will be skipped"
+  fi
+}
+
+setup_admin_token
+
+# 2) Get models, derive URL/ID if catalog returns them (retry for transient empty cache)
+MODEL_ID=""
+for _attempt in $(seq 1 10); do
+  MODELS_JSON="$(curl -skS -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" 2>&1 || true)"
+  MODEL_URL="$(echo "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.url // empty' 2>/dev/null || true)"
+  MODEL_ID="$(echo  "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.id  // empty' 2>/dev/null || true)"
+  if [[ -n "${MODEL_ID}" && "${MODEL_ID}" != "null" ]]; then
+    break
+  fi
+  echo "[smoke] models catalog empty (attempt ${_attempt}/10), retrying in 3s..." | tee -a "${LOG}"
+  sleep 3
+done
 
 # Fallbacks
 if [[ -z "${MODEL_ID}" || "${MODEL_ID}" == "null" ]]; then
   if [[ -z "${MODEL_NAME:-}" ]]; then
     echo "[smoke] ERROR: catalog did not return a model id and MODEL_NAME not set" | tee -a "${LOG}"
+    echo "[smoke] models response was: ${MODELS_JSON:0:500}"
     exit 2
   fi
   MODEL_ID="${MODEL_NAME}"
@@ -138,7 +185,7 @@ PYTEST_ARGS=(
   --capture=tee-sys              # capture prints and also echo to console
   --show-capture=all             # include captured output in the report
   --log-level=INFO               # capture logging at INFO and above
-  "${DIR}/tests/test_smoke.py"
+  "${DIR}/tests/"
 )
 
 python -c 'import pytest_html' >/dev/null 2>&1 || echo "[smoke] WARNING: pytest-html not found (but we still passed --html)"

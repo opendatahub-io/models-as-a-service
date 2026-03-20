@@ -4,14 +4,14 @@ kind: Kustomization
 metadata:
   name: maas-odh-overlay
 
-# ODH overlay: maas-api with TLS + auth policies
+# ODH overlay: maas-api with TLS + maas-controller (per-route auth/rate limits)
 # For full deployment including rate limits, use openshift overlay
 
 namespace: opendatahub
 resources:
-  - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule)
-  - ../../base/policies/auth-policies  # Gateway auth policies only
-  - maas-authorino-networkpolicy.yaml
+  - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule + NetworkPolicy)
+  - ../../base/maas-controller/default
+  - ../../base/maas-controller/policies  # gateway-default-auth, gateway-default-deny
 
 configMapGenerator:
 - envs:
@@ -21,16 +21,6 @@ generatorOptions:
   disableNameSuffixHash: true
 
 patches:
-# Set HTTPS URL for tier lookup; namespace is injected via replacements below
-- target:
-    group: kuadrant.io
-    version: v1
-    kind: AuthPolicy
-    name: gateway-auth-policy
-  patch: |-
-    - op: replace
-      path: /spec/rules/metadata/matchedTier/http/url
-      value: https://maas-api.maas-api.svc.cluster.local:8443/v1/tiers/lookup
 - patch: |-
     apiVersion: apps/v1
     kind: Deployment
@@ -52,11 +42,34 @@ patches:
                 configMapKeyRef:
                   key: gateway-name
                   name: maas-parameters
+            - name: API_KEY_MAX_EXPIRATION_DAYS
+              valueFrom:
+                configMapKeyRef:
+                  key: api-key-max-expiration-days
+                  name: maas-parameters
+                  optional: true
   target:
     kind: Deployment
     name: maas-api
 
 replacements:
+# Gateway policies must be in openshift-ingress to target maas-default-gateway
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-namespace
+  targets:
+  - select:
+      kind: AuthPolicy
+      name: gateway-default-auth
+    fieldPaths:
+    - metadata.namespace
+  - select:
+      kind: TokenRateLimitPolicy
+      name: gateway-default-deny
+    fieldPaths:
+    - metadata.namespace
 - source:
     kind: ConfigMap
     version: v1
@@ -72,6 +85,17 @@ replacements:
     kind: ConfigMap
     version: v1
     name: maas-parameters
+    fieldPath: data.maas-controller-image
+  targets:
+  - select:
+      kind: Deployment
+      name: maas-controller
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].image
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
     fieldPath: data.gateway-namespace
   targets:
   - select:
@@ -79,11 +103,6 @@ replacements:
       name: maas-api-route
     fieldPaths:
     - spec.parentRefs.0.namespace
-  - select:
-      kind: AuthPolicy
-      name: gateway-auth-policy
-    fieldPaths:
-    - metadata.namespace
   - select:
       kind: DestinationRule
       name: maas-api-backend-tls
@@ -100,11 +119,6 @@ replacements:
       name: maas-api-route
     fieldPaths:
     - spec.parentRefs.0.name
-  - select:
-      kind: AuthPolicy
-      name: gateway-auth-policy
-    fieldPaths:
-    - spec.targetRef.name
 - source:
     kind: ConfigMap
     version: v1
@@ -113,9 +127,9 @@ replacements:
   targets:
   - select:
       kind: AuthPolicy
-      name: gateway-auth-policy
+      name: maas-api-auth-policy
     fieldPaths:
-    - spec.rules.metadata.matchedTier.http.url
+    - spec.rules.metadata.apiKeyValidation.http.url
     options:
       delimiter: "."
       index: 1

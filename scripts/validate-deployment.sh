@@ -393,7 +393,7 @@ fi
 print_check "TokenRateLimitPolicy"
 RATELIMIT_COUNT=$(kubectl get tokenratelimitpolicy -A --no-headers 2>/dev/null | wc -l || echo "0")
 if [ "$RATELIMIT_COUNT" -gt 0 ]; then
-    RATELIMIT_STATUS=$(kubectl get tokenratelimitpolicy -n openshift-ingress gateway-token-rate-limits -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
+    RATELIMIT_STATUS=$(kubectl get tokenratelimitpolicy -n openshift-ingress -o jsonpath='{.items[0].status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
     if [ "$RATELIMIT_STATUS" = "True" ]; then
         print_success "TokenRateLimitPolicy is configured and accepted"
     else
@@ -413,77 +413,15 @@ if [ -z "$HOST" ]; then
 else
     print_info "Using gateway endpoint: $HOST"
     
-    # Test authentication endpoint
-    print_check "Authentication endpoint"
-    ENDPOINT="${HOST}/maas-api/v1/tokens"
-    print_info "Testing: curl -sSk -X POST $ENDPOINT -H \"Authorization: Bearer \$(oc whoami -t)\" -H \"Content-Type: application/json\" -d '{\"expiration\": \"10m\"}'"
-    
+    # Get authentication token for API tests
+    # Use pre-existing token from CI/test environment, or fall back to oc whoami -t
+    print_check "Authentication token"
     if command -v oc &> /dev/null; then
-        OC_TOKEN=$(oc whoami -t 2>/dev/null || echo "")
-        if [ -n "$OC_TOKEN" ]; then
-            TOKEN_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
-                -H "Authorization: Bearer ${OC_TOKEN}" \
-                -H "Content-Type: application/json" \
-                -X POST \
-                -d '{"expiration": "10m"}' \
-                "${ENDPOINT}" 2>/dev/null || echo "")
-            
-            HTTP_CODE=$(echo "$TOKEN_RESPONSE" | tail -n1)
-            RESPONSE_BODY=$(echo "$TOKEN_RESPONSE" | sed '$d')
-            
-            # Handle timeout/connection failure
-            if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
-                print_fail "Connection timeout or failed to reach endpoint" \
-                    "The endpoint is not reachable. This is likely because:" \
-                    "1) The endpoint is behind a VPN or firewall, 2) DNS resolution failed, 3) Gateway/Route not properly configured. Check: kubectl get gateway -n openshift-ingress && kubectl get httproute -n $MAAS_API_NAMESPACE"
-                TOKEN=""
-            elif [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
-                TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token' 2>/dev/null || echo "")
-                if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
-                    print_success "Authentication successful (HTTP $HTTP_CODE)"
-                    
-                    # Decode token and extract tier information using helper function
-                    print_check "Token information"
-                    TOKEN_PAYLOAD=$(decode_jwt_payload "$TOKEN")
-                    if [ -n "$TOKEN_PAYLOAD" ]; then
-                        SUB=$(echo "$TOKEN_PAYLOAD" | jq -r '.sub // empty' 2>/dev/null)
-                        if [ -n "$SUB" ] && [ "$SUB" != "null" ]; then
-                            print_info "Token subject: $SUB"
-                            
-                            # Extract tier from sub: system:serviceaccount:maas-default-gateway-tier-{tier}:{user}
-                            # Extract the part between "tier-" and the colon
-                            TIER=$(echo "$SUB" | sed -n 's/.*tier-\([^:]*\):.*/\1/p')
-                            if [ -n "$TIER" ]; then
-                                print_success "User tier: $TIER"
-                            else
-                                print_warning "Could not extract tier from subject" "Subject format may not match expected pattern"
-                            fi
-                        else
-                            print_warning "Could not extract sub from token payload"
-                        fi
-                    else
-                        print_warning "Could not decode token payload"
-                    fi
-                else
-                    print_fail "Authentication response invalid" "Received HTTP $HTTP_CODE but no token in response" "Check MaaS API logs: kubectl logs -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api"
-                fi
-            elif [ "$HTTP_CODE" = "404" ]; then
-                print_fail "Endpoint not found (HTTP 404)" \
-                    "Traffic is reaching the Gateway/pods but the path is incorrect" \
-                    "Check HTTPRoute configuration: kubectl describe httproute maas-api-route -n $MAAS_API_NAMESPACE"
-                TOKEN=""
-            elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ]; then
-                print_fail "Gateway/Service error (HTTP $HTTP_CODE)" \
-                    "The Gateway is not able to reach the backend service" \
-                    "Check: 1) MaaS API pods are running: kubectl get pods -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api, 2) Service exists: kubectl get svc maas-api -n $MAAS_API_NAMESPACE, 3) HTTPRoute is configured: kubectl describe httproute maas-api-route -n $MAAS_API_NAMESPACE"
-                TOKEN=""
-            else
-                print_fail "Authentication failed (HTTP $HTTP_CODE)" "Response: $(echo $RESPONSE_BODY | head -c 100)" "Check AuthPolicy and MaaS API service"
-                TOKEN=""
-            fi
+        TOKEN="${TOKEN:-${ADMIN_OC_TOKEN:-$(oc whoami -t 2>/dev/null || echo "")}}"
+        if [ -n "$TOKEN" ]; then
+            print_success "Authentication token available"
         else
             print_warning "Cannot get OpenShift token" "Not logged into oc CLI" "Run: oc login"
-            TOKEN=""
         fi
     else
         print_warning "oc CLI not found" "Cannot test authentication" "Install oc CLI or use kubectl with token"
@@ -631,6 +569,22 @@ else
     # Test rate limiting
     if [ -n "$TOKEN" ] && [ -n "$MODEL_NAME" ] && [ -n "$MODEL_CHAT_ENDPOINT" ]; then
         print_check "Rate limiting"
+
+        # Log current user tier and attempt to fetch the configured rate limit from the cluster
+        if [ -n "$TIER" ]; then
+            print_info "Current user tier: $TIER"
+            # Query the TokenRateLimitPolicy to show the configured limit for this tier
+            TIER_LIMIT=$(kubectl get tokenratelimitpolicy -n openshift-ingress -o jsonpath="{.items[0].spec.limits.${TIER}-user-tokens.rates[0].limit}" 2>/dev/null || echo "")
+            TIER_WINDOW=$(kubectl get tokenratelimitpolicy -n openshift-ingress -o jsonpath="{.items[0].spec.limits.${TIER}-user-tokens.rates[0].window}" 2>/dev/null || echo "")
+            if [ -n "$TIER_LIMIT" ] && [ -n "$TIER_WINDOW" ]; then
+                print_info "Configured rate limit for $TIER tier: $TIER_LIMIT tokens per $TIER_WINDOW"
+            else
+                print_info "Could not read rate limit for $TIER tier from TokenRateLimitPolicy"
+            fi
+        else
+            print_info "User tier: unknown (could not extract from token)"
+        fi
+
         print_info "Sending $RATE_LIMIT_TEST_COUNT rapid requests to test rate limiting..."
         
         # Use the same request payload for rate limiting tests
@@ -660,16 +614,28 @@ else
             fi
         done
         
+        # Determine if the user tier has high rate limits (enterprise/premium users)
+        # For high-tier users, all requests succeeding is expected and not a failure
+        HIGH_TIER=false
+        if [ -n "$TIER" ]; then
+            case "$TIER" in
+                enterprise|premium)
+                    HIGH_TIER=true
+                    ;;
+            esac
+        fi
+
         # Rate Limiting Validation Logic:
-        # ┌─────────────────────────────────────────────────────────────────────────────────┐
-        # │ Condition                              │ Result                                 │
-        # ├─────────────────────────────────────────────────────────────────────────────────┤
-        # │ 429s received AND no failures          │ ✅ PASS - Rate limiting working        │
-        # │ 429s received BUT some failures        │ ❌ FAIL - Partial success, instability │
-        # │ All 200s, no 429s, no failures         │ ❌ FAIL - Rate limiting not enforced   │
-        # │ Some 200s, some failures, no 429s      │ ❌ FAIL - Inconclusive                 │
-        # │ All requests failed                    │ ❌ FAIL - Complete failure             │
-        # └─────────────────────────────────────────────────────────────────────────────────┘
+        # ┌──────────────────────────────────────────────────────────────────────────────────────────┐
+        # │ Condition                              │ Result                                          │
+        # ├──────────────────────────────────────────────────────────────────────────────────────────┤
+        # │ 429s received AND no failures          │ ✅ PASS - Rate limiting working                 │
+        # │ 429s received BUT some failures        │ ❌ FAIL - Partial success, instability          │
+        # │ All 200s, no 429s (high-tier user)     │ ✅ PASS - Expected for high rate limit tiers    │
+        # │ All 200s, no 429s (free/standard user) │ ❌ FAIL - Rate limiting not enforced            │
+        # │ Some 200s, some failures, no 429s      │ ❌ FAIL - Inconclusive                          │
+        # │ All requests failed                    │ ❌ FAIL - Complete failure                      │
+        # └──────────────────────────────────────────────────────────────────────────────────────────┘
         if [ "$RATE_LIMITED_COUNT" -gt 0 ]; then
             if [ "$FAILED_COUNT" -gt 0 ]; then
                 print_fail "Rate limiting partially working but errors observed" \
@@ -679,7 +645,12 @@ else
                 print_success "Rate limiting is working ($SUCCESS_COUNT successful, $RATE_LIMITED_COUNT rate limited)"
             fi
         elif [ "$SUCCESS_COUNT" -gt 0 ] && [ "$FAILED_COUNT" -eq 0 ]; then
-            print_fail "Rate limiting not enforced" "All $SUCCESS_COUNT requests succeeded without rate limiting" "Check TokenRateLimitPolicy and Limitador configuration"
+            if [ "$HIGH_TIER" = true ]; then
+                print_success "All $SUCCESS_COUNT requests succeeded (expected for $TIER tier with higher rate limits)"
+                print_info "To verify rate limiting for $TIER tier, re-run with more requests: --rate-limit-requests 100"
+            else
+                print_fail "Rate limiting not enforced" "All $SUCCESS_COUNT requests succeeded without rate limiting" "Check TokenRateLimitPolicy and Limitador configuration"
+            fi
         elif [ "$SUCCESS_COUNT" -gt 0 ]; then
             print_fail "Rate limiting test inconclusive" "$SUCCESS_COUNT succeeded, $FAILED_COUNT failed (auth may still be stabilizing)" "Check TokenRateLimitPolicy and auth service health"
         else

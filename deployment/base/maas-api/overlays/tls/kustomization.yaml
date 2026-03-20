@@ -22,4 +22,15 @@ patches:
       - op: replace
         path: /spec/rules/1/backendRefs/0/port
         value: 8443
+  # Fix NetworkPolicy ingress podSelector - the labels transformer in 'default'
+  # incorrectly adds MaaS labels to the Authorino podSelector. Authorino pods
+  # only have 'authorino-resource: authorino', so we restore the correct selector.
+  - target:
+      kind: NetworkPolicy
+      name: maas-authorino-allow
+    patch: |
+      - op: replace
+        path: /spec/ingress/0/from/0/podSelector/matchLabels
+        value:
+          authorino-resource: authorino
 

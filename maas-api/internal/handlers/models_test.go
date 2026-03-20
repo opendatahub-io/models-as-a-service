@@ -7,19 +7,115 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v2/packages/pagination"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"knative.dev/pkg/apis"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/test/fixtures"
 )
+
+const (
+	maasModelRefGVRGroup    = "maas.opendatahub.io"
+	maasModelRefGVRVersion  = "v1alpha1"
+	maasModelRefGVRResource = "maasmodelrefs"
+)
+
+// maasModelRefUnstructured returns an unstructured MaaSModelRef for testing (name, namespace, endpoint URL, ready).
+func maasModelRefUnstructured(name, namespace, endpoint string, ready bool) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   maasModelRefGVRGroup,
+		Version: maasModelRefGVRVersion,
+		Kind:    "MaaSModelRef",
+	})
+	u.SetName(name)
+	u.SetNamespace(namespace)
+	u.SetCreationTimestamp(metav1.NewTime(time.Unix(1700000000, 0)))
+	_ = unstructured.SetNestedField(u.Object, endpoint, "status", "endpoint")
+	if ready {
+		_ = unstructured.SetNestedField(u.Object, "Ready", "status", "phase")
+	}
+	_ = unstructured.SetNestedField(u.Object, "llmisvc", "spec", "modelRef", "kind")
+	return u
+}
+
+// fakeMaaSModelRefLister implements models.MaaSModelRefLister for tests (namespace -> items).
+type fakeMaaSModelRefLister map[string][]*unstructured.Unstructured
+
+func (f fakeMaaSModelRefLister) List() ([]*unstructured.Unstructured, error) {
+	// Return all items from all namespaces
+	var out []*unstructured.Unstructured
+	for _, items := range f {
+		for _, u := range items {
+			out = append(out, u.DeepCopy())
+		}
+	}
+	return out, nil
+}
+
+// fakeSubscriptionLister implements subscription.Lister for tests.
+// Returns a single default subscription so that tests auto-select it.
+type fakeSubscriptionLister struct{}
+
+func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
+	// Return a single subscription that matches all users
+	sub := &unstructured.Unstructured{}
+	sub.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "maas.opendatahub.io",
+		Version: "v1alpha1",
+		Kind:    "MaaSSubscription",
+	})
+	sub.SetName("test-subscription")
+	sub.SetNamespace(fixtures.TestNamespace)
+
+	// Set spec.owner.groups to match test users
+	_ = unstructured.SetNestedSlice(sub.Object, []any{
+		map[string]any{"name": "free-users"},
+		map[string]any{"name": "premium-users"},
+	}, "spec", "owner", "groups")
+
+	return []*unstructured.Unstructured{sub}, nil
+}
+
+// fakeMultiSubscriptionLister returns multiple subscriptions by name -> groups mapping.
+type fakeMultiSubscriptionLister map[string][]string
+
+func (f fakeMultiSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
+	result := make([]*unstructured.Unstructured, 0, len(f))
+	for subName, groups := range f {
+		sub := &unstructured.Unstructured{}
+		sub.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "maas.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "MaaSSubscription",
+		})
+		sub.SetName(subName)
+		sub.SetNamespace(fixtures.TestNamespace)
+
+		// Set spec.owner.groups
+		groupSlice := make([]any, len(groups))
+		for i, g := range groups {
+			groupSlice[i] = map[string]any{"name": g}
+		}
+		_ = unstructured.SetNestedSlice(sub.Object, groupSlice, "spec", "owner", "groups")
+
+		result = append(result, sub)
+	}
+	return result, nil
+}
 
 // makeModelsResponse creates a JSON response for /v1/models endpoint.
 func makeModelsResponse(modelIDs ...string) []byte {
@@ -49,6 +145,33 @@ func createMockModelServer(t *testing.T, modelID string) *httptest.Server {
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
 		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// createMockModelServerWithSubscriptionCheck creates a test server that checks both Authorization and x-maas-subscription headers.
+func createMockModelServerWithSubscriptionCheck(t *testing.T, modelID string, requiredSubscription string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		subscriptionHeader := r.Header.Get("X-Maas-Subscription")
+		w.Header().Set("Content-Type", "application/json")
+
+		// Check authorization
+		if !strings.HasPrefix(authHeader, "Bearer ") || len(authHeader) <= 7 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		// Check subscription (if required)
+		if requiredSubscription != "" && subscriptionHeader != requiredSubscription {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse(modelID))
 	}))
 	t.Cleanup(server.Close)
 	return server
@@ -139,12 +262,10 @@ func TestListingModels(t *testing.T) {
 				constant.AnnotationDescription:  "A large language model for general AI tasks",
 				constant.AnnotationDisplayName:  "Test Model Alpha",
 			},
+			// MaaSModelRef listing does not populate Details from annotations.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
-				require.NotNil(t, model.Details, "Expected modelDetails to be present")
-				assert.Equal(t, "General purpose LLM", model.Details.GenAIUseCase)
-				assert.Equal(t, "A large language model for general AI tasks", model.Details.Description)
-				assert.Equal(t, "Test Model Alpha", model.Details.DisplayName)
+				_ = model
 			},
 		},
 		{
@@ -157,12 +278,10 @@ func TestListingModels(t *testing.T) {
 			Annotations: map[string]string{
 				constant.AnnotationDisplayName: "Test Model Beta",
 			},
+			// MaaSModelRef listing does not populate Details.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
-				require.NotNil(t, model.Details, "Expected modelDetails to be present")
-				assert.Empty(t, model.Details.GenAIUseCase)
-				assert.Empty(t, model.Details.Description)
-				assert.Equal(t, "Test Model Beta", model.Details.DisplayName)
+				_ = model
 			},
 		},
 		{
@@ -181,34 +300,33 @@ func TestListingModels(t *testing.T) {
 			},
 		},
 	}
-	llmInferenceServices := fixtures.CreateLLMInferenceServices(llmTestScenarios...)
+	// Build MaaSModelRef unstructured list from scenarios (same URLs as mock servers for access validation).
+	maasModelRefItems := make([]*unstructured.Unstructured, 0, len(llmTestScenarios))
+	for _, s := range llmTestScenarios {
+		endpoint := s.URL.String()
+		maasModelRefItems = append(maasModelRefItems, maasModelRefUnstructured(s.Name, fixtures.TestNamespace, endpoint, s.Ready))
+	}
+	maasModelRefLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelRefItems}
 
 	config := fixtures.TestServerConfig{
-		Objects: llmInferenceServices,
+		Objects: []runtime.Object{},
 	}
-	router, clients := fixtures.SetupTestServer(t, config)
+	router, _ := fixtures.SetupTestServer(t, config)
 
-	gatewayRef := models.GatewayRef{
-		Name:      testGatewayName,
-		Namespace: testGatewayNamespace,
-	}
-
-	modelMgr, errMgr := models.NewManager(
-		testLogger,
-		clients.LLMInferenceServiceLister,
-		clients.HTTPRouteLister,
-		gatewayRef,
-	)
+	modelMgr, errMgr := models.NewManager(testLogger)
 	require.NoError(t, errMgr)
 
-	// Create token manager for test - uses fixtures helper which sets up tier config
-	tokenManager, _, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	// Set up test fixtures
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
 	defer cleanup()
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, tokenManager)
+	// Create a mock subscription selector that auto-selects for single subscription users
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{})
+
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
 
 	// Create token handler to extract user info middleware
-	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant, tokenManager)
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 
 	v1 := router.Group("/v1")
 	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
@@ -231,7 +349,7 @@ func TestListingModels(t *testing.T) {
 
 	assert.Equal(t, "list", response.Object, "Expected object type to be 'list'")
 	// With authorization, we expect 8 models (excluding the one without URL)
-	require.Len(t, response.Data, len(llmInferenceServices)-1, "Mismatched number of models returned")
+	require.Len(t, response.Data, len(llmTestScenarios)-1, "Mismatched number of models returned")
 
 	modelsByName := make(map[string]models.Model)
 	for _, model := range response.Data {
@@ -278,4 +396,799 @@ func mustParseURL(rawURL string) *apis.URL {
 		panic("test setup failed: invalid URL: " + err.Error())
 	}
 	return u
+}
+
+func TestListingModelsWithSubscriptionHeader(t *testing.T) {
+	testLogger := logger.Development()
+
+	// Create mock servers that require specific subscription headers
+	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "premium")
+	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "free")
+
+	// Build MaaSModelRef unstructured list
+	maasModelRefItems := []*unstructured.Unstructured{
+		maasModelRefUnstructured("premium-model", fixtures.TestNamespace, premiumModelServer.URL, true),
+		maasModelRefUnstructured("free-model", fixtures.TestNamespace, freeModelServer.URL, true),
+	}
+	maasModelRefLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelRefItems}
+
+	config := fixtures.TestServerConfig{
+		Objects: []runtime.Object{},
+	}
+	router, _ := fixtures.SetupTestServer(t, config)
+
+	modelMgr, errMgr := models.NewManager(testLogger)
+	require.NoError(t, errMgr)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	defer cleanup()
+
+	// Create subscription lister with premium and free subscriptions
+	multiSubLister := fakeMultiSubscriptionLister{
+		"premium": []string{"premium-users"},
+		"free":    []string{"free-users"},
+	}
+	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister)
+
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	// Table-driven tests for subscription header variants
+	subscriptionTests := []struct {
+		name               string
+		subscription       string
+		userGroups         string
+		expectedModelID    string
+		expectedModelCount int
+	}{
+		{
+			name:               "with premium subscription header",
+			subscription:       "premium",
+			userGroups:         `["premium-users"]`,
+			expectedModelID:    "premium-model",
+			expectedModelCount: 1,
+		},
+		{
+			name:               "with free subscription header",
+			subscription:       "free",
+			userGroups:         `["free-users"]`,
+			expectedModelID:    "free-model",
+			expectedModelCount: 1,
+		},
+	}
+
+	for _, tt := range subscriptionTests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+			require.NoError(t, err, "Failed to create request")
+
+			req.Header.Set("Authorization", "Bearer valid-token")
+			req.Header.Set("X-Maas-Subscription", tt.subscription)
+			req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+			req.Header.Set(constant.HeaderGroup, tt.userGroups)
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
+
+			var response pagination.Page[models.Model]
+			err = json.Unmarshal(w.Body.Bytes(), &response)
+			require.NoError(t, err, "Failed to unmarshal response body")
+
+			require.Len(t, response.Data, tt.expectedModelCount, "Expected model count mismatch")
+			assert.Equal(t, tt.expectedModelID, response.Data[0].ID)
+		})
+	}
+
+	t.Run("without subscription header - single subscription auto-selects", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err, "Failed to create request")
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err, "Failed to unmarshal response body")
+
+		// User only has access to "free" subscription, so it auto-selects and returns free model
+		require.Len(t, response.Data, 1, "Expected one model with auto-selected free subscription")
+		assert.Equal(t, "free-model", response.Data[0].ID)
+	})
+
+	t.Run("without subscription header - multiple subscriptions requires header", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err, "Failed to create request")
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users", "premium-users"]`)
+		router.ServeHTTP(w, req)
+
+		// User has access to both subscriptions, must specify which one
+		// Returns 403 for consistency with inferencing (Authorino limitation)
+		require.Equal(t, http.StatusForbidden, w.Code, "Expected 403 Forbidden")
+
+		var errorResponse map[string]any
+		err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
+		require.NoError(t, err, "Failed to unmarshal error response")
+
+		errorObj, ok := errorResponse["error"].(map[string]any)
+		require.True(t, ok, "Expected error object")
+		assert.Equal(t, "permission_error", errorObj["type"])
+	})
+
+	// Table-driven tests for subscription error scenarios
+	subscriptionErrorTests := []struct {
+		name         string
+		subscription string
+		userGroups   string
+	}{
+		{
+			name:         "unknown subscription header - returns 403",
+			subscription: "nonexistent-subscription",
+			userGroups:   `["free-users"]`,
+		},
+		{
+			name:         "subscription user lacks access to - returns 403",
+			subscription: "premium",
+			userGroups:   `["free-users"]`,
+		},
+	}
+
+	for _, tt := range subscriptionErrorTests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+			require.NoError(t, err, "Failed to create request")
+
+			req.Header.Set("Authorization", "Bearer valid-token")
+			req.Header.Set("X-Maas-Subscription", tt.subscription)
+			req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+			req.Header.Set(constant.HeaderGroup, tt.userGroups)
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusForbidden, w.Code, "Expected 403 Forbidden")
+
+			var errorResponse map[string]any
+			err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
+			require.NoError(t, err, "Failed to unmarshal error response")
+
+			errorObj, ok := errorResponse["error"].(map[string]any)
+			require.True(t, ok, "Expected error object")
+			assert.Equal(t, "permission_error", errorObj["type"])
+		})
+	}
+}
+func TestListModels_ReturnAllModels(t *testing.T) {
+	testLogger := logger.Development()
+
+	// Create mock servers for models
+	model1Server := createMockModelServerWithSubscriptionCheck(t, "model-1", "sub-a")
+	model2Server := createMockModelServerWithSubscriptionCheck(t, "model-2", "sub-b")
+	model3Server := createMockModelServerWithSubscriptionCheck(t, "model-3", "sub-a")
+
+	// Setup MaaSModelRef lister with three models
+	lister := fakeMaaSModelRefLister{
+		"test-ns": []*unstructured.Unstructured{
+			maasModelRefUnstructured("model-1", "test-ns", model1Server.URL, true),
+			maasModelRefUnstructured("model-2", "test-ns", model2Server.URL, true),
+			maasModelRefUnstructured("model-3", "test-ns", model3Server.URL, true),
+		},
+	}
+
+	// Setup subscription lister with display metadata
+	createSubscriptionWithMeta := func(name string, groups []string, displayName, description string) *unstructured.Unstructured {
+		sub := &unstructured.Unstructured{}
+		sub.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "maas.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "MaaSSubscription",
+		})
+		sub.SetName(name)
+		sub.SetNamespace(fixtures.TestNamespace)
+
+		groupSlice := make([]any, len(groups))
+		for i, g := range groups {
+			groupSlice[i] = map[string]any{"name": g}
+		}
+
+		spec := map[string]any{
+			"owner": map[string]any{
+				"groups": groupSlice,
+			},
+		}
+
+		if displayName != "" {
+			spec["displayName"] = displayName
+		}
+		if description != "" {
+			spec["description"] = description
+		}
+
+		_ = unstructured.SetNestedMap(sub.Object, spec, "spec")
+		return sub
+	}
+
+	subscriptionLister := &fakeSubscriptionListerWithMeta{
+		subscriptions: []*unstructured.Unstructured{
+			createSubscriptionWithMeta("sub-a", []string{"group-a"}, "Subscription A", "Description for A"),
+			createSubscriptionWithMeta("sub-b", []string{"group-b"}, "Subscription B", "Description for B"),
+		},
+	}
+
+	modelMgr, err := models.NewManager(testLogger)
+	require.NoError(t, err)
+
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+
+	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, config)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	defer cleanup()
+
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	t.Run("returns all models from all subscriptions", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Return-All-Models", "true")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["group-a", "group-b"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "list", response.Object)
+		assert.Len(t, response.Data, 3, "Should return all 3 models from both subscriptions")
+
+		// Verify subscription info is attached
+		subscriptionNames := make(map[string]bool)
+		for _, model := range response.Data {
+			require.NotEmpty(t, model.Subscriptions, "Subscriptions array should not be empty")
+			for _, sub := range model.Subscriptions {
+				subscriptionNames[sub.Name] = true
+			}
+		}
+
+		assert.True(t, subscriptionNames["sub-a"], "Should have models from sub-a")
+		assert.True(t, subscriptionNames["sub-b"], "Should have models from sub-b")
+	})
+
+	t.Run("returns empty list when user has no subscriptions", func(t *testing.T) {
+		emptySubscriptionLister := &fakeSubscriptionListerWithMeta{
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithMeta("sub-a", []string{"other-group"}, "", ""),
+			},
+		}
+
+		subscriptionSelector := subscription.NewSelector(testLogger, emptySubscriptionLister)
+		emptyHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+
+		config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+		router2, _ := fixtures.SetupTestServer(t, config)
+
+		_, cleanup2 := fixtures.StubTokenProviderAPIs(t, true)
+		defer cleanup2()
+
+		tokenHandler2 := token.NewHandler(testLogger, fixtures.TestTenant)
+		v1_2 := router2.Group("/v1")
+		v1_2.GET("/models", tokenHandler2.ExtractUserInfo(), emptyHandler.ListLLMs)
+
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Return-All-Models", "true")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
+		router2.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "Should return empty list when user has no subscriptions")
+	})
+
+	t.Run("returns 400 when both headers provided", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Subscription", "sub-a")
+		req.Header.Set("X-Maas-Return-All-Models", "true")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["group-a"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+
+		var errorResponse map[string]any
+		err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
+		require.NoError(t, err)
+
+		errorObj, ok := errorResponse["error"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "invalid_request_error", errorObj["type"])
+		assert.Contains(t, errorObj["message"], "Cannot specify both")
+	})
+
+	t.Run("attaches subscription metadata to models", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Return-All-Models", "true")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["group-a"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		// Find model-1 which should have sub-a metadata
+		var model1 *models.Model
+		for i := range response.Data {
+			if response.Data[i].ID == "model-1" {
+				model1 = &response.Data[i]
+				break
+			}
+		}
+
+		require.NotNil(t, model1, "model-1 should be in response")
+		require.NotEmpty(t, model1.Subscriptions, "Subscriptions array should not be empty")
+		require.Len(t, model1.Subscriptions, 1, "model-1 should have exactly 1 subscription")
+		assert.Equal(t, "sub-a", model1.Subscriptions[0].Name)
+		assert.Equal(t, "Subscription A", model1.Subscriptions[0].DisplayName)
+		assert.Equal(t, "Description for A", model1.Subscriptions[0].Description)
+	})
+}
+
+// fakeSubscriptionListerWithMeta implements subscription.Lister with custom subscriptions.
+type fakeSubscriptionListerWithMeta struct {
+	subscriptions []*unstructured.Unstructured
+}
+
+func (f *fakeSubscriptionListerWithMeta) List() ([]*unstructured.Unstructured, error) {
+	return f.subscriptions, nil
+}
+
+func TestListModels_DeduplicationBySubscription(t *testing.T) {
+	testLogger := logger.Development()
+
+	// Create a mock server that responds to both subscriptions
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse("shared-model"))
+	}))
+	t.Cleanup(modelServer.Close)
+
+	// Setup MaaSModelRef lister with one model
+	lister := fakeMaaSModelRefLister{
+		"test-ns": []*unstructured.Unstructured{
+			maasModelRefUnstructured("shared-model", "test-ns", modelServer.URL, true),
+		},
+	}
+
+	// Setup two subscriptions that both have access to the same model
+	createSubscription := func(name string, groups []string) *unstructured.Unstructured {
+		sub := &unstructured.Unstructured{}
+		sub.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "maas.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "MaaSSubscription",
+		})
+		sub.SetName(name)
+		sub.SetNamespace(fixtures.TestNamespace)
+
+		groupSlice := make([]any, len(groups))
+		for i, g := range groups {
+			groupSlice[i] = map[string]any{"name": g}
+		}
+
+		_ = unstructured.SetNestedMap(sub.Object, map[string]any{
+			"owner": map[string]any{
+				"groups": groupSlice,
+			},
+		}, "spec")
+		return sub
+	}
+
+	subscriptionLister := &fakeSubscriptionListerWithMeta{
+		subscriptions: []*unstructured.Unstructured{
+			createSubscription("sub-a", []string{"user-group"}),
+			createSubscription("sub-b", []string{"user-group"}),
+		},
+	}
+
+	modelMgr, err := models.NewManager(testLogger)
+	require.NoError(t, err)
+
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+
+	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, config)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	defer cleanup()
+
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	t.Run("same model in different subscriptions aggregates into subscriptions array", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Return-All-Models", "true")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		// Should have 1 entry with 2 subscriptions aggregated
+		assert.Len(t, response.Data, 1, "Same model instance should aggregate subscriptions into one entry")
+
+		model := response.Data[0]
+		assert.Equal(t, "shared-model", model.ID)
+
+		// Should have 2 subscriptions in the array
+		require.Len(t, model.Subscriptions, 2, "Model should have 2 subscriptions")
+
+		subscriptionNames := []string{
+			model.Subscriptions[0].Name,
+			model.Subscriptions[1].Name,
+		}
+
+		assert.Contains(t, subscriptionNames, "sub-a")
+		assert.Contains(t, subscriptionNames, "sub-b")
+	})
+}
+
+func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
+	testLogger := logger.Development()
+
+	// Create two mock servers that both return the same model ID "gpt-4"
+	// but represent different MaaSModelRef instances
+	modelServerA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse("gpt-4"))
+	}))
+	t.Cleanup(modelServerA.Close)
+
+	modelServerB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse("gpt-4"))
+	}))
+	t.Cleanup(modelServerB.Close)
+
+	// Setup MaaSModelRef lister with two different MaaSModelRefs that return same model ID
+	lister := fakeMaaSModelRefLister{
+		"namespace-a": []*unstructured.Unstructured{
+			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true),
+		},
+		"namespace-b": []*unstructured.Unstructured{
+			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true),
+		},
+	}
+
+	// Setup single subscription
+	createSubscription := func(name string, groups []string) *unstructured.Unstructured {
+		sub := &unstructured.Unstructured{}
+		sub.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "maas.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "MaaSSubscription",
+		})
+		sub.SetName(name)
+		sub.SetNamespace(fixtures.TestNamespace)
+
+		groupSlice := make([]any, len(groups))
+		for i, g := range groups {
+			groupSlice[i] = map[string]any{"name": g}
+		}
+
+		_ = unstructured.SetNestedMap(sub.Object, map[string]any{
+			"owner": map[string]any{
+				"groups": groupSlice,
+			},
+		}, "spec")
+		return sub
+	}
+
+	subscriptionLister := &fakeSubscriptionListerWithMeta{
+		subscriptions: []*unstructured.Unstructured{
+			createSubscription("sub-a", []string{"user-group"}),
+		},
+	}
+
+	modelMgr, err := models.NewManager(testLogger)
+	require.NoError(t, err)
+
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+
+	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, config)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	defer cleanup()
+
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	t.Run("different MaaSModelRefs with same model ID but different URLs return separate entries", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Return-All-Models", "true")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		// Should have 2 entries because URLs are different (deduplication by model ID + URL)
+		assert.Len(t, response.Data, 2, "Different URLs should create separate entries even with same model ID")
+
+		// Both should have model ID "gpt-4" and subscription "sub-a"
+		for _, model := range response.Data {
+			assert.Equal(t, "gpt-4", model.ID)
+			require.Len(t, model.Subscriptions, 1, "Each model should have 1 subscription")
+			assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
+		}
+
+		// Verify we have 2 different URLs
+		urls := []string{response.Data[0].URL.String(), response.Data[1].URL.String()}
+		assert.NotEqual(t, urls[0], urls[1], "Should have different URLs")
+	})
+}
+
+func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
+	testLogger := logger.Development()
+
+	// Create ONE mock server that both MaaSModelRefs will point to
+	sharedModelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(makeModelsResponse("gpt-4"))
+	}))
+	t.Cleanup(sharedModelServer.Close)
+
+	// Setup MaaSModelRef lister with two different MaaSModelRefs pointing to the SAME URL
+	lister := fakeMaaSModelRefLister{
+		"namespace-a": []*unstructured.Unstructured{
+			maasModelRefUnstructured("gpt-4-ref", "namespace-a", sharedModelServer.URL, true),
+		},
+		"namespace-b": []*unstructured.Unstructured{
+			maasModelRefUnstructured("gpt-4-another-ref", "namespace-b", sharedModelServer.URL, true),
+		},
+	}
+
+	// Setup single subscription
+	createSubscription := func(name string, groups []string) *unstructured.Unstructured {
+		sub := &unstructured.Unstructured{}
+		sub.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "maas.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "MaaSSubscription",
+		})
+		sub.SetName(name)
+		sub.SetNamespace(fixtures.TestNamespace)
+
+		groupSlice := make([]any, len(groups))
+		for i, g := range groups {
+			groupSlice[i] = map[string]any{"name": g}
+		}
+
+		_ = unstructured.SetNestedMap(sub.Object, map[string]any{
+			"owner": map[string]any{
+				"groups": groupSlice,
+			},
+		}, "spec")
+		return sub
+	}
+
+	subscriptionLister := &fakeSubscriptionListerWithMeta{
+		subscriptions: []*unstructured.Unstructured{
+			createSubscription("sub-a", []string{"user-group"}),
+		},
+	}
+
+	modelMgr, err := models.NewManager(testLogger)
+	require.NoError(t, err)
+
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+
+	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, config)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	defer cleanup()
+
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	t.Run("different MaaSModelRefs with same URL and model ID are deduplicated", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Return-All-Models", "true")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		// Should have 1 entry because same URL and model ID (deduplicated)
+		assert.Len(t, response.Data, 1, "Same URL and model ID should be deduplicated into single entry")
+
+		model := response.Data[0]
+		assert.Equal(t, "gpt-4", model.ID)
+		assert.Equal(t, sharedModelServer.URL, model.URL.String())
+		require.Len(t, model.Subscriptions, 1, "Model should have 1 subscription")
+		assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
+	})
+}
+
+func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t *testing.T) {
+	testLogger := logger.Development()
+
+	// Create two mock servers that both return the same model ID "gpt-4"
+	// One accessible via sub-a, one via sub-b
+	modelServerA := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "sub-a")
+	modelServerB := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "sub-b")
+
+	// Setup MaaSModelRef lister with two different MaaSModelRefs in different namespaces
+	lister := fakeMaaSModelRefLister{
+		"namespace-a": []*unstructured.Unstructured{
+			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true),
+		},
+		"namespace-b": []*unstructured.Unstructured{
+			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true),
+		},
+	}
+
+	// Setup two subscriptions
+	createSubscription := func(name string, groups []string) *unstructured.Unstructured {
+		sub := &unstructured.Unstructured{}
+		sub.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "maas.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "MaaSSubscription",
+		})
+		sub.SetName(name)
+		sub.SetNamespace(fixtures.TestNamespace)
+
+		groupSlice := make([]any, len(groups))
+		for i, g := range groups {
+			groupSlice[i] = map[string]any{"name": g}
+		}
+
+		_ = unstructured.SetNestedMap(sub.Object, map[string]any{
+			"owner": map[string]any{
+				"groups": groupSlice,
+			},
+		}, "spec")
+		return sub
+	}
+
+	subscriptionLister := &fakeSubscriptionListerWithMeta{
+		subscriptions: []*unstructured.Unstructured{
+			createSubscription("sub-a", []string{"user-group"}),
+			createSubscription("sub-b", []string{"user-group"}),
+		},
+	}
+
+	modelMgr, err := models.NewManager(testLogger)
+	require.NoError(t, err)
+
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+
+	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, config)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	defer cleanup()
+
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	t.Run("different MaaSModelRefs with same model ID but different URLs return separate entries", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Return-All-Models", "true")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		// Should have 2 entries because URLs are different (even though model ID is same)
+		assert.Len(t, response.Data, 2, "Different URLs should create separate entries even with same model ID")
+
+		// Both should have model ID "gpt-4" but different URLs and subscriptions
+		modelsByURL := make(map[string]models.Model)
+		for _, model := range response.Data {
+			assert.Equal(t, "gpt-4", model.ID, "Both entries should have model ID gpt-4")
+			require.Len(t, model.Subscriptions, 1, "Each model should have exactly 1 subscription")
+			modelsByURL[model.URL.String()] = model
+		}
+
+		// Verify we have 2 different URLs
+		assert.Len(t, modelsByURL, 2, "Should have 2 different URLs")
+
+		// Verify each has the correct subscription
+		subscriptionNames := make(map[string]bool)
+		for _, model := range response.Data {
+			subscriptionNames[model.Subscriptions[0].Name] = true
+		}
+		assert.True(t, subscriptionNames["sub-a"], "Should have model with sub-a")
+		assert.True(t, subscriptionNames["sub-b"], "Should have model with sub-b")
+	})
 }

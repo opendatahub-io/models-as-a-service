@@ -1,46 +1,22 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/env"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
-// StorageMode represents the storage backend type.
-type StorageMode string
-
 const (
-	StorageModeInMemory StorageMode = "in-memory"
-	StorageModeDisk     StorageMode = "disk"
-	StorageModeExternal StorageMode = "external"
-)
-
-// String implements flag.Value interface.
-func (s *StorageMode) String() string {
-	return string(*s)
-}
-
-func (s *StorageMode) Set(value string) error {
-	switch StorageMode(value) {
-	case StorageModeInMemory, StorageModeDisk, StorageModeExternal:
-		*s = StorageMode(value)
-		return nil
-	case "":
-		*s = StorageModeInMemory
-		return nil
-	default:
-		return fmt.Errorf("invalid storage mode %q: valid modes are %q, %q, or %q",
-			value, StorageModeInMemory, StorageModeDisk, StorageModeExternal)
-	}
-}
-
-const (
-	DefaultDataPath     = "/data/maas-api.db"
 	DefaultSecureAddr   = ":8443"
 	DefaultInsecureAddr = ":8080"
 )
@@ -52,25 +28,23 @@ type Config struct {
 	GatewayName      string
 	GatewayNamespace string
 
+	MaaSSubscriptionNamespace string
+
 	// Server configuration
-	Address string // Listen address (host:port)
+	Address string // Listen address for HTTPS (host:port)
 	Secure  bool   // Use HTTPS
 	TLS     TLSConfig
 
 	DebugMode bool
 
-	// StorageMode specifies the storage backend type:
-	//   - "in-memory" (default): Ephemeral storage, data lost on restart
-	//   - "disk": Persistent local storage using a file (single replica only)
-	//   - "external": External database (PostgreSQL), supports multiple replicas
-	StorageMode StorageMode
-
-	// DBConnectionURL is the database connection URL for external mode.
+	// DBConnectionURL is the PostgreSQL connection URL.
+	// Format: postgresql://user:password@host:port/database
 	DBConnectionURL string
 
-	// DataPath is the path to the database file for disk mode.
-	// Default: /data/maas-api.db
-	DataPath string
+	// APIKeyMaxExpirationDays is the maximum allowed expiration in days for API keys.
+	// Users cannot create API keys with expiration longer than this value.
+	// Default: 30 days. Minimum: 1 day.
+	APIKeyMaxExpirationDays int
 
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
@@ -81,26 +55,22 @@ func Load() *Config {
 	debugMode, _ := env.GetBool("DEBUG_MODE", false)
 	gatewayName := env.GetString("GATEWAY_NAME", constant.DefaultGatewayName)
 	secure, _ := env.GetBool("SECURE", false)
+	maxExpirationDays, _ := env.GetInt("API_KEY_MAX_EXPIRATION_DAYS", constant.DefaultAPIKeyMaxExpirationDays)
 
 	c := &Config{
-		Name:             env.GetString("INSTANCE_NAME", gatewayName),
-		Namespace:        env.GetString("NAMESPACE", constant.DefaultNamespace),
-		GatewayName:      gatewayName,
-		GatewayNamespace: env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
-		Address:          env.GetString("ADDRESS", ""),
-		Secure:           secure,
-		TLS:              loadTLSConfig(),
-		DebugMode:        debugMode,
-		StorageMode:      StorageModeInMemory,
-		DBConnectionURL:  env.GetString("DB_CONNECTION_URL", ""),
-		DataPath:         env.GetString("DATA_PATH", DefaultDataPath),
+		Name:                      env.GetString("INSTANCE_NAME", gatewayName),
+		Namespace:                 env.GetString("NAMESPACE", constant.DefaultNamespace),
+		GatewayName:               gatewayName,
+		GatewayNamespace:          env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
+		MaaSSubscriptionNamespace: env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
+		Address:                   env.GetString("ADDRESS", ""),
+		Secure:                    secure,
+		TLS:                       loadTLSConfig(),
+		DebugMode:                 debugMode,
+		DBConnectionURL:           "", // Loaded from K8s secret via LoadDatabaseURL()
+		APIKeyMaxExpirationDays:   maxExpirationDays,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
-	}
-
-	// Validate STORAGE_MODE env var through Set() to ensure consistent validation
-	if err := c.StorageMode.Set(env.GetString("STORAGE_MODE", "")); err != nil {
-		c.StorageMode = StorageModeInMemory
 	}
 
 	c.bindFlags(flag.CommandLine)
@@ -114,8 +84,9 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.Namespace, "namespace", c.Namespace, "Namespace of the MaaS instance")
 	fs.StringVar(&c.GatewayName, "gateway-name", c.GatewayName, "Name of the Gateway that has MaaS capabilities")
 	fs.StringVar(&c.GatewayNamespace, "gateway-namespace", c.GatewayNamespace, "Namespace where MaaS-enabled Gateway is deployed")
+	fs.StringVar(&c.MaaSSubscriptionNamespace, "maas-subscription-namespace", c.MaaSSubscriptionNamespace, "Namespace where MaaSSubscription CRs are located")
 
-	fs.StringVar(&c.Address, "address", c.Address, "Listen address (default :8443 for secure, :8080 for insecure)")
+	fs.StringVar(&c.Address, "address", c.Address, "HTTPS listen address (default :8443)")
 	fs.BoolVar(&c.Secure, "secure", c.Secure, "Use HTTPS (default: false)")
 	c.TLS.bindFlags(fs)
 
@@ -123,9 +94,7 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.deprecatedHTTPPort, "port", c.deprecatedHTTPPort, "DEPRECATED: use --address with --secure=false")
 
 	fs.BoolVar(&c.DebugMode, "debug", c.DebugMode, "Enable debug mode")
-	fs.Var(&c.StorageMode, "storage", "Storage mode: in-memory (default), disk, or external")
-	fs.StringVar(&c.DBConnectionURL, "db-connection-url", c.DBConnectionURL, "Database connection URL (required for --storage=external)")
-	fs.StringVar(&c.DataPath, "data-path", c.DataPath, "Path to database file (for --storage=disk)")
+	// Note: DBConnectionURL is loaded from K8s secret 'maas-db-config', not from CLI flag
 }
 
 // Validate validates the configuration after flags have been parsed.
@@ -133,6 +102,11 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 func (c *Config) Validate() error {
 	// Handle backward compatibility for deprecated flags
 	c.handleDeprecatedFlags()
+
+	// Validate required fields
+	if c.DBConnectionURL == "" {
+		return errors.New("db connection URL is required (loaded from K8s secret 'maas-db-config')")
+	}
 
 	if err := c.TLS.validate(); err != nil {
 		return err
@@ -153,6 +127,18 @@ func (c *Config) Validate() error {
 		} else {
 			c.Address = DefaultInsecureAddr
 		}
+	}
+
+	if strings.TrimSpace(c.MaaSSubscriptionNamespace) == "" {
+		return errors.New("MAAS_SUBSCRIPTION_NAMESPACE must be non-empty")
+	}
+	if errs := validation.IsDNS1123Label(c.MaaSSubscriptionNamespace); len(errs) > 0 {
+		return fmt.Errorf("MAAS_SUBSCRIPTION_NAMESPACE %q is invalid: %v", c.MaaSSubscriptionNamespace, errs)
+	}
+
+	// Validate API key max expiration days
+	if c.APIKeyMaxExpirationDays < 1 {
+		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
 	}
 
 	return nil
@@ -176,4 +162,32 @@ func (c *Config) PrintDeprecationWarnings(log *logger.Logger) {
 			log.Warn("WARNING: --port is deprecated, use --address with --secure=false to serve insecure HTTP traffic")
 		}
 	})
+}
+
+// LoadDatabaseURL reads the database connection URL from the Kubernetes secret.
+// This replaces the previous approach of reading from environment variables.
+//
+// Secret: maas-db-config (in the same namespace as the pod)
+// Key: DB_CONNECTION_URL
+//
+// Returns an error if the secret is missing or the key is not found.
+func (c *Config) LoadDatabaseURL(ctx context.Context, clientset *kubernetes.Clientset) error {
+	const (
+		//nolint:gosec // This is the documented name of the secret, not a hardcoded credential.
+		secretName = "maas-db-config"
+		secretKey  = "DB_CONNECTION_URL"
+	)
+
+	secret, err := clientset.CoreV1().Secrets(c.Namespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to read secret %s/%s: %w (ensure the secret exists before starting maas-api)", c.Namespace, secretName, err)
+	}
+
+	dbURL, ok := secret.Data[secretKey]
+	if !ok || len(dbURL) == 0 {
+		return fmt.Errorf("key %q not found or empty in secret %s/%s", secretKey, c.Namespace, secretName)
+	}
+
+	c.DBConnectionURL = string(dbURL)
+	return nil
 }

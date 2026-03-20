@@ -146,6 +146,22 @@ Results:
 
 ---
 
+### `setup-authorino-tls.sh`
+Configures Authorino for TLS communication with maas-api. Run automatically by `deploy.sh` when `--enable-tls-backend` is set (default).
+
+**Usage:**
+```bash
+# Configure Authorino TLS (default: kuadrant-system)
+./scripts/setup-authorino-tls.sh
+
+# For RHCL, use rh-connectivity-link namespace
+AUTHORINO_NAMESPACE=rh-connectivity-link ./scripts/setup-authorino-tls.sh
+```
+
+**Note:** This script patches Authorino's service, CR, and deployment. Use `--disable-tls-backend` with `deploy.sh` to skip if you manage Authorino TLS separately.
+
+---
+
 ### `install-dependencies.sh`
 Installs individual dependencies (Kuadrant, ODH, etc.).
 
@@ -234,7 +250,7 @@ oc login
 ```bash
 # Check TokenRateLimitPolicy
 kubectl get tokenratelimitpolicy -A
-kubectl describe tokenratelimitpolicy gateway-token-rate-limits -n openshift-ingress
+kubectl describe tokenratelimitpolicy -n openshift-ingress
 
 # Check Limitador pods
 kubectl get pods -n kuadrant-system -l app.kubernetes.io/name=limitador
