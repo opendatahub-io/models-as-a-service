@@ -203,36 +203,11 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 	if modelRefs, found, _ := unstructured.NestedSlice(spec, "modelRefs"); found {
 		for _, modelRef := range modelRefs {
 			if modelMap, ok := modelRef.(map[string]any); ok {
-				ref := ModelRefInfo{}
-				if name, ok := modelMap["name"].(string); ok {
-					ref.Name = name
-				}
-				if ns, ok := modelMap["namespace"].(string); ok {
-					ref.Namespace = ns
-				}
-				if limits, found, _ := unstructured.NestedSlice(modelMap, "tokenRateLimits"); found {
-					for _, limitRaw := range limits {
-						if limitMap, ok := limitRaw.(map[string]any); ok {
-							trl := TokenRateLimit{}
-							if limit, ok := limitMap["limit"].(int64); ok {
-								trl.Limit = limit
-								if limit > sub.MaxLimit {
-									sub.MaxLimit = limit
-								}
-							}
-							if window, ok := limitMap["window"].(string); ok {
-								trl.Window = window
-							}
-							ref.TokenRateLimits = append(ref.TokenRateLimits, trl)
-						}
+				ref := parseModelRef(modelMap)
+				for _, trl := range ref.TokenRateLimits {
+					if trl.Limit > sub.MaxLimit {
+						sub.MaxLimit = trl.Limit
 					}
-				}
-				if billingRate, found, _ := unstructured.NestedMap(modelMap, "billingRate"); found {
-					br := &BillingRate{}
-					if perToken, ok := billingRate["perToken"].(string); ok {
-						br.PerToken = perToken
-					}
-					ref.BillingRate = br
 				}
 				sub.ModelRefs = append(sub.ModelRefs, ref)
 			}
@@ -240,24 +215,64 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 	}
 
 	// Parse tokenMetadata
-	if metadata, found, _ := unstructured.NestedMap(spec, "tokenMetadata"); found {
-		if orgID, ok := metadata["organizationId"].(string); ok {
-			sub.OrganizationID = orgID
-		}
-		if costCenter, ok := metadata["costCenter"].(string); ok {
-			sub.CostCenter = costCenter
-		}
-		if labelsRaw, ok := metadata["labels"].(map[string]any); ok {
-			sub.Labels = make(map[string]string)
-			for k, v := range labelsRaw {
-				if s, ok := v.(string); ok {
-					sub.Labels[k] = s
+	parseTokenMetadata(spec, &sub)
+
+	return sub, nil
+}
+
+// parseModelRef extracts a ModelRefInfo from an unstructured model ref map.
+func parseModelRef(modelMap map[string]any) ModelRefInfo {
+	ref := ModelRefInfo{}
+	if name, ok := modelMap["name"].(string); ok {
+		ref.Name = name
+	}
+	if ns, ok := modelMap["namespace"].(string); ok {
+		ref.Namespace = ns
+	}
+	if limits, found, _ := unstructured.NestedSlice(modelMap, "tokenRateLimits"); found {
+		for _, limitRaw := range limits {
+			if limitMap, ok := limitRaw.(map[string]any); ok {
+				trl := TokenRateLimit{}
+				if limit, ok := limitMap["limit"].(int64); ok {
+					trl.Limit = limit
 				}
+				if window, ok := limitMap["window"].(string); ok {
+					trl.Window = window
+				}
+				ref.TokenRateLimits = append(ref.TokenRateLimits, trl)
 			}
 		}
 	}
+	if billingRate, found, _ := unstructured.NestedMap(modelMap, "billingRate"); found {
+		br := &BillingRate{}
+		if perToken, ok := billingRate["perToken"].(string); ok {
+			br.PerToken = perToken
+		}
+		ref.BillingRate = br
+	}
+	return ref
+}
 
-	return sub, nil
+// parseTokenMetadata extracts tokenMetadata fields from the spec into the subscription.
+func parseTokenMetadata(spec map[string]any, sub *subscription) {
+	metadata, found, _ := unstructured.NestedMap(spec, "tokenMetadata")
+	if !found {
+		return
+	}
+	if orgID, ok := metadata["organizationId"].(string); ok {
+		sub.OrganizationID = orgID
+	}
+	if costCenter, ok := metadata["costCenter"].(string); ok {
+		sub.CostCenter = costCenter
+	}
+	if labelsRaw, ok := metadata["labels"].(map[string]any); ok {
+		sub.Labels = make(map[string]string)
+		for k, v := range labelsRaw {
+			if s, ok := v.(string); ok {
+				sub.Labels[k] = s
+			}
+		}
+	}
 }
 
 // userHasAccess checks if user/groups match subscription owner.
