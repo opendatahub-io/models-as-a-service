@@ -86,6 +86,7 @@ OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 KUSTOMIZE_FORCE_CONFLICTS="${KUSTOMIZE_FORCE_CONFLICTS:-false}"
+EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -151,12 +152,19 @@ ADVANCED OPTIONS (PR Testing):
       Operator channel override
       Default: fast-3 (ODH), fast-3.x (RHOAI)
 
+  --external-oidc
+      Enable external OIDC on the maas-api AuthPolicy.
+      Requires OIDC_ISSUER_URL or deployment/overlays/odh/params.env to provide
+      a real oidc-issuer-url value.
+
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
   OPERATOR_TYPE             Operator type (rhoai/odh)
+  EXTERNAL_OIDC            Enable external OIDC on maas-api (true/false)
+  OIDC_ISSUER_URL          External OIDC issuer URL for maas-api AuthPolicy patching
   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
   KUSTOMIZE_FORCE_CONFLICTS When true, pass --force-conflicts to kubectl apply in kustomize mode (default: false)
 
@@ -260,6 +268,10 @@ parse_arguments() {
         require_flag_value "$1" "${2:-}"
         OPERATOR_CHANNEL="$2"
         shift 2
+        ;;
+      --external-oidc)
+        EXTERNAL_OIDC="true"
+        shift
         ;;
       --help|-h)
         show_help
@@ -404,6 +416,7 @@ main() {
   log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
+  log_info "  External OIDC: $EXTERNAL_OIDC"
   if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
     log_info "  MaaS API image: $MAAS_API_IMAGE"
   fi
@@ -1366,11 +1379,48 @@ get_odh_overlay_param() {
   awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$params_file"
 }
 
+resolve_external_oidc_issuer() {
+  local oidc_issuer_url="${OIDC_ISSUER_URL:-}"
+  if [[ -z "$oidc_issuer_url" ]]; then
+    oidc_issuer_url=$(get_odh_overlay_param "oidc-issuer-url" 2>/dev/null || echo "")
+  fi
+
+  if [[ -z "$oidc_issuer_url" || "$oidc_issuer_url" == "https://oidc.example.invalid/realms/maas" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$oidc_issuer_url"
+}
+
+patch_authpolicy_from_template() {
+  local authpolicy_name="$1"
+  local template_file="$2"
+  local maas_namespace="$3"
+  local oidc_issuer_url="${4:-}"
+
+  local rendered_patch
+  rendered_patch="$(mktemp)"
+
+  sed \
+    -e "s|__MAAS_NAMESPACE__|${maas_namespace}|g" \
+    -e "s|__OIDC_ISSUER_URL__|${oidc_issuer_url}|g" \
+    "$template_file" > "$rendered_patch"
+
+  kubectl patch authpolicy "$authpolicy_name" -n "$NAMESPACE" --type=merge --patch-file "$rendered_patch"
+  rm -f "$rendered_patch"
+}
+
 # configure_maas_api_authpolicy
-#   Patches the operator-managed maas-api AuthPolicy to restore API key auth
-#   and optionally enable OIDC JWT validation from params.env.
+#   Ensures the live maas-api AuthPolicy keeps API key support and, when
+#   enabled, layers external OIDC JWT validation on top.
 configure_maas_api_authpolicy() {
   log_info "Configuring MaaS API AuthPolicy..."
+
+  local project_root
+  project_root="$(find_project_root)" || {
+    log_error "Could not determine project root for AuthPolicy patching"
+    return 1
+  }
 
   local authpolicy_name="maas-api-auth-policy"
   local wait_timeout=120
@@ -1391,119 +1441,32 @@ configure_maas_api_authpolicy() {
     return 0
   fi
 
-  local oidc_issuer_url="${OIDC_ISSUER_URL:-}"
-  if [[ -z "$oidc_issuer_url" ]]; then
-    oidc_issuer_url=$(get_odh_overlay_param "oidc-issuer-url" 2>/dev/null || echo "")
-  fi
-
-  local oidc_enabled="false"
-  if [[ -n "$oidc_issuer_url" && "$oidc_issuer_url" != "https://oidc.example.invalid/realms/maas" ]]; then
-    oidc_enabled="true"
-  fi
-
-  local oidc_block=""
-  local openshift_priority=1
-  if [[ "$oidc_enabled" == "true" ]]; then
-    log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url"
-    openshift_priority=2
-    oidc_block=$(cat <<EOF
-      oidc-identities:
-        when:
-          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
-        jwt:
-          issuerUrl: $oidc_issuer_url
-        priority: 1
-EOF
-)
-  else
-    log_info "  OIDC issuer not configured, keeping OpenShift + API key auth only"
-  fi
-
   log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
   kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
     opendatahub.io/managed="false" --overwrite 2>/dev/null || true
 
-  log_info "  Patching AuthPolicy with API key and optional OIDC auth..."
-  if ! kubectl patch authpolicy "$authpolicy_name" -n "$NAMESPACE" --type=merge --patch-file <(cat <<EOF
-spec:
-  rules:
-    authentication:
-      api-keys:
-        when:
-          - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
-        plain:
-          selector: request.headers.authorization
-        priority: 0
-$oidc_block
-      openshift-identities:
-        when:
-          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
-        kubernetesTokenReview:
-          audiences:
-            - https://kubernetes.default.svc
-            - maas-default-gateway-sa
-        priority: $openshift_priority
-    metadata:
-      apiKeyValidation:
-        when:
-          - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
-        http:
-          url: https://maas-api.$NAMESPACE.svc.cluster.local:8443/internal/v1/api-keys/validate
-          method: POST
-          contentType: application/json
-          body:
-            expression: '{"key": request.headers.authorization.replace("Bearer ", "")}'
-        priority: 0
-    authorization:
-      api-key-valid:
-        when:
-          - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
-        patternMatching:
-          patterns:
-            - selector: auth.metadata.apiKeyValidation.valid
-              operator: eq
-              value: "true"
-        priority: 0
-    response:
-      success:
-        headers:
-          X-MaaS-Username:
-            when:
-              - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
-            plain:
-              selector: auth.metadata.apiKeyValidation.username
-            priority: 0
-          X-MaaS-Username-OC:
-            when:
-              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
-            plain:
-              expression: >-
-                has(auth.identity.preferred_username) ?
-                auth.identity.preferred_username :
-                (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)
-            key: X-MaaS-Username
-            priority: 1
-          X-MaaS-Group:
-            when:
-              - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
-            plain:
-              expression: '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'
-            priority: 0
-          X-MaaS-Group-OC:
-            when:
-              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
-            plain:
-              expression: >-
-                has(auth.identity.groups) ?
-                (size(auth.identity.groups) > 0 ?
-                '["system:authenticated","' + auth.identity.groups.join('","') + '"]' :
-                '["system:authenticated"]') :
-                '["' + auth.identity.user.groups.join('","') + '"]'
-            key: X-MaaS-Group
-            priority: 1
-EOF
-  ); then
-    log_warn "  Failed to patch AuthPolicy with API key/OIDC configuration"
+  local api_keys_patch="$project_root/scripts/data/maas-api-authpolicy-api-keys-patch.yaml"
+  log_info "  Patching AuthPolicy to ensure API key support..."
+  if ! patch_authpolicy_from_template "$authpolicy_name" "$api_keys_patch" "$NAMESPACE"; then
+    log_warn "  Failed to patch AuthPolicy with API key configuration"
+    return 0
+  fi
+
+  if [[ "$EXTERNAL_OIDC" != "true" ]]; then
+    log_info "  External OIDC not enabled, leaving OpenShift auth as the only identity-token path"
+    return 0
+  fi
+
+  local oidc_issuer_url
+  oidc_issuer_url="$(resolve_external_oidc_issuer)" || {
+    log_error "External OIDC requested but no real oidc-issuer-url was configured"
+    return 1
+  }
+
+  local oidc_patch="$project_root/scripts/data/maas-api-authpolicy-external-oidc-patch.yaml"
+  log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url"
+  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$NAMESPACE" "$oidc_issuer_url"; then
+    log_warn "  Failed to patch AuthPolicy with external OIDC configuration"
     return 0
   fi
 

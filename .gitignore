@@ -8,7 +8,6 @@ build/
 .claude
 .cursor/
 AGENTS.md
-.worktrees/
 
 *.pid
 

@@ -29,13 +29,13 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - Installs primary operator (RHOAI or ODH) or deploys via kustomize
 - Applies custom resources (DSC, DSCI)
 - Configures TLS backend (enabled by default, use `--disable-tls-backend` to skip)
-- In operator mode, patches the live `maas-api` AuthPolicy to restore API key auth and optionally enable OIDC from `deployment/overlays/odh/params.env`
 - Supports custom operator catalogs and MaaS API images for PR testing
 
 **Options:**
 - `--operator-type <odh|rhoai>` - Which operator to install (default: odh)
 - `--deployment-mode <operator|kustomize>` - Deployment method (default: operator)
 - `--namespace <namespace>` - Target namespace for deployment
+- `--external-oidc` - Enable external OIDC patching for `maas-api`
 - `--enable-tls-backend` - Enable TLS backend (default)
 - `--disable-tls-backend` - Disable TLS backend
 - `--verbose` - Enable debug logging
@@ -56,7 +56,6 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `OPERATOR_CATALOG` - Custom operator catalog for PR testing
 - `OPERATOR_IMAGE` - Custom operator image for PR testing
 - `OPERATOR_TYPE` - Operator type (odh/rhoai)
-- `OIDC_ISSUER_URL` - Override the OIDC issuer URL used when patching the operator-managed `maas-api` AuthPolicy
 - `LOG_LEVEL` - Logging verbosity (DEBUG, INFO, WARN, ERROR)
 
 **Advanced Usage:**
@@ -116,8 +115,6 @@ The script provides:
 - `0`: All critical checks passed
 - `1`: Some checks failed
 
-**Note:** This script validates the general MaaS deployment. For the interim OIDC flow where OIDC is enabled on `maas-api` and model routes still expect API keys, use `validate-oidc-flow.sh` below.
-
 **Example output:**
 ```
 =========================================
@@ -150,75 +147,13 @@ Results:
 
 ---
 
-### `validate-oidc-flow.sh`
-Validates the interim OIDC flow:
-
-1. Get an OIDC token
-2. Create a MaaS API key with that token
-3. List models with the minted API key
-4. Run inference with the minted API key
-
-**Usage:**
-```bash
-# Use the temporary Keycloak defaults
-./scripts/validate-oidc-flow.sh
-
-# Or provide your own token directly
-OIDC_TOKEN="<jwt>" ./scripts/validate-oidc-flow.sh
-```
-
-**Default assumptions:**
-- Keycloak route: `https://keycloak.<cluster-domain>`
-- Realm: `maas`
-- Client: `maas-cli`
-- Test user: `alice / letmein`
-
-**Useful overrides:**
-- `MAAS_GATEWAY_HOST`
-- `KEYCLOAK_HOST`
-- `OIDC_TOKEN_URL`
-- `OIDC_CLIENT_ID`
-- `OIDC_USERNAME`
-- `OIDC_PASSWORD`
-- `OIDC_TOKEN`
-
----
-
 ### `install-keycloak.sh`
 Installs a temporary Keycloak instance for MaaS OIDC testing.
-
-**What it creates:**
-- Namespace `keycloak`
-- Temporary admin credentials secret
-- Realm import ConfigMap
-- Keycloak Deployment and Service
-- OpenShift Route at `https://keycloak.<cluster-domain>`
 
 **Usage:**
 ```bash
 ./scripts/installers/install-keycloak.sh
 ```
-
-**Default realm contents:**
-- Realm: `maas`
-- Public client: `maas-cli`
-- Users:
-  - `alice / letmein` -> `premium-group`
-  - `erin / letmein` -> `enterprise-group`
-  - `ada / letmein` -> `admin-group`
-
-**Useful overrides:**
-- `KEYCLOAK_NAMESPACE`
-- `KEYCLOAK_NAME`
-- `KEYCLOAK_IMAGE`
-- `KEYCLOAK_REALM`
-- `KEYCLOAK_CLIENT_ID`
-- `KEYCLOAK_HOST`
-- `KEYCLOAK_ADMIN_USER`
-- `KEYCLOAK_ADMIN_PASSWORD`
-- `CLUSTER_DOMAIN`
-
-The script prints the issuer URL to copy into `deployment/overlays/odh/params.env`.
 
 ---
 
@@ -272,22 +207,6 @@ kustomize build docs/samples/models/simulator | kubectl apply -f -
 
 # 4. Re-run validation to verify model
 ./scripts/validate-deployment.sh
-```
-
-### OIDC Smoke Test
-```bash
-# 1. Install the temporary Keycloak example
-./scripts/installers/install-keycloak.sh
-
-# 2. Replace the placeholder oidc-issuer-url in deployment/overlays/odh/params.env
-#    with the printed issuer URL
-
-# 3. Deploy or patch MaaS with OIDC enabled
-#    (works in both operator mode and kustomize mode via deploy.sh)
-./scripts/deploy.sh
-
-# 4. Validate the interim OIDC -> API key -> inference flow
-./scripts/validate-oidc-flow.sh
 ```
 
 ### Initial Deployment (Kustomize Mode)
