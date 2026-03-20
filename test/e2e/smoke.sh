@@ -95,46 +95,46 @@ if [[ -z "${BOOTSTRAP_TOKEN}" ]]; then
   exit 1
 fi
 
-# Log a masked preview of the bootstrap token to the log (not the console)
-echo "[bootstrap] using cluster token: len=$((${#BOOTSTRAP_TOKEN})) head=${BOOTSTRAP_TOKEN:0:12}…tail=${BOOTSTRAP_TOKEN: -8}" >> "${LOG}"
+# Log token acquisition without exposing token content
+echo "[bootstrap] acquired cluster token (len=${#BOOTSTRAP_TOKEN})" >> "${LOG}"
 
 # Mint an API key using a bootstrap token
 # Usage: mint_api_key <key_name> [bootstrap_token]
-# If bootstrap_token is not provided, uses BOOTSTRAP_TOKEN env var
+# All logs go to stderr; only the key is written to stdout
 mint_api_key() {
   local key_name="${1:-e2e-smoke-key}"
   local token="${2:-${BOOTSTRAP_TOKEN}}"
   local response
   local api_key
+  echo "[smoke] Minting API key '${key_name}' via ${MAAS_API_BASE_URL}/v1/api-keys..." | tee -a "${LOG}" >&2
   
-  echo "[smoke] Minting API key '${key_name}' via ${MAAS_API_BASE_URL}/v1/api-keys..." | tee -a "${LOG}"
-  
-  response=$(curl -skS -X POST \
+  if ! response=$(curl -skS --max-time 30 -X POST \
     -H "Authorization: Bearer ${token}" \
     -H "Content-Type: application/json" \
     -d "{\"name\": \"${key_name}\", \"expiresIn\": \"2h\"}" \
-    "${MAAS_API_BASE_URL}/v1/api-keys" 2>&1)
+    "${MAAS_API_BASE_URL}/v1/api-keys" 2>&1); then
+    echo "[smoke] ERROR: Failed to reach ${MAAS_API_BASE_URL}/v1/api-keys" | tee -a "${LOG}" >&2
+    return 1
+  fi
   
   api_key=$(echo "${response}" | jq -r '.key // empty' 2>/dev/null || true)
   
   if [[ -z "${api_key}" || "${api_key}" == "null" ]]; then
-    echo "[smoke] ERROR: Failed to mint API key" | tee -a "${LOG}"
-    echo "[smoke] Response: ${response:0:500}" | tee -a "${LOG}"
+    echo "[smoke] ERROR: Failed to mint API key" | tee -a "${LOG}" >&2
+    echo "[smoke] Response: ${response:0:500}" | tee -a "${LOG}" >&2
     return 1
   fi
   
-  echo "[smoke] Successfully minted API key: ${api_key:0:15}..." | tee -a "${LOG}"
-  echo "${api_key}"
+  echo "[smoke] Successfully minted API key (len=${#api_key})" | tee -a "${LOG}" >&2
+  printf '%s\n' "${api_key}"
 }
 
 # Mint API key for tests
-TOKEN=$(mint_api_key "e2e-smoke-${USER}")
-if [[ -z "${TOKEN}" ]]; then
+if ! TOKEN=$(mint_api_key "e2e-smoke-${USER}"); then
   echo "[smoke] ERROR: Failed to mint API key for tests" | tee -a "${LOG}"
   exit 1
 fi
 export TOKEN
-echo "[smoke] Using minted API key for tests (len=${#TOKEN})" | tee -a "${LOG}"
 
 # Admin token setup - add to odh-admins, then mint admin API key
 setup_admin_token() {
@@ -206,8 +206,6 @@ RBAC_EOF
     ADMIN_OC_TOKEN="${admin_api_key}"
     export ADMIN_OC_TOKEN
     echo "[smoke] Admin API key minted successfully - admin tests will run"
-  else
-    echo "[smoke] Failed to mint admin API key - admin tests will be skipped"
   fi
 }
 
