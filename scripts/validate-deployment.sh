@@ -419,15 +419,17 @@ else
     OC_TOKEN=""
     TOKEN=""
     API_KEY_ID=""
-    if command -v oc &> /dev/null; then
-        OC_TOKEN="${ADMIN_OC_TOKEN:-$(oc whoami -t 2>/dev/null || echo "")}"
-        if [ -n "$OC_TOKEN" ]; then
-            print_success "OpenShift identity token available"
-        else
-            print_warning "Cannot get OpenShift token" "Not logged into oc CLI" "Run: oc login"
-        fi
+    OC_TOKEN="${ADMIN_OC_TOKEN:-}"
+    if [ -z "$OC_TOKEN" ] && command -v oc &> /dev/null; then
+        OC_TOKEN="$(oc whoami -t 2>/dev/null || echo "")"
+    fi
+
+    if [ -n "$OC_TOKEN" ]; then
+        print_success "OpenShift identity token available"
+    elif command -v oc &> /dev/null; then
+        print_warning "Cannot get OpenShift token" "Not logged into oc CLI" "Run: oc login"
     else
-        print_warning "oc CLI not found" "Cannot test authentication" "Install oc CLI or use kubectl with token"
+        print_warning "Cannot get OpenShift token" "Neither ADMIN_OC_TOKEN nor oc CLI is available" "Set ADMIN_OC_TOKEN or install oc CLI"
     fi
 
     # Create a MaaS API key using the OC token
@@ -445,9 +447,9 @@ else
         API_KEY_BODY=$(echo "$API_KEY_RESPONSE" | sed '$d')
 
         if [ "$API_KEY_HTTP_CODE" = "201" ]; then
-            TOKEN=$(echo "$API_KEY_BODY" | jq -r '.key' 2>/dev/null)
-            API_KEY_ID=$(echo "$API_KEY_BODY" | jq -r '.id' 2>/dev/null)
-            if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
+            TOKEN=$(printf '%s' "$API_KEY_BODY" | jq -r '.key // empty' 2>/dev/null)
+            API_KEY_ID=$(printf '%s' "$API_KEY_BODY" | jq -r '.id // empty' 2>/dev/null)
+            if [ -n "$TOKEN" ] && [ -n "$API_KEY_ID" ]; then
                 print_success "MaaS API key created (name: $API_KEY_NAME)"
                 # Set up cleanup trap to delete the API key on exit
                 cleanup_api_key() {
@@ -458,10 +460,27 @@ else
                             "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}" 2>/dev/null || true
                     fi
                 }
-                trap cleanup_api_key EXIT INT TERM
+                cleanup_and_exit() {
+                    local status="$1"
+                    trap - EXIT
+                    cleanup_api_key
+                    exit "$status"
+                }
+                trap cleanup_api_key EXIT
+                trap 'cleanup_and_exit 130' INT
+                trap 'cleanup_and_exit 143' TERM
             else
-                print_fail "Failed to parse API key from response" "Response: $(echo $API_KEY_BODY | head -c 200)"
+                print_fail "Failed to parse API key from response" \
+                    "Response omitted because it may contain the plaintext API key"
+                # Clean up the API key if we got an ID but failed to parse the key
+                if [ -n "$API_KEY_ID" ]; then
+                    curl -sSk -o /dev/null \
+                        -H "Authorization: Bearer $OC_TOKEN" \
+                        -X DELETE \
+                        "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}" 2>/dev/null || true
+                fi
                 TOKEN=""
+                API_KEY_ID=""
             fi
         else
             print_fail "Failed to create MaaS API key (HTTP $API_KEY_HTTP_CODE)" \
