@@ -52,12 +52,14 @@ spec:
             when:
               - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
             plain:
-              expression: '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'
+              expression: >-
+                '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'
             priority: 0
           X-MaaS-Group-OC:
             when:
               - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
             plain:
-              selector: auth.identity.user.groups.@tostr
+              expression: >-
+                '["' + auth.identity.user.groups.join('","') + '"]'
             key: X-MaaS-Group
             priority: 1
