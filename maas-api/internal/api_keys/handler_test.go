@@ -103,12 +103,12 @@ func TestSearchAPIKeys_EmptyRequest(t *testing.T) {
 
 	// Create test keys
 	ctx := context.Background()
-	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Key 1", "", []string{"system:authenticated"}, nil)
+	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Key 1", "", []string{"system:authenticated"}, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Key 2", "", []string{"system:authenticated"}, nil)
+	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Key 2", "", []string{"system:authenticated"}, nil, false)
 	require.NoError(t, err)
 	// Create a revoked key
-	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Key 3", "", []string{"system:authenticated"}, nil)
+	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Key 3", "", []string{"system:authenticated"}, nil, false)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "key-3")
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestSearchAPIKeys_Pagination(t *testing.T) {
 		keyID := fmt.Sprintf("key-%d", i)
 		keyHash := fmt.Sprintf("hash-%d", i)
 		name := fmt.Sprintf("Key %d", i)
-		err := store.AddKey(ctx, testUser.Username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		err := store.AddKey(ctx, testUser.Username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
 		require.NoError(t, err)
 	}
 
@@ -253,9 +253,9 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 	}
 
 	// Create active and revoked keys
-	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, nil)
+	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, nil)
+	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, nil, false)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "revoked-key")
 	require.NoError(t, err)
@@ -379,11 +379,11 @@ func TestSearchAPIKeys_Sorting(t *testing.T) {
 	}
 
 	// Create keys with different names
-	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Charlie", "", []string{"system:authenticated"}, nil)
+	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Charlie", "", []string{"system:authenticated"}, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Alice", "", []string{"system:authenticated"}, nil)
+	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Alice", "", []string{"system:authenticated"}, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Bob", "", []string{"system:authenticated"}, nil)
+	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Bob", "", []string{"system:authenticated"}, nil, false)
 	require.NoError(t, err)
 
 	t.Run("DefaultSort_CreatedAtDesc", func(t *testing.T) {
@@ -506,7 +506,7 @@ func TestSearchAPIKeys_AdminVsRegularUser(t *testing.T) {
 			keyID := fmt.Sprintf("%s-key-%d", username, i)
 			keyHash := fmt.Sprintf("%s-hash-%d", username, i)
 			name := fmt.Sprintf("%s Key %d", username, i)
-			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
 			require.NoError(t, err)
 		}
 	}
@@ -627,14 +627,14 @@ func TestSearchAPIKeys_AdminFiltersByUsernameAndStatus(t *testing.T) {
 			keyID := fmt.Sprintf("%s-active-%d", username, i)
 			keyHash := fmt.Sprintf("%s-hash-active-%d", username, i)
 			name := fmt.Sprintf("%s Active Key %d", username, i)
-			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
 			require.NoError(t, err)
 		}
 		// Create 1 revoked key
 		keyID := fmt.Sprintf("%s-revoked", username)
 		keyHash := fmt.Sprintf("%s-hash-revoked", username)
 		name := fmt.Sprintf("%s Revoked Key", username)
-		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
 		require.NoError(t, err)
 		err = store.Revoke(ctx, keyID)
 		require.NoError(t, err)
@@ -707,7 +707,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		keyID := fmt.Sprintf("alice-key-%d", i)
 		keyHash := fmt.Sprintf("alice-hash-%d", i)
 		name := fmt.Sprintf("Alice Key %d", i)
-		err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
 		require.NoError(t, err)
 	}
 
@@ -715,7 +715,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		keyID := fmt.Sprintf("bob-key-%d", i)
 		keyHash := fmt.Sprintf("bob-hash-%d", i)
 		name := fmt.Sprintf("Bob Key %d", i)
-		err := store.AddKey(ctx, "bob", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+		err := store.AddKey(ctx, "bob", keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
 		require.NoError(t, err)
 	}
 
@@ -770,7 +770,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 			keyID := fmt.Sprintf("alice-key-%d", i)
 			keyHash := fmt.Sprintf("alice-hash-%d", i)
 			name := fmt.Sprintf("Alice Key %d", i)
-			err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil)
+			err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
 			require.NoError(t, err)
 		}
 
@@ -912,9 +912,9 @@ func TestGetAPIKeyHandler(t *testing.T) {
 	}
 
 	// Add keys to store
-	err := store.AddKey(context.Background(), aliceKey.Username, aliceKey.ID, "hash1", aliceKey.Name, "", aliceKey.Groups, nil)
+	err := store.AddKey(context.Background(), aliceKey.Username, aliceKey.ID, "hash1", aliceKey.Name, "", aliceKey.Groups, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, "hash2", bobKey.Name, "", bobKey.Groups, nil)
+	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, "hash2", bobKey.Name, "", bobKey.Groups, nil, false)
 	require.NoError(t, err)
 
 	t.Run("OwnerCanGetOwnKey", func(t *testing.T) {
@@ -1015,7 +1015,7 @@ func testRevokeKeySuccess(t *testing.T, user *token.UserContext) {
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	// Create alice's key
-	err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
+	err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil, false)
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -1058,7 +1058,7 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 		// Create alice's key
-		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil, false)
 		require.NoError(t, err)
 
 		// Bob trying to revoke Alice's key
@@ -1125,7 +1125,7 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 		// Create and immediately revoke alice's key
-		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil, false)
 		require.NoError(t, err)
 		err = store.Revoke(context.Background(), "alice-key-1")
 		require.NoError(t, err)
@@ -1145,5 +1145,159 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 
 		// Already revoked key returns 404 (not found among active keys)
 		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+}
+
+// ============================================================
+// EPHEMERAL API KEY TESTS
+// ============================================================
+
+func TestCreateEphemeralAPIKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	testUser := &token.UserContext{
+		Username: "playground-user",
+		Groups:   []string{"system:authenticated"},
+	}
+
+	t.Run("EphemeralKeyWithoutName", func(t *testing.T) {
+		requestBody := `{"ephemeral": true}`
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
+		c.Set("user", testUser)
+
+		handler.CreateAPIKey(c)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		var response CreateAPIKeyResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		// Name should be auto-generated
+		assert.Contains(t, response.Name, "ephemeral-")
+		// Expiration should be set (1hr default)
+		assert.NotNil(t, response.ExpiresAt)
+		// Ephemeral flag should be true in response
+		assert.True(t, response.Ephemeral, "ephemeral should be true in response")
+	})
+
+	t.Run("EphemeralKeyWithName", func(t *testing.T) {
+		requestBody := `{"ephemeral": true, "name": "my-playground-key"}`
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
+		c.Set("user", testUser)
+
+		handler.CreateAPIKey(c)
+
+		assert.Equal(t, http.StatusCreated, w.Code)
+		var response CreateAPIKeyResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "my-playground-key", response.Name)
+		// Ephemeral flag should be true in response
+		assert.True(t, response.Ephemeral, "ephemeral should be true in response")
+	})
+
+	t.Run("NonEphemeralRequiresName", func(t *testing.T) {
+		requestBody := `{}`
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
+		c.Set("user", testUser)
+
+		handler.CreateAPIKey(c)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		var response map[string]string
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Contains(t, response["error"], "name is required")
+	})
+
+	t.Run("EphemeralKeyExceedsMaxExpiration", func(t *testing.T) {
+		// Try to create ephemeral key with 2hr expiration (exceeds 1hr max)
+		requestBody := `{"ephemeral": true, "expiresIn": "2h"}`
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
+		c.Set("user", testUser)
+
+		handler.CreateAPIKey(c)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		var response map[string]string
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Contains(t, response["error"], "cannot exceed 1 hour")
+	})
+}
+
+func TestSearchExcludesEphemeralByDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+	testUser := &token.UserContext{
+		Username: "test-user",
+		Groups:   []string{"system:authenticated"},
+	}
+
+	// Create regular keys
+	err := store.AddKey(ctx, testUser.Username, "regular-key-1", "hash-1", "Regular Key 1", "", []string{"system:authenticated"}, nil, false)
+	require.NoError(t, err)
+	err = store.AddKey(ctx, testUser.Username, "regular-key-2", "hash-2", "Regular Key 2", "", []string{"system:authenticated"}, nil, false)
+	require.NoError(t, err)
+
+	// Create ephemeral keys
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-1", "hash-3", "Ephemeral Key 1", "", []string{"system:authenticated"}, nil, true)
+	require.NoError(t, err)
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-2", "hash-4", "Ephemeral Key 2", "", []string{"system:authenticated"}, nil, true)
+	require.NoError(t, err)
+
+	t.Run("DefaultSearchExcludesEphemeral", func(t *testing.T) {
+		requestBody := `{}`
+		response := executeSearchRequest(t, handler, requestBody, testUser)
+
+		assert.Len(t, response.Data, 2, "should only return regular keys")
+		for _, key := range response.Data {
+			assert.False(t, key.Ephemeral, "should not include ephemeral keys")
+		}
+	})
+
+	t.Run("IncludeEphemeralFilter", func(t *testing.T) {
+		requestBody := `{"filters": {"includeEphemeral": true}}`
+		response := executeSearchRequest(t, handler, requestBody, testUser)
+
+		assert.Len(t, response.Data, 4, "should return all keys including ephemeral")
+
+		ephemeralCount := 0
+		for _, key := range response.Data {
+			if key.Ephemeral {
+				ephemeralCount++
+			}
+		}
+		assert.Equal(t, 2, ephemeralCount, "should have 2 ephemeral keys")
 	})
 }

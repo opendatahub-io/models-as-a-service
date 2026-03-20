@@ -64,7 +64,7 @@ func TestAPIKeyOperations(t *testing.T) {
 	defer store.Close()
 
 	t.Run("AddKey", func(t *testing.T) {
-		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", []string{"system:authenticated", "premium-user"}, nil)
+		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", []string{"system:authenticated", "premium-user"}, nil, false)
 		require.NoError(t, err)
 
 		// Verify key was added by fetching it
@@ -97,7 +97,7 @@ func TestAPIKeyOperations(t *testing.T) {
 
 	t.Run("UpdateLastUsed", func(t *testing.T) {
 		// Add another key for this test
-		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", []string{"system:authenticated", "free-user"}, nil)
+		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", []string{"system:authenticated", "free-user"}, nil, false)
 		require.NoError(t, err)
 
 		err = store.UpdateLastUsed(ctx, "key-id-2")

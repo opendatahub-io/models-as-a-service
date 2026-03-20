@@ -246,6 +246,55 @@ curl -sSk \
 > [!NOTE]
 > API keys use hash-based storage (only SHA-256 hash stored, never plaintext). They are OpenAI-compatible (sk-oai-* format) and support optional expiration. API keys are stored in the configured database (see [Storage Configuration](#storage-configuration)) with metadata including creation date, expiration date, and status.
 
+##### Ephemeral API Keys
+
+Ephemeral keys are short-lived programmatic keys designed for temporary access scenarios. They differ from regular API keys in several ways:
+
+| Feature | Regular API Keys | Ephemeral API Keys |
+|---------|------------------|-------------------|
+| Default expiration | 90 days | 1 hour |
+| Maximum expiration | 90 days (configurable) | 1 hour (enforced) |
+| Name | Required | Optional (auto-generated if not provided) |
+| Shown in list/search | Yes | No (excluded by default) |
+| Use case | Long-term application access | Short-term programmatic access |
+
+```shell
+# Create an ephemeral key (1-hour default expiration, name auto-generated)
+API_KEY_RESPONSE=$(curl -sSk \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"ephemeral": true}' \
+  "${HOST}/maas-api/v1/api-keys")
+
+echo $API_KEY_RESPONSE | jq -r .
+API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
+
+# Create an ephemeral key with custom name and expiration (max 1hr)
+API_KEY_RESPONSE=$(curl -sSk \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{
+    "ephemeral": true,
+    "name": "playground-session",
+    "expiresIn": "30m"
+  }' \
+  "${HOST}/maas-api/v1/api-keys")
+```
+
+To include ephemeral keys in search results, use the `includeEphemeral` filter:
+
+```shell
+# Search including ephemeral keys
+curl -sSk \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"filters": {"includeEphemeral": true}}' \
+  "${HOST}/maas-api/v1/api-keys/search" | jq .
+```
+
 ### Database Configuration
 
 maas-api uses PostgreSQL for persistent storage of API key metadata. The database connection is configured via a Kubernetes Secret.

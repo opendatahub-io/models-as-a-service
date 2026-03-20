@@ -303,17 +303,10 @@ class TestAPIKeyExpiration:
     def max_expiration_days(self) -> int:
         """Get the configured max expiration days from environment.
         
-        This value must be explicitly provided by the test harness via the
-        API_KEY_MAX_EXPIRATION_DAYS environment variable so that it matches
-        the maas-api deployment configuration. If not set or invalid, these
-        tests are skipped to avoid flaky behavior from configuration mismatch.
+        Defaults to 90 days if API_KEY_MAX_EXPIRATION_DAYS is not set,
+        matching the maas-api default (constant.DefaultAPIKeyMaxExpirationDays).
         """
-        val = os.environ.get("API_KEY_MAX_EXPIRATION_DAYS")
-        if val is None:
-            pytest.skip(
-                "API_KEY_MAX_EXPIRATION_DAYS not set; skipping expiration policy tests "
-                "to avoid mismatch with maas-api configuration"
-            )
+        val = os.environ.get("API_KEY_MAX_EXPIRATION_DAYS", "90")
         try:
             return int(val)
         except ValueError:

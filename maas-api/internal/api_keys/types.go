@@ -29,6 +29,7 @@ type ApiKey struct {
 	ExpirationDate string   `json:"expirationDate,omitempty"` // Empty for permanent keys
 	Status         Status   `json:"status"`                   // "active", "expired", "revoked"
 	LastUsedAt     string   `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
+	Ephemeral      bool     `json:"ephemeral"`                // Short-lived programmatic key
 }
 
 // ValidationResult holds the result of API key validation (for Authorino HTTP callback).
@@ -84,6 +85,9 @@ type SearchFilters struct {
 	// Phase 4: Boolean filters (future)
 	HasExpiration *bool `json:"hasExpiration,omitempty"` // true = expiring, false = permanent
 	HasBeenUsed   *bool `json:"hasBeenUsed,omitempty"`   // true = used, false = never used
+
+	// Ephemeral key filter
+	IncludeEphemeral *bool `json:"includeEphemeral,omitempty"` // Include ephemeral keys in results (default: false)
 }
 
 // SortParams specifies sorting criteria.

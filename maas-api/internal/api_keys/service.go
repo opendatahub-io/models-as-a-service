@@ -42,44 +42,61 @@ func NewServiceWithLogger(store MetadataStore, cfg *config.Config, log *logger.L
 // CreateAPIKeyResponse is returned when creating an API key.
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
 type CreateAPIKeyResponse struct {
-	Key       string  `json:"key"`       // Plaintext key - SHOWN ONCE, NEVER STORED
-	KeyPrefix string  `json:"keyPrefix"` // Display prefix for UI
+	Key       string  `json:"key"`                 // Plaintext key - SHOWN ONCE, NEVER STORED
+	KeyPrefix string  `json:"keyPrefix"`           // Display prefix for UI
 	ID        string  `json:"id"`
 	Name      string  `json:"name"`
 	CreatedAt string  `json:"createdAt"`
 	ExpiresAt *string `json:"expiresAt,omitempty"` // RFC3339 timestamp
+	Ephemeral bool    `json:"ephemeral"` // Short-lived programmatic key
 }
 
 // CreateAPIKey creates a new API key (sk-oai-* format).
-// If expiresIn is not provided, defaults to APIKeyMaxExpirationDays.
+// If expiresIn is not provided, defaults to APIKeyMaxExpirationDays (or 1hr for ephemeral).
 // Per Feature Refinement "Key Format & Security":
 // - Generates cryptographically secure key with sk-oai-* prefix
 // - Stores ONLY the SHA-256 hash (plaintext never stored)
 // - Returns plaintext ONCE at creation ("show-once" pattern)
 // - Stores user groups for subscription-based authorization.
 // Admins can create keys for other users by specifying a different username.
-func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups []string, name, description string, expiresIn *time.Duration) (*CreateAPIKeyResponse, error) {
-	// Default to max expiration if not provided
+func (s *Service) CreateAPIKey(
+	ctx context.Context, username string, userGroups []string, name, description string,
+	expiresIn *time.Duration, ephemeral bool,
+) (*CreateAPIKeyResponse, error) {
+	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
+	maxDays := constant.DefaultAPIKeyMaxExpirationDays
+	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
+		maxDays = s.config.APIKeyMaxExpirationDays
+	}
+	maxRegularDuration := time.Duration(maxDays) * 24 * time.Hour
+
+	// Default expiration if not provided
 	if expiresIn == nil {
-		maxDays := constant.DefaultAPIKeyMaxExpirationDays
-		if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
-			maxDays = s.config.APIKeyMaxExpirationDays
+		if ephemeral {
+			// Ephemeral keys default to 1 hour
+			d := 1 * time.Hour
+			expiresIn = &d
+		} else {
+			// Regular keys default to max expiration days
+			expiresIn = &maxRegularDuration
 		}
-		defaultExpiration := time.Duration(maxDays) * 24 * time.Hour
-		expiresIn = &defaultExpiration
 	}
 
 	if *expiresIn <= 0 {
-		return nil, errors.New("expiration must be positive")
+		return nil, ErrExpirationNotPositive
 	}
 
-	// Validate against maximum expiration limit
-	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
-		maxDuration := time.Duration(s.config.APIKeyMaxExpirationDays) * 24 * time.Hour
-		if *expiresIn > maxDuration {
-			return nil, fmt.Errorf("requested expiration (%v) exceeds maximum allowed (%d days)",
-				*expiresIn, s.config.APIKeyMaxExpirationDays)
+	// Validate against maximum expiration limit (always enforced)
+	if ephemeral {
+		// Ephemeral keys have a strict 1-hour maximum to prevent abuse
+		maxEphemeralDuration := 1 * time.Hour
+		if *expiresIn > maxEphemeralDuration {
+			return nil, fmt.Errorf("ephemeral key expiration (%v) cannot exceed 1 hour: %w", *expiresIn, ErrExpirationExceedsMax)
 		}
+	} else if *expiresIn > maxRegularDuration {
+		// Regular keys always enforce max expiration (config or default)
+		return nil, fmt.Errorf("requested expiration (%v) exceeds maximum allowed (%d days): %w",
+			*expiresIn, maxDays, ErrExpirationExceedsMax)
 	}
 
 	// Calculate absolute expiration timestamp (always set since we default to max)
@@ -97,11 +114,11 @@ func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups 
 	// Store in database (hash only, plaintext NEVER stored)
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
-	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, &expiresAt); err != nil {
+	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, &expiresAt, ephemeral); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
-	s.logger.Info("Created API key", "user", username, "groups", userGroups, "id", keyID)
+	s.logger.Info("Created API key", "user", username, "groups", userGroups, "id", keyID, "ephemeral", ephemeral)
 
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
 	formatted := expiresAt.Format(time.RFC3339)
@@ -112,6 +129,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups 
 		Name:      name,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		ExpiresAt: &formatted,
+		Ephemeral: ephemeral,
 	}
 
 	return response, nil
