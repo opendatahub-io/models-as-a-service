@@ -57,7 +57,7 @@ fi
 
 echo "🔧 Checking Keycloak operator installation..."
 
-if kubectl get crd keycloaks.k8s.keycloak.org &>/dev/null; then
+if kubectl get subscription keycloak-operator -n "$NAMESPACE" &>/dev/null; then
   echo "  ✓ Keycloak operator already installed"
 else
   echo "  Installing Keycloak operator from community-operators catalog..."
