@@ -3,9 +3,10 @@ package constant
 import "time"
 
 const (
-	DefaultNamespace        = "maas-api"
-	DefaultGatewayName      = "maas-default-gateway"
-	DefaultGatewayNamespace = "openshift-ingress"
+	DefaultNamespace                 = "maas-api"
+	DefaultGatewayName               = "maas-default-gateway"
+	DefaultGatewayNamespace          = "openshift-ingress"
+	DefaultMaaSSubscriptionNamespace = "models-as-a-service"
 
 	DefaultResyncPeriod = 8 * time.Hour
 

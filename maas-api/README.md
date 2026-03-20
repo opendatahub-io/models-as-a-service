@@ -222,13 +222,16 @@ API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 **Managing API Keys:**
 
 ```shell
-# List all your API keys
+# Search your API keys
 curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
-  "${HOST}/maas-api/v1/api-keys" | jq .
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{}' \
+  "${HOST}/maas-api/v1/api-keys/search" | jq .
 
 # Get specific API key by ID
-API_KEY_ID="<id-from-list>"
+API_KEY_ID="<id-from-search>"
 curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}" | jq .
@@ -243,6 +246,55 @@ curl -sSk \
 > [!NOTE]
 > API keys use hash-based storage (only SHA-256 hash stored, never plaintext). They are OpenAI-compatible (sk-oai-* format) and support optional expiration. API keys are stored in the configured database (see [Storage Configuration](#storage-configuration)) with metadata including creation date, expiration date, and status.
 
+##### Ephemeral API Keys
+
+Ephemeral keys are short-lived programmatic keys designed for temporary access scenarios. They differ from regular API keys in several ways:
+
+| Feature | Regular API Keys | Ephemeral API Keys |
+|---------|------------------|-------------------|
+| Default expiration | 90 days | 1 hour |
+| Maximum expiration | 90 days (configurable) | 1 hour (enforced) |
+| Name | Required | Optional (auto-generated if not provided) |
+| Shown in list/search | Yes | No (excluded by default) |
+| Use case | Long-term application access | Short-term programmatic access |
+
+```shell
+# Create an ephemeral key (1-hour default expiration, name auto-generated)
+API_KEY_RESPONSE=$(curl -sSk \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"ephemeral": true}' \
+  "${HOST}/maas-api/v1/api-keys")
+
+echo $API_KEY_RESPONSE | jq -r .
+API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
+
+# Create an ephemeral key with custom name and expiration (max 1hr)
+API_KEY_RESPONSE=$(curl -sSk \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{
+    "ephemeral": true,
+    "name": "playground-session",
+    "expiresIn": "30m"
+  }' \
+  "${HOST}/maas-api/v1/api-keys")
+```
+
+To include ephemeral keys in search results, use the `includeEphemeral` filter:
+
+```shell
+# Search including ephemeral keys
+curl -sSk \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"filters": {"includeEphemeral": true}}' \
+  "${HOST}/maas-api/v1/api-keys/search" | jq .
+```
+
 ### Database Configuration
 
 maas-api uses PostgreSQL for persistent storage of API key metadata. The database connection is configured via a Kubernetes Secret.
@@ -251,6 +303,40 @@ maas-api uses PostgreSQL for persistent storage of API key metadata. The databas
     When using `scripts/deploy.sh` for development, PostgreSQL is deployed automatically with the secret created.
 
 For production deployments, see the [Database Prerequisites](../docs/content/install/prerequisites.md#database-prerequisite) guide.
+
+#### Listing models with subscription filtering
+
+The `/v1/models` endpoint supports subscription filtering and aggregation:
+
+    HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
+
+    # List models from all accessible subscriptions
+    curl ${HOST}/v1/models \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "X-MaaS-Return-All-Models: true" | jq .
+
+    # List models from a specific subscription
+    curl ${HOST}/v1/models \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "X-MaaS-Subscription: my-subscription" | jq .
+
+**Subscription Aggregation**: When the same model (same ID and URL) is accessible via multiple subscriptions, it appears once in the response with an array of all subscriptions providing access:
+
+    {
+      "object": "list",
+      "data": [
+        {
+          "id": "model-name",
+          "url": "https://...",
+          "subscriptions": [
+            {"name": "subscription-a", "displayName": "Subscription A"},
+            {"name": "subscription-b", "displayName": "Subscription B"}
+          ]
+        }
+      ]
+    }
 
 #### Calling the model and hitting the rate limit
 

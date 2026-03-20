@@ -67,7 +67,7 @@ class TestModelsEndpoint:
     - Returns HTTP 401 for missing authentication
     - Filters models based on subscription access (probes each model endpoint)
 
-    Test Coverage (14 tests) - Organized by Expected HTTP Status:
+    Test Coverage (16 tests) - Organized by Expected HTTP Status:
 
     ═══════════════════════════════════════════════════════════════════════════
     SUCCESS CASES (HTTP 200) - Core Subscription Selection
@@ -87,40 +87,49 @@ class TestModelsEndpoint:
     4. test_models_filtered_by_subscription
        → Models correctly filtered by specified subscription
 
-    5. test_deduplication_same_model_multiple_refs (xfail - deduplication bug)
-       → Same modelRef listed twice should deduplicate to 1 entry
+    5. test_deduplication_same_model_multiple_refs
+       → Same modelRef listed twice deduplicates to 1 entry (same URL)
 
-    6. test_different_modelrefs_same_model_id (xfail - deduplication bug)
-       → Different modelRefs serving SAME model ID should deduplicate to 1 entry
+    6. test_different_modelrefs_same_model_id
+       → Different modelRefs (different URLs) return 2 separate entries
 
     7. test_multiple_distinct_models_in_subscription
        → Different modelRefs with different IDs returns 2 entries (no duplicates)
 
-    8. test_empty_model_list
+    8. test_return_all_models_header
+       → X-MaaS-Return-All-Models: true returns models from all subscriptions
+
+    9. test_empty_model_list
        → Empty model list should return [] not null
 
-    9. test_response_schema_matches_openapi
-       → Response structure matches OpenAPI specification
+    10. test_response_schema_matches_openapi
+        → Response structure matches OpenAPI specification
 
-    10. test_model_metadata_preserved
+    11. test_model_metadata_preserved
         → Model fields (url, ready, created, owned_by) accurate
+
+    ═══════════════════════════════════════════════════════════════════════════
+    ERROR CASES (HTTP 400) - Invalid Request
+    ═══════════════════════════════════════════════════════════════════════════
+    12. test_conflicting_headers
+        → Both X-MaaS-Subscription and X-MaaS-Return-All-Models → 400
 
     ═══════════════════════════════════════════════════════════════════════════
     ERROR CASES (HTTP 403) - Permission Errors
     ═══════════════════════════════════════════════════════════════════════════
-    11. test_multi_subscription_without_header_403
+    13. test_multi_subscription_without_header_403
         → Multiple subscriptions, no header → 403 permission_error
 
-    12. test_invalid_subscription_header_403
+    14. test_invalid_subscription_header_403
         → Non-existent subscription → 403 permission_error
 
-    13. test_access_denied_to_subscription_403
+    15. test_access_denied_to_subscription_403
         → Subscription exists but user lacks access → 403 permission_error
 
     ═══════════════════════════════════════════════════════════════════════════
     ERROR CASES (HTTP 401) - Authentication Errors
     ═══════════════════════════════════════════════════════════════════════════
-    14. test_unauthenticated_request_401
+    16. test_unauthenticated_request_401
         → No Authorization header → 401 authentication_error
     """
 
@@ -282,6 +291,14 @@ class TestModelsEndpoint:
                 assert "created" in model, "Model missing 'created' field"
                 assert "owned_by" in model, "Model missing 'owned_by' field"
 
+                # Validate subscriptions field (new feature)
+                assert "subscriptions" in model, "Model missing 'subscriptions' field"
+                assert isinstance(model["subscriptions"], list), "subscriptions should be a list"
+                assert len(model["subscriptions"]) == 1, \
+                    f"Expected 1 subscription (auto-selected), got {len(model['subscriptions'])}"
+                assert model["subscriptions"][0]["name"] == subscription_name, \
+                    f"Expected subscription '{subscription_name}', got '{model['subscriptions'][0]['name']}'"
+
             log.info(f"✅ Single subscription auto-select → {r.status_code} with {len(models)} model(s)")
 
         finally:
@@ -365,6 +382,15 @@ class TestModelsEndpoint:
 
             # Should have at least one model from simulator-subscription
             assert len(models) > 0, f"Expected at least one model in response, got {len(models)}. Data was: {data.get('data')}"
+
+            # Validate subscriptions field
+            for model in models:
+                assert "subscriptions" in model, "Model missing 'subscriptions' field"
+                assert isinstance(model["subscriptions"], list), "subscriptions should be a list"
+                assert len(model["subscriptions"]) == 1, \
+                    f"Expected 1 subscription (explicit header), got {len(model['subscriptions'])}"
+                assert model["subscriptions"][0]["name"] == "simulator-subscription", \
+                    f"Expected 'simulator-subscription', got '{model['subscriptions'][0]['name']}'"
 
             log.info(f"✅ Explicit subscription header → {r.status_code} with {len(models)} model(s)")
 
@@ -545,20 +571,16 @@ class TestModelsEndpoint:
 
             _delete_sa(sa_name, namespace=sa_ns)
 
-    @pytest.mark.xfail(reason="Known bug: API does not deduplicate - same modelRef 2x returns 2+ duplicates instead of 1", strict=True)
     def test_deduplication_same_model_multiple_refs(self):
         """
         Test 6: Same modelRef listed twice should deduplicate to 1 entry.
 
         Creates a subscription with the SAME modelRef listed TWICE (different rate limits).
-        The API should deduplicate and return only 1 entry regardless of how many times
-        the same modelRef is listed.
+        The API deduplicates by (model ID, URL) and returns only 1 entry since both
+        references point to the same backend service.
 
-        Currently fails because:
-        - API returns 2+ duplicate entries instead of 1 deduplicated entry
-        - No deduplication logic in maas-api/internal/handlers/models.go
-
-        See: BUG_MODELS_ENDPOINT_NO_DEDUPLICATION.md
+        The response includes subscription information showing which subscription(s)
+        provide access to the model.
         """
         log.info("Test 6: Same modelRef twice should deduplicate (INTENDED behavior)")
 
@@ -683,7 +705,22 @@ class TestModelsEndpoint:
             assert len(models) == 1, \
                 f"Expected 1 deduplicated entry (same modelRef listed 2x), got {len(models)} duplicates: {model_ids}"
 
-            log.info(f"✅ API correctly deduplicated same modelRef listed 2x → 1 entry")
+            # Validate subscriptions field
+            model = models[0]
+            assert "subscriptions" in model, "Model should have 'subscriptions' field"
+            assert isinstance(model["subscriptions"], list), "subscriptions should be a list"
+            assert len(model["subscriptions"]) == 1, \
+                f"Expected 1 subscription (single subscription requested), got {len(model['subscriptions'])}"
+
+            sub = model["subscriptions"][0]
+            assert "name" in sub, "Subscription should have 'name' field"
+            assert sub["name"] == subscription_name, \
+                f"Expected subscription name '{subscription_name}', got '{sub['name']}'"
+            # displayName and description are optional
+            assert isinstance(sub.get("displayName", ""), str), "displayName should be string if present"
+            assert isinstance(sub.get("description", ""), str), "description should be string if present"
+
+            log.info("✅ API correctly deduplicated same modelRef listed 2x → 1 entry with subscription info")
 
         finally:
             # Cleanup
@@ -692,25 +729,20 @@ class TestModelsEndpoint:
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_reconcile()
 
-    @pytest.mark.xfail(reason="Known bug: API does not deduplicate - different refs serving same model ID return 3+ duplicates instead of 1", strict=True)
     def test_different_modelrefs_same_model_id(self):
         """
-        Test 7: Different modelRefs serving same model ID should deduplicate.
+        Test 7: Different modelRefs serving same model ID return separate entries.
 
         Uses two DIFFERENT MaaSModelRefs (each listed ONCE) that both serve the
         SAME model ID:
         - MODEL_REF (facebook-opt-125m-simulated) → serves "facebook/opt-125m"
         - PREMIUM_MODEL_REF (premium-simulated-simulated-premium) → serves "facebook/opt-125m"
 
-        The API should deduplicate by model ID and return only 1 entry, regardless
-        of how many different MaaSModelRefs serve that same model.
+        The API deduplicates by (model ID, URL). Since these are different backend
+        services with different URLs, they return as 2 separate entries even though
+        they serve the same model ID.
 
-        Currently fails because:
-        - API returns 3+ duplicate entries instead of 1 deduplicated entry
-        - No deduplication logic in maas-api/internal/handlers/models.go
-        - Backend /v1/models endpoint may also return duplicates
-
-        See: BUG_MODELS_ENDPOINT_NO_DEDUPLICATION.md
+        Each entry shows the same model ID but different URL and subscription.
         """
         log.info("Test 7: Different modelRefs same ID should deduplicate (INTENDED behavior)")
 
@@ -828,7 +860,7 @@ class TestModelsEndpoint:
             log.info(f"   Unique IDs: {unique_ids}")
             log.info(f"   Subscription had: 2 different modelRefs both serving 'facebook/opt-125m'")
 
-            # Both modelRefs serve the same model ID, so should only have 1 unique ID
+            # Both modelRefs serve the same model ID
             assert len(unique_ids) == 1, \
                 f"Expected only 1 unique model ID (both modelRefs serve facebook/opt-125m), got {len(unique_ids)}: {unique_ids}"
 
@@ -837,12 +869,26 @@ class TestModelsEndpoint:
             assert expected_id in unique_ids, \
                 f"Expected to find '{expected_id}', but got {unique_ids}"
 
-            # INTENDED BEHAVIOR: Should return exactly 1 entry (deduplicated by model ID)
-            # even though 2 different modelRefs serve the same model
-            assert len(models) == 1, \
-                f"Expected 1 deduplicated entry (2 different refs serve same ID), got {len(models)} duplicates: {model_ids}"
+            # INTENDED BEHAVIOR: Should return 2 entries (deduplication by model ID + URL)
+            # Different backend services (different URLs) return separate entries even with same model ID
+            assert len(models) == 2, \
+                f"Expected 2 entries (different URLs), got {len(models)}: {model_ids}"
 
-            log.info(f"✅ API correctly deduplicated different modelRefs serving same ID → 1 entry")
+            # Validate both entries have different URLs
+            urls = [m["url"] for m in models if "url" in m]
+            assert len(urls) == 2, f"Expected 2 URLs, got {len(urls)}"
+            assert urls[0] != urls[1], f"Expected different URLs, got duplicates: {urls}"
+
+            # Validate each entry has subscriptions field with the same subscription
+            for model in models:
+                assert "subscriptions" in model, "Model should have 'subscriptions' field"
+                assert isinstance(model["subscriptions"], list), "subscriptions should be a list"
+                assert len(model["subscriptions"]) == 1, \
+                    f"Expected 1 subscription per model, got {len(model['subscriptions'])}"
+                assert model["subscriptions"][0]["name"] == subscription_name, \
+                    f"Expected subscription '{subscription_name}', got '{model['subscriptions'][0]['name']}'"
+
+            log.info("✅ API correctly returned 2 separate entries (different URLs) for same model ID")
 
         finally:
             # Cleanup
@@ -994,6 +1040,15 @@ class TestModelsEndpoint:
             assert len(model_ids) == len(unique_ids), \
                 f"Expected no duplicates, but got {len(model_ids)} entries for {len(unique_ids)} unique IDs: {model_ids}"
 
+            # Validate subscriptions field
+            for model in models:
+                assert "subscriptions" in model, f"Model {model['id']} missing 'subscriptions' field"
+                assert isinstance(model["subscriptions"], list), "subscriptions should be a list"
+                assert len(model["subscriptions"]) == 1, \
+                    f"Expected 1 subscription, got {len(model['subscriptions'])}"
+                assert model["subscriptions"][0]["name"] == subscription_name, \
+                    f"Expected subscription '{subscription_name}', got '{model['subscriptions'][0]['name']}'"
+
             log.info(f"✅ API correctly returned 2 distinct models without duplicates: {sorted(unique_ids)}")
 
         finally:
@@ -1002,6 +1057,145 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_reconcile()
+
+    def test_return_all_models_header(self):
+        """
+        Test: X-MaaS-Return-All-Models header returns models from all subscriptions.
+
+        Creates a user with access to TWO subscriptions containing different models.
+        Queries with X-MaaS-Return-All-Models: true and validates:
+        - Returns models from ALL accessible subscriptions
+        - Each model includes subscriptions array showing which subscription(s) provide access
+        - Models appearing in multiple subscriptions have aggregated subscription list
+        """
+        log.info("Test: X-MaaS-Return-All-Models header aggregates subscriptions")
+
+        sa_name = "e2e-return-all-sa"
+        sa_ns = "default"
+        maas_ns = _ns()
+        sub1_name = "e2e-return-all-sub1"
+        sub2_name = "e2e-return-all-sub2"
+        auth1_name = "e2e-return-all-auth1"
+        auth2_name = "e2e-return-all-auth2"
+        api_key = None
+
+        try:
+            # Create SA
+            sa_token = _create_sa_token(sa_name, namespace=sa_ns)
+            sa_user = _sa_to_user(sa_name, namespace=sa_ns)
+
+            # Create subscription 1 with DISTINCT_MODEL_REF
+            log.info(f"Creating subscription 1 with {DISTINCT_MODEL_REF}")
+            _create_test_auth_policy(auth1_name, DISTINCT_MODEL_REF, users=[sa_user])
+            _create_test_subscription(sub1_name, DISTINCT_MODEL_REF, users=[sa_user])
+
+            # Create subscription 2 with DISTINCT_MODEL_2_REF
+            log.info(f"Creating subscription 2 with {DISTINCT_MODEL_2_REF}")
+            _create_test_auth_policy(auth2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
+            _create_test_subscription(sub2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
+
+            # Create API key
+            api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
+
+            _wait_reconcile()
+
+            # Query with X-MaaS-Return-All-Models: true
+            log.info("Querying /v1/models with X-MaaS-Return-All-Models: true")
+            r = requests.get(
+                f"{_maas_api_url()}/v1/models",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "X-MaaS-Return-All-Models": "true",
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+            data = r.json()
+            models = data.get("data") or []
+
+            # Should get models from BOTH subscriptions
+            model_ids = [m["id"] for m in models]
+            log.info(f"Got {len(models)} models: {model_ids}")
+
+            # Validate we got models from both subscriptions
+            # (At minimum we should see the 2 distinct models)
+            assert len(models) >= 2, \
+                f"Expected at least 2 models (from 2 subscriptions), got {len(models)}"
+
+            # Validate all models have subscriptions field
+            for model in models:
+                assert "subscriptions" in model, f"Model {model['id']} missing 'subscriptions' field"
+                assert isinstance(model["subscriptions"], list), \
+                    f"Model {model['id']} subscriptions should be a list"
+                assert len(model["subscriptions"]) > 0, \
+                    f"Model {model['id']} should have at least one subscription"
+
+                # Validate subscription structure
+                for sub in model["subscriptions"]:
+                    assert "name" in sub, "Subscription should have 'name' field"
+                    assert isinstance(sub["name"], str), "Subscription name should be string"
+
+            log.info(f"✅ X-MaaS-Return-All-Models returned {len(models)} models from all subscriptions")
+
+        finally:
+            _delete_cr("maassubscription", sub1_name, namespace=maas_ns)
+            _delete_cr("maassubscription", sub2_name, namespace=maas_ns)
+            _delete_cr("maasauthpolicy", auth1_name, namespace=maas_ns)
+            _delete_cr("maasauthpolicy", auth2_name, namespace=maas_ns)
+            _delete_sa(sa_name, namespace=sa_ns)
+            _wait_reconcile()
+
+    def test_conflicting_headers(self):
+        """
+        Test: Specifying both X-MaaS-Subscription and X-MaaS-Return-All-Models returns 400.
+
+        These headers are mutually exclusive:
+        - X-MaaS-Subscription: filter to specific subscription
+        - X-MaaS-Return-All-Models: return from ALL subscriptions
+
+        Specifying both should return 400 Bad Request.
+        """
+        log.info("Test: Conflicting headers return 400")
+
+        sa_name = "e2e-conflicting-headers-sa"
+        sa_ns = "default"
+        api_key = None
+
+        try:
+            # Create SA with access to simulator-subscription (via system:authenticated)
+            sa_token = _create_sa_token(sa_name, namespace=sa_ns)
+            api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
+
+            _wait_reconcile()
+
+            # Query with BOTH headers
+            r = requests.get(
+                f"{_maas_api_url()}/v1/models",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "X-MaaS-Subscription": "simulator-subscription",
+                    "X-MaaS-Return-All-Models": "true",
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            # Should return 400 Bad Request
+            assert r.status_code == 400, \
+                f"Expected 400 for conflicting headers, got {r.status_code}: {r.text}"
+
+            data = r.json()
+            assert "error" in data, "Response should contain error"
+            assert "message" in data["error"], "Error should contain message"
+            assert "cannot specify both" in data["error"]["message"].lower(), \
+                f"Error message should mention conflicting headers: {data['error']['message']}"
+
+            log.info("✅ Conflicting headers correctly returned 400")
+
+        finally:
+            _delete_sa(sa_name, namespace=sa_ns)
 
     def test_empty_model_list(self):
         """

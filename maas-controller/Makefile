@@ -1,45 +1,65 @@
 # MaaS Controller Makefile
 # Build and deploy the MaaS control plane (MaaSModelRef, MaaSAuthPolicy, MaaSSubscription)
 
+PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
+
 include tools.mk
 
-.PHONY: build run test tidy lint install uninstall image-build image-push docker-build generate manifests verify-codegen help
+.PHONY: build run test tidy lint install uninstall generate manifests verify-codegen help
 
 help:
 	@echo "MaaS Controller make targets:"
-	@echo "  make build        - build manager binary to bin/manager"
-	@echo "  make run          - build and run manager locally"
-	@echo "  make test         - run tests"
-	@echo "  make lint         - run golangci-lint"
-	@echo "  make generate     - generate deepcopy code for API types"
-	@echo "  make manifests    - generate CRD manifests"
-	@echo "  make install      - apply deployment/base/maas-controller/default (CRDs, RBAC, deployment)"
-	@echo "  make uninstall    - delete deployment/base/maas-controller/default resources"
-	@echo "  make verify-codegen - run generate + manifests and fail if files changed (CI check)"
-	@echo "  make image-build  - build container image (podman/buildah/docker); default IMAGE=quay.io/opendatahub/maas-controller"
-	@echo "  make image-push   - build and push image; override with IMAGE=... IMAGE_TAG=..."
+	@echo "  make build              - build manager binary to bin/manager"
+	@echo "  make run                - build and run manager locally"
+	@echo "  make test               - run tests"
+	@echo "  make lint               - run golangci-lint"
+	@echo "  make generate           - generate deepcopy code for API types"
+	@echo "  make manifests          - generate CRD manifests"
+	@echo "  make install            - apply deployment/base/maas-controller/default (CRDs, RBAC, deployment)"
+	@echo "  make uninstall          - delete deployment/base/maas-controller/default resources"
+	@echo "  make verify-codegen     - run generate + manifests and fail if files changed (CI check)"
+	@echo "  make build-image        - build container image; override with REPO=... TAG=..."
+	@echo "  make build-image-konflux - build container image using Dockerfile.konflux"
+	@echo "  make push-image         - push container image to registry"
+	@echo ""
+	@echo "FIPS options:"
+	@echo "  make build GO_STRICTFIPS=true  - build with FIPS strict runtime"
+
+BINARY_NAME := manager
+BUILD_DIR := $(PROJECT_DIR)/bin
+
+GOOS   ?= $(shell go env GOOS)
+GOARCH ?= $(shell go env GOARCH)
+GO_STRICTFIPS ?= false
+
+CGO_ENABLED  ?= 1
+
+ifeq ($(GO_STRICTFIPS),true)
+  GOEXPERIMENT ?= strictfipsruntime
+endif
+
+GO_ENV := GOOS=$(GOOS) GOARCH=$(GOARCH)
+ifdef GOEXPERIMENT
+  GO_ENV += GOEXPERIMENT=$(GOEXPERIMENT)
+endif
+ifdef CGO_ENABLED
+  GO_ENV += CGO_ENABLED=$(CGO_ENABLED)
+endif
 
 CONTROLLER_GEN_VERSION ?= v0.16.4
 CONTROLLER_GEN = $(BUILD_DIR)/controller-gen
 
-BINARY_NAME := manager
-BUILD_DIR := bin
-
-# Container build: use podman, buildah, or docker (default: podman if available, else buildah, else docker)
-CONTAINER_RUNTIME := $(shell command -v podman 1>/dev/null 2>&1 && echo podman || (command -v buildah 1>/dev/null 2>&1 && echo buildah || echo docker))
-# Default image
-IMAGE ?= quay.io/opendatahub/maas-controller
-IMAGE_TAG ?= latest
-FULL_IMAGE := $(IMAGE):$(IMAGE_TAG)
+## Container image
+include container.mk
 
 build: tidy $(BUILD_DIR)
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/manager
+	$(GO_ENV) go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/manager
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 run: build
-	./$(BUILD_DIR)/$(BINARY_NAME)
+	$(BUILD_DIR)/$(BINARY_NAME)
 
 test: tidy
 	go test ./...
@@ -90,18 +110,3 @@ install:
 
 uninstall:
 	kubectl delete -k ../deployment/base/maas-controller/default --ignore-not-found
-
-# Build container image (podman, buildah, or docker)
-# buildah uses "bud" (build-using-dockerfile) instead of "build"
-BUILD_CMD := $(if $(filter buildah,$(CONTAINER_RUNTIME)),bud,build)
-image-build:
-	$(CONTAINER_RUNTIME) $(BUILD_CMD) -t $(FULL_IMAGE) --platform=linux/amd64 -f Dockerfile .
-	@echo "Built $(FULL_IMAGE) with $(CONTAINER_RUNTIME)"
-
-# Alias for image-build (backward compatibility)
-docker-build: image-build
-
-# Push image to registry (must be logged in, e.g. podman login quay.io)
-image-push: image-build
-	$(CONTAINER_RUNTIME) push $(FULL_IMAGE)
-	@echo "Pushed $(FULL_IMAGE)"

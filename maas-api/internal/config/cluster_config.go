@@ -78,7 +78,7 @@ func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	return out, nil
 }
 
-func NewClusterConfig(resyncPeriod time.Duration) (*ClusterConfig, error) {
+func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.Duration) (*ClusterConfig, error) {
 	restConfig, err := LoadRestConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
@@ -100,9 +100,10 @@ func NewClusterConfig(resyncPeriod time.Duration) (*ClusterConfig, error) {
 	maasInformer := maasDynamicFactory.ForResource(maasGVR)
 	maasModelRefListerVal := &maasModelRefLister{lister: maasInformer.Lister()}
 
-	// MaaSSubscription informer (cached); watches all namespaces for subscription selection.
+	// MaaSSubscription informer (cached); watches only the configured namespace for subscription selection.
+	subscriptionDynamicFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, resyncPeriod, subscriptionNamespace, nil)
 	subscriptionGVR := subscription.GVR()
-	subscriptionInformer := maasDynamicFactory.ForResource(subscriptionGVR)
+	subscriptionInformer := subscriptionDynamicFactory.ForResource(subscriptionGVR)
 	maasSubscriptionListerVal := &subscriptionLister{lister: subscriptionInformer.Lister()}
 
 	// Auth CR informer (cluster-scoped); used to determine admin groups from services.platform.opendatahub.io/v1alpha1/Auth.
@@ -129,6 +130,7 @@ func NewClusterConfig(resyncPeriod time.Duration) (*ClusterConfig, error) {
 		},
 		startFuncs: []func(<-chan struct{}){
 			maasDynamicFactory.Start,
+			subscriptionDynamicFactory.Start,
 		},
 	}, nil
 }
