@@ -39,13 +39,17 @@ type MaaSModelSpec struct {
 // CredentialReference references a Kubernetes Secret with provider API credentials.
 type CredentialReference struct {
 	// Name is the name of the Secret
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 	// Namespace is the namespace of the Secret. Defaults to the MaaSModelRef namespace if omitted.
+	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
 // ModelReference references a model endpoint in the same namespace
+// +kubebuilder:validation:XValidation:rule="self.kind != 'ExternalModel' || has(self.provider) && self.provider != ''",message="provider is required when kind is ExternalModel"
 type ModelReference struct {
 	// Kind determines which fields are available
 	// +kubebuilder:validation:Enum=LLMInferenceService;ExternalModel
@@ -56,11 +60,14 @@ type ModelReference struct {
 
 	// Provider identifies the API format and auth type for external models.
 	// e.g. "openai", "anthropic". Only used when kind=ExternalModel.
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	Provider string `json:"provider,omitempty"`
 
-	// Endpoint is the FQDN for the external provider.
+	// Endpoint is the FQDN for the external provider (no scheme or path).
 	// e.g. "api.openai.com". Only used when kind=ExternalModel.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$`
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
 }

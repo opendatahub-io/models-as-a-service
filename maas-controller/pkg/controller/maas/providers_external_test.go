@@ -52,6 +52,22 @@ func newHTTPRouteWithGateway(name, ns, gatewayName, gatewayNS string) *gatewayap
 				},
 			},
 		},
+		Status: gatewayapiv1.HTTPRouteStatus{
+			RouteStatus: gatewayapiv1.RouteStatus{
+				Parents: []gatewayapiv1.RouteParentStatus{
+					{
+						ParentRef: gatewayapiv1.ParentReference{
+							Name:      gatewayapiv1.ObjectName(gatewayName),
+							Namespace: &gwNS,
+						},
+						Conditions: []metav1.Condition{
+							{Type: "Accepted", Status: "True"},
+							{Type: "Programmed", Status: "True"},
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -92,6 +108,9 @@ func TestExternalModel_ReconcileRoute_Success(t *testing.T) {
 
 func TestExternalModel_ReconcileRoute_MissingHTTPRoute(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	// Pre-populate status to verify it gets cleared
+	model.Status.HTTPRouteName = "stale-route"
+	model.Status.Endpoint = "https://stale.example.com/gpt-4o"
 
 	r, _ := newTestReconciler(model)
 	r.GatewayName = "maas-default-gateway"
@@ -100,11 +119,14 @@ func TestExternalModel_ReconcileRoute_MissingHTTPRoute(t *testing.T) {
 	log := zap.New(zap.UseDevMode(true))
 
 	err := handler.ReconcileRoute(context.Background(), log, model)
-	if err == nil {
-		t.Fatal("ReconcileRoute: expected error for missing HTTPRoute")
+	if err != nil {
+		t.Fatalf("ReconcileRoute: expected nil error for missing HTTPRoute (Pending), got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("ReconcileRoute: error = %q, want to contain 'not found'", err.Error())
+	if model.Status.HTTPRouteName != "" {
+		t.Errorf("HTTPRouteName should be cleared, got %q", model.Status.HTTPRouteName)
+	}
+	if model.Status.Endpoint != "" {
+		t.Errorf("Endpoint should be cleared, got %q", model.Status.Endpoint)
 	}
 }
 

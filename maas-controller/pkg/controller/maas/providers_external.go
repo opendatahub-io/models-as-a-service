@@ -49,8 +49,14 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		if apierrors.IsNotFound(err) {
 			log.Info("HTTPRoute not found for ExternalModel, waiting for user to create it",
 				"routeName", routeName, "namespace", routeNS, "model", model.Name)
-			return fmt.Errorf("HTTPRoute %s/%s not found for ExternalModel %s — create it to enable routing",
-				routeNS, routeName, model.Name)
+			// Clear stale route status so the model stays NotReady without requeue hot-looping
+			model.Status.Endpoint = ""
+			model.Status.HTTPRouteName = ""
+			model.Status.HTTPRouteNamespace = ""
+			model.Status.HTTPRouteGatewayName = ""
+			model.Status.HTTPRouteGatewayNamespace = ""
+			model.Status.HTTPRouteHostnames = nil
+			return nil
 		}
 		return fmt.Errorf("failed to get HTTPRoute %s/%s: %w", routeNS, routeName, err)
 	}
@@ -58,6 +64,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 	expectedGatewayName := h.r.gatewayName()
 	expectedGatewayNamespace := h.r.gatewayNamespace()
 	gatewayFound := false
+	gatewayAccepted := false
 	var gatewayName string
 	var gatewayNamespace string
 
@@ -79,16 +86,29 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		}
 	}
 
+	// Verify the gateway has accepted and programmed the route via status conditions
+	if gatewayFound {
+		for _, parent := range route.Status.RouteStatus.Parents {
+			pName := string(parent.ParentRef.Name)
+			pNS := routeNS
+			if parent.ParentRef.Namespace != nil {
+				pNS = string(*parent.ParentRef.Namespace)
+			}
+			if pName == expectedGatewayName && pNS == expectedGatewayNamespace {
+				for _, cond := range parent.Conditions {
+					if cond.Type == "Accepted" && cond.Status == "True" {
+						gatewayAccepted = true
+					}
+				}
+				break
+			}
+		}
+	}
+
 	var hostnames []string
 	for _, hostname := range route.Spec.Hostnames {
 		hostnames = append(hostnames, string(hostname))
 	}
-
-	model.Status.HTTPRouteName = routeName
-	model.Status.HTTPRouteNamespace = routeNS
-	model.Status.HTTPRouteGatewayName = gatewayName
-	model.Status.HTTPRouteGatewayNamespace = gatewayNamespace
-	model.Status.HTTPRouteHostnames = hostnames
 
 	if !gatewayFound {
 		log.Error(nil, "HTTPRoute does not reference configured gateway",
@@ -98,6 +118,21 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		return fmt.Errorf("HTTPRoute %s/%s does not reference gateway %s/%s (found: %s/%s)",
 			routeNS, routeName, expectedGatewayNamespace, expectedGatewayName, gatewayNamespace, gatewayName)
 	}
+
+	if !gatewayAccepted {
+		log.Info("HTTPRoute references correct gateway but not yet accepted",
+			"routeName", routeName, "namespace", routeNS, "model", model.Name)
+		model.Status.HTTPRouteName = routeName
+		model.Status.HTTPRouteNamespace = routeNS
+		// Don't set gateway/hostname fields until route is accepted
+		return nil
+	}
+
+	model.Status.HTTPRouteName = routeName
+	model.Status.HTTPRouteNamespace = routeNS
+	model.Status.HTTPRouteGatewayName = gatewayName
+	model.Status.HTTPRouteGatewayNamespace = gatewayNamespace
+	model.Status.HTTPRouteHostnames = hostnames
 
 	log.Info("HTTPRoute validated for ExternalModel",
 		"routeName", routeName, "namespace", routeNS, "model", model.Name,
