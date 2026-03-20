@@ -14,6 +14,7 @@
 #                                   odh → kuadrant (community v1.3.1)
 #                                   rhoai → rhcl (Red Hat Connectivity Link)
 #   --enable-tls-backend          Enable TLS for Authorino/MaaS API (default: on)
+#   --enable-keycloak             Deploy Keycloak for external OIDC (optional)
 #   --namespace <namespace>       Target namespace
 #   --verbose                     Enable debug logging
 #   --dry-run                     Show what would be done
@@ -38,6 +39,9 @@
 #
 #   # Deploy RHOAI (uses rhcl policy engine)
 #   ./scripts/deploy.sh --operator-type rhoai
+#
+#   # Deploy with Keycloak for external OIDC support
+#   ./scripts/deploy.sh --enable-keycloak
 #
 #   # Test custom MaaS API image
 #   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh
@@ -78,6 +82,7 @@ OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
 NAMESPACE="${DEPLOYMENT_NAMESPACE:-}"  # Auto-determined based on operator type
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
+ENABLE_KEYCLOAK="${ENABLE_KEYCLOAK:-false}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
@@ -117,6 +122,11 @@ OPTIONS:
   --disable-tls-backend
       Disable TLS backend for Authorino and MaaS API
       Uses HTTP tier lookup URL instead
+
+  --enable-keycloak
+      Deploy Keycloak identity provider for external OIDC support (optional)
+      Creates keycloak-system namespace and deploys Keycloak operator
+      See examples/keycloak/ for configuration guide
 
   --namespace <namespace>
       Target namespace for deployment
@@ -175,6 +185,9 @@ EXAMPLES:
   # Deploy RHOAI (uses rhcl policy engine)
   ./scripts/deploy.sh --operator-type rhoai
 
+  # Deploy with Keycloak for external OIDC support
+  ./scripts/deploy.sh --enable-keycloak
+
   # Deploy via Kustomize
   ./scripts/deploy.sh --deployment-mode kustomize
 
@@ -227,6 +240,10 @@ parse_arguments() {
         ;;
       --disable-tls-backend)
         ENABLE_TLS_BACKEND="false"
+        shift
+        ;;
+      --enable-keycloak)
+        ENABLE_KEYCLOAK="true"
         shift
         ;;
       --namespace)
@@ -534,6 +551,11 @@ deploy_via_operator() {
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
 
+  # Deploy Keycloak identity provider (optional, if enabled)
+  if [[ "$ENABLE_KEYCLOAK" == "true" ]]; then
+    deploy_keycloak
+  fi
+
   # Inject custom MaaS API image if specified
   inject_maas_api_image_operator_mode "$NAMESPACE"
 
@@ -590,6 +612,11 @@ deploy_via_kustomize() {
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
 
+  # Deploy Keycloak identity provider (optional, if enabled)
+  if [[ "$ENABLE_KEYCLOAK" == "true" ]]; then
+    deploy_keycloak
+  fi
+
   log_info "Applying kustomize manifests..."
   # Patch the maas-api URL placeholder with actual namespace
   kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$overlay" | sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g")
@@ -623,6 +650,15 @@ deploy_via_kustomize() {
 
 deploy_postgresql() {
   NAMESPACE="$NAMESPACE" "${SCRIPT_DIR}/setup-database.sh"
+}
+
+#──────────────────────────────────────────────────────────────
+# KEYCLOAK DEPLOYMENT
+#──────────────────────────────────────────────────────────────
+
+deploy_keycloak() {
+  log_info "Deploying Keycloak identity provider for external OIDC support..."
+  "${SCRIPT_DIR}/setup-keycloak.sh"
 }
 
 #──────────────────────────────────────────────────────────────
