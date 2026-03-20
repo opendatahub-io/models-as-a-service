@@ -147,13 +147,16 @@ Results:
 
 ---
 
-### `install-keycloak.sh`
-Installs a temporary Keycloak instance for MaaS OIDC testing.
+### External OIDC Test Configuration
+This repository no longer provisions a temporary Keycloak instance for external OIDC testing.
 
-**Usage:**
-```bash
-./scripts/installers/install-keycloak.sh
-```
+Use an externally provisioned OIDC provider and set these variables when running the Prow-style E2E flow with `EXTERNAL_OIDC=true`:
+
+- `OIDC_ISSUER_URL`
+- `OIDC_TOKEN_URL`
+- `OIDC_CLIENT_ID`
+- `OIDC_USERNAME`
+- `OIDC_PASSWORD`
 
 ---
 

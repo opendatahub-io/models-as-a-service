@@ -39,7 +39,12 @@
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
-#   EXTERNAL_OIDC - Enable temporary Keycloak install + external OIDC e2e coverage (default: false)
+#   EXTERNAL_OIDC - Enable external OIDC e2e coverage with an externally provisioned IdP (default: false)
+#   OIDC_ISSUER_URL - Required when EXTERNAL_OIDC=true; issuer URL used by deploy.sh
+#   OIDC_TOKEN_URL - Required when EXTERNAL_OIDC=true; token endpoint used by pytest
+#   OIDC_CLIENT_ID - Required when EXTERNAL_OIDC=true; client ID used to request tokens
+#   OIDC_USERNAME - Required when EXTERNAL_OIDC=true; test user for OIDC token requests
+#   OIDC_PASSWORD - Required when EXTERNAL_OIDC=true; password for the OIDC test user
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 # =============================================================================
@@ -91,6 +96,25 @@ print_header() {
     echo "$1"
     echo "----------------------------------------"
     echo ""
+}
+
+require_external_oidc_config() {
+    local required_vars=(OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD)
+    local missing=()
+    local var_name
+
+    for var_name in "${required_vars[@]}"; do
+        if [[ -z "${!var_name:-}" ]]; then
+            missing+=("$var_name")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "❌ ERROR: EXTERNAL_OIDC=true requires an externally provisioned OIDC provider"
+        echo "   Missing required variables: ${missing[*]}"
+        echo "   This branch no longer installs Keycloak automatically."
+        exit 1
+    fi
 }
 
 check_prerequisites() {
@@ -147,15 +171,9 @@ deploy_maas_platform() {
     fi
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
-        echo "Installing temporary Keycloak for external OIDC tests..."
-        if ! bash "$PROJECT_ROOT/scripts/installers/install-keycloak.sh"; then
-            echo "❌ ERROR: temporary Keycloak installation failed"
-            exit 1
-        fi
-
-        local cluster_domain
-        cluster_domain="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
-        export OIDC_ISSUER_URL="https://keycloak.${cluster_domain}/realms/maas"
+        echo "Using externally provisioned OIDC configuration for external OIDC tests..."
+        require_external_oidc_config
+        export OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD
         echo "Using OIDC issuer: ${OIDC_ISSUER_URL}"
     fi
 
@@ -390,13 +408,9 @@ setup_vars_for_tests() {
     export EXTERNAL_OIDC
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
-        export KEYCLOAK_HOST="keycloak.${CLUSTER_DOMAIN}"
-        export KEYCLOAK_REALM="${KEYCLOAK_REALM:-maas}"
-        export OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-maas-cli}"
-        export OIDC_USERNAME="${OIDC_USERNAME:-alice}"
-        export OIDC_PASSWORD="${OIDC_PASSWORD:-letmein}"
-        export OIDC_TOKEN_URL="https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token"
-        echo "KEYCLOAK_HOST: ${KEYCLOAK_HOST}"
+        require_external_oidc_config
+        export OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD
+        echo "OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}"
         echo "OIDC_TOKEN_URL: ${OIDC_TOKEN_URL}"
     fi
 
