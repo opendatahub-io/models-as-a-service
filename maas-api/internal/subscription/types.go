@@ -12,6 +12,8 @@ type SelectRequest struct {
 type SelectResponse struct {
 	// Success fields (populated when selection succeeds)
 	Name           string            `json:"name,omitempty"`           // Subscription name
+	DisplayName    string            `json:"displayName,omitempty"`    // Human-friendly display name for UI
+	Description    string            `json:"description,omitempty"`    // Subscription description
 	OrganizationID string            `json:"organizationId,omitempty"` // Organization ID for billing
 	CostCenter     string            `json:"costCenter,omitempty"`     // Cost center for attribution
 	Labels         map[string]string `json:"labels,omitempty"`         // Additional tracking labels

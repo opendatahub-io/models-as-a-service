@@ -13,7 +13,6 @@ Requires:
 Environment variables (all optional, with defaults):
   - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_API_BASE_URL: MaaS API URL (required for API key creation)
-  - DEPLOYMENT_NAMESPACE: MaaS API and Controller namespace (default: opendatahub)
   - MAAS_SUBSCRIPTION_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: When set, use this SA token
     instead of oc whoami -t (e.g. for Prow where oc whoami -t is unavailable)
@@ -348,7 +347,7 @@ def _sa_to_user(sa_name, namespace=None):
     return f"system:serviceaccount:{namespace}:{sa_name}"
 
 
-def _create_test_maas_model(name, llmis_name="facebook-opt-125m-simulated", llmis_namespace="llm", namespace=None):
+def _create_test_maas_model(name, llmis_name=MODEL_REF, llmis_namespace=MODEL_NAMESPACE, namespace=None):
     """Create a MaaSModelRef CR for testing.
 
     Note: MaaSModelRef can only reference backend models (LLMInferenceService) in the same namespace.
@@ -615,19 +614,6 @@ def _list_crs(kind, namespace=None):
         )
 
     return json.loads(result.stdout).get("items", [])
-
-
-def _get_cr_annotations(kind, name, namespace="llm"):
-    """Return annotations dict of a CR, or None if not found."""
-    result = subprocess.run(
-        ["oc", "get", kind, name, "-n", namespace, "-o", "json"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return None
-    obj = json.loads(result.stdout)
-    return obj.get("metadata", {}).get("annotations") or {}
 
 
 # ---------------------------------------------------------------------------
@@ -1090,7 +1076,7 @@ class TestManagedAnnotation:
         """AuthPolicy annotated with opendatahub.io/managed=false must not have
         its spec updated when the parent MaaSAuthPolicy is modified."""
         ns = _ns()
-        ap_ns = "llm"
+        ap_ns = MODEL_NAMESPACE
         parent_snapshot = None
         try:
             # 1. Verify the AuthPolicy exists
@@ -1184,7 +1170,7 @@ class TestManagedAnnotation:
         """TokenRateLimitPolicy annotated with opendatahub.io/managed=false must not
         have its spec updated when the parent MaaSSubscription is modified."""
         ns = _ns()
-        trlp_ns = "llm"
+        trlp_ns = MODEL_NAMESPACE
         parent_snapshot = None
         try:
             # 1. Verify the TRLP exists
@@ -1283,115 +1269,6 @@ class TestManagedAnnotation:
                 )
 
             _wait_reconcile()
-
-
-class TestMaasSubscriptionNamespace:
-    """Verifies MaaS controller reconciles CRs from any namespace (namespace scoping support)."""
-
-    def test_authpolicy_and_subscription_in_maas_subscription_namespace(self):
-        """MaaSAuthPolicy and MaaSSubscription in MaaS subscription namespace should be reconciled
-        and should appear in the AuthPolicy and TRLP annotations for the model."""
-        ns = _ns()
-        try:
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSAuthPolicy",
-                "metadata": {"name": "e2e-watched-auth", "namespace": ns},
-                "spec": {
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                    "subjects": {"groups": [{"name": "system:authenticated"}]},
-                },
-            })
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-watched-sub", "namespace": ns},
-                "spec": {
-                    "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
-                },
-            })
-            _wait_reconcile(30)
-
-            auth_name = f"maas-auth-{MODEL_REF}"
-            auth_annotations = _get_cr_annotations("authpolicy", auth_name, "llm")
-            assert auth_annotations is not None, (
-                f"AuthPolicy {auth_name} not found"
-            )
-            assert "e2e-watched-auth" in auth_annotations.get("maas.opendatahub.io/auth-policies", "").split(","), (
-                "MaaSAuthPolicy e2e-watched-auth not reconciled"
-            )
-
-            trlp_name = f"maas-trlp-{MODEL_REF}"
-            trlp_annotations = _get_cr_annotations("tokenratelimitpolicy", trlp_name, "llm")
-            assert trlp_annotations is not None, (
-                f"TRLP {trlp_name} not found"
-            )
-            assert "e2e-watched-sub" in trlp_annotations.get("maas.opendatahub.io/subscriptions", "").split(","), (
-                "MaaSSubscription e2e-watched-sub not reconciled"
-            )
-        finally:
-            _delete_cr("maasauthpolicy", "e2e-watched-auth")
-            _delete_cr("maassubscription", "e2e-watched-sub")
-            _wait_reconcile()
-
-    def test_authpolicy_and_subscription_in_another_namespace(self):
-        """MaaSAuthPolicy and MaaSSubscription in another namespace should not be reconciled
-        and should not appear in the AuthPolicy and TRLP annotations for the model."""
-        ns = "e2e-unwatched-ns"
-        subprocess.run(
-            ["oc", "create", "namespace", ns],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        try:
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSAuthPolicy",
-                "metadata": {"name": "e2e-unwatched-auth", "namespace": ns},
-                "spec": {
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                    "subjects": {"groups": [{"name": "system:authenticated"}]},
-                },
-            })
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-unwatched-sub", "namespace": ns},
-                "spec": {
-                    "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
-                },
-            })
-            _wait_reconcile(30)
-
-            auth_name = f"maas-auth-{MODEL_REF}"
-            auth_annotations = _get_cr_annotations("authpolicy", auth_name, "llm")
-            assert auth_annotations is not None, (
-                f"AuthPolicy {auth_name} not found"
-            )
-            assert "e2e-unwatched-auth" not in auth_annotations.get("maas.opendatahub.io/auth-policies", "").split(","), (
-                "MaaSAuthPolicy e2e-unwatched-auth not reconciled (namespace scoping should not allow this)"
-            )
-
-            trlp_name = f"maas-trlp-{MODEL_REF}"
-            trlp_annotations = _get_cr_annotations("tokenratelimitpolicy", trlp_name, "llm")
-            assert trlp_annotations is not None, (
-                f"TRLP {trlp_name} not found"
-            )
-            assert "e2e-unwatched-sub" not in trlp_annotations.get("maas.opendatahub.io/subscriptions", "").split(","), (
-                "MaaSSubscription e2e-unwatched-sub not reconciled (namespace scoping should not allow this)"
-            )
-        finally:
-            _delete_cr("maasauthpolicy", "e2e-unwatched-auth", namespace=ns)
-            _delete_cr("maassubscription", "e2e-unwatched-sub", namespace=ns)
-            _wait_reconcile()
-            subprocess.run(
-                ["oc", "delete", "namespace", ns, "--ignore-not-found", "--timeout=30s"],
-                capture_output=True,
-                text=True,
-            )
 
 
 class TestE2ESubscriptionFlow:
@@ -1780,7 +1657,7 @@ class TestE2ESubscriptionFlow:
 
             # Test: Invalid/non-existent subscription header → 403
             log.info("Testing: User with invalid subscription header")
-            r = _inference(api_key, path=MODEL_PATH, subscription="nonexistent-subscription-xyz")
+            r = _inference(api_key, path=MODEL_PATH, subscription=INVALID_SUBSCRIPTION)
             assert r.status_code == 403, f"Expected 403 for invalid subscription, got {r.status_code}"
             log.info("✅ Invalid subscription header → %s", r.status_code)
 

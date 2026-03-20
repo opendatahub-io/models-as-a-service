@@ -24,6 +24,8 @@ spec:
               fieldPath: metadata.namespace
         - name: SECURE
           value: "false"
+        - name: MAAS_SUBSCRIPTION_NAMESPACE
+          value: "models-as-a-service"
         resources:
           requests:
             memory: "64Mi"

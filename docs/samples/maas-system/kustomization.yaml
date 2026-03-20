@@ -1,5 +1,5 @@
 # Bundled MaaS system: LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription
-# per tier. Deploy all at once so dependencies resolve correctly.
+# per subscription. Deploy all at once so dependencies resolve correctly.
 # - free: system:authenticated, 100 tokens/min
 # - premium: premium-user, 1000 tokens/min
 apiVersion: kustomize.config.k8s.io/v1beta1

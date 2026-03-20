@@ -3,7 +3,7 @@
 This guide provides quickstart instructions for deploying the MaaS Platform infrastructure.
 
 !!! note
-    For more detailed instructions, please refer to [Installation under the Administrator Guide](install/prerequisites.md).
+    For more detailed instructions, please refer to [Installation under the Install Guide](install/prerequisites.md).
 
 ## Prerequisites
 
@@ -36,31 +36,50 @@ For step-by-step commands, see [TLS Configuration: Authorino TLS Configuration](
 
 ## Quick Start
 
-### Automated OpenShift Deployment (Recommended)
+### Automated OpenShift Deployment
 
-For OpenShift clusters, use the unified automated deployment script:
+For OpenShift clusters, use the unified automated deployment script. Choose your deployment method:
 
-```bash
-# Clone the repository
-git clone https://github.com/opendatahub-io/models-as-a-service.git
-cd models-as-a-service
+=== "Operator (Recommended)"
 
-export MAAS_REF="main"  # Use the latest release tag, or "main" for development
+    Deploy MaaS through the RHOAI or ODH operator. This is the recommended approach for production deployments.
 
-# Deploy using RHOAI operator (default)
-./scripts/deploy.sh
+    ```bash
+    export MAAS_REF="main"  # Use the latest release tag, or "main" for development
 
-# Or deploy using ODH operator
-./scripts/deploy.sh --operator-type odh
+    # Deploy using RHOAI operator (default)
+    ./scripts/deploy.sh
 
-# Or deploy using kustomize
-./scripts/deploy.sh --deployment-mode kustomize
-```
+    # Or deploy using ODH operator
+    ./scripts/deploy.sh --operator-type odh
+    ```
 
-!!! note "Using Release Tags"
-    The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
-    The release workflow automatically updates all `MAAS_REF="main"` references in documentation and scripts
-    to use the new release tag when a release is created. Use `"main"` only for development/testing.
+    !!! note "Using Release Tags"
+        The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
+        The release workflow automatically updates all `MAAS_REF="main"` references in documentation and scripts
+        to use the new release tag when a release is created. Use `"main"` only for development/testing.
+
+=== "Kustomize (Development Only)"
+
+    !!! warning "Development Use Only"
+        Kustomize deployment is intended for **development and testing purposes only**. For production deployments, use the Operator install tab above instead.
+
+    !!! note "Prerequisites: Run hack scripts first"
+        Before deploying with kustomize, you must run the two hack scripts to install cert-manager, LeaderWorkerSet (LWS), and the ODH operator. Run them in order:
+
+        1. **cert-manager and LWS**: `./.github/hack/install-cert-manager-and-lws.sh`
+        2. **ODH operator**: `./.github/hack/install-odh.sh`
+
+    ```bash
+    export MAAS_REF="main"  # Use the latest release tag, or "main" for development
+
+    ./scripts/deploy.sh --deployment-mode kustomize
+    ```
+
+    !!! note "Using Release Tags"
+        The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
+        The release workflow automatically updates all `MAAS_REF="main"` references in documentation and scripts
+        to use the new release tag when a release is created. Use `"main"` only for development/testing.
 
 
 ### Verify Deployment
@@ -107,79 +126,6 @@ kubectl get pods -n redhat-ods-applications
 
 For detailed validation and troubleshooting, see the [Validation Guide](install/validation.md).
 
-## Model Setup
-
-!!! note
-    At least one model must be deployed to validate the installation using the [Validation Guide](install/validation.md).
-
-### Deploy Sample Models
-
-#### Simulator Model (CPU)
-
-A lightweight mock service for testing that generates responses without running an actual language model.
-
-```bash
-PROJECT_DIR=$(git rev-parse --show-toplevel)
-kustomize build ${PROJECT_DIR}/docs/samples/models/simulator/ | kubectl apply -f -
-```
-
-#### Facebook OPT-125M Model (CPU)
-
-An inference deployment that loads and runs a 125M parameter model without the need for a GPU.
-
-```bash
-PROJECT_DIR=$(git rev-parse --show-toplevel)
-kustomize build ${PROJECT_DIR}/docs/samples/models/facebook-opt-125m-cpu/ | kubectl apply -f -
-```
-
-#### Qwen3 Model (GPU Required)
-
-⚠️ This model requires GPU nodes with `nvidia.com/gpu` resources available in your cluster.
-
-```bash
-PROJECT_DIR=$(git rev-parse --show-toplevel)
-kustomize build ${PROJECT_DIR}/docs/samples/models/qwen3/ | kubectl apply -f -
-```
-
-#### Verify Model Deployment
-
-```bash
-# Check LLMInferenceService status
-kubectl get llminferenceservices -n llm
-
-# Check pods
-kubectl get pods -n llm
-```
-
-#### Update Existing Models (Optional)
-
-To update an existing model, modify the `LLMInferenceService` to use the newly created `maas-default-gateway` gateway.
-
-```bash
-kubectl patch llminferenceservice my-production-model -n llm --type='json' -p='[
-  {
-    "op": "add",
-    "path": "/spec/gateway/refs/-",
-    "value": {
-      "name": "maas-default-gateway",
-      "namespace": "openshift-ingress"
-    }
-  }
-]'
-```
-
-```yaml
-apiVersion: serving.kserve.io/v1alpha1
-kind: LLMInferenceService
-metadata:
-  name: my-production-model
-spec:
-  gateway:
-    refs:
-      - name: maas-default-gateway
-        namespace: openshift-ingress
-```
-
 ## Next Steps
 
-After installation, proceed to [Validation](install/validation.md) to test and verify your deployment.
+After deployment, proceed to [Model Setup (On Cluster)](install/model-setup.md) to deploy sample models, then [Validation](install/validation.md) to test and verify your deployment.
