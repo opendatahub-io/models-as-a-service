@@ -39,6 +39,12 @@
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
+#   EXTERNAL_OIDC - Enable external OIDC e2e coverage with an externally provisioned IdP (default: false)
+#   OIDC_ISSUER_URL - Required when EXTERNAL_OIDC=true; issuer URL used by deploy.sh
+#   OIDC_TOKEN_URL - Required when EXTERNAL_OIDC=true; token endpoint used by pytest
+#   OIDC_CLIENT_ID - Required when EXTERNAL_OIDC=true; client ID used to request tokens
+#   OIDC_USERNAME - Required when EXTERNAL_OIDC=true; test user for OIDC token requests
+#   OIDC_PASSWORD - Required when EXTERNAL_OIDC=true; password for the OIDC test user
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 # =============================================================================
@@ -66,6 +72,7 @@ SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}  # Skip platform and model deployment 
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
+EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
@@ -89,6 +96,25 @@ print_header() {
     echo "$1"
     echo "----------------------------------------"
     echo ""
+}
+
+require_external_oidc_config() {
+    local required_vars=(OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD)
+    local missing=()
+    local var_name
+
+    for var_name in "${required_vars[@]}"; do
+        if [[ -z "${!var_name:-}" ]]; then
+            missing+=("$var_name")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "❌ ERROR: EXTERNAL_OIDC=true requires an externally provisioned OIDC provider"
+        echo "   Missing required variables: ${missing[*]}"
+        echo "   This branch no longer installs Keycloak automatically."
+        exit 1
+    fi
 }
 
 check_prerequisites() {
@@ -144,6 +170,13 @@ deploy_maas_platform() {
         exit 1
     fi
 
+    if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        echo "Using externally provisioned OIDC configuration for external OIDC tests..."
+        require_external_oidc_config
+        export OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD
+        echo "Using OIDC issuer: ${OIDC_ISSUER_URL}"
+    fi
+
     # 3. Deploy MaaS via operator (Kuadrant, gateway, maas-api, maas-controller, policies)
     # Note: ODH/catalog already installed by install-odh.sh; deploy.sh will skip duplicate installs
     local deploy_cmd=(
@@ -158,6 +191,9 @@ deploy_maas_platform() {
     fi
     if [[ "$INSECURE_HTTP" == "true" ]]; then
         deploy_cmd+=(--disable-tls-backend)
+    fi
+    if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        deploy_cmd+=(--external-oidc)
     fi
 
     if ! "${deploy_cmd[@]}"; then
@@ -369,6 +405,14 @@ setup_vars_for_tests() {
         exit 1
     fi
     export HOST="maas.${CLUSTER_DOMAIN}"
+    export EXTERNAL_OIDC
+
+    if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        require_external_oidc_config
+        export OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD
+        echo "OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}"
+        echo "OIDC_TOKEN_URL: ${OIDC_TOKEN_URL}"
+    fi
 
     if [ "$INSECURE_HTTP" = "true" ]; then
         export MAAS_API_BASE_URL="http://${HOST}/maas-api"
@@ -463,7 +507,8 @@ run_e2e_tests() {
         "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_namespace_scoping.py" \
         "$test_dir/tests/test_subscription.py" \
-        "$test_dir/tests/test_models_endpoint.py" ; then 
+        "$test_dir/tests/test_models_endpoint.py" \
+        "$test_dir/tests/test_external_oidc.py" ; then 
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi

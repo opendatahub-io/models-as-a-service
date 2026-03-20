@@ -35,6 +35,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--operator-type <odh|rhoai>` - Which operator to install (default: odh)
 - `--deployment-mode <operator|kustomize>` - Deployment method (default: operator)
 - `--namespace <namespace>` - Target namespace for deployment
+- `--external-oidc` - Enable external OIDC patching for `maas-api`
 - `--enable-tls-backend` - Enable TLS backend (default)
 - `--disable-tls-backend` - Disable TLS backend
 - `--verbose` - Enable debug logging
@@ -143,6 +144,19 @@ Results:
 
 ✅ PASS: All critical checks passed! 🎉
 ```
+
+---
+
+### External OIDC Test Configuration
+This repository no longer provisions a temporary Keycloak instance for external OIDC testing.
+
+Use an externally provisioned OIDC provider and set these variables when running the Prow-style E2E flow with `EXTERNAL_OIDC=true`:
+
+- `OIDC_ISSUER_URL`
+- `OIDC_TOKEN_URL`
+- `OIDC_CLIENT_ID`
+- `OIDC_USERNAME`
+- `OIDC_PASSWORD`
 
 ---
 
