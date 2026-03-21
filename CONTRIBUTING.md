@@ -76,7 +76,7 @@ This project follows a **Stream-Lake-Ocean** release model. Code flows from acti
 - Kustomize: `./scripts/ci/validate-manifests.sh` (from repo root; requires kustomize 5.7.x).
 - MaaS Controller codegen: from the repo root, run `make -C maas-controller verify-codegen` (automatically installs the correct `controller-gen` version to `bin/controller-gen`).
 - MaaS API: from `maas-api/`, run `make lint` and `make test`.
-- Full E2E (Prow-style): `./test/e2e/scripts/prow_run_smoke_test.sh` (from repo root; requires OpenShift cluster and cluster-admin).
+- Full E2E (Prow-style): `./test/e2e/scripts/prow_run_smoke_test.sh` (from repo root; requires OpenShift cluster and cluster-admin). When `EXTERNAL_OIDC=true`, also provide `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, and `OIDC_PASSWORD` for an existing IdP.
 
 ## Testing
 

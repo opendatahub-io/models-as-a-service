@@ -132,6 +132,52 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 	}
 }
 
+func TestMaaSAuthPolicyReconciler_EmptyGroupsHeaderUsesEmptyJSONArray(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+	}
+
+	expr, found, err := unstructured.NestedString(
+		got.Object,
+		"spec", "rules", "response", "success", "headers", "X-MaaS-Group", "plain", "expression",
+	)
+	if err != nil || !found {
+		t.Fatalf("X-MaaS-Group expression missing or invalid: found=%v err=%v", found, err)
+	}
+
+	want := `size(auth.metadata.apiKeyValidation.groups) > 0 ? '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' : '[]'`
+	if expr != want {
+		t.Fatalf("X-MaaS-Group expression = %q, want %q", expr, want)
+	}
+}
+
 // TestMaaSAuthPolicyReconciler_DuplicateReconciliation verifies that reconciling
 // multiple auth policies for the same model does not produce redundant AuthPolicy updates.
 //

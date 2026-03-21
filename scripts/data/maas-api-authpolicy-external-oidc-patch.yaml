@@ -6,9 +6,20 @@ spec:
           - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
         jwt:
           issuerUrl: __OIDC_ISSUER_URL__
+          ttl: 300
         priority: 1
       openshift-identities:
         priority: 2
+    authorization:
+      oidc-client-bound:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
+        patternMatching:
+          patterns:
+            - selector: auth.identity.azp
+              operator: eq
+              value: __OIDC_CLIENT_ID__
+        priority: 1
     response:
       success:
         headers:

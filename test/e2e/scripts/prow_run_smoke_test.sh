@@ -39,7 +39,7 @@
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
-#   EXTERNAL_OIDC - Enable temporary Keycloak install + external OIDC e2e coverage (default: false)
+#   EXTERNAL_OIDC - Use externally provisioned OIDC settings + external OIDC e2e coverage (default: false)
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 # =============================================================================
@@ -91,6 +91,27 @@ print_header() {
     echo "$1"
     echo "----------------------------------------"
     echo ""
+}
+
+require_external_oidc_env() {
+    local required_vars=(OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD)
+    local missing=()
+    local name
+
+    for name in "${required_vars[@]}"; do
+        if [[ -z "${!name:-}" ]]; then
+            missing+=("$name")
+        fi
+    done
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    echo "❌ ERROR: EXTERNAL_OIDC=true requires an externally provisioned OIDC provider"
+    echo "   Missing variables: ${missing[*]}"
+    echo "   Set OIDC_ISSUER_URL, OIDC_TOKEN_URL, OIDC_CLIENT_ID, OIDC_USERNAME, and OIDC_PASSWORD"
+    exit 1
 }
 
 check_prerequisites() {
@@ -147,16 +168,8 @@ deploy_maas_platform() {
     fi
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
-        echo "Installing temporary Keycloak for external OIDC tests..."
-        if ! bash "$PROJECT_ROOT/scripts/installers/install-keycloak.sh"; then
-            echo "❌ ERROR: temporary Keycloak installation failed"
-            exit 1
-        fi
-
-        local cluster_domain
-        cluster_domain="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
-        export OIDC_ISSUER_URL="https://keycloak.${cluster_domain}/realms/maas"
-        echo "Using OIDC issuer: ${OIDC_ISSUER_URL}"
+        require_external_oidc_env
+        echo "Using external OIDC issuer: ${OIDC_ISSUER_URL}"
     fi
 
     # 3. Deploy MaaS via operator (Kuadrant, gateway, maas-api, maas-controller, policies)
@@ -390,13 +403,9 @@ setup_vars_for_tests() {
     export EXTERNAL_OIDC
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
-        export KEYCLOAK_HOST="keycloak.${CLUSTER_DOMAIN}"
-        export KEYCLOAK_REALM="${KEYCLOAK_REALM:-maas}"
-        export OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-maas-cli}"
-        export OIDC_USERNAME="${OIDC_USERNAME:-alice}"
-        export OIDC_PASSWORD="${OIDC_PASSWORD:-letmein}"
-        export OIDC_TOKEN_URL="https://${KEYCLOAK_HOST}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token"
-        echo "KEYCLOAK_HOST: ${KEYCLOAK_HOST}"
+        require_external_oidc_env
+        export OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD
+        echo "OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}"
         echo "OIDC_TOKEN_URL: ${OIDC_TOKEN_URL}"
     fi
 

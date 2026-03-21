@@ -2,6 +2,7 @@ import os
 import time
 import uuid
 import logging
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -10,10 +11,7 @@ from conftest import TLS_VERIFY
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
-    reason="external OIDC tests are disabled",
-)
+EXTERNAL_OIDC_DISABLED_REASON = "external OIDC tests are disabled"
 
 
 def _required_env(name: str) -> str:
@@ -61,6 +59,41 @@ def _create_oidc_api_key(maas_api_base_url: str, oidc_token: str) -> dict:
     return data
 
 
+def _build_inference_url(maas_api_base_url: str, model_url: str) -> str:
+    gateway_origin = urlparse(maas_api_base_url.rstrip("/"))
+    parsed_model_url = urlparse(model_url.rstrip("/"))
+    expected_origin = f"{gateway_origin.scheme}://{gateway_origin.netloc}"
+
+    assert parsed_model_url.scheme in {"http", "https"}, (
+        f"Unsupported model URL scheme: {parsed_model_url.scheme or '<missing>'}"
+    )
+    assert (
+        parsed_model_url.scheme == gateway_origin.scheme
+        and parsed_model_url.netloc == gateway_origin.netloc
+    ), f"Model URL {model_url} is outside MaaS gateway origin {expected_origin}"
+
+    return f"{parsed_model_url.geturl()}/v1/chat/completions"
+
+
+def test_build_inference_url_accepts_maas_origin():
+    assert _build_inference_url(
+        "https://maas.apps.example.com/maas-api",
+        "https://maas.apps.example.com/llm/demo-model",
+    ) == "https://maas.apps.example.com/llm/demo-model/v1/chat/completions"
+
+
+def test_build_inference_url_rejects_cross_origin():
+    with pytest.raises(AssertionError, match="outside MaaS gateway origin"):
+        _build_inference_url(
+            "https://maas.apps.example.com/maas-api",
+            "https://attacker.apps.example.com/llm/demo-model",
+        )
+
+
+@pytest.mark.skipif(
+    os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
+    reason=EXTERNAL_OIDC_DISABLED_REASON,
+)
 class TestExternalOIDC:
     def test_oidc_token_can_create_api_key(self, maas_api_base_url: str):
         token = _request_oidc_token()
@@ -95,9 +128,9 @@ class TestExternalOIDC:
         assert items, f"Expected at least one model from /v1/models, got: {models_response.text}"
 
         model_id = items[0]["id"]
-        model_url = items[0]["url"].rstrip("/")
+        inference_url = _build_inference_url(maas_api_base_url, items[0]["url"])
         inference_response = requests.post(
-            f"{model_url}/v1/chat/completions",
+            inference_url,
             headers=headers,
             json={
                 "model": model_id,

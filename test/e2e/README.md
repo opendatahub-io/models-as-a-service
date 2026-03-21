@@ -15,6 +15,30 @@ Deploys MaaS platform, creates test users, and runs smoke tests:
 ./test/e2e/scripts/prow_run_smoke_test.sh
 ```
 
+### External OIDC Smoke Coverage
+
+When running the Prow-style flow with `EXTERNAL_OIDC=true`, provide an existing OIDC provider. The script no longer provisions a temporary Keycloak instance from this repository.
+
+Required variables:
+
+- `OIDC_ISSUER_URL`
+- `OIDC_TOKEN_URL`
+- `OIDC_CLIENT_ID`
+- `OIDC_USERNAME`
+- `OIDC_PASSWORD`
+
+Example:
+
+```bash
+EXTERNAL_OIDC=true \
+OIDC_ISSUER_URL="https://idp.example.com/realms/maas" \
+OIDC_TOKEN_URL="https://idp.example.com/realms/maas/protocol/openid-connect/token" \
+OIDC_CLIENT_ID="maas-cli" \
+OIDC_USERNAME="alice" \
+OIDC_PASSWORD="supersecret" \
+./test/e2e/scripts/prow_run_smoke_test.sh
+```
+
 ### Smoke Tests Only
 
 If MaaS is already deployed and you just want to run tests:

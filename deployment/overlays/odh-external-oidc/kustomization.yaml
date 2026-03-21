@@ -1,0 +1,43 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../odh
+
+configMapGenerator:
+- behavior: merge
+  envs:
+  - params.env
+  name: maas-parameters
+generatorOptions:
+  disableNameSuffixHash: true
+
+patches:
+- path: maas-api-auth-policy-oidc-patch.yaml
+  target:
+    kind: AuthPolicy
+    name: maas-api-auth-policy
+
+replacements:
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.oidc-issuer-url
+  targets:
+  - select:
+      kind: AuthPolicy
+      name: maas-api-auth-policy
+    fieldPaths:
+    - spec.rules.authentication.oidc-identities.jwt.issuerUrl
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.oidc-client-id
+  targets:
+  - select:
+      kind: AuthPolicy
+      name: maas-api-auth-policy
+    fieldPaths:
+    - spec.rules.authorization.oidc-client-bound.patternMatching.patterns.0.value

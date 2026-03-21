@@ -298,7 +298,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 					// Groups - construct JSON array string from API key validation groups
 					"X-MaaS-Group": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `'["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'`,
+							"expression": `size(auth.metadata.apiKeyValidation.groups) > 0 ? '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' : '[]'`,
 						},
 						"metrics":  false,
 						"priority": int64(0),

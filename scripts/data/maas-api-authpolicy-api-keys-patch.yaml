@@ -53,7 +53,9 @@ spec:
               - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
             plain:
               expression: >-
-                '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'
+                size(auth.metadata.apiKeyValidation.groups) > 0 ?
+                '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' :
+                '[]'
             priority: 0
           X-MaaS-Group-OC:
             when:

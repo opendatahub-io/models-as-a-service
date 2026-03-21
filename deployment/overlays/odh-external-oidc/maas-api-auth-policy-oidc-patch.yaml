@@ -12,11 +12,22 @@ spec:
           - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
         jwt:
           issuerUrl: https://oidc.example.invalid/realms/maas
+          ttl: 300
         priority: 1
       openshift-identities:
         when:
           - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
         priority: 2
+    authorization:
+      oidc-client-bound:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
+        patternMatching:
+          patterns:
+            - selector: auth.identity.azp
+              operator: eq
+              value: maas-cli
+        priority: 1
     response:
       success:
         headers:
