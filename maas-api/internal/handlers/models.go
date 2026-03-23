@@ -100,6 +100,7 @@ func (h *ModelsHandler) selectSubscriptionsForListing(
 // handleSubscriptionSelectionError handles errors from subscription selection and sends appropriate HTTP responses.
 func (h *ModelsHandler) handleSubscriptionSelectionError(c *gin.Context, err error) {
 	var multipleSubsErr *subscription.MultipleSubscriptionsError
+	var ambiguousErr *subscription.SubscriptionAmbiguousError
 	var accessDeniedErr *subscription.AccessDeniedError
 	var notFoundErr *subscription.SubscriptionNotFoundError
 	var noSubErr *subscription.NoSubscriptionError
@@ -110,6 +111,16 @@ func (h *ModelsHandler) handleSubscriptionSelectionError(c *gin.Context, err err
 		h.logger.Debug("User has multiple subscriptions, x-maas-subscription header required",
 			"subscriptionCount", len(multipleSubsErr.Subscriptions),
 		)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": err.Error(),
+				"type":    "permission_error",
+			}})
+		return
+	}
+
+	if errors.As(err, &ambiguousErr) {
+		h.logger.Debug("Subscription name is ambiguous")
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
 				"message": err.Error(),

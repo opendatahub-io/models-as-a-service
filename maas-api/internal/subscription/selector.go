@@ -138,15 +138,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 			}
 
 			if len(accessibleMatches) > 1 {
-				// Multiple accessible subscriptions with same bare name in different namespaces
-				namespaces := make([]string, len(accessibleMatches))
-				for i, m := range accessibleMatches {
-					namespaces[i] = m.Namespace
-				}
-				return nil, &SubscriptionAmbiguousError{
-					Subscription: requestedSubscription,
-					Namespaces:   namespaces,
-				}
+				// Multiple accessible subscriptions with same bare name in different namespaces.
+				// Don't leak any information - return a generic error requiring qualified names.
+				return nil, &SubscriptionAmbiguousError{}
 			}
 
 			// Exactly one accessible match - use it
@@ -524,14 +518,11 @@ func (e *MultipleSubscriptionsError) Error() string {
 }
 
 // SubscriptionAmbiguousError indicates multiple subscriptions with the same bare name exist.
-type SubscriptionAmbiguousError struct {
-	Subscription string
-	Namespaces   []string
-}
+// No details are included to prevent namespace enumeration.
+type SubscriptionAmbiguousError struct{}
 
 func (e *SubscriptionAmbiguousError) Error() string {
-	return fmt.Sprintf("subscription name '%s' is ambiguous (exists in multiple namespaces: %s), use qualified name 'namespace/name'",
-		e.Subscription, strings.Join(e.Namespaces, ", "))
+	return "subscription name is ambiguous, use qualified name 'namespace/name'"
 }
 
 // ModelNotInSubscriptionError indicates the requested model is not included in the subscription.
