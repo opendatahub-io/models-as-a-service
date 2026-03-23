@@ -595,6 +595,71 @@ paths:
                     description: Unauthorized response.
                 "403":
                     description: Forbidden. User trying to revoke another user's key.
+    /v1/subscriptions:
+        get:
+            tags:
+                - subscriptions
+            summary: List all subscriptions the authenticated user has access to
+            description: Returns all MaaSSubscription resources the user has access to based on group membership or username. Useful for UIs that need to show all user subscriptions.
+            operationId: subscriptions#list
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/SubscriptionListItem'
+                            example:
+                                - subscription_id_header: free-tier
+                                  subscription_description: Free Tier
+                                - subscription_id_header: premium
+                                  subscription_description: Premium Plan
+                "500":
+                    description: Internal Server Error response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /v1/model/{model-id}/subscriptions:
+        get:
+            tags:
+                - subscriptions
+            summary: List subscriptions the user has access to for a specific model
+            description: Returns MaaSSubscription resources the user has access to that include the specified model in their modelRefs. The model-id parameter must be the MaaSModelRef resource name (e.g. "facebook-opt-125m-simulated"), not the served model name (e.g. "facebook/opt-125m") or the route path. Useful for populating a subscription dropdown when the user must specify X-MaaS-Subscription.
+            operationId: subscriptions#list_for_model
+            parameters:
+                - in: path
+                  name: model-id
+                  schema:
+                      type: string
+                  required: true
+                  description: The MaaSModelRef resource name (e.g. "facebook-opt-125m-simulated"). This is the name of the MaaSModelRef, not the served model ID or the route path.
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: '#/components/schemas/SubscriptionListItem'
+                            example:
+                                - subscription_id_header: premium
+                                  subscription_description: Premium Plan
+                "400":
+                    description: Bad Request. Missing model-id parameter.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
     bearerAuth:
@@ -800,6 +865,93 @@ components:
                 - error
                 - message
 
+        # Subscription info for list responses
+        SubscriptionListItem:
+            type: object
+            properties:
+                subscription_id_header:
+                    type: string
+                    description: Subscription name to use in the X-MaaS-Subscription header
+                    example: premium
+                subscription_description:
+                    type: string
+                    description: Human-readable description (from description annotation, falls back to display-name, then name)
+                    example: Premium Plan
+                display_name:
+                    type: string
+                    description: Display name from the openshift.io/display-name annotation
+                    example: Premium
+                priority:
+                    type: integer
+                    format: int32
+                    description: Subscription priority (higher = higher priority)
+                    example: 10
+                model_refs:
+                    type: array
+                    description: Model references with rate limits
+                    items:
+                        $ref: '#/components/schemas/ModelRefInfo'
+                organization_id:
+                    type: string
+                    description: Organization identifier for metering and billing
+                    example: premium-org
+                cost_center:
+                    type: string
+                    description: Cost center for usage attribution
+                    example: ai-team
+                labels:
+                    type: object
+                    additionalProperties:
+                        type: string
+                    description: Additional labels for tracking and metrics
+                    example:
+                        env: production
+            required:
+                - subscription_id_header
+                - subscription_description
+                - priority
+                - model_refs
+
+        ModelRefInfo:
+            type: object
+            properties:
+                name:
+                    type: string
+                    description: Name of the MaaSModelRef
+                    example: free-model-ref
+                namespace:
+                    type: string
+                    description: Namespace where the MaaSModelRef lives
+                    example: llm
+                token_rate_limits:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            limit:
+                                type: integer
+                                format: int64
+                                description: Maximum number of tokens allowed
+                                example: 100
+                            window:
+                                type: string
+                                description: "Time window (e.g., 1m, 1h, 24h)"
+                                example: 1m
+                        required:
+                            - limit
+                            - window
+                billing_rate:
+                    type: object
+                    properties:
+                        per_token:
+                            type: string
+                            description: Cost per token
+                            example: "0.001"
+                    required:
+                        - per_token
+            required:
+                - name
+
         # API Key metadata
         ApiKey:
             type: object
@@ -875,5 +1027,7 @@ tags:
       description: "\U0001F916 Model management service"
     - name: tiers
       description: "\U0001F3F7️Tier lookup service"
+    - name: subscriptions
+      description: Subscription listing service
     - name: health
       description: ❤️ Health check service
