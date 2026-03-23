@@ -29,6 +29,12 @@ spec:
     value: maas-api/Dockerfile
   - name: path-context
     value: maas-api
+  - name: build-platforms
+    value:
+    - linux/x86_64
+    - linux/arm64
+    - linux/ppc64le
+    - linux/s390x
   - name: additional-tags
     value:
     - 'odh-pr-{{revision}}'

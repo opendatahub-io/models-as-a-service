@@ -1576,10 +1576,11 @@ class TestModelsEndpoint:
             assert error.get("type") == "permission_error", f"Expected error type 'permission_error', got {error.get('type')}"
             assert "message" in error, "Error missing 'message' field"
 
-            # Message should indicate access denied
+            # Security: Bare subscription names return "not found" to avoid leaking namespace info.
+            # This prevents enumeration of subscriptions across namespaces.
             message = error["message"].lower()
-            assert "denied" in message or "access" in message, \
-                f"Error message doesn't indicate access denied: {error['message']}"
+            assert "denied" in message or "access" in message or "not found" in message, \
+                f"Error message should indicate permission issue: {error['message']}"
 
             log.info(f"✅ Access denied to subscription → {r.status_code} (permission_error)")
 
