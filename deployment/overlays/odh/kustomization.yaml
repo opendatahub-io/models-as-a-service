@@ -26,6 +26,8 @@ metadata:
 #
 # For details, see: deployment/components/shared-patches/README.md
 
+# IMPORTANT: This namespace must match 'app-namespace' in params.env
+# The AuthPolicy URL uses app-namespace for DNS resolution
 namespace: opendatahub
 
 resources:
