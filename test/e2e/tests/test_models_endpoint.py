@@ -68,7 +68,7 @@ class TestModelsEndpoint:
     - Returns HTTP 401 for missing authentication
     - Filters models based on subscription access (probes each model endpoint)
 
-    Test Coverage (16 tests) - Organized by Expected HTTP Status:
+    Test Coverage (18 tests) - Organized by Expected HTTP Status:
 
     ═══════════════════════════════════════════════════════════════════════════
     SUCCESS CASES (HTTP 200) - Authentication Method Behaviors
@@ -121,16 +121,22 @@ class TestModelsEndpoint:
     ═══════════════════════════════════════════════════════════════════════════
     ERROR CASES (HTTP 403) - Permission Errors
     ═══════════════════════════════════════════════════════════════════════════
-    14. test_invalid_subscription_header_403
-        → Non-existent subscription → 403 permission_error
+    14. test_api_key_with_deleted_subscription_403
+        → API key bound to deleted subscription → 403 permission_error
 
-    15. test_access_denied_to_subscription_403
-        → Subscription exists but user lacks access → 403 permission_error
+    15. test_api_key_with_inaccessible_subscription_403
+        → API key/user with subscription they don't have access to → 403 permission_error
+
+    16. test_invalid_subscription_header_403
+        → User token with non-existent subscription → 403 permission_error
+
+    17. test_access_denied_to_subscription_403
+        → User token with subscription they lack access to → 403 permission_error
 
     ═══════════════════════════════════════════════════════════════════════════
     ERROR CASES (HTTP 401) - Authentication Errors
     ═══════════════════════════════════════════════════════════════════════════
-    16. test_unauthenticated_request_401
+    18. test_unauthenticated_request_401
         → No Authorization header → 401 authentication_error
     """
 
@@ -1468,6 +1474,133 @@ class TestModelsEndpoint:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_api_key_with_deleted_subscription_403(self):
+        """
+        Test: API key bound to a subscription that was deleted after key creation.
+
+        This tests an edge case where an API key was minted with a subscription,
+        but that subscription is later deleted. The gateway injects X-MaaS-Subscription
+        from the key, but the subscription no longer exists.
+
+        Expected: HTTP 403 with error type: permission_error
+        """
+        ns = _ns()
+        auth_policy_name = "e2e-api-key-deleted-sub-auth"
+        subscription_name = "e2e-api-key-deleted-sub"
+        sa_name = "e2e-api-key-deleted-sub-sa"
+        api_key = None
+
+        try:
+            # Create service account and token
+            oc_token = _create_sa_token(sa_name, namespace=ns)
+            sa_user = _sa_to_user(sa_name, namespace=ns)
+
+            # Create test resources
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
+
+            # Create API key bound to subscription
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+
+            _wait_reconcile()
+
+            # Delete the subscription (simulating deletion after key creation)
+            log.info(f"Deleting subscription {subscription_name} after API key creation")
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _wait_reconcile()
+
+            # Query with API key (gateway injects deleted subscription name)
+            log.info(f"Querying /v1/models with API key bound to deleted subscription")
+            r = requests.get(
+                f"{_maas_api_url()}/v1/models",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            # Should return 403 because subscription doesn't exist
+            assert r.status_code == 403, \
+                f"Expected 403 for API key with deleted subscription, got {r.status_code}: {r.text}"
+
+            data = r.json()
+            assert "error" in data, "Response missing 'error' field"
+            error = data["error"]
+            assert error.get("type") == "permission_error", \
+                f"Expected error type 'permission_error', got {error.get('type')}"
+
+            log.info(f"✅ API key with deleted subscription → {r.status_code} (permission_error)")
+
+        finally:
+            # subscription_name already deleted
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_name, namespace=ns)
+            _wait_reconcile()
+
+    def test_api_key_with_inaccessible_subscription_403(self):
+        """
+        Test: API key bound to a subscription the user no longer has access to.
+
+        This tests an edge case where an API key was minted when the user had access
+        to a subscription, but later the user's group membership changed and they
+        lost access. The key still has the subscription bound.
+
+        Expected: HTTP 403 with error type: permission_error
+        """
+        ns = _ns()
+        auth_policy_name = "e2e-api-key-no-access-auth"
+        subscription_name = "e2e-api-key-no-access-sub"
+        sa_user = "e2e-api-key-user-sa"
+        sa_other = "e2e-api-key-other-sa"
+
+        try:
+            # Create two service accounts
+            oc_token_user = _create_sa_token(sa_user, namespace=ns)
+            _ = _create_sa_token(sa_other, namespace=ns)
+
+            user_principal = _sa_to_user(sa_user, namespace=ns)
+            other_principal = _sa_to_user(sa_other, namespace=ns)
+
+            # Create subscription accessible only to "other" user
+            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[user_principal, other_principal])
+            _create_test_subscription(subscription_name, MODEL_REF, users=[other_principal])
+
+            _wait_reconcile()
+
+            # User tries to query with their token but specifying the other user's subscription
+            # This simulates what would happen if an API key was bound to a subscription
+            # the user doesn't have access to
+            log.info(f"Querying /v1/models with user token and inaccessible subscription")
+            r = requests.get(
+                f"{_maas_api_url()}/v1/models",
+                headers={
+                    "Authorization": f"Bearer {oc_token_user}",
+                    "X-MaaS-Subscription": subscription_name,
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            # Should return 403 because user doesn't have access to the subscription
+            assert r.status_code == 403, \
+                f"Expected 403 for subscription without access, got {r.status_code}: {r.text}"
+
+            data = r.json()
+            assert "error" in data, "Response missing 'error' field"
+            error = data["error"]
+            assert error.get("type") == "permission_error", \
+                f"Expected error type 'permission_error', got {error.get('type')}"
+
+            log.info(f"✅ API key/user with inaccessible subscription → {r.status_code} (permission_error)")
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_sa(sa_user, namespace=ns)
+            _delete_sa(sa_other, namespace=ns)
             _wait_reconcile()
 
     def test_invalid_subscription_header_403(self):
