@@ -4,6 +4,7 @@ approvers:
   - chaitanya1731
   - nerdalert
   - jland-redhat
+  - nirrozenbaum
   - dmytro-zaharnytskyi
   - SB159
   - noyitz
@@ -21,6 +22,7 @@ reviewers:
   - chaitanya1731
   - nerdalert
   - jland-redhat
+  - nirrozenbaum
   - dmytro-zaharnytskyi
   - SB159
   - noyitz
