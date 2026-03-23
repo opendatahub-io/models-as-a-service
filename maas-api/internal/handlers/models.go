@@ -340,7 +340,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 }
 
 // filterModelsBySubscription filters models to only those matching the subscription's modelRefs.
-func filterModelsBySubscription(modelList []models.Model, modelRefs []subscription.ModelRef) []models.Model {
+func filterModelsBySubscription(modelList []models.Model, modelRefs []subscription.ModelRefInfo) []models.Model {
 	if len(modelRefs) == 0 {
 		return modelList
 	}

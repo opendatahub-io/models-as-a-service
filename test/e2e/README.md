@@ -76,9 +76,10 @@ pytest tests/test_api_keys.py -v \
 - `MAAS_API_BASE_URL` - MaaS API URL (auto-discovered from `oc get route maas-api`)
 - `TOKEN` - User token (auto-obtained via `oc whoami -t`)
 - `ADMIN_OC_TOKEN` - Optional admin token for authorization tests (if not set, admin tests are skipped)
+- `API_KEY_MAX_EXPIRATION_DAYS` - Max expiration policy for expiration tests (default: 90, matching maas-api default)
 
 **Test Coverage:**
-- ✅ Create, list, revoke API keys
+- ✅ Create, search, revoke API keys
 - ✅ Admin authorization (manage other users' keys)
 - ✅ Non-admin authorization (403 on other users' keys)
 - ✅ Validation endpoint (active and revoked keys)

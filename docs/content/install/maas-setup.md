@@ -57,7 +57,7 @@ The Gateway must exist before enabling modelsAsService in your DataScienceCluste
 ```yaml
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 # Use default ingress cert for HTTPS, or set CERT_NAME to your TLS secret name
-dCERT_NAME=${CERT_NAME:-$(kubectl get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)}
+CERT_NAME=${CERT_NAME:-$(kubectl get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)}
 [[ -z "$CERT_NAME" ]] && CERT_NAME="router-certs-default"
 
 kubectl apply -f - <<EOF
