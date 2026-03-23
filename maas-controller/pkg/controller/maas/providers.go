@@ -32,6 +32,10 @@ import (
 // ErrKindNotImplemented indicates the model kind is recognized but not implemented (e.g. ExternalModel stub).
 var ErrKindNotImplemented = errors.New("model kind not implemented")
 
+// ErrHTTPRouteNotFound indicates the HTTPRoute for a model does not exist yet (normal during startup).
+// Controller should set status to Pending and requeue to retry.
+var ErrHTTPRouteNotFound = errors.New("HTTPRoute not found yet")
+
 // RouteResolver returns the HTTPRoute name and namespace for a MaaSModelRef.
 // Used by findHTTPRouteForModel and by AuthPolicy/Subscription controllers to attach policies.
 type RouteResolver interface {

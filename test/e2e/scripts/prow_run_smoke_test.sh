@@ -239,11 +239,15 @@ deploy_models() {
     fi
     echo "✅ Simulator models ready"
 
-    # TODO: Currently waits for  ever and bounces controller (seems like they are not reconciled even after llmisvc are reported as up)
+    # Wait for MaaSModelRefs to transition to Ready phase.
+    # The controller now properly handles the race condition where MaaSModelRef is created
+    # before KServe creates the HTTPRoute (sets Pending + requeues, then Ready when route exists).
     echo "Waiting for MaaSModelRefs to be Ready..."
-    local retries=0
+    local timeout=300  # 5 minutes - sufficient for KServe to create HTTPRoutes
+    local deadline=$((SECONDS + timeout))
     local all_ready=false
-    while [[ $retries -lt 30 ]]; do
+
+    while [[ $SECONDS -lt $deadline ]]; do
         all_ready=true
         while IFS= read -r phase; do
             if [[ "$phase" != "Ready" ]]; then
@@ -251,41 +255,22 @@ deploy_models() {
                 break
             fi
         done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+
         if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
+            echo "✅ MaaSModelRefs ready"
             break
         fi
-        retries=$((retries + 1))
+
         sleep 5
     done
 
     if ! $all_ready; then
-        # TODO: Remove this workaround once maas-controller reconcile logic is correct.
-        # Controller can get stuck in a bad state forever; bouncing may unstick it.
-        echo "  MaaSModelRefs not ready after ${retries} retries, bouncing maas-controller..."
-        kubectl rollout restart deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
-        kubectl rollout status deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --timeout=120s 2>/dev/null || true
-        echo "  Retrying MaaSModelRefs wait..."
-        retries=0
-        while [[ $retries -lt 30 ]]; do
-            all_ready=true
-            while IFS= read -r phase; do
-                if [[ "$phase" != "Ready" ]]; then
-                    all_ready=false
-                    break
-                fi
-            done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-            if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
-                break
-            fi
-            retries=$((retries + 1))
-            sleep 5
-        done
-    fi
-
-    if $all_ready; then
-        echo "✅ MaaSModelRefs ready"
-    else
-        echo "⚠️  WARNING: MaaSModelRefs still not ready after bounce, continuing anyway"
+        echo "❌ ERROR: MaaSModelRefs did not reach Ready state within ${timeout}s"
+        echo "Dumping MaaSModelRef status:"
+        oc get maasmodelrefs -n llm -o yaml || true
+        echo "Dumping controller logs:"
+        kubectl logs deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --tail=100 || true
+        exit 1
     fi
 
     wait_for_auth_policies_enforced
