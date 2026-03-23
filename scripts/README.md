@@ -147,13 +147,22 @@ Results:
 
 ---
 
-### `install-keycloak.sh`
-Installs a temporary Keycloak instance for MaaS OIDC testing.
+### `setup-keycloak.sh` — Keycloak for External OIDC
+Deploys the Keycloak operator and a Keycloak instance for MaaS external OIDC testing.
 
 **Usage:**
 ```bash
-./scripts/installers/install-keycloak.sh
+# Deploy Keycloak operator + instance + HTTPRoute
+./scripts/setup-keycloak.sh
+
+# Import test realm with MaaS-compatible users/groups
+./docs/samples/keycloak/test-realms/apply-test-realms.sh
+
+# Clean up
+./scripts/cleanup-keycloak.sh --force
 ```
+
+See [docs/samples/keycloak/](../docs/samples/keycloak/) for realm configuration and OIDC setup guide.
 
 ---
 

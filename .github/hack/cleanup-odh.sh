@@ -127,8 +127,18 @@ done
 echo "11. Deleting LLM models and namespace..."
 force_delete_namespace "llm" "llminferenceservice" "inferenceservice" "maasmodelrefs.maas.opendatahub.io"
 
-# 12. Delete gateway resources in openshift-ingress
-echo "12. Deleting gateway resources..."
+# 12. Delete Keycloak (if deployed for external OIDC testing)
+echo "12. Deleting Keycloak (if installed)..."
+if kubectl get namespace keycloak-system &>/dev/null; then
+    kubectl delete keycloak maas-keycloak -n keycloak-system --ignore-not-found --timeout=60s 2>/dev/null || true
+    sleep 5
+    force_delete_namespace "keycloak-system" "keycloaks.k8s.keycloak.org"
+else
+    echo "   keycloak-system not found, skipping"
+fi
+
+# 13. Delete gateway resources in openshift-ingress
+echo "13. Deleting gateway resources..."
 kubectl delete gateway maas-default-gateway -n openshift-ingress --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter -n openshift-ingress -l kuadrant.io/managed=true --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter kuadrant-auth-tls-fix -n openshift-ingress --ignore-not-found 2>/dev/null || true
@@ -136,20 +146,20 @@ kubectl delete authpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/n
 kubectl delete ratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete tokenratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 
-# 13. Delete MaaS RBAC (ClusterRoles, ClusterRoleBindings - can conflict with other managers)
-echo "13. Deleting MaaS RBAC..."
+# 14. Delete MaaS RBAC (ClusterRoles, ClusterRoleBindings - can conflict with other managers)
+echo "14. Deleting MaaS RBAC..."
 kubectl delete clusterrolebinding maas-api maas-controller-rolebinding --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-api maas-controller-role --ignore-not-found 2>/dev/null || true
 
-# 14. Optionally delete CRDs
+# 15. Optionally delete CRDs
 if $INCLUDE_CRDS; then
-    echo "14. Deleting ODH CRDs..."
+    echo "15. Deleting ODH CRDs..."
     kubectl delete crd datascienceclusters.datasciencecluster.opendatahub.io --ignore-not-found 2>/dev/null || true
     kubectl delete crd dscinitializations.dscinitialization.opendatahub.io --ignore-not-found 2>/dev/null || true
     kubectl delete crd datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io --ignore-not-found 2>/dev/null || true
     # Add more CRDs as needed
 else
-    echo "14. Skipping CRD deletion (use --include-crds to remove CRDs)"
+    echo "15. Skipping CRD deletion (use --include-crds to remove CRDs)"
 fi
 
 echo ""

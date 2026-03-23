@@ -14,6 +14,7 @@
 #                                   odh → kuadrant (community v1.3.1)
 #                                   rhoai → rhcl (Red Hat Connectivity Link)
 #   --enable-tls-backend          Enable TLS for Authorino/MaaS API (default: on)
+#   --enable-keycloak             Deploy Keycloak for external OIDC (optional)
 #   --namespace <namespace>       Target namespace
 #   --verbose                     Enable debug logging
 #   --dry-run                     Show what would be done
@@ -87,6 +88,7 @@ MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 KUSTOMIZE_FORCE_CONFLICTS="${KUSTOMIZE_FORCE_CONFLICTS:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
+ENABLE_KEYCLOAK="${ENABLE_KEYCLOAK:-false}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -151,6 +153,11 @@ ADVANCED OPTIONS (PR Testing):
   --channel <channel>
       Operator channel override
       Default: fast-3 (ODH), fast-3.x (RHOAI)
+
+  --enable-keycloak
+      Deploy Keycloak identity provider for external OIDC support (optional)
+      Creates keycloak-system namespace and deploys Keycloak operator
+      See docs/samples/keycloak/ for realm configuration
 
   --external-oidc
       Enable external OIDC on the maas-api AuthPolicy.
@@ -270,6 +277,10 @@ parse_arguments() {
         require_flag_value "$1" "${2:-}"
         OPERATOR_CHANNEL="$2"
         shift 2
+        ;;
+      --enable-keycloak)
+        ENABLE_KEYCLOAK="true"
+        shift
         ;;
       --external-oidc)
         EXTERNAL_OIDC="true"
@@ -536,6 +547,11 @@ deploy_via_operator() {
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
 
+  # Deploy Keycloak identity provider (optional, if enabled)
+  if [[ "$ENABLE_KEYCLOAK" == "true" ]]; then
+    deploy_keycloak
+  fi
+
   # Inject custom MaaS API image if specified
   inject_maas_api_image_operator_mode "$NAMESPACE"
 
@@ -592,6 +608,11 @@ deploy_via_kustomize() {
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
 
+  # Deploy Keycloak identity provider (optional, if enabled)
+  if [[ "$ENABLE_KEYCLOAK" == "true" ]]; then
+    deploy_keycloak
+  fi
+
   log_info "Applying kustomize manifests..."
   # Patch the maas-api URL placeholder with actual namespace
   kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$overlay" | sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g")
@@ -625,6 +646,11 @@ deploy_via_kustomize() {
 
 deploy_postgresql() {
   NAMESPACE="$NAMESPACE" "${SCRIPT_DIR}/setup-database.sh"
+}
+
+deploy_keycloak() {
+  log_info "Deploying Keycloak identity provider for external OIDC support..."
+  "${SCRIPT_DIR}/setup-keycloak.sh"
 }
 
 #──────────────────────────────────────────────────────────────

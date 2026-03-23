@@ -168,6 +168,25 @@ deploy_maas_platform() {
     fi
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        if [[ -z "${OIDC_ISSUER_URL:-}" ]]; then
+            echo "EXTERNAL_OIDC=true but OIDC_ISSUER_URL not set — auto-provisioning Keycloak..."
+            if ! bash "$PROJECT_ROOT/scripts/setup-keycloak.sh"; then
+                echo "❌ ERROR: Keycloak installation failed"
+                exit 1
+            fi
+            if ! bash "$PROJECT_ROOT/docs/samples/keycloak/test-realms/apply-test-realms.sh"; then
+                echo "❌ ERROR: Keycloak test realm import failed"
+                exit 1
+            fi
+            local cluster_domain
+            cluster_domain="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
+            export OIDC_ISSUER_URL="https://keycloak.${cluster_domain}/realms/maas"
+            export OIDC_TOKEN_URL="https://keycloak.${cluster_domain}/realms/maas/protocol/openid-connect/token"
+            export OIDC_CLIENT_ID="maas-cli"
+            export OIDC_USERNAME="alice"
+            export OIDC_PASSWORD="letmein"
+            echo "Auto-provisioned Keycloak OIDC: ${OIDC_ISSUER_URL}"
+        fi
         require_external_oidc_env
         echo "Using external OIDC issuer: ${OIDC_ISSUER_URL}"
     fi
