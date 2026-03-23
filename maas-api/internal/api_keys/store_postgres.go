@@ -37,8 +37,9 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
+// ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time) error {
+func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time, ephemeral bool) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -53,16 +54,16 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, na
 	}
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, status, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8)
+		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, status, created_at, expires_at, ephemeral)
+		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9)
 	`
 	// Use pq.Array to handle PostgreSQL TEXT[] type
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), time.Now().UTC(), expiresAt)
+	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), time.Now().UTC(), expiresAt, ephemeral)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
 
-	s.logger.Debug("Stored API key", "id", keyID, "user", username)
+	s.logger.Debug("Stored API key", "id", keyID, "user", username, "ephemeral", ephemeral)
 	return nil
 }
 
@@ -71,6 +72,7 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, na
 // Fetches limit+1 items to efficiently determine if more pages exist.
 // username can be empty (admin viewing all users) or specific username.
 // statuses can filter by status (active, revoked, expired) - empty means all statuses.
+// Note: Ephemeral keys are excluded by default (use Search with IncludeEphemeral for full control).
 func (s *PostgresStore) List(ctx context.Context, username string, params PaginationParams, statuses []string) (*PaginatedResult, error) {
 	// Validate params
 	if params.Limit < 1 || params.Limit > 100 {
@@ -84,6 +86,9 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 	var whereClauses []string
 	var args []any
 	argPos := 1
+
+	// Exclude ephemeral keys by default
+	whereClauses = append(whereClauses, "ephemeral = FALSE")
 
 	if username != "" {
 		whereClauses = append(whereClauses, fmt.Sprintf("username = $%d", argPos))
@@ -111,7 +116,7 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 
 	//nolint:gosec // Dynamic WHERE clause is safe - uses parameterized queries
 	query := fmt.Sprintf(`
-		SELECT id, name, description, created_at, expires_at, status, last_used_at
+		SELECT id, name, description, created_at, expires_at, status, last_used_at, ephemeral
 		FROM api_keys
 		%s
 		ORDER BY created_at DESC
@@ -133,7 +138,7 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 		var expiresAt, lastUsedAt sql.NullTime
 		var description sql.NullString
 
-		if err := rows.Scan(&k.ID, &k.Name, &description, &createdAt, &expiresAt, &k.Status, &lastUsedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.Name, &description, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
@@ -169,6 +174,7 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 }
 
 // Search implements flexible API key search with filtering, sorting, pagination.
+// Ephemeral keys are excluded by default unless IncludeEphemeral filter is set to true.
 func (s *PostgresStore) Search(
 	ctx context.Context,
 	username string,
@@ -188,6 +194,11 @@ func (s *PostgresStore) Search(
 	var whereClauses []string
 	var args []any
 	argPos := 1
+
+	// Exclude ephemeral keys by default
+	if filters.IncludeEphemeral == nil || !*filters.IncludeEphemeral {
+		whereClauses = append(whereClauses, "ephemeral = FALSE")
+	}
 
 	// Filter by username
 	if username != "" {
@@ -230,7 +241,7 @@ func (s *PostgresStore) Search(
 
 	//nolint:gosec // Dynamic ORDER BY is safe - sort.By/Order validated against allowlist in handler
 	query := fmt.Sprintf(`
-		SELECT id, name, description, created_at, expires_at, status, last_used_at
+		SELECT id, name, description, username, created_at, expires_at, status, last_used_at, ephemeral
 		FROM api_keys
 		%s
 		%s
@@ -256,10 +267,12 @@ func (s *PostgresStore) Search(
 			&key.ID,
 			&key.Name,
 			&description,
+			&key.Username,
 			&createdAt,
 			&expiresAt,
 			&key.Status,
 			&lastUsedAt,
+			&key.Ephemeral,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan API key: %w", err)
@@ -301,7 +314,7 @@ func (s *PostgresStore) Search(
 // Get retrieves a single API key by ID.
 func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 	query := `
-		SELECT id, name, description, username, created_at, expires_at, status, last_used_at
+		SELECT id, name, description, username, created_at, expires_at, status, last_used_at, ephemeral
 		FROM api_keys
 		WHERE id = $1
 	`
@@ -312,7 +325,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
 
-	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &createdAt, &expiresAt, &k.Status, &lastUsedAt); err != nil {
+	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}
@@ -336,7 +349,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 // GetByHash looks up an API key by its SHA-256 hash (critical path for validation).
 func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, error) {
 	query := `
-		SELECT id, username, name, description, user_groups, status, expires_at, last_used_at
+		SELECT id, username, name, description, user_groups, status, expires_at, last_used_at, ephemeral
 		FROM api_keys
 		WHERE key_hash = $1
 	`
@@ -348,7 +361,7 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 	var userGroups []string
 
 	// Use pq.Array to scan PostgreSQL TEXT[] into []string
-	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Status, &expiresAt, &lastUsedAt); err != nil {
+	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Status, &expiresAt, &lastUsedAt, &k.Ephemeral); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}

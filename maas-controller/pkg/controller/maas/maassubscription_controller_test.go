@@ -18,6 +18,8 @@ package maas
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -273,6 +275,7 @@ func TestMaaSSubscriptionReconciler_DeleteAnnotation(t *testing.T) {
 		})
 	}
 }
+
 // TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion verifies that when multiple
 // MaaSSubscriptions reference the same model, deleting one does not delete the aggregated
 // TokenRateLimitPolicy, but deleting the last one does.
@@ -396,4 +399,231 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("TokenRateLimitPolicy should be deleted after deleting last parent subscription, but got error: %v", err)
 	}
+}
+
+// TestMaaSSubscriptionReconciler_SimplifiedTRLP verifies the TRLP no longer contains
+// membership checks, header validation, or deny rules. It should trust auth.identity.selected_subscription.
+func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
+	const (
+		modelName     = "llm"
+		namespace     = "default"
+		httpRouteName = "maas-model-" + modelName
+		trlpName      = "maas-trlp-" + modelName
+		maasSubName   = "sub-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasSub := newMaaSSubscription(maasSubName, namespace, "team-a", modelName, 100)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasSub).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: namespace}, trlp); err != nil {
+		t.Fatalf("Get TokenRateLimitPolicy %q: %v", trlpName, err)
+	}
+
+	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	if err != nil || !found {
+		t.Fatalf("spec.limits not found: found=%v err=%v", found, err)
+	}
+
+	// Should have exactly 1 limit entry (no deny rules)
+	if len(limitsMap) != 1 {
+		t.Errorf("expected 1 limit entry, got %d: %v", len(limitsMap), limitsMap)
+	}
+
+	// Check the limit entry key (now includes namespace: "namespace-name-model-tokens")
+	expectedKey := namespace + "-" + maasSubName + "-" + modelName + "-tokens"
+	limitEntry, ok := limitsMap[expectedKey]
+	if !ok {
+		t.Fatalf("expected limit entry %q not found, got keys: %v", expectedKey, getKeys(limitsMap))
+	}
+
+	// Verify it has a single, simple predicate
+	limitMap, ok := limitEntry.(map[string]interface{})
+	if !ok {
+		t.Fatalf("limitEntry is not map[string]interface{}: %T", limitEntry)
+	}
+	whenSlice, found, err := unstructured.NestedSlice(limitMap, "when")
+	if err != nil || !found {
+		t.Fatalf("when predicates not found: found=%v err=%v", found, err)
+	}
+
+	if len(whenSlice) != 1 {
+		t.Errorf("expected 1 when predicate, got %d", len(whenSlice))
+	}
+
+	predMap, ok := whenSlice[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("whenSlice[0] is not map[string]interface{}: %T", whenSlice[0])
+	}
+	pred, ok := predMap["predicate"].(string)
+	if !ok {
+		t.Fatalf("predicate not a string: %T", predMap["predicate"])
+	}
+
+	// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
+	expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/%s@%s/%s"`, namespace, maasSubName, namespace, modelName)
+	if pred != expected {
+		t.Errorf("predicate = %q, want %q", pred, expected)
+	}
+
+	// Verify no membership/header checks in predicate
+	if strings.Contains(pred, "groups_str") || strings.Contains(pred, "request.headers") || strings.Contains(pred, "exists(") {
+		t.Errorf("predicate should not contain membership/header checks: %s", pred)
+	}
+
+	// Verify no deny rules
+	for key := range limitsMap {
+		if strings.Contains(key, "deny-") {
+			t.Errorf("found deny rule %q, expected none", key)
+		}
+	}
+}
+
+// TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified verifies that
+// multiple subscriptions generate simple predicates without exclusion logic.
+func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T) {
+	const (
+		modelName     = "llm"
+		namespace     = "default"
+		httpRouteName = "maas-model-" + modelName
+		trlpName      = "maas-trlp-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	subA := newMaaSSubscription("sub-a", namespace, "team-a", modelName, 100)
+	subB := newMaaSSubscription("sub-b", namespace, "team-b", modelName, 200)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, subA, subB).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+
+	// Reconcile both subscriptions
+	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), reqA); err != nil {
+		t.Fatalf("Reconcile sub-a: %v", err)
+	}
+
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: namespace}, trlp); err != nil {
+		t.Fatalf("Get TokenRateLimitPolicy: %v", err)
+	}
+
+	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	if err != nil || !found {
+		t.Fatalf("spec.limits not found: found=%v err=%v", found, err)
+	}
+
+	// Should have exactly 2 limit entries (one per subscription, no deny rules)
+	if len(limitsMap) != 2 {
+		t.Errorf("expected 2 limit entries, got %d: %v", len(limitsMap), getKeys(limitsMap))
+	}
+
+	// Verify sub-a limit entry (now includes namespace in key)
+	subAKey := namespace + "-sub-a-" + modelName + "-tokens"
+	if limitA, ok := limitsMap[subAKey]; ok {
+		limitAMap, ok := limitA.(map[string]interface{})
+		if !ok {
+			t.Fatalf("sub-a limitEntry is not map[string]interface{}: %T", limitA)
+		}
+		whenSlice, found, err := unstructured.NestedSlice(limitAMap, "when")
+		if err != nil || !found {
+			t.Fatalf("sub-a when predicates not found: found=%v err=%v", found, err)
+		}
+		if len(whenSlice) != 1 {
+			t.Errorf("sub-a: expected 1 when predicate, got %d", len(whenSlice))
+		}
+		predMap, ok := whenSlice[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("sub-a whenSlice[0] is not map[string]interface{}: %T", whenSlice[0])
+		}
+		pred, ok := predMap["predicate"].(string)
+		if !ok {
+			t.Fatalf("sub-a predicate not a string: %T", predMap["predicate"])
+		}
+		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
+		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-a@%s/%s"`, namespace, namespace, modelName)
+		if pred != expected {
+			t.Errorf("sub-a predicate = %q, want %q", pred, expected)
+		}
+		// No exclusion logic (no reference to sub-b or team-b)
+		if strings.Contains(pred, "sub-b") || strings.Contains(pred, "team-b") {
+			t.Errorf("sub-a predicate should not reference sub-b: %s", pred)
+		}
+	} else {
+		t.Errorf("sub-a limit entry not found, got keys: %v", getKeys(limitsMap))
+	}
+
+	// Verify sub-b limit entry (now includes namespace in key)
+	subBKey := namespace + "-sub-b-" + modelName + "-tokens"
+	if limitB, ok := limitsMap[subBKey]; ok {
+		limitBMap, ok := limitB.(map[string]interface{})
+		if !ok {
+			t.Fatalf("sub-b limitEntry is not map[string]interface{}: %T", limitB)
+		}
+		whenSlice, found, err := unstructured.NestedSlice(limitBMap, "when")
+		if err != nil || !found {
+			t.Fatalf("sub-b when predicates not found: found=%v err=%v", found, err)
+		}
+		if len(whenSlice) != 1 {
+			t.Errorf("sub-b: expected 1 when predicate, got %d", len(whenSlice))
+		}
+		predMap, ok := whenSlice[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("sub-b whenSlice[0] is not map[string]interface{}: %T", whenSlice[0])
+		}
+		pred, ok := predMap["predicate"].(string)
+		if !ok {
+			t.Fatalf("sub-b predicate not a string: %T", predMap["predicate"])
+		}
+		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
+		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-b@%s/%s"`, namespace, namespace, modelName)
+		if pred != expected {
+			t.Errorf("sub-b predicate = %q, want %q", pred, expected)
+		}
+		// No exclusion logic (no reference to sub-a or team-a)
+		if strings.Contains(pred, "sub-a") || strings.Contains(pred, "team-a") {
+			t.Errorf("sub-b predicate should not reference sub-a: %s", pred)
+		}
+	} else {
+		t.Errorf("sub-b limit entry not found, got keys: %v", getKeys(limitsMap))
+	}
+
+	// Verify no deny rules
+	for key := range limitsMap {
+		if strings.Contains(key, "deny-") {
+			t.Errorf("found deny rule %q, expected none", key)
+		}
+	}
+}
+
+
+// Helper to get map keys
+func getKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

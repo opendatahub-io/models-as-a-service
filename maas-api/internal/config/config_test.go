@@ -110,7 +110,7 @@ func TestValidate(t *testing.T) {
 			},
 			expectError: "--tls-cert and --tls-key must both be provided together",
 		},
-{
+		{
 			name: "valid insecure config sets default address :8080",
 			cfg: Config{
 				DBConnectionURL:         "postgresql://localhost/test",

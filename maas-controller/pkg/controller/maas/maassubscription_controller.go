@@ -122,16 +122,12 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 		}
 
 		limitsMap := map[string]interface{}{}
-		var allGroupNames, allUserNames []string
 		var subNames []string
 
 		type subInfo struct {
-			sub        maasv1alpha1.MaaSSubscription
-			mRef       maasv1alpha1.ModelSubscriptionRef
-			groupNames []string
-			userNames  []string
-			rates      []interface{}
-			maxLimit   int64
+			sub   maasv1alpha1.MaaSSubscription
+			mRef  maasv1alpha1.ModelSubscriptionRef
+			rates []interface{}
 		}
 		var subs []subInfo
 		for _, sub := range allSubs {
@@ -139,136 +135,54 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				if mRef.Namespace != modelRef.Namespace || mRef.Name != modelRef.Name {
 					continue
 				}
-				var groupNames []string
-				for _, group := range sub.Spec.Owner.Groups {
-					if err := validateCELValue(group.Name, "group name"); err != nil {
-						return fmt.Errorf("invalid owner in MaaSSubscription %s: %w", sub.Name, err)
-					}
-					groupNames = append(groupNames, group.Name)
-				}
-				var userNames []string
-				for _, user := range sub.Spec.Owner.Users {
-					if err := validateCELValue(user, "username"); err != nil {
-						return fmt.Errorf("invalid owner in MaaSSubscription %s: %w", sub.Name, err)
-					}
-					userNames = append(userNames, user)
-				}
 				var rates []interface{}
-				var maxLimit int64
 				if len(mRef.TokenRateLimits) > 0 {
 					for _, trl := range mRef.TokenRateLimits {
 						rates = append(rates, map[string]interface{}{"limit": trl.Limit, "window": trl.Window})
-						if trl.Limit > maxLimit {
-							maxLimit = trl.Limit
-						}
 					}
 				} else {
 					rates = append(rates, map[string]interface{}{"limit": int64(100), "window": "1m"})
-					maxLimit = 100
 				}
-				subs = append(subs, subInfo{sub: sub, mRef: mRef, groupNames: groupNames, userNames: userNames, rates: rates, maxLimit: maxLimit})
+				subs = append(subs, subInfo{sub: sub, mRef: mRef, rates: rates})
 				break
 			}
 		}
 
-		// Sort subscriptions by maxLimit descending (highest tier first).
-		sort.Slice(subs, func(i, j int) bool { return subs[i].maxLimit > subs[j].maxLimit })
-
-		// Helper: build a compact CEL predicate that checks if the user belongs to
-		// any of the given groups or matches any of the given usernames. Uses a single
-		// exists() call for groups (e.g. exists(g, g == "a" || g == "b")) instead of
-		// N separate exists() calls, keeping predicates short at scale.
-		buildMembershipCheck := func(groups, users []string) string {
-			var parts []string
-			if len(groups) > 0 {
-				var comparisons []string
-				for _, g := range groups {
-					comparisons = append(comparisons, fmt.Sprintf(`g == "%s"`, g))
-				}
-				parts = append(parts, fmt.Sprintf(`auth.identity.groups_str.split(",").exists(g, %s)`, strings.Join(comparisons, " || ")))
-			}
-			for _, u := range users {
-				parts = append(parts, fmt.Sprintf(`auth.identity.userid == "%s"`, u))
-			}
-			return strings.Join(parts, " || ")
-		}
-
-		headerCheck := `request.headers["x-maas-subscription"]`
-		headerExists := `request.headers.exists(h, h == "x-maas-subscription")`
-
-		for i, si := range subs {
+		// Trust auth.identity.selected_subscription_key from AuthPolicy.
+		// AuthPolicy has already validated subscription selection via /v1/subscriptions/select,
+		// which handles:
+		//  - Validating subscription exists and user has access (groups/users match)
+		//  - Auto-selecting if user has exactly one subscription
+		//  - Returning 403 Forbidden for invalid scenarios (wrong header, no access, multiple without header)
+		// TokenRateLimitPolicy simply applies the rate limit for the validated subscription.
+		//
+		// The selected_subscription_key format is: {subNamespace}/{subName}@{modelNamespace}/{modelName}
+		// This ensures proper isolation between subscriptions in different namespaces and across models.
+		for _, si := range subs {
 			subNames = append(subNames, si.sub.Name)
-			allGroupNames = append(allGroupNames, si.groupNames...)
-			allUserNames = append(allUserNames, si.userNames...)
 
-			membershipCheck := buildMembershipCheck(si.groupNames, si.userNames)
-			if membershipCheck == "" {
-				log.Info("skipping subscription with no owner groups/users — rate limit would be unreachable",
-					"subscription", si.sub.Name, "model", si.mRef.Name)
-				continue
-			}
+			// Build subscription reference: namespace/name
+			subRef := fmt.Sprintf("%s/%s", si.sub.Namespace, si.sub.Name)
+			// Build model-scoped reference: subscription@model
+			modelScopedRef := fmt.Sprintf("%s@%s/%s", subRef, si.mRef.Namespace, si.mRef.Name)
 
-			// Collect higher-tier groups/users for exclusions
-			var excludeGroups, excludeUsers []string
-			for j := 0; j < i; j++ {
-				excludeGroups = append(excludeGroups, subs[j].groupNames...)
-				excludeUsers = append(excludeUsers, subs[j].userNames...)
-			}
-
-			// Build branch selection: explicit header OR auto-select with exclusions.
-			explicitBranch := fmt.Sprintf(`%s == "%s"`, headerCheck, si.sub.Name)
-			autoBranch := "!" + headerExists
-			if exclusionCheck := buildMembershipCheck(excludeGroups, excludeUsers); exclusionCheck != "" {
-				autoBranch += " && !(" + exclusionCheck + ")"
-			}
-
-			limitsMap[fmt.Sprintf("%s-%s-tokens", si.sub.Name, si.mRef.Name)] = map[string]interface{}{
+			// TRLP limit key must be safe for YAML (no slashes)
+			safeKey := strings.ReplaceAll(subRef, "/", "-")
+			limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, si.mRef.Name)] = map[string]interface{}{
 				"rates": si.rates,
 				"when": []interface{}{
-					map[string]interface{}{"predicate": membershipCheck},
-					map[string]interface{}{"predicate": explicitBranch + " || (" + autoBranch + ")"},
+					map[string]interface{}{
+						"predicate": fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, modelScopedRef),
+					},
 				},
 				"counters": []interface{}{
 					map[string]interface{}{"expression": "auth.identity.userid"},
 				},
 			}
-
-			// Deny users who explicitly select this subscription but don't belong to it.
-			limitsMap[fmt.Sprintf("deny-not-member-%s-%s", si.sub.Name, si.mRef.Name)] = map[string]interface{}{
-				"rates": []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
-				"when": []interface{}{
-					map[string]interface{}{"predicate": explicitBranch},
-					map[string]interface{}{"predicate": "!(" + membershipCheck + ")"},
-				},
-				"counters": []interface{}{map[string]interface{}{"expression": "auth.identity.userid"}},
-			}
 		}
 
-		// Deny-unsubscribed: user is not in ANY subscription group/user list.
-		if denyCheck := buildMembershipCheck(allGroupNames, allUserNames); denyCheck != "" {
-			limitsMap[fmt.Sprintf("deny-unsubscribed-%s", modelRef.Name)] = map[string]interface{}{
-				"rates":    []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
-				"when":     []interface{}{map[string]interface{}{"predicate": "!(" + denyCheck + ")"}},
-				"counters": []interface{}{map[string]interface{}{"expression": "auth.identity.userid"}},
-			}
-		}
-
-		// Deny invalid header: header present but doesn't match any known subscription.
-		if len(subNames) > 0 {
-			denyHeaderWhen := []interface{}{
-				map[string]interface{}{"predicate": headerExists},
-			}
-			for _, name := range subNames {
-				denyHeaderWhen = append(denyHeaderWhen,
-					map[string]interface{}{"predicate": fmt.Sprintf(`%s != "%s"`, headerCheck, name)},
-				)
-			}
-			limitsMap[fmt.Sprintf("deny-invalid-header-%s", modelRef.Name)] = map[string]interface{}{
-				"rates":    []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
-				"when":     denyHeaderWhen,
-				"counters": []interface{}{map[string]interface{}{"expression": "auth.identity.userid"}},
-			}
-		}
+		// Sort subscription names for stable annotation value across reconciles
+		sort.Strings(subNames)
 
 		// Build the aggregated TokenRateLimitPolicy (one per model, covering all subscriptions)
 		policyName := fmt.Sprintf("maas-trlp-%s", modelRef.Name)
@@ -306,7 +220,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			if err := r.Create(ctx, policy); err != nil {
 				return fmt.Errorf("failed to create TokenRateLimitPolicy for model %s: %w", modelRef.Name, err)
 			}
-			log.Info("TokenRateLimitPolicy created", "name", policyName, "model", modelRef.Name, "subscriptions", subNames)
+			log.Info("TokenRateLimitPolicy created", "name", policyName, "model", modelRef.Name, "subscriptionCount", len(subNames), "subscriptions", subNames)
 		} else if err != nil {
 			return fmt.Errorf("failed to get existing TokenRateLimitPolicy: %w", err)
 		} else {
@@ -339,12 +253,12 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				}
 
 				if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
-					log.Info("TokenRateLimitPolicy unchanged, skipping update", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name)
+					log.Info("TokenRateLimitPolicy unchanged, skipping update", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name, "subscriptionCount", len(subNames))
 				} else {
 					if err := r.Update(ctx, existing); err != nil {
 						return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s/%s: %w", modelRef.Namespace, modelRef.Name, err)
 					}
-					log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name, "subscriptions", subNames)
+					log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name, "subscriptionCount", len(subNames), "subscriptions", subNames)
 				}
 			}
 		}
