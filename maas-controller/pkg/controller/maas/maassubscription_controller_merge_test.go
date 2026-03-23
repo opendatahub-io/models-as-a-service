@@ -95,10 +95,11 @@ func TestMaaSSubscriptionReconciler_TRLPMergeStrategy(t *testing.T) {
 	}
 }
 
-// TestMaaSSubscriptionReconciler_MultipleModelsSharedRoute verifies that when
-// multiple MaaSModelRefs point to the same HTTPRoute, the controller creates
-// separate TRLPs for each model, and both use strategy: merge to avoid conflicts.
-func TestMaaSSubscriptionReconciler_MultipleModelsSharedRoute(t *testing.T) {
+// TestMaaSSubscriptionReconciler_TRLPMergeStrategyMultipleModels verifies that
+// the controller creates separate TRLPs for each model, and all use strategy: merge.
+// Note: In unit tests, we create separate routes per model. The E2E test validates
+// the real scenario where multiple models share the same HTTPRoute.
+func TestMaaSSubscriptionReconciler_TRLPMergeStrategyMultipleModels(t *testing.T) {
 	const (
 		namespace = "default"
 		modelA    = "model-a"
@@ -184,7 +185,7 @@ func TestMaaSSubscriptionReconciler_MultipleModelsSharedRoute(t *testing.T) {
 		})
 	}
 
-	// NOTE: The real scenario where multiple models point to the SAME HTTPRoute
-	// is tested in the E2E test. In unit tests, we verify the TRLP spec structure
-	// is correct (uses merge strategy) regardless of whether routes are shared.
+	// NOTE: This unit test creates separate routes per model due to test constraints.
+	// The real scenario where multiple models share the same HTTPRoute is validated
+	// in E2E tests (see test/e2e/tests/test_trlp_merge_strategy.md).
 }

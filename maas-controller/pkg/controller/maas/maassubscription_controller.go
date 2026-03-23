@@ -271,6 +271,11 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 		}
 
 		// Build the aggregated TokenRateLimitPolicy (one per model, covering all subscriptions)
+		// Note: We don't set OwnerReferences because:
+		// 1. TRLPs are aggregated across multiple subscriptions (not owned by one subscription)
+		// 2. HTTPRoute may be in a different namespace than subscriptions (cross-namespace ownership not allowed)
+		// 3. Cleanup is handled by finalizers: when a subscription is deleted, we delete the TRLP
+		//    and let remaining subscriptions rebuild it without the deleted subscription's limits
 		policyName := fmt.Sprintf("maas-trlp-%s", modelRef.Name)
 		policy := &unstructured.Unstructured{}
 		policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
@@ -360,6 +365,23 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 	// Always delete the aggregated TokenRateLimitPolicy so remaining MaaSSubscriptions rebuild it
 	// without the rate limits from the deleted subscription. If we skip deletion, the aggregated
 	// TokenRateLimitPolicy will contain stale configuration from the deleted MaaSSubscription.
+
+	// Resolve HTTPRoute namespace (TRLP is created in the same namespace as the HTTPRoute).
+	// If the model is already deleted, fall back to searching in the model's namespace.
+	httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, modelNamespace, modelName)
+	trlpNamespace := modelNamespace // fallback if model not found
+	if err != nil {
+		if errors.Is(err, ErrModelNotFound) {
+			log.Info("Model not found during TRLP cleanup, searching in model namespace", "model", modelNamespace+"/"+modelName)
+			// Model deleted; TRLP might still exist in model's namespace (for current providers,
+			// HTTPRoute namespace == model namespace, but this handles the general case)
+		} else {
+			return fmt.Errorf("failed to resolve HTTPRoute for model %s/%s during cleanup: %w", modelNamespace, modelName, err)
+		}
+	} else {
+		trlpNamespace = httpRouteNS
+	}
+
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"})
 	labelSelector := client.MatchingLabels{
@@ -367,7 +389,8 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 		"app.kubernetes.io/managed-by": "maas-controller",
 		"app.kubernetes.io/part-of":    "maas-subscription",
 	}
-	if err := r.List(ctx, policyList, client.InNamespace(modelNamespace), labelSelector); err != nil {
+	// Search in HTTPRoute namespace (or model namespace if route not found)
+	if err := r.List(ctx, policyList, client.InNamespace(trlpNamespace), labelSelector); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
@@ -379,7 +402,12 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 			log.Info("TokenRateLimitPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 			continue
 		}
-		log.Info("Deleting TokenRateLimitPolicy (no remaining parent subscriptions)", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
+		logMsg := "Deleting TokenRateLimitPolicy (no remaining parent subscriptions)"
+		logArgs := []interface{}{"name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace + "/" + modelName}
+		if httpRouteName != "" {
+			logArgs = append(logArgs, "httpRoute", httpRouteNS+"/"+httpRouteName)
+		}
+		log.Info(logMsg, logArgs...)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete TokenRateLimitPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
 		}
