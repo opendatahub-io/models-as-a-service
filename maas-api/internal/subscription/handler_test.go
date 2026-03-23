@@ -12,6 +12,7 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 // mockLister implements subscription.Lister for testing.
@@ -47,7 +48,8 @@ func createTestSubscription(name string, groups []string, priority int32, orgID,
 						"name": "test-model",
 						"tokenRateLimits": []any{
 							map[string]any{
-								"limit": int64(1000),
+								"limit":  int64(1000),
+								"window": "1m",
 							},
 						},
 					},
@@ -280,7 +282,8 @@ func TestHandler_SelectSubscription_UserWithoutGroups(t *testing.T) {
 						"name": "test-model",
 						"tokenRateLimits": []any{
 							map[string]any{
-								"limit": int64(1000),
+								"limit":  int64(1000),
+								"window": "1m",
 							},
 						},
 					},
@@ -554,5 +557,284 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// --- Subscription && /v1/model/:model-id/subscriptions endpoints tests ---
+
+func createTestSubscriptionWithAnnotations(name string, groups []string, modelNames []string, annotations map[string]string) *unstructured.Unstructured {
+	groupsSlice := make([]any, len(groups))
+	for i, g := range groups {
+		groupsSlice[i] = map[string]any{"name": g}
+	}
+
+	modelRefs := make([]any, len(modelNames))
+	for i, m := range modelNames {
+		modelRefs[i] = map[string]any{
+			"name": m,
+			"tokenRateLimits": []any{
+				map[string]any{"limit": int64(1000), "window": "1m"},
+			},
+		}
+	}
+
+	metadata := map[string]any{
+		"name":      name,
+		"namespace": "test-ns",
+	}
+	if len(annotations) > 0 {
+		annMap := make(map[string]any, len(annotations))
+		for k, v := range annotations {
+			annMap[k] = v
+		}
+		metadata["annotations"] = annMap
+	}
+
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "maas.opendatahub.io/v1alpha1",
+			"kind":       "MaaSSubscription",
+			"metadata":   metadata,
+			"spec": map[string]any{
+				"owner": map[string]any{
+					"groups": groupsSlice,
+				},
+				"priority":  int64(10),
+				"modelRefs": modelRefs,
+			},
+		},
+	}
+}
+
+func setupListTestRouter(lister subscription.Lister, username string, groups []string) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	log := logger.New(false)
+	selector := subscription.NewSelector(log, lister)
+	handler := subscription.NewHandler(log, selector)
+
+	setUser := func(c *gin.Context) {
+		c.Set("user", &token.UserContext{
+			Username: username,
+			Groups:   groups,
+		})
+		c.Next()
+	}
+
+	router.GET("/v1/subscriptions", setUser, handler.ListSubscriptions)
+	router.GET("/v1/model/:model-id/subscriptions", setUser, handler.ListSubscriptionsForModel)
+	return router
+}
+
+func TestListSubscriptions_MultipleAccessible(t *testing.T) {
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createTestSubscriptionWithAnnotations("free-sub", []string{"free-users"}, []string{"model-a"}, map[string]string{
+			"openshift.io/display-name": "Free Tier",
+		}),
+		createTestSubscriptionWithAnnotations("premium-sub", []string{"premium-users"}, []string{"model-a", "model-b"}, map[string]string{
+			"openshift.io/display-name": "Premium Plan",
+			"openshift.io/description":  "High limits for production",
+		}),
+		createTestSubscriptionWithAnnotations("other-sub", []string{"other-group"}, []string{"model-a"}, nil),
+	}}
+
+	router := setupListTestRouter(lister, "alice", []string{"free-users", "premium-users"})
+	req := httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var result []subscription.SubscriptionInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 subscriptions, got %d", len(result))
+	}
+
+	found := map[string]string{}
+	for _, s := range result {
+		found[s.SubscriptionIDHeader] = s.SubscriptionDescription
+	}
+
+	if desc, ok := found["free-sub"]; !ok || desc != "Free Tier" {
+		t.Errorf("expected free-sub with description 'Free Tier' (fallback from display-name), got %q", desc)
+	}
+	if desc, ok := found["premium-sub"]; !ok || desc != "High limits for production" {
+		t.Errorf("expected premium-sub with description 'High limits for production', got %q", desc)
+	}
+}
+
+func TestListSubscriptions_NoAccess(t *testing.T) {
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createTestSubscriptionWithAnnotations("premium-sub", []string{"premium-users"}, []string{"model-a"}, nil),
+	}}
+
+	router := setupListTestRouter(lister, "nobody", []string{"unknown-group"})
+	req := httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	var result []subscription.SubscriptionInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if len(result) != 0 {
+		t.Errorf("expected empty array, got %d items", len(result))
+	}
+}
+
+func TestListSubscriptionsForModel_FiltersByModel(t *testing.T) {
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createTestSubscriptionWithAnnotations("free-sub", []string{"free-users"}, []string{"model-a"}, map[string]string{
+			"openshift.io/display-name": "Free Tier",
+		}),
+		createTestSubscriptionWithAnnotations("premium-sub", []string{"premium-users"}, []string{"model-a", "model-b"}, map[string]string{
+			"openshift.io/display-name": "Premium Plan",
+		}),
+	}}
+
+	router := setupListTestRouter(lister, "alice", []string{"free-users", "premium-users"})
+
+	// model-b is only in premium-sub
+	req := httptest.NewRequest(http.MethodGet, "/v1/model/model-b/subscriptions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	var result []subscription.SubscriptionInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 subscription for model-b, got %d", len(result))
+	}
+	if result[0].SubscriptionIDHeader != "premium-sub" {
+		t.Errorf("expected premium-sub, got %q", result[0].SubscriptionIDHeader)
+	}
+}
+
+func TestListSubscriptionsForModel_UnknownModel(t *testing.T) {
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createTestSubscriptionWithAnnotations("free-sub", []string{"free-users"}, []string{"model-a"}, nil),
+	}}
+
+	router := setupListTestRouter(lister, "alice", []string{"free-users"})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/model/nonexistent-model/subscriptions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	var result []subscription.SubscriptionInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if len(result) != 0 {
+		t.Errorf("expected empty array for unknown model, got %d items", len(result))
+	}
+}
+
+func TestListSubscriptions_DescriptionFallback(t *testing.T) {
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createTestSubscriptionWithAnnotations("both-annotations", []string{"free-users"}, []string{"m"}, map[string]string{
+			"openshift.io/display-name": "My Display Name",
+			"openshift.io/description":  "My Description",
+		}),
+		createTestSubscriptionWithAnnotations("with-description-only", []string{"free-users"}, []string{"m"}, map[string]string{
+			"openshift.io/description": "Description Only",
+		}),
+		createTestSubscriptionWithAnnotations("with-display-name-only", []string{"free-users"}, []string{"m"}, map[string]string{
+			"openshift.io/display-name": "Display Name Only",
+		}),
+		createTestSubscriptionWithAnnotations("no-annotations", []string{"free-users"}, []string{"m"}, nil),
+	}}
+
+	router := setupListTestRouter(lister, "alice", []string{"free-users"})
+	req := httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	var result []subscription.SubscriptionInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if len(result) != 4 {
+		t.Fatalf("expected 4 subscriptions, got %d", len(result))
+	}
+
+	byID := map[string]subscription.SubscriptionInfo{}
+	for _, s := range result {
+		byID[s.SubscriptionIDHeader] = s
+	}
+
+	// Description preferred over display-name
+	if byID["both-annotations"].SubscriptionDescription != "My Description" {
+		t.Errorf("expected description 'My Description', got %q", byID["both-annotations"].SubscriptionDescription)
+	}
+	if byID["both-annotations"].DisplayName != "My Display Name" {
+		t.Errorf("expected display_name 'My Display Name', got %q", byID["both-annotations"].DisplayName)
+	}
+	// Description only
+	if byID["with-description-only"].SubscriptionDescription != "Description Only" {
+		t.Errorf("expected description 'Description Only', got %q", byID["with-description-only"].SubscriptionDescription)
+	}
+	// Display-name falls back to subscription_description when no description
+	if byID["with-display-name-only"].SubscriptionDescription != "Display Name Only" {
+		t.Errorf("expected description fallback to display-name, got %q", byID["with-display-name-only"].SubscriptionDescription)
+	}
+	if byID["with-display-name-only"].DisplayName != "Display Name Only" {
+		t.Errorf("expected display_name 'Display Name Only', got %q", byID["with-display-name-only"].DisplayName)
+	}
+	// No annotations: falls back to name
+	if byID["no-annotations"].SubscriptionDescription != "no-annotations" {
+		t.Errorf("expected name fallback, got %q", byID["no-annotations"].SubscriptionDescription)
+	}
+}
+
+func TestListSubscriptionsForModel_NoAccess(t *testing.T) {
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createTestSubscriptionWithAnnotations("premium-sub", []string{"premium-users"}, []string{"model-a"}, nil),
+	}}
+
+	router := setupListTestRouter(lister, "nobody", []string{"unknown-group"})
+	req := httptest.NewRequest(http.MethodGet, "/v1/model/model-a/subscriptions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	var result []subscription.SubscriptionInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if len(result) != 0 {
+		t.Errorf("expected empty array when user has no access, got %d items", len(result))
 	}
 }
