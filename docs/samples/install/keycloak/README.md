@@ -102,7 +102,7 @@ See: [test-realms/README.md](test-realms/README.md)
 
 ```bash
 # Deploy test realms
-./examples/keycloak/test-realms/apply-test-realms.sh
+./docs/samples/install/keycloak/test-realms/apply-test-realms.sh
 ```
 
 ### Method 3: Custom Realm Template
@@ -111,7 +111,7 @@ Start from a minimal template and customize:
 
 ```bash
 # Copy template (when available)
-cp examples/keycloak/custom-realm-template.json my-realm.json
+cp docs/samples/install/keycloak/custom-realm-template.json my-realm.json
 
 # Edit my-realm.json with your configuration
 

@@ -73,7 +73,7 @@ These realms contain security issues intentional for testing:
 
 ```bash
 # From repository root
-./examples/keycloak/test-realms/apply-test-realms.sh
+./docs/samples/install/keycloak/test-realms/apply-test-realms.sh
 ```
 
 This script will:

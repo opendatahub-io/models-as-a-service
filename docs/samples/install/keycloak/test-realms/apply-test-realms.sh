@@ -16,7 +16,7 @@
 #   - Keycloak must be deployed (run ./scripts/setup-keycloak.sh)
 #
 # Usage:
-#   ./examples/keycloak/test-realms/apply-test-realms.sh
+#   ./docs/samples/install/keycloak/test-realms/apply-test-realms.sh
 #
 
 set -euo pipefail
@@ -175,5 +175,5 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "⚠️  Remember: These are TEST realms with insecure configurations"
-echo "   See examples/keycloak/test-realms/README.md for details"
+echo "   See docs/samples/install/keycloak/test-realms/README.md for details"
 echo ""

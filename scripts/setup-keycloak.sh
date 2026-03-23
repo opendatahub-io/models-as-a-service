@@ -39,6 +39,12 @@ KEYCLOAK_NAME="maas-keycloak"
 GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
 KEYCLOAK_INSTANCES="${KEYCLOAK_INSTANCES:-1}"
+# Validate KEYCLOAK_INSTANCES (prevent injection)
+if ! [[ "$KEYCLOAK_INSTANCES" =~ ^[0-9]+$ ]] || [ "$KEYCLOAK_INSTANCES" -lt 1 ]; then
+  echo "ERROR: KEYCLOAK_INSTANCES must be a positive integer (got: '$KEYCLOAK_INSTANCES')" >&2
+  exit 1
+fi
+
 OPERATOR_TIMEOUT="${OPERATOR_TIMEOUT:-180}"
 KEYCLOAK_TIMEOUT="${KEYCLOAK_TIMEOUT:-300}"
 
@@ -95,7 +101,7 @@ EOF
   WAIT_START=$(date +%s)
   while ! kubectl get crd keycloaks.k8s.keycloak.org &>/dev/null; do
     ELAPSED=$(($(date +%s) - WAIT_START))
-    if [ $ELAPSED -gt $OPERATOR_TIMEOUT ]; then
+    if [ "$ELAPSED" -gt "$OPERATOR_TIMEOUT" ]; then
       echo "  ⚠️  Timeout waiting for Keycloak operator CRD" >&2
       echo "  Check operator logs: kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=keycloak-operator" >&2
       exit 1
@@ -157,8 +163,8 @@ if kubectl get keycloak "$KEYCLOAK_NAME" -n "$NAMESPACE" &>/dev/null; then
 
   if [[ "$CURRENT_HOSTNAME" != "$KEYCLOAK_HOSTNAME" ]]; then
     echo "  Updating hostname from '$CURRENT_HOSTNAME' to '$KEYCLOAK_HOSTNAME'..."
-    kubectl patch keycloak "$KEYCLOAK_NAME" -n "$NAMESPACE" --type=merge -p \
-      "{\"spec\":{\"hostname\":{\"hostname\":\"${KEYCLOAK_HOSTNAME}\"}}}"
+    PATCH_JSON=$(jq -n --arg hostname "$KEYCLOAK_HOSTNAME" '{spec:{hostname:{hostname:$hostname}}}')
+    kubectl patch keycloak "$KEYCLOAK_NAME" -n "$NAMESPACE" --type=merge -p "$PATCH_JSON"
   fi
 else
   echo "  Creating Keycloak instance..."
@@ -177,6 +183,9 @@ metadata:
     app: keycloak
     purpose: maas-oidc
 spec:
+  # WARNING: HTTP enabled for POC/development only
+  # Production deployments should use TLS termination at Gateway
+  # (cert-manager with Let's Encrypt or enterprise CA)
   instances: ${KEYCLOAK_INSTANCES}
   hostname:
     hostname: ${KEYCLOAK_HOSTNAME}
@@ -193,7 +202,7 @@ EOF
   WAIT_START=$(date +%s)
   while ! kubectl get statefulset -n "$NAMESPACE" -l app=keycloak 2>/dev/null | grep -q "${KEYCLOAK_NAME}"; do
     ELAPSED=$(($(date +%s) - WAIT_START))
-    if [ $ELAPSED -gt 60 ]; then
+    if [ "$ELAPSED" -gt 60 ]; then
       echo "  ⚠️  StatefulSet not created after 60s, checking Keycloak status..." >&2
       kubectl get keycloak "$KEYCLOAK_NAME" -n "$NAMESPACE" -o yaml
       break
@@ -232,8 +241,8 @@ fi
 # Create or update HTTPRoute
 if kubectl get httproute keycloak-route -n "$NAMESPACE" &>/dev/null; then
   echo "  Updating existing HTTPRoute..."
-  kubectl patch httproute keycloak-route -n "$NAMESPACE" --type=merge -p \
-    "{\"spec\":{\"hostnames\":[\"${KEYCLOAK_HOSTNAME}\"]}}"
+  PATCH_JSON=$(jq -n --arg hostname "$KEYCLOAK_HOSTNAME" '{spec:{hostnames:[$hostname]}}')
+  kubectl patch httproute keycloak-route -n "$NAMESPACE" --type=merge -p "$PATCH_JSON"
 else
   echo "  Creating HTTPRoute..."
   kubectl apply -n "$NAMESPACE" -f - <<EOF
@@ -307,7 +316,7 @@ echo "   - Valid redirect URIs: https://${CLUSTER_DOMAIN}/*"
 echo "   - Client scopes: Add 'groups' mapper"
 echo ""
 echo "4. Optional: Import test realms for development:"
-echo "   - See examples/keycloak/test-realms/"
+echo "   - See docs/samples/install/keycloak/test-realms/"
 echo "   - ⚠️  Test realms contain hardcoded passwords - NOT for production"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

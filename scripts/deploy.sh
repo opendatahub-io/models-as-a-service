@@ -126,7 +126,7 @@ OPTIONS:
   --enable-keycloak
       Deploy Keycloak identity provider for external OIDC support (optional)
       Creates keycloak-system namespace and deploys Keycloak operator
-      See examples/keycloak/ for configuration guide
+      See docs/samples/install/keycloak/ for configuration guide
 
   --namespace <namespace>
       Target namespace for deployment
