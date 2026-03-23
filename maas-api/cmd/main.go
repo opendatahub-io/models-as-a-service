@@ -158,13 +158,17 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	}
 
 	tokenHandler := token.NewHandler(log, cfg.Name)
-
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister)
+	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector)
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, log)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	// Subscription listing routes
+	v1Routes.GET("/subscriptions", tokenHandler.ExtractUserInfo(), subscriptionHandler.ListSubscriptions)
+	v1Routes.GET("/model/:model-id/subscriptions", tokenHandler.ExtractUserInfo(), subscriptionHandler.ListSubscriptionsForModel)
 
 	// API Key routes - Complete CRUD for hash-based key architecture
 	apiKeyRoutes := v1Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
@@ -177,7 +181,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	// Internal routes for Authorino HTTP callback (no auth required - called by Authorino)
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
-	internalRoutes.POST("/subscriptions/select", subscription.NewHandler(log, subscriptionSelector).SelectSubscription)
+	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil
 }

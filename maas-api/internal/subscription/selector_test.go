@@ -44,30 +44,37 @@ func createSubscription(name string, groups []string, users []string, priority i
 				"name": "test-model",
 				"tokenRateLimits": []any{
 					map[string]any{
-						"limit": int64(1000),
+						"limit":  int64(1000),
+						"window": "1m",
 					},
 				},
 			},
 		},
 	}
 
-	// Add optional displayName and description
-	if displayName != "" {
-		spec["displayName"] = displayName
+	metadata := map[string]any{
+		"name":      name,
+		"namespace": "test-ns",
 	}
-	if description != "" {
-		spec["description"] = description
+
+	// Add optional displayName and description as annotations
+	if displayName != "" || description != "" {
+		annotations := map[string]any{}
+		if displayName != "" {
+			annotations["openshift.io/display-name"] = displayName
+		}
+		if description != "" {
+			annotations["openshift.io/description"] = description
+		}
+		metadata["annotations"] = annotations
 	}
 
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "maas.opendatahub.io/v1alpha1",
 			"kind":       "MaaSSubscription",
-			"metadata": map[string]any{
-				"name":      name,
-				"namespace": "test-ns",
-			},
-			"spec": spec,
+			"metadata":   metadata,
+			"spec":       spec,
 		},
 	}
 }

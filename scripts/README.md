@@ -52,6 +52,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 
 **Environment Variables:**
 - `MAAS_API_IMAGE` - Custom MaaS API container image (works in both operator and kustomize modes)
+- `MAAS_CONTROLLER_IMAGE` - Custom MaaS controller container image
 - `OPERATOR_CATALOG` - Custom operator catalog for PR testing
 - `OPERATOR_IMAGE` - Custom operator image for PR testing
 - `OPERATOR_TYPE` - Operator type (odh/rhoai)
@@ -175,9 +176,13 @@ Installs individual dependencies (Kuadrant, ODH, etc.).
 ```
 
 **Options:**
+- `--all`: Install all components
 - `--kuadrant`: Install Kuadrant operator and dependencies
-- `--istio`: Install Istio
-- `--prometheus`: Install Prometheus
+- `--istio`: Install Istio service mesh
+- `--odh`: Install OpenDataHub operator (OpenShift only)
+- `--kserve`: Install KServe model serving platform
+- `--prometheus`: Install Prometheus operator
+- `--ocp`: Use OpenShift-specific handling
 
 ---
 
