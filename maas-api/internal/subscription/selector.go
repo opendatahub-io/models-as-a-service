@@ -9,6 +9,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -46,6 +47,7 @@ type subscription struct {
 	OrganizationID string
 	CostCenter     string
 	Labels         map[string]string
+	ModelRefs      []ModelRefInfo
 }
 
 // GetAllAccessible returns all subscriptions the user has access to.
@@ -165,14 +167,10 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		Name: obj.GetName(),
 	}
 
-	// Parse displayName (optional - field may not exist in CRD yet)
-	if displayName, found, _ := unstructured.NestedString(spec, "displayName"); found {
-		sub.DisplayName = displayName
-	}
-
-	// Parse description (optional - field may not exist in CRD yet)
-	if description, found, _ := unstructured.NestedString(spec, "description"); found {
-		sub.Description = description
+	// Parse annotations for display metadata
+	if annotations := obj.GetAnnotations(); annotations != nil {
+		sub.DisplayName = annotations[constant.AnnotationDisplayName]
+		sub.Description = annotations[constant.AnnotationDescription]
 	}
 
 	// Parse owner
@@ -201,44 +199,80 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		}
 	}
 
-	// Parse modelRefs to calculate maxLimit
+	// Parse modelRefs
 	if modelRefs, found, _ := unstructured.NestedSlice(spec, "modelRefs"); found {
 		for _, modelRef := range modelRefs {
 			if modelMap, ok := modelRef.(map[string]any); ok {
-				if limits, found, _ := unstructured.NestedSlice(modelMap, "tokenRateLimits"); found {
-					for _, limitRaw := range limits {
-						if limitMap, ok := limitRaw.(map[string]any); ok {
-							if limit, ok := limitMap["limit"].(int64); ok {
-								if limit > sub.MaxLimit {
-									sub.MaxLimit = limit
-								}
-							}
-						}
+				ref := parseModelRef(modelMap)
+				for _, trl := range ref.TokenRateLimits {
+					if trl.Limit > sub.MaxLimit {
+						sub.MaxLimit = trl.Limit
 					}
 				}
+				sub.ModelRefs = append(sub.ModelRefs, ref)
 			}
 		}
 	}
 
 	// Parse tokenMetadata
-	if metadata, found, _ := unstructured.NestedMap(spec, "tokenMetadata"); found {
-		if orgID, ok := metadata["organizationId"].(string); ok {
-			sub.OrganizationID = orgID
-		}
-		if costCenter, ok := metadata["costCenter"].(string); ok {
-			sub.CostCenter = costCenter
-		}
-		if labelsRaw, ok := metadata["labels"].(map[string]any); ok {
-			sub.Labels = make(map[string]string)
-			for k, v := range labelsRaw {
-				if s, ok := v.(string); ok {
-					sub.Labels[k] = s
+	parseTokenMetadata(spec, &sub)
+
+	return sub, nil
+}
+
+// parseModelRef extracts a ModelRefInfo from an unstructured model ref map.
+func parseModelRef(modelMap map[string]any) ModelRefInfo {
+	ref := ModelRefInfo{}
+	if name, ok := modelMap["name"].(string); ok {
+		ref.Name = name
+	}
+	if ns, ok := modelMap["namespace"].(string); ok {
+		ref.Namespace = ns
+	}
+	if limits, found, _ := unstructured.NestedSlice(modelMap, "tokenRateLimits"); found {
+		for _, limitRaw := range limits {
+			if limitMap, ok := limitRaw.(map[string]any); ok {
+				trl := TokenRateLimit{}
+				if limit, ok := limitMap["limit"].(int64); ok {
+					trl.Limit = limit
 				}
+				if window, ok := limitMap["window"].(string); ok {
+					trl.Window = window
+				}
+				ref.TokenRateLimits = append(ref.TokenRateLimits, trl)
 			}
 		}
 	}
+	if billingRate, found, _ := unstructured.NestedMap(modelMap, "billingRate"); found {
+		br := &BillingRate{}
+		if perToken, ok := billingRate["perToken"].(string); ok {
+			br.PerToken = perToken
+		}
+		ref.BillingRate = br
+	}
+	return ref
+}
 
-	return sub, nil
+// parseTokenMetadata extracts tokenMetadata fields from the spec into the subscription.
+func parseTokenMetadata(spec map[string]any, sub *subscription) {
+	metadata, found, _ := unstructured.NestedMap(spec, "tokenMetadata")
+	if !found {
+		return
+	}
+	if orgID, ok := metadata["organizationId"].(string); ok {
+		sub.OrganizationID = orgID
+	}
+	if costCenter, ok := metadata["costCenter"].(string); ok {
+		sub.CostCenter = costCenter
+	}
+	if labelsRaw, ok := metadata["labels"].(map[string]any); ok {
+		sub.Labels = make(map[string]string)
+		for k, v := range labelsRaw {
+			if s, ok := v.(string); ok {
+				sub.Labels[k] = s
+			}
+		}
+	}
 }
 
 // userHasAccess checks if user/groups match subscription owner.
@@ -261,6 +295,16 @@ func userHasAccess(sub *subscription, username string, groups []string) bool {
 	return false
 }
 
+// hasModel returns true if the subscription includes the given model name.
+func (s subscription) hasModel(modelID string) bool {
+	for _, ref := range s.ModelRefs {
+		if ref.Name == modelID {
+			return true
+		}
+	}
+	return false
+}
+
 // sortSubscriptionsByPriority sorts in-place by priority desc, then maxLimit desc.
 func sortSubscriptionsByPriority(subs []subscription) {
 	sort.SliceStable(subs, func(i, j int) bool {
@@ -271,12 +315,91 @@ func sortSubscriptionsByPriority(subs []subscription) {
 	})
 }
 
+// ListAccessibleForModel returns subscriptions the user has access to
+// that include the specified model in their modelRefs.
+func (s *Selector) ListAccessibleForModel(username string, groups []string, modelID string) ([]SubscriptionInfo, error) {
+	subscriptions, err := s.loadSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
+	}
+
+	result := []SubscriptionInfo{}
+	for _, sub := range subscriptions {
+		if userHasAccess(&sub, username, groups) && sub.hasModel(modelID) {
+			result = append(result, toSubscriptionInfo(&sub))
+		}
+	}
+
+	// Sort for deterministic ordering
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].SubscriptionIDHeader < result[j].SubscriptionIDHeader
+	})
+
+	return result, nil
+}
+
+// toSubscriptionInfo converts internal subscription to a list response item.
+func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
+	desc := sub.Description
+	if desc == "" {
+		desc = sub.DisplayName
+	}
+	if desc == "" {
+		desc = sub.Name
+	}
+	modelRefs := sub.ModelRefs
+	if modelRefs == nil {
+		modelRefs = []ModelRefInfo{}
+	}
+	return SubscriptionInfo{
+		SubscriptionIDHeader:    sub.Name,
+		SubscriptionDescription: desc,
+		DisplayName:             sub.DisplayName,
+		Priority:                sub.Priority,
+		ModelRefs:               modelRefs,
+		OrganizationID:          sub.OrganizationID,
+		CostCenter:              sub.CostCenter,
+		Labels:                  sub.Labels,
+	}
+}
+
+// ResponseToSubscriptionInfo converts a SelectResponse to a SubscriptionInfo.
+func ResponseToSubscriptionInfo(sub *SelectResponse) SubscriptionInfo {
+	desc := sub.Description
+	if desc == "" {
+		desc = sub.DisplayName
+	}
+	if desc == "" {
+		desc = sub.Name
+	}
+	modelRefs := sub.ModelRefs
+	if modelRefs == nil {
+		modelRefs = []ModelRefInfo{}
+	}
+	return SubscriptionInfo{
+		SubscriptionIDHeader:    sub.Name,
+		SubscriptionDescription: desc,
+		DisplayName:             sub.DisplayName,
+		Priority:                sub.Priority,
+		ModelRefs:               modelRefs,
+		OrganizationID:          sub.OrganizationID,
+		CostCenter:              sub.CostCenter,
+		Labels:                  sub.Labels,
+	}
+}
+
 // toResponse converts internal subscription to API response.
 func toResponse(sub *subscription) *SelectResponse {
+	modelRefs := sub.ModelRefs
+	if modelRefs == nil {
+		modelRefs = []ModelRefInfo{}
+	}
 	return &SelectResponse{
 		Name:           sub.Name,
 		DisplayName:    sub.DisplayName,
 		Description:    sub.Description,
+		Priority:       sub.Priority,
+		ModelRefs:      modelRefs,
 		OrganizationID: sub.OrganizationID,
 		CostCenter:     sub.CostCenter,
 		Labels:         sub.Labels,

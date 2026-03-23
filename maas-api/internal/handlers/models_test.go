@@ -608,14 +608,19 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 			},
 		}
 
-		if displayName != "" {
-			spec["displayName"] = displayName
-		}
-		if description != "" {
-			spec["description"] = description
+		_ = unstructured.SetNestedMap(sub.Object, spec, "spec")
+
+		if displayName != "" || description != "" {
+			annotations := map[string]string{}
+			if displayName != "" {
+				annotations[constant.AnnotationDisplayName] = displayName
+			}
+			if description != "" {
+				annotations[constant.AnnotationDescription] = description
+			}
+			sub.SetAnnotations(annotations)
 		}
 
-		_ = unstructured.SetNestedMap(sub.Object, spec, "spec")
 		return sub
 	}
 
