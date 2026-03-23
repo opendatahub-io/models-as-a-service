@@ -1,5 +1,5 @@
 /*
-Copyright 2026 The opendatahub.io Authors.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -59,7 +59,7 @@ func (t *AzureOpenAITranslator) TranslateRequest(body map[string]any) (map[strin
 		return nil, nil, nil, fmt.Errorf("model field is required")
 	}
 	if !t.deploymentIDPattern.MatchString(model) {
-		return nil, nil, nil, fmt.Errorf("model contains invalid characters for Azure deployment ID")
+		return nil, nil, nil, fmt.Errorf("model '%s' contains invalid characters for Azure deployment ID", model)
 	}
 
 	headers := map[string]string{
