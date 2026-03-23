@@ -17,8 +17,45 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
+
+const testSubscriptionName = "test-subscription"
+
+// fixedSubSelector satisfies SubscriptionSelector for handler tests (no cluster subscriptions).
+type fixedSubSelector struct{}
+
+func (fixedSubSelector) Select(_ []string, _ string, requested string) (*subscription.SelectResponse, error) {
+	if requested != "" {
+		return &subscription.SelectResponse{Name: requested}, nil
+	}
+	return &subscription.SelectResponse{Name: testSubscriptionName}, nil
+}
+
+func (fixedSubSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
+	return &subscription.SelectResponse{Name: testSubscriptionName}, nil
+}
+
+// errSubSelector returns fixed errors from Select / SelectHighestPriority (for handler HTTP mapping tests).
+type errSubSelector struct {
+	selectErr          error
+	highestPriorityErr error
+}
+
+func (e errSubSelector) Select(_ []string, _ string, _ string) (*subscription.SelectResponse, error) {
+	if e.selectErr != nil {
+		return nil, e.selectErr
+	}
+	return &subscription.SelectResponse{Name: "stub-sub"}, nil
+}
+
+func (e errSubSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
+	if e.highestPriorityErr != nil {
+		return nil, e.highestPriorityErr
+	}
+	return &subscription.SelectResponse{Name: testSubscriptionName}, nil
+}
 
 // Test constants.
 const (
@@ -93,7 +130,7 @@ func TestSearchAPIKeys_EmptyRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	testUser := &token.UserContext{
@@ -103,12 +140,12 @@ func TestSearchAPIKeys_EmptyRequest(t *testing.T) {
 
 	// Create test keys
 	ctx := context.Background()
-	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Key 1", "", []string{"system:authenticated"}, nil, false)
+	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Key 1", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Key 2", "", []string{"system:authenticated"}, nil, false)
+	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Key 2", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
 	// Create a revoked key
-	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Key 3", "", []string{"system:authenticated"}, nil, false)
+	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Key 3", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "key-3")
 	require.NoError(t, err)
@@ -139,7 +176,7 @@ func TestSearchAPIKeys_Pagination(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	testUser := &token.UserContext{
@@ -153,7 +190,7 @@ func TestSearchAPIKeys_Pagination(t *testing.T) {
 		keyID := fmt.Sprintf("key-%d", i)
 		keyHash := fmt.Sprintf("hash-%d", i)
 		name := fmt.Sprintf("Key %d", i)
-		err := store.AddKey(ctx, testUser.Username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
+		err := store.AddKey(ctx, testUser.Username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 		require.NoError(t, err)
 	}
 
@@ -243,7 +280,7 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	ctx := context.Background()
@@ -253,9 +290,9 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 	}
 
 	// Create active and revoked keys
-	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, nil, false)
+	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, nil, false)
+	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "revoked-key")
 	require.NoError(t, err)
@@ -369,7 +406,7 @@ func TestSearchAPIKeys_Sorting(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	ctx := context.Background()
@@ -379,11 +416,11 @@ func TestSearchAPIKeys_Sorting(t *testing.T) {
 	}
 
 	// Create keys with different names
-	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Charlie", "", []string{"system:authenticated"}, nil, false)
+	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Charlie", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Alice", "", []string{"system:authenticated"}, nil, false)
+	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Alice", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Bob", "", []string{"system:authenticated"}, nil, false)
+	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Bob", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
 
 	t.Run("DefaultSort_CreatedAtDesc", func(t *testing.T) {
@@ -494,7 +531,7 @@ func TestSearchAPIKeys_AdminVsRegularUser(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	ctx := context.Background()
@@ -506,7 +543,7 @@ func TestSearchAPIKeys_AdminVsRegularUser(t *testing.T) {
 			keyID := fmt.Sprintf("%s-key-%d", username, i)
 			keyHash := fmt.Sprintf("%s-hash-%d", username, i)
 			name := fmt.Sprintf("%s Key %d", username, i)
-			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
+			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 			require.NoError(t, err)
 		}
 	}
@@ -614,7 +651,7 @@ func TestSearchAPIKeys_AdminFiltersByUsernameAndStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	ctx := context.Background()
@@ -627,14 +664,14 @@ func TestSearchAPIKeys_AdminFiltersByUsernameAndStatus(t *testing.T) {
 			keyID := fmt.Sprintf("%s-active-%d", username, i)
 			keyHash := fmt.Sprintf("%s-hash-active-%d", username, i)
 			name := fmt.Sprintf("%s Active Key %d", username, i)
-			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
+			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 			require.NoError(t, err)
 		}
 		// Create 1 revoked key
 		keyID := fmt.Sprintf("%s-revoked", username)
 		keyHash := fmt.Sprintf("%s-hash-revoked", username)
 		name := fmt.Sprintf("%s Revoked Key", username)
-		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
+		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 		require.NoError(t, err)
 		err = store.Revoke(ctx, keyID)
 		require.NoError(t, err)
@@ -697,7 +734,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	ctx := context.Background()
@@ -707,7 +744,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		keyID := fmt.Sprintf("alice-key-%d", i)
 		keyHash := fmt.Sprintf("alice-hash-%d", i)
 		name := fmt.Sprintf("Alice Key %d", i)
-		err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
+		err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 		require.NoError(t, err)
 	}
 
@@ -715,7 +752,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		keyID := fmt.Sprintf("bob-key-%d", i)
 		keyHash := fmt.Sprintf("bob-hash-%d", i)
 		name := fmt.Sprintf("Bob Key %d", i)
-		err := store.AddKey(ctx, "bob", keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
+		err := store.AddKey(ctx, "bob", keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 		require.NoError(t, err)
 	}
 
@@ -770,7 +807,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 			keyID := fmt.Sprintf("alice-key-%d", i)
 			keyHash := fmt.Sprintf("alice-hash-%d", i)
 			name := fmt.Sprintf("Alice Key %d", i)
-			err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, nil, false)
+			err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 			require.NoError(t, err)
 		}
 
@@ -851,7 +888,7 @@ func TestUserCanCreateOwnKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	regularUser := &token.UserContext{
@@ -875,11 +912,112 @@ func TestUserCanCreateOwnKey(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 
+	assert.Equal(t, testSubscriptionName, response.Subscription)
+
 	// Verify key is owned by alice with her actual groups
 	meta, err := store.Get(context.Background(), response.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "alice", meta.Username)
 	assert.Equal(t, []string{"tier-free", "system:authenticated"}, meta.Groups)
+	assert.Equal(t, testSubscriptionName, meta.Subscription)
+}
+
+func TestCreateAPIKey_WithExplicitSubscription(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	user := &token.UserContext{Username: "alice", Groups: []string{"system:authenticated"}}
+	body := `{"name": "k1", "subscription": "custom-sub"}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Body = io.NopCloser(strings.NewReader(body))
+	c.Set("user", user)
+
+	handler.CreateAPIKey(c)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var response CreateAPIKeyResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "custom-sub", response.Subscription)
+
+	meta, err := store.Get(context.Background(), response.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "custom-sub", meta.Subscription)
+}
+
+func TestCreateAPIKey_SubscriptionSelectErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := &token.UserContext{Username: "alice", Groups: []string{"system:authenticated"}}
+
+	tests := []struct {
+		name        string
+		sel         errSubSelector
+		body        string
+		wantCode    int
+		wantErrCode string
+	}{
+		{
+			name: "explicit subscription not found",
+			sel: errSubSelector{
+				selectErr: &subscription.SubscriptionNotFoundError{Subscription: "missing-sub"},
+			},
+			body:        `{"name": "k1", "subscription": "missing-sub"}`,
+			wantCode:    http.StatusBadRequest,
+			wantErrCode: "subscription_not_found",
+		},
+		{
+			name: "explicit subscription access denied",
+			sel: errSubSelector{
+				selectErr: &subscription.AccessDeniedError{Subscription: "other-sub"},
+			},
+			body:        `{"name": "k1", "subscription": "other-sub"}`,
+			wantCode:    http.StatusForbidden,
+			wantErrCode: "subscription_access_denied",
+		},
+		{
+			name: "no accessible subscription when omitting field",
+			sel: errSubSelector{
+				highestPriorityErr: &subscription.NoSubscriptionError{},
+			},
+			body:        `{"name": "k1"}`,
+			wantCode:    http.StatusBadRequest,
+			wantErrCode: "no_subscription",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMockStore()
+			cfg := &config.Config{}
+			service := NewServiceWithLogger(store, cfg, tt.sel, logger.Development())
+			h := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request.Body = io.NopCloser(strings.NewReader(tt.body))
+			c.Set("user", user)
+
+			h.CreateAPIKey(c)
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			var resp map[string]string
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, tt.wantErrCode, resp["code"])
+			assert.NotEmpty(t, resp["error"])
+
+			res, err := store.Search(context.Background(), user.Username, &SearchFilters{}, &SortParams{By: DefaultSortBy, Order: DefaultSortOrder}, &PaginationParams{Limit: 10, Offset: 0})
+			require.NoError(t, err)
+			assert.Empty(t, res.Keys, "no key should be persisted on subscription resolution failure")
+		})
+	}
 }
 
 // ============================================================
@@ -890,7 +1028,7 @@ func TestGetAPIKeyHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	// Create test keys for alice and bob
@@ -912,9 +1050,9 @@ func TestGetAPIKeyHandler(t *testing.T) {
 	}
 
 	// Add keys to store
-	err := store.AddKey(context.Background(), aliceKey.Username, aliceKey.ID, "hash1", aliceKey.Name, "", aliceKey.Groups, nil, false)
+	err := store.AddKey(context.Background(), aliceKey.Username, aliceKey.ID, "hash1", aliceKey.Name, "", aliceKey.Groups, testSubscriptionName, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, "hash2", bobKey.Name, "", bobKey.Groups, nil, false)
+	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, "hash2", bobKey.Name, "", bobKey.Groups, testSubscriptionName, nil, false)
 	require.NoError(t, err)
 
 	t.Run("OwnerCanGetOwnKey", func(t *testing.T) {
@@ -1011,11 +1149,11 @@ func testRevokeKeySuccess(t *testing.T, user *token.UserContext) {
 	t.Helper()
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	// Create alice's key
-	err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil, false)
+	err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -1054,11 +1192,11 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 	t.Run("RegularUserCannotRevokeOthersKey_IDOR_Protection", func(t *testing.T) {
 		store := NewMockStore()
 		cfg := &config.Config{}
-		service := NewServiceWithLogger(store, cfg, logger.Development())
+		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 		// Create alice's key
-		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil, false)
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, testSubscriptionName, nil, false)
 		require.NoError(t, err)
 
 		// Bob trying to revoke Alice's key
@@ -1099,7 +1237,7 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 	t.Run("NonExistentKeyReturns404", func(t *testing.T) {
 		store := NewMockStore()
 		cfg := &config.Config{}
-		service := NewServiceWithLogger(store, cfg, logger.Development())
+		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 		aliceUser := &token.UserContext{
@@ -1121,11 +1259,11 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 	t.Run("CannotRevokeAlreadyRevokedKey", func(t *testing.T) {
 		store := NewMockStore()
 		cfg := &config.Config{}
-		service := NewServiceWithLogger(store, cfg, logger.Development())
+		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 		// Create and immediately revoke alice's key
-		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil, false)
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, testSubscriptionName, nil, false)
 		require.NoError(t, err)
 		err = store.Revoke(context.Background(), "alice-key-1")
 		require.NoError(t, err)
@@ -1156,7 +1294,7 @@ func TestCreateEphemeralAPIKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	testUser := &token.UserContext{
@@ -1255,7 +1393,7 @@ func TestSearchExcludesEphemeralByDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, logger.Development())
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
 	ctx := context.Background()
@@ -1265,15 +1403,15 @@ func TestSearchExcludesEphemeralByDefault(t *testing.T) {
 	}
 
 	// Create regular keys
-	err := store.AddKey(ctx, testUser.Username, "regular-key-1", "hash-1", "Regular Key 1", "", []string{"system:authenticated"}, nil, false)
+	err := store.AddKey(ctx, testUser.Username, "regular-key-1", "hash-1", "Regular Key 1", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "regular-key-2", "hash-2", "Regular Key 2", "", []string{"system:authenticated"}, nil, false)
+	err = store.AddKey(ctx, testUser.Username, "regular-key-2", "hash-2", "Regular Key 2", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
 	require.NoError(t, err)
 
 	// Create ephemeral keys
-	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-1", "hash-3", "Ephemeral Key 1", "", []string{"system:authenticated"}, nil, true)
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-1", "hash-3", "Ephemeral Key 1", "", []string{"system:authenticated"}, testSubscriptionName, nil, true)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-2", "hash-4", "Ephemeral Key 2", "", []string{"system:authenticated"}, nil, true)
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-2", "hash-4", "Ephemeral Key 2", "", []string{"system:authenticated"}, testSubscriptionName, nil, true)
 	require.NoError(t, err)
 
 	t.Run("DefaultSearchExcludesEphemeral", func(t *testing.T) {

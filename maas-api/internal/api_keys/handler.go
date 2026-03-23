@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
@@ -126,10 +127,11 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 // If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (or 1hr for ephemeral).
 // Users can only create keys for themselves - the key inherits the user's groups.
 type CreateAPIKeyRequest struct {
-	Name        string          `json:"name,omitempty"`        // Required for regular keys, optional for ephemeral
-	Description string          `json:"description,omitempty"`
-	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"`   // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral)
-	Ephemeral   bool            `json:"ephemeral,omitempty"`   // Short-lived programmatic token (default: false)
+	Name           string          `json:"name,omitempty"`        // Required for regular keys, optional for ephemeral
+	Description    string          `json:"description,omitempty"`
+	Subscription   string          `json:"subscription,omitempty"` // Optional MaaSSubscription name; when omitted, highest-priority accessible subscription is used
+	ExpiresIn      *token.Duration `json:"expiresIn,omitempty"`    // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral)
+	Ephemeral      bool            `json:"ephemeral,omitempty"`    // Short-lived programmatic token (default: false)
 }
 
 // CreateAPIKey handles POST /v1/api-keys
@@ -173,12 +175,26 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	}
 
 	// Create key for the authenticated user with their groups
-	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, name, req.Description, expiresIn, req.Ephemeral)
+	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, name, req.Description, expiresIn, req.Ephemeral, strings.TrimSpace(req.Subscription))
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
-		// Return 400 for validation errors, 500 for internal errors
 		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var notFound *subscription.SubscriptionNotFoundError
+		if errors.As(err, &notFound) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "subscription_not_found"})
+			return
+		}
+		var accessDenied *subscription.AccessDeniedError
+		if errors.As(err, &accessDenied) {
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error(), "code": "subscription_access_denied"})
+			return
+		}
+		var noSub *subscription.NoSubscriptionError
+		if errors.As(err, &noSub) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "no_subscription"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create API key"})

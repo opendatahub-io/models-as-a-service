@@ -130,6 +130,37 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	return nil, &MultipleSubscriptionsError{Subscriptions: subNames}
 }
 
+// SelectHighestPriority returns the accessible subscription with highest spec.priority
+// (then max token limit desc, then name asc for deterministic ties).
+func (s *Selector) SelectHighestPriority(groups []string, username string) (*SelectResponse, error) {
+	if len(groups) == 0 && username == "" {
+		return nil, errors.New("either groups or username must be provided")
+	}
+
+	subscriptions, err := s.loadSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
+	}
+
+	if len(subscriptions) == 0 {
+		return nil, &NoSubscriptionError{}
+	}
+
+	var accessible []subscription
+	for _, sub := range subscriptions {
+		if userHasAccess(&sub, username, groups) {
+			accessible = append(accessible, sub)
+		}
+	}
+
+	if len(accessible) == 0 {
+		return nil, &NoSubscriptionError{}
+	}
+
+	sortSubscriptionsByPriority(accessible)
+	return toResponse(&accessible[0]), nil
+}
+
 // loadSubscriptions fetches and parses MaaSSubscription resources.
 func (s *Selector) loadSubscriptions() ([]subscription, error) {
 	objects, err := s.lister.List()
@@ -261,13 +292,16 @@ func userHasAccess(sub *subscription, username string, groups []string) bool {
 	return false
 }
 
-// sortSubscriptionsByPriority sorts in-place by priority desc, then maxLimit desc.
+// sortSubscriptionsByPriority sorts in-place by priority desc, then maxLimit desc, then name asc.
 func sortSubscriptionsByPriority(subs []subscription) {
 	sort.SliceStable(subs, func(i, j int) bool {
 		if subs[i].Priority != subs[j].Priority {
 			return subs[i].Priority > subs[j].Priority
 		}
-		return subs[i].MaxLimit > subs[j].MaxLimit
+		if subs[i].MaxLimit != subs[j].MaxLimit {
+			return subs[i].MaxLimit > subs[j].MaxLimit
+		}
+		return subs[i].Name < subs[j].Name
 	})
 }
 

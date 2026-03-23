@@ -305,6 +305,9 @@ paths:
                                     type: boolean
                                     description: Create a short-lived programmatic key. Defaults to false. Ephemeral keys have 1hr default and maximum expiration (enforced), and optional name.
                                     default: false
+                                subscription:
+                                    type: string
+                                    description: Optional MaaSSubscription resource name to bind to this key. When omitted, the user's highest-priority accessible subscription is used (spec.priority, descending).
                         examples:
                             default_expiration:
                                 summary: API key with default expiration (API_KEY_MAX_EXPIRATION_DAYS)
@@ -333,6 +336,7 @@ paths:
                                     - keyPrefix
                                     - id
                                     - name
+                                    - subscription
                                     - createdAt
                                     - expiresAt
                                     - ephemeral
@@ -349,6 +353,9 @@ paths:
                                     name:
                                         type: string
                                         description: Name of the key
+                                    subscription:
+                                        type: string
+                                        description: MaaSSubscription name bound to this key at creation time
                                     createdAt:
                                         type: string
                                         format: date-time

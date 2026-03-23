@@ -11,44 +11,53 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
 
-type Service struct {
-	store  MetadataStore
-	logger *logger.Logger
-	config *config.Config
+// SubscriptionSelector resolves which MaaSSubscription to bind when minting an API key.
+type SubscriptionSelector interface {
+	Select(groups []string, username string, requestedSubscription string) (*subscription.SelectResponse, error)
+	SelectHighestPriority(groups []string, username string) (*subscription.SelectResponse, error)
 }
 
-func NewService(store MetadataStore, cfg *config.Config) *Service {
-	return &Service{
-		store:  store,
-		logger: logger.Production(),
-		config: cfg,
-	}
+type Service struct {
+	store       MetadataStore
+	logger      *logger.Logger
+	config      *config.Config
+	subSelector SubscriptionSelector
+}
+
+func NewService(store MetadataStore, cfg *config.Config, sub SubscriptionSelector) *Service {
+	return NewServiceWithLogger(store, cfg, sub, logger.Production())
 }
 
 // NewServiceWithLogger creates a new service with a custom logger (for testing).
-func NewServiceWithLogger(store MetadataStore, cfg *config.Config, log *logger.Logger) *Service {
+func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub SubscriptionSelector, log *logger.Logger) *Service {
 	if log == nil {
 		log = logger.Production()
 	}
+	if sub == nil {
+		panic("SubscriptionSelector cannot be nil")
+	}
 	return &Service{
-		store:  store,
-		logger: log,
-		config: cfg,
+		store:       store,
+		logger:      log,
+		config:      cfg,
+		subSelector: sub,
 	}
 }
 
 // CreateAPIKeyResponse is returned when creating an API key.
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
 type CreateAPIKeyResponse struct {
-	Key       string  `json:"key"`                 // Plaintext key - SHOWN ONCE, NEVER STORED
-	KeyPrefix string  `json:"keyPrefix"`           // Display prefix for UI
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	CreatedAt string  `json:"createdAt"`
-	ExpiresAt *string `json:"expiresAt,omitempty"` // RFC3339 timestamp
-	Ephemeral bool    `json:"ephemeral"` // Short-lived programmatic key
+	Key          string  `json:"key"`                 // Plaintext key - SHOWN ONCE, NEVER STORED
+	KeyPrefix    string  `json:"keyPrefix"`           // Display prefix for UI
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Subscription string  `json:"subscription"`        // MaaSSubscription name bound to this key
+	CreatedAt    string  `json:"createdAt"`
+	ExpiresAt    *string `json:"expiresAt,omitempty"` // RFC3339 timestamp
+	Ephemeral    bool    `json:"ephemeral"`           // Short-lived programmatic key
 }
 
 // CreateAPIKey creates a new API key (sk-oai-* format).
@@ -61,7 +70,7 @@ type CreateAPIKeyResponse struct {
 // Admins can create keys for other users by specifying a different username.
 func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
-	expiresIn *time.Duration, ephemeral bool,
+	expiresIn *time.Duration, ephemeral bool, requestedSubscription string,
 ) (*CreateAPIKeyResponse, error) {
 	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
 	maxDays := constant.DefaultAPIKeyMaxExpirationDays
@@ -108,13 +117,28 @@ func (s *Service) CreateAPIKey(
 		return nil, fmt.Errorf("failed to generate API key: %w", err)
 	}
 
+	var subResp *subscription.SelectResponse
+	var selectErr error
+	if requestedSubscription != "" {
+		subResp, selectErr = s.subSelector.Select(userGroups, username, requestedSubscription)
+	} else {
+		subResp, selectErr = s.subSelector.SelectHighestPriority(userGroups, username)
+	}
+	if selectErr != nil {
+		return nil, selectErr
+	}
+	subscriptionName := subResp.Name
+	if subscriptionName == "" {
+		return nil, fmt.Errorf("resolved subscription name is empty")
+	}
+
 	// Generate unique ID for this key
 	keyID := uuid.New().String()
 
 	// Store in database (hash only, plaintext NEVER stored)
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
-	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, &expiresAt, ephemeral); err != nil {
+	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, &expiresAt, ephemeral); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
@@ -123,13 +147,14 @@ func (s *Service) CreateAPIKey(
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
 	formatted := expiresAt.Format(time.RFC3339)
 	response := &CreateAPIKeyResponse{
-		Key:       plaintext, // SHOWN ONCE, NEVER AGAIN
-		KeyPrefix: prefix,
-		ID:        keyID,
-		Name:      name,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		ExpiresAt: &formatted,
-		Ephemeral: ephemeral,
+		Key:            plaintext, // SHOWN ONCE, NEVER AGAIN
+		KeyPrefix:      prefix,
+		ID:             keyID,
+		Name:           name,
+		Subscription:   subscriptionName,
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		ExpiresAt:      &formatted,
+		Ephemeral:      ephemeral,
 	}
 
 	return response, nil
