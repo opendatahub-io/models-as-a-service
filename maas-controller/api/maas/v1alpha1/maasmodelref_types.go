@@ -64,8 +64,11 @@ type ModelReference struct {
 	// +optional
 	Provider string `json:"provider,omitempty"`
 
-	// Endpoint is the FQDN for the external provider (no scheme or path).
+	// Endpoint is the FQDN of the external provider (no scheme or path).
 	// e.g. "api.openai.com". Only used when kind=ExternalModel.
+	// This field is metadata for downstream consumers (e.g. BBR provider-resolver plugin)
+	// and is not used by the controller for endpoint derivation. Use spec.endpointOverride
+	// to override the controller-derived endpoint.
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$`
 	// +optional

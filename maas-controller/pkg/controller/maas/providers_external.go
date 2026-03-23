@@ -145,7 +145,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 // Status returns the model endpoint URL and whether the model is ready.
 // ExternalModel is considered ready once the HTTPRoute is validated (no backend readiness probe).
 func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error) {
-	if model.Status.HTTPRouteName == "" {
+	if model.Status.HTTPRouteName == "" || model.Status.HTTPRouteGatewayName == "" {
 		return "", false, nil
 	}
 

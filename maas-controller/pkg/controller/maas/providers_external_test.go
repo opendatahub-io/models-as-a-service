@@ -168,6 +168,7 @@ func TestExternalModel_ReconcileRoute_WrongGateway(t *testing.T) {
 func TestExternalModel_Status_Ready(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
 	model.Status.HTTPRouteName = "maas-model-gpt-4o"
+	model.Status.HTTPRouteGatewayName = "maas-default-gateway"
 	model.Status.HTTPRouteHostnames = []string{"maas.example.com"}
 
 	r, _ := newTestReconciler(model)
@@ -183,6 +184,24 @@ func TestExternalModel_Status_Ready(t *testing.T) {
 	}
 	if endpoint != "https://maas.example.com/gpt-4o" {
 		t.Errorf("Status: endpoint = %q, want %q", endpoint, "https://maas.example.com/gpt-4o")
+	}
+}
+
+func TestExternalModel_Status_NotReadyWhenGatewayNotAccepted(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	// HTTPRouteName set but gateway not yet accepted (no HTTPRouteGatewayName)
+	model.Status.HTTPRouteName = "maas-model-gpt-4o"
+
+	r, _ := newTestReconciler(model)
+	handler := &externalModelHandler{r: r}
+	log := zap.New(zap.UseDevMode(true))
+
+	_, ready, err := handler.Status(context.Background(), log, model)
+	if err != nil {
+		t.Fatalf("Status: unexpected error: %v", err)
+	}
+	if ready {
+		t.Error("Status: ready = true, want false (gateway not yet accepted)")
 	}
 }
 
