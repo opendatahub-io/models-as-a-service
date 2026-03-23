@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -1406,6 +1407,81 @@ func TestCreateEphemeralAPIKey(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 		assert.Contains(t, response["error"], "cannot exceed 1 hour")
+	})
+}
+
+// ============================================================
+// CLEANUP EXPIRED EPHEMERAL KEYS TESTS (POST /internal/v1/api-keys/cleanup)
+// ============================================================
+
+func TestCleanupExpiredEphemeralKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+
+	// Create regular active key (should NOT be deleted)
+	err := store.AddKey(ctx, "alice", "regular-key", "hash-1", "Regular Key", "", []string{"users"}, nil, false)
+	require.NoError(t, err)
+
+	// Create active ephemeral key with future expiration (should NOT be deleted)
+	futureExpiry := time.Now().Add(30 * time.Minute)
+	err = store.AddKey(ctx, "alice", "active-ephemeral", "hash-2", "Active Ephemeral", "", []string{"users"}, &futureExpiry, true)
+	require.NoError(t, err)
+
+	// Create expired ephemeral key (should be deleted)
+	pastExpiry := time.Now().Add(-1 * time.Hour)
+	err = store.AddKey(ctx, "alice", "expired-ephemeral", "hash-3", "Expired Ephemeral", "", []string{"users"}, &pastExpiry, true)
+	require.NoError(t, err)
+
+	// Create another expired ephemeral key (should be deleted)
+	pastExpiry2 := time.Now().Add(-2 * time.Hour)
+	err = store.AddKey(ctx, "bob", "expired-ephemeral-2", "hash-4", "Expired Ephemeral 2", "", []string{"users"}, &pastExpiry2, true)
+	require.NoError(t, err)
+
+	t.Run("DeletesExpiredEphemeralKeys", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/internal/v1/api-keys/cleanup", nil)
+
+		//nolint:contextcheck // Gin handlers receive *gin.Context which contains the context.
+		handler.CleanupExpiredEphemeralKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response CleanupResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), response.DeletedCount)
+		assert.Contains(t, response.Message, "2 expired ephemeral key(s)")
+
+		// Verify expired keys are gone
+		_, err = store.Get(ctx, "expired-ephemeral")
+		require.ErrorIs(t, err, ErrKeyNotFound)
+		_, err = store.Get(ctx, "expired-ephemeral-2")
+		require.ErrorIs(t, err, ErrKeyNotFound)
+
+		// Verify regular and active ephemeral keys still exist
+		_, err = store.Get(ctx, "regular-key")
+		require.NoError(t, err)
+		_, err = store.Get(ctx, "active-ephemeral")
+		require.NoError(t, err)
+	})
+
+	t.Run("NoExpiredKeysReturnsZero", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/internal/v1/api-keys/cleanup", nil)
+
+		handler.CleanupExpiredEphemeralKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response CleanupResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), response.DeletedCount)
 	})
 }
 

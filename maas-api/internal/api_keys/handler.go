@@ -437,6 +437,23 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// CleanupExpiredEphemeralKeys handles POST /internal/v1/api-keys/cleanup
+// Deletes expired ephemeral API keys. Called by CronJob.
+// Access is restricted at the network level via NetworkPolicy.
+func (h *Handler) CleanupExpiredEphemeralKeys(c *gin.Context) {
+	count, err := h.service.CleanupExpiredEphemeral(c.Request.Context())
+	if err != nil {
+		h.logger.Error("Failed to cleanup expired ephemeral keys", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cleanup expired ephemeral keys"})
+		return
+	}
+
+	c.JSON(http.StatusOK, CleanupResponse{
+		DeletedCount: count,
+		Message:      fmt.Sprintf("Successfully deleted %d expired ephemeral key(s)", count),
+	})
+}
+
 // BulkRevokeAPIKeys handles POST /v1/api-keys/bulk-revoke
 // Revokes all active API keys for a specific user.
 func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
