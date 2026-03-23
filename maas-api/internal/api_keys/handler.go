@@ -127,11 +127,12 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 // If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (or 1hr for ephemeral).
 // Users can only create keys for themselves - the key inherits the user's groups.
 type CreateAPIKeyRequest struct {
-	Name           string          `json:"name,omitempty"`        // Required for regular keys, optional for ephemeral
-	Description    string          `json:"description,omitempty"`
-	Subscription   string          `json:"subscription,omitempty"` // Optional MaaSSubscription name; when omitted, highest-priority accessible subscription is used
-	ExpiresIn      *token.Duration `json:"expiresIn,omitempty"`    // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral)
-	Ephemeral      bool            `json:"ephemeral,omitempty"`    // Short-lived programmatic token (default: false)
+	Name             string          `json:"name,omitempty"`        // Required for regular keys, optional for ephemeral
+	Description      string          `json:"description,omitempty"`
+	Subscription     string          `json:"subscription,omitempty"`   // Optional MaaSSubscription name; when omitted, highest-priority accessible subscription is used
+	RequestedModel   string          `json:"requestedModel,omitempty"` // Optional model ref (e.g. namespace/name); when set with subscription, selector validates the model is in that subscription
+	ExpiresIn        *token.Duration `json:"expiresIn,omitempty"`      // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral)
+	Ephemeral        bool            `json:"ephemeral,omitempty"`      // Short-lived programmatic token (default: false)
 }
 
 // CreateAPIKey handles POST /v1/api-keys
@@ -175,11 +176,16 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	}
 
 	// Create key for the authenticated user with their groups
-	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, name, req.Description, expiresIn, req.Ephemeral, strings.TrimSpace(req.Subscription))
+	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, name, req.Description, expiresIn, req.Ephemeral, strings.TrimSpace(req.Subscription), strings.TrimSpace(req.RequestedModel))
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
 		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var modelNotInSub *subscription.ModelNotInSubscriptionError
+		if errors.As(err, &modelNotInSub) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "model_not_in_subscription"})
 			return
 		}
 		var notFound *subscription.SubscriptionNotFoundError

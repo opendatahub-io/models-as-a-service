@@ -17,7 +17,7 @@ import (
 
 // SubscriptionSelector resolves which MaaSSubscription to bind when minting an API key.
 type SubscriptionSelector interface {
-	Select(groups []string, username string, requestedSubscription string) (*subscription.SelectResponse, error)
+	Select(groups []string, username string, requestedSubscription string, requestedModel string) (*subscription.SelectResponse, error)
 	SelectHighestPriority(groups []string, username string) (*subscription.SelectResponse, error)
 }
 
@@ -71,7 +71,7 @@ type CreateAPIKeyResponse struct {
 // Admins can create keys for other users by specifying a different username.
 func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
-	expiresIn *time.Duration, ephemeral bool, requestedSubscription string,
+	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, requestedModel string,
 ) (*CreateAPIKeyResponse, error) {
 	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
 	maxDays := constant.DefaultAPIKeyMaxExpirationDays
@@ -121,7 +121,7 @@ func (s *Service) CreateAPIKey(
 	var subResp *subscription.SelectResponse
 	var selectErr error
 	if requestedSubscription != "" {
-		subResp, selectErr = s.subSelector.Select(userGroups, username, requestedSubscription)
+		subResp, selectErr = s.subSelector.Select(userGroups, username, requestedSubscription, requestedModel)
 	} else {
 		subResp, selectErr = s.subSelector.SelectHighestPriority(userGroups, username)
 	}
