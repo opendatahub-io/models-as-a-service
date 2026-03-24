@@ -23,9 +23,15 @@ import (
 	"github.com/go-logr/logr"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+// routeConditionProgrammed is the "Programmed" condition type for route parent status.
+// gateway-api v1.2.1 only defines this as a Gateway condition (GatewayConditionProgrammed),
+// but gateway controllers commonly set it on route parent status as well.
+const routeConditionProgrammed = "Programmed"
 
 // externalModelHandler implements BackendHandler for kind "ExternalModel".
 type externalModelHandler struct {
@@ -95,11 +101,17 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 				pNS = string(*parent.ParentRef.Namespace)
 			}
 			if pName == expectedGatewayName && pNS == expectedGatewayNamespace {
+				accepted := false
+				programmed := false
 				for _, cond := range parent.Conditions {
-					if cond.Type == "Accepted" && cond.Status == "True" {
-						gatewayAccepted = true
+					if cond.Type == string(gatewayapiv1.RouteConditionAccepted) && cond.Status == metav1.ConditionTrue {
+						accepted = true
+					}
+					if cond.Type == routeConditionProgrammed && cond.Status == metav1.ConditionTrue {
+						programmed = true
 					}
 				}
+				gatewayAccepted = accepted && programmed
 				break
 			}
 		}
@@ -120,7 +132,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 	}
 
 	if !gatewayAccepted {
-		log.Info("HTTPRoute references correct gateway but not yet accepted",
+		log.Info("HTTPRoute references correct gateway but not yet accepted and programmed",
 			"routeName", routeName, "namespace", routeNS, "model", model.Name)
 		model.Status.HTTPRouteName = routeName
 		model.Status.HTTPRouteNamespace = routeNS
@@ -185,6 +197,8 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 		}
 	}
 	if len(gateway.Status.Addresses) > 0 {
+		log.Info("Using IP-based gateway address; TLS hostname verification may fail",
+			"address", gateway.Status.Addresses[0].Value, "model", model.Name)
 		return fmt.Sprintf("https://%s/%s", gateway.Status.Addresses[0].Value, model.Name), nil
 	}
 

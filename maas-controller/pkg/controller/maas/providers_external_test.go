@@ -61,8 +61,8 @@ func newHTTPRouteWithGateway(name, ns, gatewayName, gatewayNS string) *gatewayap
 							Namespace: &gwNS,
 						},
 						Conditions: []metav1.Condition{
-							{Type: "Accepted", Status: "True"},
-							{Type: "Programmed", Status: "True"},
+							{Type: string(gatewayapiv1.RouteConditionAccepted), Status: metav1.ConditionTrue},
+							{Type: routeConditionProgrammed, Status: metav1.ConditionTrue},
 						},
 					},
 				},
