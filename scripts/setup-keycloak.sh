@@ -25,7 +25,7 @@
 #
 # Access Keycloak Admin Console:
 #   1. Get admin password:
-#      kubectl get secret -n keycloak-system keycloak-initial-admin \
+#      kubectl get secret -n keycloak-system maas-keycloak-initial-admin \
 #        -o jsonpath='{.data.password}' | base64 -d
 #   2. Navigate to: https://keycloak.{cluster-domain}
 #   3. Login as: admin / {password-from-step-1}
@@ -92,6 +92,7 @@ spec:
   name: keycloak-operator
   source: community-operators
   sourceNamespace: openshift-marketplace
+  startingCSV: keycloak-operator.v26.5.6
   installPlanApproval: Automatic
 EOF
 

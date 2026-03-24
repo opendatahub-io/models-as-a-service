@@ -71,8 +71,8 @@ The easiest way to configure realms is through the web UI:
    - **Authorization:** OFF
    - **Authentication flow:** Standard flow, Direct access grants
    - Click "Next"
-   - **Valid redirect URIs:** `https://*.{your-cluster-domain}/*`
-   - **Web origins:** `+` (allows CORS from redirect URIs)
+   - **Valid redirect URIs:** `https://maas.apps.{your-cluster-domain}/*` (restrict to the MaaS gateway host)
+   - **Web origins:** `https://maas.apps.{your-cluster-domain}` (restrict to the MaaS gateway host)
    - Click "Save"
 
 5. **Configure Group Mapper**
