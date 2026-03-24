@@ -240,8 +240,8 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 					"plain": map[string]interface{}{
 						"selector": "request.headers.authorization",
 					},
-					"when": []map[string]interface{}{
-						{
+					"when": []interface{}{
+						map[string]interface{}{
 							"selector": "request.headers.authorization",
 							"operator": "matches",
 							"value":    "^Bearer sk-oai-.*",
@@ -258,18 +258,18 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 					"kubernetesTokenReview": map[string]interface{}{
 						"audiences": []interface{}{}, // Empty means any audience is accepted
 					},
-					"when": []map[string]interface{}{
-						{
+					"when": []interface{}{
+						map[string]interface{}{
 							"selector": "request.url_path",
 							"operator": "endswith",
 							"value":    "/v1/models",
 						},
-						{
+						map[string]interface{}{
 							"selector": "request.headers.authorization",
 							"operator": "neq",
 							"value":    "",
 						},
-						{
+						map[string]interface{}{
 							"selector": "request.headers.authorization",
 							"operator": "matches",
 							"value":    "^Bearer (?!sk-oai-).*",
