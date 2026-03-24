@@ -864,7 +864,7 @@ class TestModelsEndpoint:
             log.info(f"📊 API Response: {len(models)} total model(s), {len(unique_ids)} unique ID(s)")
             log.info(f"   Model IDs: {model_ids}")
             log.info(f"   Unique IDs: {unique_ids}")
-            log.info(f"   Subscription had: 2 different modelRefs both serving 'facebook/opt-125m'")
+            log.info("   Subscription had: 2 different modelRefs both serving 'facebook/opt-125m'")
 
             # Both modelRefs serve the same model ID
             assert len(unique_ids) == 1, \
@@ -1511,7 +1511,7 @@ class TestModelsEndpoint:
             _wait_reconcile()
 
             # Query with API key (gateway injects deleted subscription name)
-            log.info(f"Querying /v1/models with API key bound to deleted subscription")
+            log.info("Querying /v1/models with API key bound to deleted subscription")
             r = requests.get(
                 f"{_maas_api_url()}/v1/models",
                 headers={
@@ -1572,7 +1572,7 @@ class TestModelsEndpoint:
             # User tries to query with their token but specifying the other user's subscription
             # This simulates what would happen if an API key was bound to a subscription
             # the user doesn't have access to
-            log.info(f"Querying /v1/models with user token and inaccessible subscription")
+            log.info("Querying /v1/models with user token and inaccessible subscription")
             r = requests.get(
                 f"{_maas_api_url()}/v1/models",
                 headers={

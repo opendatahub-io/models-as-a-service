@@ -54,7 +54,8 @@ func init() {
 
 // getClusterServiceAccountIssuer fetches the cluster's service account issuer from OpenShift/ROSA configuration.
 // Returns empty string if not found or not running on OpenShift/ROSA.
-func getClusterServiceAccountIssuer(c client.Client) (string, error) {
+// Uses client.Reader (not client.Client) so it can be called before the manager cache starts.
+func getClusterServiceAccountIssuer(c client.Reader) (string, error) {
 	// Try to fetch the OpenShift Authentication config resource
 	// This works on OpenShift/ROSA but not on vanilla Kubernetes
 	authConfig := &unstructured.Unstructured{}
@@ -128,8 +129,9 @@ func main() {
 	}
 
 	// Auto-detect cluster audience from OpenShift/ROSA if using default value
+	// Use GetAPIReader() instead of GetClient() because the cache hasn't started yet
 	if clusterAudience == "https://kubernetes.default.svc" {
-		if detectedAudience, err := getClusterServiceAccountIssuer(mgr.GetClient()); err == nil && detectedAudience != "" {
+		if detectedAudience, err := getClusterServiceAccountIssuer(mgr.GetAPIReader()); err == nil && detectedAudience != "" {
 			setupLog.Info("auto-detected cluster service account issuer", "audience", detectedAudience)
 			clusterAudience = detectedAudience
 		} else if err != nil {

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -59,13 +60,6 @@ type MaaSAuthPolicyReconciler struct {
 	ClusterAudience string
 }
 
-func (r *MaaSAuthPolicyReconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return defaultGatewayName
-}
-
 func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
 	if r.ClusterAudience != "" {
 		return r.ClusterAudience
@@ -79,6 +73,7 @@ func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
+//+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
 
 // Reconcile is part of the main kubernetes reconciliation loop
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
@@ -181,6 +176,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 				allowedUsers = append(allowedUsers, user)
 			}
 		}
+
+		// Deduplicate and sort to ensure stable output across reconciles
+		// (Kubernetes List order is not guaranteed to be deterministic)
+		policyNames = deduplicateAndSort(policyNames)
+		allowedGroups = deduplicateAndSort(allowedGroups)
+		allowedUsers = deduplicateAndSort(allowedUsers)
 
 		// Construct API URLs using configured namespace
 		apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
@@ -287,12 +288,14 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]interface{}{
-				"rego": `allow {
-  # API key authentication: validate the key
+				"rego": `# API key authentication: validate the key
+allow {
   object.get(input.auth.metadata, "apiKeyValidation", {})
   input.auth.metadata.apiKeyValidation.valid == true
-} {
-  # Kubernetes token authentication: check identity exists
+}
+
+# Kubernetes token authentication: check identity exists
+allow {
   object.get(input.auth.identity, "user", {}).username != ""
 }`,
 			},
@@ -778,4 +781,25 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 		}
 	}
 	return requests
+}
+// deduplicateAndSort removes duplicates from a string slice and sorts it.
+// This ensures stable output across reconciles, preventing spurious updates
+// caused by non-deterministic Kubernetes List order.
+func deduplicateAndSort(items []string) []string {
+	if len(items) == 0 {
+		return items
+	}
+	// Use a map to deduplicate
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		seen[item] = true
+	}
+	// Build deduplicated slice
+	result := make([]string, 0, len(seen))
+	for item := range seen {
+		result = append(result, item)
+	}
+	// Sort for deterministic output
+	sort.Strings(result)
+	return result
 }

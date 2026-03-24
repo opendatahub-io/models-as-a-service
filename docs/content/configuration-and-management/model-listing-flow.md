@@ -140,16 +140,22 @@ All models in the response include a `subscriptions` array with metadata for eac
 
 ### Deduplication Behavior
 
-When `X-MaaS-Return-All-Models: true` is used, models are deduplicated by `(id, url)` key:
+Models are deduplicated by `(id, url, ownedBy)` key:
 
-- **Same id + same URL**: Single entry with subscriptions aggregated into the `subscriptions` array
-- **Same id + different URLs**: Separate entries (different model endpoints)
+- **Same id + same URL + same MaaSModelRef (ownedBy)**: Single entry with subscriptions aggregated into the `subscriptions` array
+- **Different id, URL, or MaaSModelRef**: Separate entries
 
-**Example:**
-- Model `gpt-3.5` at URL `https://example.com/gpt-3.5` is accessible via subscriptions A and B
+**User token authentication** (multiple subscriptions):
+- Model `gpt-3.5` from MaaSModelRef `namespace-a/model-a` at URL `https://example.com/gpt-3.5` is accessible via subscriptions A and B
   - Result: One entry with `subscriptions: [{name: "A"}, {name: "B"}]`
-- Model `gpt-3.5` at URL `https://example.com/gpt-3.5-premium` is only in subscription B
-  - Result: Separate entry with `subscriptions: [{name: "B"}]`
+- Model `gpt-3.5` from MaaSModelRef `namespace-b/model-b` at the same URL is only in subscription B
+  - Result: Separate entry with `subscriptions: [{name: "B"}]` (different MaaSModelRef)
+- Model `gpt-3.5` at URL `https://example.com/gpt-3.5-premium` from `namespace-a/model-a` is only in subscription B
+  - Result: Separate entry with `subscriptions: [{name: "B"}]` (different URL)
+
+**API key authentication** (single subscription):
+- Deduplication handles edge cases where multiple MaaSModelRef resources point to the same model endpoint
+- Each unique MaaSModelRef resource appears as a separate entry
 
 !!! tip "Subscription metadata fields"
     The `displayName` and `description` fields are read from the MaaSSubscription CRD's `spec.displayName` and `spec.description` fields. If these fields are not set in the CRD, they will be empty strings in the response.

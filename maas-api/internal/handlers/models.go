@@ -188,11 +188,23 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	// For API keys: Authorino injects this from auth.metadata.apiKeyValidation.subscription
 	// For user tokens: This header is not present (Authorino doesn't inject it)
 	requestedSubscription := strings.TrimSpace(c.GetHeader("x-maas-subscription"))
+	isAPIKeyRequest := strings.HasPrefix(authHeader, "Bearer sk-oai-")
+
+	// Fail closed: API keys without a bound subscription must be rejected
+	if isAPIKeyRequest && requestedSubscription == "" {
+		h.logger.Debug("API key request missing bound subscription header")
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": "API key has no subscription bound",
+				"type":    "permission_error",
+			}})
+		return
+	}
 
 	// Determine behavior based on auth method:
 	// - API key with subscription → filter by that subscription (requestedSubscription != "")
 	// - User token → return all accessible models (requestedSubscription == "")
-	returnAllModels := requestedSubscription == ""
+	returnAllModels := !isAPIKeyRequest && requestedSubscription == ""
 
 	// Get user context for subscription selection
 	var userContext *token.UserContext
@@ -264,11 +276,13 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 		} else {
 			// Filter models by subscription(s) and aggregate subscriptions
-			// Deduplication key is (model ID, URL) - models with the same ID and URL are
-			// the same instance and should have their subscriptions aggregated into an array.
+			// Deduplication key is (model ID, URL, OwnedBy) - models with the same ID, URL, and
+			// MaaSModelRef (namespace/name) are the same instance and should have their
+			// subscriptions aggregated into an array.
 			type modelKey struct {
-				id  string
-				url string
+				id      string
+				url     string
+				ownedBy string
 			}
 			modelsByKey := make(map[modelKey]*models.Model)
 
@@ -300,12 +314,12 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 						Description: sub.Description,
 					}
 
-					// Create key from model ID and URL
+					// Create key from model ID, URL, and OwnedBy (namespace/name of MaaSModelRef)
 					urlStr := ""
 					if model.URL != nil {
 						urlStr = model.URL.String()
 					}
-					key := modelKey{id: model.ID, url: urlStr}
+					key := modelKey{id: model.ID, url: urlStr, ownedBy: model.OwnedBy}
 
 					if existingModel, exists := modelsByKey[key]; exists {
 						// Model already exists - append subscription if not already present
@@ -327,7 +341,10 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 				if keys[i].id != keys[j].id {
 					return keys[i].id < keys[j].id
 				}
-				return keys[i].url < keys[j].url
+				if keys[i].url != keys[j].url {
+					return keys[i].url < keys[j].url
+				}
+				return keys[i].ownedBy < keys[j].ownedBy
 			})
 			for _, k := range keys {
 				modelList = append(modelList, *modelsByKey[k])

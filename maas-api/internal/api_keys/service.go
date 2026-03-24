@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -225,6 +226,17 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	groups := metadata.Groups
 	if groups == nil {
 		groups = []string{} // Return empty array if no groups stored
+	}
+
+	// Fail closed: reject keys with no bound subscription (CWE-284)
+	// This prevents legacy keys, bad migrations, or manual writes with empty subscription
+	// from bypassing the "subscription bound at mint" access control invariant
+	if strings.TrimSpace(metadata.Subscription) == "" {
+		s.logger.Warn("API key missing bound subscription", "key_id", metadata.ID)
+		return &ValidationResult{
+			Valid:  false,
+			Reason: "key has no subscription bound",
+		}, nil
 	}
 
 	// Success - return user identity and groups for Authorino

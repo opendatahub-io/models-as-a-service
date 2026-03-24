@@ -402,9 +402,9 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	testLogger := logger.Development()
 
 	// Create mock servers that require specific subscription headers
-	// Use qualified names (namespace/name) to match the format sent by the handler
-	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "test-namespace/premium")
-	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "test-namespace/free")
+	// Use bare subscription names to match what Authorino injects from API key validation
+	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "premium")
+	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "free")
 
 	// Build MaaSModelRef unstructured list
 	maasModelRefItems := []*unstructured.Unstructured{
@@ -581,10 +581,10 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	testLogger := logger.Development()
 
 	// Create mock servers for models
-	// Use qualified names (namespace/name) to match the format sent by the handler
-	model1Server := createMockModelServerWithSubscriptionCheck(t, "model-1", "test-namespace/sub-a")
-	model2Server := createMockModelServerWithSubscriptionCheck(t, "model-2", "test-namespace/sub-b")
-	model3Server := createMockModelServerWithSubscriptionCheck(t, "model-3", "test-namespace/sub-a")
+	// Use bare subscription names to match what Authorino injects from API key validation
+	model1Server := createMockModelServerWithSubscriptionCheck(t, "model-1", "sub-a")
+	model2Server := createMockModelServerWithSubscriptionCheck(t, "model-2", "sub-b")
+	model3Server := createMockModelServerWithSubscriptionCheck(t, "model-3", "sub-a")
 
 	// Setup MaaSModelRef lister with three models
 	lister := fakeMaaSModelRefLister{
@@ -1049,7 +1049,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 	v1 := router.Group("/v1")
 	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 
-	t.Run("different MaaSModelRefs with same URL and model ID are deduplicated", func(t *testing.T) {
+	t.Run("different MaaSModelRefs with same URL and model ID remain separate entries", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
 		require.NoError(t, err)
@@ -1066,14 +1066,19 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 
-		// Should have 1 entry because same URL and model ID (deduplicated)
-		assert.Len(t, response.Data, 1, "Same URL and model ID should be deduplicated into single entry")
+		// Should have 2 entries because different MaaSModelRef resources (different ownedBy)
+		// even though they have the same URL and model ID
+		assert.Len(t, response.Data, 2, "Different MaaSModelRef resources should remain separate entries")
 
-		model := response.Data[0]
-		assert.Equal(t, "gpt-4", model.ID)
-		assert.Equal(t, sharedModelServer.URL, model.URL.String())
-		require.Len(t, model.Subscriptions, 1, "Model should have 1 subscription")
-		assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
+		// Both should have model ID "gpt-4" and same URL but different ownedBy
+		for _, model := range response.Data {
+			assert.Equal(t, "gpt-4", model.ID)
+			assert.Equal(t, sharedModelServer.URL, model.URL.String())
+			require.Len(t, model.Subscriptions, 1, "Each model should have 1 subscription")
+			assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
+			// OwnedBy should be either namespace-a/gpt-4-ref or namespace-b/gpt-4-another-ref
+			assert.Contains(t, []string{"namespace-a/gpt-4-ref", "namespace-b/gpt-4-another-ref"}, model.OwnedBy)
+		}
 	})
 }
 
@@ -1082,9 +1087,9 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 
 	// Create two mock servers that both return the same model ID "gpt-4"
 	// One accessible via sub-a, one via sub-b
-	// Use qualified names (namespace/name) to match the format sent by the handler
-	modelServerA := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "test-namespace/sub-a")
-	modelServerB := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "test-namespace/sub-b")
+	// Use bare subscription names to match what Authorino injects from API key validation
+	modelServerA := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "sub-a")
+	modelServerB := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "sub-b")
 
 	// Setup MaaSModelRef lister with two different MaaSModelRefs in different namespaces
 	lister := fakeMaaSModelRefLister{
