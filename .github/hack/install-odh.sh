@@ -5,9 +5,9 @@
 # Prerequisites: cert-manager and LWS operators (run install-cert-manager-and-lws.sh first).
 #
 # Environment variables:
-#   OPERATOR_CATALOG - Custom catalog image (optional). When unset, uses community-operators (ODH 3.3).
+#   OPERATOR_CATALOG - Custom catalog image (optional). When unset, uses community-operators (ODH stable).
 #                      Set to e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest for custom builds.
-#   OPERATOR_CHANNEL - Subscription channel (default: fast-3 for community, fast for custom catalog)
+#   OPERATOR_CHANNEL - Subscription channel (default: stable for community, fast for custom catalog)
 #   OPERATOR_IMAGE   - Custom operator image to patch into CSV (optional)
 #
 # Usage: ./install-odh.sh
@@ -59,7 +59,7 @@ patch_operator_csv_if_needed() {
 echo "=== Installing OpenDataHub operator ==="
 echo ""
 
-# 1. Catalog setup: use community-operators (ODH 3.3) by default, or custom catalog when OPERATOR_CATALOG is set
+# 1. Catalog setup: use community-operators (ODH stable) by default, or custom catalog when OPERATOR_CATALOG is set
 echo "1. Setting up ODH catalog..."
 if [[ -n "$OPERATOR_CATALOG" ]]; then
   echo "   Using custom catalog: $OPERATOR_CATALOG"
@@ -67,9 +67,9 @@ if [[ -n "$OPERATOR_CATALOG" ]]; then
   catalog_source="odh-custom-catalog"
   channel="${OPERATOR_CHANNEL:-fast}"
 else
-  echo "   Using community-operators (ODH 3.3)"
+  echo "   Using community-operators (ODH stable)"
   catalog_source="community-operators"
-  channel="${OPERATOR_CHANNEL:-fast-3}"
+  channel="${OPERATOR_CHANNEL:-stable}"
 fi
 
 # 2. Install ODH operator via OLM
