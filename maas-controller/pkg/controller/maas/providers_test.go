@@ -60,6 +60,7 @@ func testRESTMapper() apimeta.RESTMapper {
 	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"}, ns)
 	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}, ns)
 	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSPlatformAuth"}, ns)
 	return m
 }
 

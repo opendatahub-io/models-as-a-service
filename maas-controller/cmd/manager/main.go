@@ -74,11 +74,14 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	setupLog.Info("watching namespace for MaaS AuthPolicy and MaaSSubscription", "namespace", maasSubscriptionNamespace)
+	setupLog.Info("watching namespaces for MaaS CRs", "subscriptionNamespace", maasSubscriptionNamespace, "apiNamespace", maasAPINamespace)
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
 			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: map[string]cache.Config{maasSubscriptionNamespace: {}}},
 			&maasv1alpha1.MaaSSubscription{}: {Namespaces: map[string]cache.Config{maasSubscriptionNamespace: {}}},
+			// MaaSPlatformAuth lives in the maas-api namespace (same as the controller pod)
+			// because it configures the maas-api AuthPolicy, not per-model access.
+			&maasv1alpha1.MaaSPlatformAuth{}: {Namespaces: map[string]cache.Config{maasAPINamespace: {}}},
 		},
 	}
 
@@ -119,6 +122,16 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
+		os.Exit(1)
+	}
+	if err := (&maas.MaaSPlatformAuthReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		MaaSAPINamespace: maasAPINamespace,
+		ClusterAudience:  clusterAudience,
+		GatewayName:      gatewayName,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "MaaSPlatformAuth")
 		os.Exit(1)
 	}
 

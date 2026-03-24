@@ -51,11 +51,6 @@ patches:
   target:
     kind: Deployment
     name: maas-api
-- path: maas-api-auth-policy-oidc-patch.yaml
-  target:
-    kind: AuthPolicy
-    name: maas-api-auth-policy
-
 replacements:
 # Gateway policies must be in openshift-ingress to target maas-default-gateway
 - source:
@@ -145,14 +140,3 @@ replacements:
     options:
       delimiter: "."
       index: 1
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.oidc-issuer-url
-  targets:
-  - select:
-      kind: AuthPolicy
-      name: maas-api-auth-policy
-    fieldPaths:
-    - spec.rules.authentication.oidc-identities.jwt.issuerUrl
