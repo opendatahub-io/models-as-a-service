@@ -136,7 +136,7 @@ func getHTTPRoute(ctx context.Context, c client.Reader, name, ns string) (*gatew
 	err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, route)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("HTTPRoute %s/%s not found for model", ns, name)
+			return nil, fmt.Errorf("%w: HTTPRoute %s/%s", ErrHTTPRouteNotFound, ns, name)
 		}
 		return nil, fmt.Errorf("failed to get HTTPRoute %s/%s: %w", ns, name, err)
 	}
