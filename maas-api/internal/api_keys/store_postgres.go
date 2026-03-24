@@ -461,7 +461,7 @@ func (s *PostgresStore) UpdateLastUsed(ctx context.Context, keyID string) error 
 // The grace period provides a safety net before hard-deleting keys from the database.
 // Uses the partial index idx_api_keys_ephemeral_expired for efficient lookups.
 func (s *PostgresStore) DeleteExpiredEphemeral(ctx context.Context) (int64, error) {
-	query := `DELETE FROM api_keys WHERE ephemeral = TRUE AND expires_at IS NOT NULL AND (status = 'expired' OR expires_at < NOW()) AND expires_at < NOW() - INTERVAL '30 minutes'`
+	query := `DELETE FROM api_keys WHERE ephemeral = TRUE AND expires_at IS NOT NULL AND expires_at < NOW() - INTERVAL '30 minutes'`
 
 	result, err := s.db.ExecContext(ctx, query)
 	if err != nil {

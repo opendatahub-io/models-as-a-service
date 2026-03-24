@@ -18,7 +18,7 @@ spec:
   - to:
     - podSelector:
         matchLabels:
-          app: maas-api
+          app.kubernetes.io/name: maas-api
     ports:
     - protocol: TCP
       port: 8080
