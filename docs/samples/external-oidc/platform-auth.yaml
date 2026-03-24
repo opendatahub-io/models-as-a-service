@@ -4,6 +4,6 @@ metadata:
   name: platform-auth
 spec:
   externalOIDC:
-    issuerUrl: https://oidc.example.invalid/realms/maas
+    issuerUrl: https://keycloak.apps.example.com/realms/maas
     clientId: maas-cli
     ttl: 300

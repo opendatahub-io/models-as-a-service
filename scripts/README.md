@@ -35,7 +35,8 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--operator-type <odh|rhoai>` - Which operator to install (default: odh)
 - `--deployment-mode <operator|kustomize>` - Deployment method (default: operator)
 - `--namespace <namespace>` - Target namespace for deployment
-- `--external-oidc` - Enable external OIDC patching for `maas-api`
+- `--external-oidc` - Create a `MaaSPlatformAuth` CR to enable external OIDC on `maas-api` (requires `OIDC_ISSUER_URL` and `OIDC_CLIENT_ID`)
+- `--enable-keycloak` - Deploy a Keycloak instance for external OIDC testing
 - `--enable-tls-backend` - Enable TLS backend (default)
 - `--disable-tls-backend` - Disable TLS backend
 - `--verbose` - Enable debug logging
@@ -147,10 +148,29 @@ Results:
 
 ---
 
-### External OIDC Test Configuration
-This repository no longer provisions a temporary Keycloak instance for external OIDC testing.
+### External OIDC
 
-Use an externally provisioned OIDC provider and set these variables when running the Prow-style E2E flow with `EXTERNAL_OIDC=true`:
+External OIDC is enabled by creating a `MaaSPlatformAuth` CR. The controller
+updates the `maas-api` AuthPolicy to accept JWTs from the configured issuer.
+
+**Via `deploy.sh`:**
+
+```bash
+OIDC_ISSUER_URL=https://idp.example.com/realms/my-realm \
+OIDC_CLIENT_ID=my-client \
+./scripts/deploy.sh --deployment-mode operator --external-oidc
+```
+
+**Via `kubectl`:**
+
+```bash
+kubectl apply -f docs/samples/external-oidc/platform-auth.yaml -n <maas-namespace>
+```
+
+See [External OIDC documentation](../docs/samples/external-oidc/README.md) for
+the full guide.
+
+**E2E testing** with `EXTERNAL_OIDC=true` requires these environment variables:
 
 - `OIDC_ISSUER_URL`
 - `OIDC_TOKEN_URL`
