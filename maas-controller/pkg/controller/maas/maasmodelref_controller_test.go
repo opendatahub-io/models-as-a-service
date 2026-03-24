@@ -526,14 +526,14 @@ func TestMaaSModelRefReconciler_HTTPRouteRaceCondition(t *testing.T) {
 	r, c := newTestReconciler(model, llmisvc)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
-	// --- Phase 1: Reconcile without HTTPRoute -> should enter Pending with requeue ---
+	// --- Phase 1: Reconcile without HTTPRoute -> should enter Pending ---
 
 	result, err := r.Reconcile(ctx, req)
 	if err != nil {
 		t.Fatalf("Reconcile (no HTTPRoute): %v", err)
 	}
-	if result.RequeueAfter == 0 {
-		t.Errorf("expected RequeueAfter to be set when HTTPRoute not found, got: %v", result)
+	if result.Requeue || result.RequeueAfter != 0 {
+		t.Errorf("expected no requeue when HTTPRoute not found (watch handles it), got: %v", result)
 	}
 
 	got := &maasv1alpha1.MaaSModelRef{}
@@ -552,7 +552,7 @@ func TestMaaSModelRefReconciler_HTTPRouteRaceCondition(t *testing.T) {
 		t.Fatalf("Create HTTPRoute: %v", err)
 	}
 
-	// Reconcile again (triggered by HTTPRoute watch or RequeueAfter)
+	// Reconcile again (triggered by HTTPRoute watch)
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatalf("Reconcile (with HTTPRoute): %v", err)
 	}

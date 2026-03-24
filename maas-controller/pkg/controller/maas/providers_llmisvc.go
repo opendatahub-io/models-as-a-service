@@ -52,7 +52,7 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 		return fmt.Errorf("failed to list HTTPRoutes for LLMInferenceService %s: %w", model.Spec.ModelRef.Name, err)
 	}
 	if len(routeList.Items) == 0 {
-		log.Info("HTTPRoute not found for LLMInferenceService, will retry", "llmisvcName", model.Spec.ModelRef.Name, "namespace", routeNS)
+		log.V(1).Info("HTTPRoute not found for LLMInferenceService, will retry when created", "llmisvcName", model.Spec.ModelRef.Name, "namespace", routeNS)
 		return fmt.Errorf("%w: for LLMInferenceService %s in namespace %s", ErrHTTPRouteNotFound, model.Spec.ModelRef.Name, routeNS)
 	}
 	route := &routeList.Items[0]

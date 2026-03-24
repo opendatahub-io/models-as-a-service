@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
@@ -140,10 +139,10 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, nil
 		}
 		if errors.Is(err, ErrHTTPRouteNotFound) {
-			// HTTPRoute doesn't exist yet (KServe hasn't created it) - this is normal during startup.
-			// Set status to Pending and requeue quickly. HTTPRoute watch will also trigger when route is created.
-			r.updateStatus(ctx, model, "Pending", "Waiting for HTTPRoute to be created by KServe", statusSnapshot)
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			// HTTPRoute doesn't exist yet - this is normal during startup.
+			// Set status to Pending (not Failed). The HTTPRoute watch will trigger reconciliation when the route is created.
+			r.updateStatus(ctx, model, "Pending", "Waiting for HTTPRoute to be created", statusSnapshot)
+			return ctrl.Result{}, nil
 		}
 		log.Error(err, "failed to reconcile HTTPRoute")
 		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to reconcile HTTPRoute: %v", err), statusSnapshot)
