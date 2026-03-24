@@ -285,7 +285,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		authRules := make(map[string]interface{})
 
 		// Validate authentication: API key must be valid, OR K8s token must be authenticated
-		// For API keys: check apiKeyValidation.valid == "true"
+		// For API keys: check apiKeyValidation.valid == true (boolean)
 		// For K8s tokens: check that identity.username exists (TokenReview succeeded)
 		authRules["auth-valid"] = map[string]interface{}{
 			"metrics":  false,
@@ -294,7 +294,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 				"rego": `allow {
   # API key authentication: validate the key
   object.get(input.auth.metadata, "apiKeyValidation", {})
-  input.auth.metadata.apiKeyValidation.valid == "true"
+  input.auth.metadata.apiKeyValidation.valid == true
 } {
   # Kubernetes token authentication: check identity exists
   object.get(input.auth.identity, "username", "") != ""
