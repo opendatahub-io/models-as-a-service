@@ -9,12 +9,16 @@
 #
 # WHAT IT DOES:
 #   1. Install cert-manager and LeaderWorkerSet (LWS) operators (required for KServe)
-#   2. Deploy MaaS platform via kustomize (RHCL, gateway, MaaS API, maas-controller)
-#   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
-#   4. Deploy MaaS system (free + premium + e2e test fixtures: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
-#   5. Setup test tokens (admin + regular user) for comprehensive testing
-#   6. Run E2E tests (API keys + subscription + models endpoint tests)
-#   7. Run deployment validation + token metadata verification
+#   2. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
+#   3. Deploy MaaS platform via kustomize (Kuadrant, MaaS API, maas-controller)
+#   4. Deploy simulator model for testing
+#   5. Validate deployment functionality
+#   6. Create test users with different permission levels:
+#      - Admin user (cluster-admin role)
+#      - Edit user (edit role)
+#      - View user (view role)
+#   7. Run token metadata verification (as admin user)
+#   8. Run smoke tests for each user
 # 
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
@@ -27,20 +31,20 @@
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
-#   OPERATOR_CATALOG - ODH catalog image (optional). Unset = community-operators ODH 3.3.
-#                      Set for custom builds, e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest
+#   OPERATOR_CATALOG - ODH catalog image (default: quay.io/opendatahub/opendatahub-operator-catalog:latest)
+#   OPERATOR_CHANNEL - OLM channel (default: fast-3)
+#   OPERATOR_STARTING_CSV - Pin ODH Subscription startingCSV (default: opendatahub-operator.v3.4.0-ea.1; "-" to omit)
+#   OPERATOR_INSTALL_PLAN_APPROVAL - Manual (default) or Automatic; "-" to omit (Manual: first IP auto-approved by script)
 #   OPERATOR_IMAGE   - Custom ODH operator image for CSV patch (optional)
-#   SKIP_DEPLOYMENT - Skip platform and model deployment (default: false)
-#                     Use for running tests against an existing cluster
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
+#   SKIP_SMOKE      - Skip smoke tests (default: false)
+#   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (default: uses operator default)
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/opendatahub/maas-controller:latest)
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
-#                    Affects deploy.sh (via --disable-tls-backend) and test env
-#   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
-#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
+#                    Affects both deploy.sh (via --disable-tls-backend) and smoke.sh
 # =============================================================================
 
 set -euo pipefail
@@ -62,26 +66,23 @@ PROJECT_ROOT="$(_find_project_root_bootstrap)"
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # Options (can be set as environment variables)
-SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}  # Skip platform and model deployment (for existing clusters)
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
+SKIP_SMOKE=${SKIP_SMOKE:-false}
+SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
+SKIP_SUBSCRIPTION_TESTS=${SKIP_SUBSCRIPTION_TESTS:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
-export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
+export OPERATOR_CATALOG=${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}
+export OPERATOR_CHANNEL=${OPERATOR_CHANNEL:-fast-3}
+export OPERATOR_STARTING_CSV=${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.4.0-ea.1}
+export OPERATOR_INSTALL_PLAN_APPROVAL=${OPERATOR_INSTALL_PLAN_APPROVAL:-Manual}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 AUTHORINO_NAMESPACE="kuadrant-system"
-DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
-MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
-
-# Artifact collection: OpenShift CI provides ARTIFACT_DIR (docs.ci.openshift.org/docs/architecture/step-registry).
-# Files written here are collected to artifacts/<job>/<step>/ in Prow. Fallbacks: ARTIFACTS, LOG_DIR, or local reports.
-ARTIFACTS_DIR="${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}"
-
-# Source auth utils (patch_authorino_debug, collect_e2e_artifacts)
-source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
+MAAS_NAMESPACE="opendatahub"
 
 print_header() {
     echo ""
@@ -149,10 +150,8 @@ deploy_maas_platform() {
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --deployment-mode kustomize
+        --operator-catalog "${OPERATOR_CATALOG}"
     )
-    if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
-        deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
-    fi
     if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         deploy_cmd+=(--operator-image "${OPERATOR_IMAGE}")
     fi
@@ -190,7 +189,7 @@ deploy_maas_platform() {
 }
 
 deploy_models() {
-    echo "Deploying MaaS system (free + premium: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)"
+    echo "Deploying simulator models (regular + premium)"
     # Create llm namespace if it does not exist
     if ! kubectl get namespace llm >/dev/null 2>&1; then
         echo "Creating 'llm' namespace..."
@@ -202,31 +201,21 @@ deploy_models() {
         echo "'llm' namespace already exists"
     fi
 
-    # Create MaaS CRs namespace if it does not exist
-    if ! kubectl get namespace "$MAAS_SUBSCRIPTION_NAMESPACE" >/dev/null 2>&1; then
-        echo "Creating '$MAAS_SUBSCRIPTION_NAMESPACE' namespace..."
-        if ! kubectl create namespace "$MAAS_SUBSCRIPTION_NAMESPACE"; then
-            echo "❌ ERROR: Failed to create '$MAAS_SUBSCRIPTION_NAMESPACE' namespace"
-            exit 1
-        fi
-    else
-        echo "'$MAAS_SUBSCRIPTION_NAMESPACE' namespace already exists"
-    fi
-
-    # Deploy all at once so dependencies resolve correctly
-    # E2E test fixtures kustomization hardcodes namespace: models-as-a-service; override to $MAAS_SUBSCRIPTION_NAMESPACE
-    # so CRs land in the correct namespace.
-    if ! (cd "$PROJECT_ROOT" && kustomize build test/e2e/fixtures/ | \
-            sed "s/namespace: models-as-a-service/namespace: $MAAS_SUBSCRIPTION_NAMESPACE/g" | \
-            kubectl apply -f -); then
-        echo "❌ ERROR: Failed to deploy MaaS system with e2e fixtures"
+    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator/ | kubectl apply -f -); then
+        echo "❌ ERROR: Failed to deploy simulator model"
         exit 1
     fi
-    echo "✅ MaaS system deployed (free + premium + e2e test fixtures)"
+    echo "✅ Regular simulator deployed"
+
+    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator-premium/ | kubectl apply -f -); then
+        echo "❌ ERROR: Failed to deploy premium simulator model"
+        exit 1
+    fi
+    echo "✅ Premium simulator deployed"
 
     echo "Waiting for models to be ready..."
     if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for free simulator to be ready"
+        echo "❌ ERROR: Timed out waiting for regular simulator to be ready"
         oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
@@ -237,56 +226,34 @@ deploy_models() {
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
     fi
-    echo "✅ Simulator models ready"
+    echo "✅ Simulator models deployed"
 
-    # TODO: Currently waits for  ever and bounces controller (seems like they are not reconciled even after llmisvc are reported as up)
-    echo "Waiting for MaaSModelRefs to be Ready..."
+    # Deploy subscription CRs (MaaSModels + MaaSAuthPolicies + MaaSSubscriptions).
+    # Needed early so that: catalog discovery works (MaaSModels), auth probes pass
+    # (per-route AuthPolicies), and rate limiting is active (for validation checks).
+    # Subscription tests running last re-apply these idempotently.
+    echo "Deploying MaaS subscription CRs..."
+    if ! kubectl apply -k "$PROJECT_ROOT/maas-controller/examples/"; then
+        echo "⚠️  WARNING: Failed to deploy subscription CRs, continuing..."
+    fi
+
+    echo "Waiting for MaaSModels to be Ready..."
     local retries=0
-    local all_ready=false
     while [[ $retries -lt 30 ]]; do
-        all_ready=true
+        local all_ready=true
         while IFS= read -r phase; do
             if [[ "$phase" != "Ready" ]]; then
                 all_ready=false
                 break
             fi
-        done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-        if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
+        done < <(oc get maasmodels -n "$MAAS_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        if $all_ready && [[ -n "$(oc get maasmodels -n "$MAAS_NAMESPACE" -o name 2>/dev/null)" ]]; then
             break
         fi
         retries=$((retries + 1))
         sleep 5
     done
-
-    if ! $all_ready; then
-        # TODO: Remove this workaround once maas-controller reconcile logic is correct.
-        # Controller can get stuck in a bad state forever; bouncing may unstick it.
-        echo "  MaaSModelRefs not ready after ${retries} retries, bouncing maas-controller..."
-        kubectl rollout restart deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
-        kubectl rollout status deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --timeout=120s 2>/dev/null || true
-        echo "  Retrying MaaSModelRefs wait..."
-        retries=0
-        while [[ $retries -lt 30 ]]; do
-            all_ready=true
-            while IFS= read -r phase; do
-                if [[ "$phase" != "Ready" ]]; then
-                    all_ready=false
-                    break
-                fi
-            done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-            if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
-                break
-            fi
-            retries=$((retries + 1))
-            sleep 5
-        done
-    fi
-
-    if $all_ready; then
-        echo "✅ MaaSModelRefs ready"
-    else
-        echo "⚠️  WARNING: MaaSModelRefs still not ready after bounce, continuing anyway"
-    fi
+    echo "✅ MaaS subscription CRs deployed"
 
     wait_for_auth_policies_enforced
 }
@@ -327,13 +294,13 @@ wait_for_auth_policies_enforced() {
 
 validate_deployment() {
     echo "Deployment Validation"
-    echo "Using namespace: $DEPLOYMENT_NAMESPACE"
+    echo "Using namespace: $MAAS_NAMESPACE"
     
     if [ "$SKIP_VALIDATION" = false ]; then
-        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$DEPLOYMENT_NAMESPACE"; then
+        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE"; then
             echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
             sleep 30
-            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$DEPLOYMENT_NAMESPACE"; then
+            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$MAAS_NAMESPACE"; then
                 echo "❌ ERROR: Deployment validation failed after retry"
                 exit 1
             fi
@@ -382,62 +349,33 @@ setup_vars_for_tests() {
     echo "✅ Variables for tests setup completed"
 }
 
-# Premium test token: use premium-service-account when oc whoami -t doesn't work (e.g. Prow).
-# TODO: Consolidate token strategies — consider always using SA for consistency across local/Prow.
-# TODO: Consider moving SA/namespace constants to a shared config or env defaults.
-PREMIUM_USERS_NS="premium-users-namespace"
-PREMIUM_SA="premium-service-account"
-
-setup_premium_test_token() {
-    echo "Setting up premium test token (SA-based, works when oc whoami -t is unavailable)..."
-    # Create namespace and SA
-    if ! kubectl get namespace "$PREMIUM_USERS_NS" &>/dev/null; then
-        echo "Creating namespace: $PREMIUM_USERS_NS"
-        kubectl create namespace "$PREMIUM_USERS_NS"
+run_smoke_tests() {
+    echo "-- Smoke Testing --"
+    
+    if [ "$SKIP_SMOKE" = false ]; then
+        if ! (cd "$PROJECT_ROOT" && bash test/e2e/smoke.sh); then
+            echo "❌ ERROR: Smoke tests failed"
+            exit 1
+        else
+            echo "✅ Smoke tests completed successfully"
+        fi
+    else
+        echo "⏭️  Skipping smoke tests"
     fi
-    if ! kubectl get sa "$PREMIUM_SA" -n "$PREMIUM_USERS_NS" &>/dev/null; then
-        echo "Creating service account: $PREMIUM_SA"
-        kubectl create sa "$PREMIUM_SA" -n "$PREMIUM_USERS_NS"
-    fi
-
-    # Add premium SA as user (not group) so it gets premium access.
-    local sa_user="system:serviceaccount:${PREMIUM_USERS_NS}:${PREMIUM_SA}"
-    echo "Patching MaaSAuthPolicy premium-simulator-access to include $sa_user..."
-    oc patch maasauthpolicy premium-simulator-access -n "$MAAS_SUBSCRIPTION_NAMESPACE" --type=merge -p="{\"spec\": {\"subjects\": {\"groups\": [{\"name\": \"premium-user\"}], \"users\": [\"$sa_user\"]}}}"
-
-    echo "Patching MaaSSubscription premium-simulator-subscription to include $sa_user..."
-    oc patch maassubscription premium-simulator-subscription -n "$MAAS_SUBSCRIPTION_NAMESPACE" --type=merge -p="{\"spec\": {\"owner\": {\"groups\": [{\"name\": \"premium-user\"}], \"users\": [\"$sa_user\"]}}}"
-
-    export E2E_TEST_TOKEN_SA_NAMESPACE="$PREMIUM_USERS_NS"
-    export E2E_TEST_TOKEN_SA_NAME="$PREMIUM_SA"
-    # TODO: Add brief reconcile wait if controller is slow to pick up patches.
-    echo "✅ Premium test token setup complete (E2E_TEST_TOKEN_SA_* exported)"
 }
 
-run_e2e_tests() {
-    echo "-- E2E Tests (API Keys + Subscription + Models Endpoint) --"
-
-    # Note: setup_premium_test_token() is called earlier in main execution
-    # (Phase 1: Admin Setup) while still logged in as system:admin
+run_subscription_tests() {
+    echo "-- Subscription Controller Tests --"
 
     export GATEWAY_HOST="${HOST}"
-    export DEPLOYMENT_NAMESPACE
-    export MAAS_SUBSCRIPTION_NAMESPACE
-    # Skip TLS verification in CI (self-signed certs)
-    export E2E_SKIP_TLS_VERIFY=true
-    # Set MODEL_NAME explicitly - maas-api /v1/models currently only lists MaaSModelRefs
-    # from its own namespace, but models are deployed in 'llm' namespace.
-    # TODO: Fix maas-api to list MaaSModelRefs from ALL namespaces (pass "" to ListFromMaaSModelRefLister)
-    export MODEL_NAME="facebook-opt-125m-simulated"
-    export E2E_MODEL_NAMESPACE="llm"
-    # TOKEN and ADMIN_OC_TOKEN are already exported by setup_test_tokens()
+    export MAAS_NAMESPACE
 
     local test_dir="$PROJECT_ROOT/test/e2e"
-    # Use ARTIFACTS_DIR so pytest reports go to Prow artifact collection (ARTIFACT_DIR)
-    mkdir -p "$ARTIFACTS_DIR"
+    local reports_dir="$test_dir/reports"
+    mkdir -p "$reports_dir"
 
     if [[ ! -d "$test_dir/.venv" ]]; then
-        echo "Creating Python venv for e2e tests..."
+        echo "Creating Python venv for subscription tests..."
         python3 -m venv "$test_dir/.venv" --upgrade-deps
     fi
     source "$test_dir/.venv/bin/activate"
@@ -446,260 +384,105 @@ run_e2e_tests() {
 
     local user
     user="$(oc whoami 2>/dev/null || echo 'unknown')"
-    local html="$ARTIFACTS_DIR/e2e-${user}.html"
-    local xml="$ARTIFACTS_DIR/e2e-${user}.xml"
+    local html="$reports_dir/subscription-${user}.html"
+    local xml="$reports_dir/subscription-${user}.xml"
 
-    echo "Running e2e tests with:"
-    echo "  - TOKEN: $(echo "${TOKEN:-not set}" | cut -c1-20)..."
-    echo "  - ADMIN_OC_TOKEN: $(echo "${ADMIN_OC_TOKEN:-not set}" | cut -c1-20)..."
-    echo "  - GATEWAY_HOST: ${GATEWAY_HOST}"
-
-    # Run all e2e tests: API keys, subscription, models endpoint, and namespace scoping tests
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
-        -v --maxfail=5 --disable-warnings \
+        -q --maxfail=3 --disable-warnings \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         --capture=tee-sys --show-capture=all --log-level=INFO \
-        "$test_dir/tests/test_api_keys.py" \
-        "$test_dir/tests/test_namespace_scoping.py" \
-        "$test_dir/tests/test_subscription.py" \
-        "$test_dir/tests/test_models_endpoint.py" ; then 
-        echo "❌ ERROR: E2E tests failed"
+        "$test_dir/tests/test_subscription.py"; then
+        echo "❌ ERROR: Subscription tests failed"
         exit 1
     fi
 
-    echo "✅ E2E tests completed"
+    echo "✅ Subscription tests completed"
     echo " - JUnit XML : ${xml}"
     echo " - HTML      : ${html}"
 }
 
-
-# Namespace for admin SA in SA fallback (avoids both admin+regular in default → both would be admin)
-E2E_ADMIN_SA_NAMESPACE="${E2E_ADMIN_SA_NAMESPACE:-maas-admin}"
+run_token_verification() {
+    echo "-- Token Metadata Verification --"
+    
+    if [ "$SKIP_TOKEN_VERIFICATION" = false ]; then
+        if ! (cd "$PROJECT_ROOT" && bash scripts/verify-tokens-metadata-logic.sh); then
+            echo "❌ ERROR: Token metadata verification failed"
+            exit 1
+        else
+            echo "✅ Token metadata verification completed successfully"
+        fi
+    else
+        echo "Skipping token metadata verification..."
+    fi
+}
 
 setup_test_user() {
     local username="$1"
     local cluster_role="$2"
-    local namespace="${3:-default}"
-    
-    # Create namespace if it doesn't exist
-    if ! oc get namespace "$namespace" &>/dev/null; then
-        echo "Creating namespace: $namespace"
-        oc create namespace "$namespace"
-    fi
     
     # Check and create service account
-    if ! oc get serviceaccount "$username" -n "$namespace" >/dev/null 2>&1; then
-        echo "Creating service account: $username in $namespace"
-        oc create serviceaccount "$username" -n "$namespace"
+    if ! oc get serviceaccount "$username" -n default >/dev/null 2>&1; then
+        echo "Creating service account: $username"
+        oc create serviceaccount "$username" -n default
     else
-        echo "Service account $username already exists in $namespace"
+        echo "Service account $username already exists"
     fi
     
     # Check and create cluster role binding
     if ! oc get clusterrolebinding "${username}-binding" >/dev/null 2>&1; then
         echo "Creating cluster role binding for $username"
-        oc adm policy add-cluster-role-to-user "$cluster_role" "system:serviceaccount:${namespace}:${username}"
+        oc adm policy add-cluster-role-to-user "$cluster_role" "system:serviceaccount:default:$username"
     else
         echo "Cluster role binding for $username already exists"
     fi
     
-    echo "✅ User setup completed: $username (namespace: $namespace)"
-}
-
-# Patch Auth CR to add system:serviceaccounts:${admin_namespace} so SA-based admin token works.
-# maas-api AdminChecker checks user.Groups against Auth CR spec.adminGroups.
-# SA in namespace X has groups: system:serviceaccounts, system:serviceaccounts:X.
-# We use a dedicated admin namespace (maas-admin) so the regular user (in default) is NOT admin.
-_patch_auth_cr_for_sa_admin() {
-    local admin_namespace="${1:-$E2E_ADMIN_SA_NAMESPACE}"
-    local admin_group="system:serviceaccounts:${admin_namespace}"
-    
-    local auth_cr
-    for gvr in "auths.services.platform.opendatahub.io" "auths.platform.opendatahub.io"; do
-        if oc get "$gvr" auth &>/dev/null; then
-            auth_cr="$gvr"
-            break
-        fi
-    done
-    if [[ -z "$auth_cr" ]]; then
-        echo "⚠️  Auth CR not found - admin tests may fail (SA token not in adminGroups)"
-        return 0
-    fi
-    local current
-    current=$(oc get "$auth_cr" auth -o jsonpath='{.spec.adminGroups[*]}' 2>/dev/null || true)
-    if [[ "$current" == *"${admin_group}"* ]]; then
-        echo "✅ Auth CR already has ${admin_group} in adminGroups"
-        return 0
-    fi
-    if oc patch "$auth_cr" auth --type=json -p="[{\"op\": \"add\", \"path\": \"/spec/adminGroups/-\", \"value\": \"${admin_group}\"}]" 2>/dev/null; then
-        echo "✅ Added ${admin_group} to Auth CR adminGroups (SA admin fallback)"
-    else
-        echo "⚠️  Failed to patch Auth CR - admin tests may fail"
-    fi
-}
-
-setup_test_tokens() {
-    # ═══════════════════════════════════════════════════════════════════════════
-    # Extract test tokens WITHOUT switching the main oc session.
-    # 
-    # Architecture: 
-    #   - Main oc session stays as system:admin (for any cluster operations)
-    #   - Test tokens are extracted into env vars using a TEMPORARY kubeconfig
-    #   - Tests use TOKEN/ADMIN_OC_TOKEN env vars for API authentication
-    #
-    # Why htpasswd users instead of SA tokens?
-    #   - htpasswd users have OpenShift group memberships (system:authenticated)
-    #   - SA tokens don't carry group memberships, so they can't see models
-    # ═══════════════════════════════════════════════════════════════════════════
-    
-    echo "Setting up test tokens (admin + regular user)..."
-    
-    local current_user api_server
-    current_user=$(oc whoami)
-    api_server=$(oc whoami --show-server)
-    echo "Current admin session: $current_user (will be preserved)"
-    
-    export ADMIN_OC_TOKEN=""
-    export TOKEN=""
-    
-    # Use a temporary kubeconfig for token extraction logins
-    # This prevents polluting the main oc session
-    local temp_kubeconfig
-    temp_kubeconfig=$(mktemp)
-    trap "rm -f '$temp_kubeconfig'" RETURN
-    
-    # 1. Try htpasswd users from idp-htpasswd step (Prow CI)
-    if [[ -f "${SHARED_DIR:-}/runtime_env" ]]; then
-        # shellcheck source=/dev/null
-        source "${SHARED_DIR}/runtime_env"
-        if [[ -n "${USERS:-}" ]]; then
-            echo "Found htpasswd users from idp-htpasswd step"
-            
-            # Admin user: testuser-1 (added to odh-admins)
-            local admin_creds
-            admin_creds=$(echo "$USERS" | tr ',' '\n' | grep "^testuser-1:" | head -1)
-            if [[ -n "$admin_creds" ]]; then
-                local admin_user admin_pass
-                admin_user="${admin_creds%%:*}"
-                admin_pass="${admin_creds#*:}"
-                
-                # Add to odh-admins group (using main session which is system:admin)
-                oc adm groups add-users odh-admins "$admin_user" 2>/dev/null || true
-                
-                # Extract token using temp kubeconfig (doesn't affect main session)
-                if KUBECONFIG="$temp_kubeconfig" oc login "$api_server" -u "$admin_user" -p "$admin_pass" --insecure-skip-tls-verify=true &>/dev/null; then
-                    ADMIN_OC_TOKEN=$(KUBECONFIG="$temp_kubeconfig" oc whoami -t)
-                    echo "✅ Admin token for $admin_user (htpasswd)"
-                fi
-            fi
-            
-            # Regular user: testuser-2 (NOT in odh-admins, but has system:authenticated)
-            local regular_creds
-            regular_creds=$(echo "$USERS" | tr ',' '\n' | grep "^testuser-2:" | head -1)
-            if [[ -n "$regular_creds" ]]; then
-                local regular_user regular_pass
-                regular_user="${regular_creds%%:*}"
-                regular_pass="${regular_creds#*:}"
-                
-                # Extract token using temp kubeconfig (doesn't affect main session)
-                if KUBECONFIG="$temp_kubeconfig" oc login "$api_server" -u "$regular_user" -p "$regular_pass" --insecure-skip-tls-verify=true &>/dev/null; then
-                    TOKEN=$(KUBECONFIG="$temp_kubeconfig" oc whoami -t)
-                    echo "✅ Regular user token for $regular_user (htpasswd)"
-                fi
-            fi
-        fi
-    fi
-    
-    # 2. Fallback for admin: use current user's token (local htpasswd user)
-    if [[ -z "$ADMIN_OC_TOKEN" ]]; then
-        ADMIN_OC_TOKEN=$(oc whoami -t 2>/dev/null || true)
-        if [[ -n "$ADMIN_OC_TOKEN" ]]; then
-            oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
-            echo "✅ Admin token for $current_user (added to odh-admins)"
-        else
-            echo "⚠️  No htpasswd token available - using SA token (admin tests may fail)"
-            setup_test_user "tester-admin-user" "cluster-admin" "$E2E_ADMIN_SA_NAMESPACE"
-            # maas-api AdminChecker uses Auth CR adminGroups; SA in maas-admin has system:serviceaccounts:maas-admin
-            # Patch Auth CR so only tester-admin-user is admin (regular user stays in default → not admin)
-            _patch_auth_cr_for_sa_admin "$E2E_ADMIN_SA_NAMESPACE"
-            ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n "$E2E_ADMIN_SA_NAMESPACE" --duration=1h)
-        fi
-    fi
-    
-    # 3. Fallback for regular user: always use a separate SA to ensure distinct users
-    # This is required for IDOR tests that verify users cannot access each other's keys
-    # Regular user stays in default namespace (system:serviceaccounts:default) - NOT in adminGroups
-    if [[ -z "$TOKEN" ]]; then
-        echo "Creating separate SA token for regular user (required for IDOR tests)..."
-        setup_test_user "tester-regular-user" "view" "default"
-        TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
-        echo "✅ Regular user token for tester-regular-user (SA-based, namespace: default)"
-    fi
-    
-    echo "Token setup complete (main session unchanged: $(oc whoami))"
+    echo "✅ User setup completed: $username"
 }
 
 # Main execution
-# On exit (success or failure): collect artifacts (authorino-debug.log, cluster state, pod logs) and auth report
-_run_exit_artifacts() {
-    DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" ARTIFACTS_DIR="$ARTIFACTS_DIR" \
-        collect_e2e_artifacts
-    echo ""
-    echo "========== Auth Debug Report =========="
-    mkdir -p "$ARTIFACTS_DIR"
-    DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" \
-        run_auth_debug_report 2>&1 | tee "$ARTIFACTS_DIR/auth-debug.log" || true
-    echo "======================================"
-}
-trap '_run_exit_artifacts' EXIT
-
 print_header "Deploying Maas on OpenShift"
 check_prerequisites
+deploy_maas_platform
 
-if [[ "$SKIP_DEPLOYMENT" == "true" ]]; then
-    echo "  Skipping deployment (SKIP_DEPLOYMENT=true)"
-    echo "  Assuming MaaS platform and models are already deployed"
-else
-    deploy_maas_platform
-
-    print_header "Deploying Models"  
-    deploy_models
-    patch_authorino_debug  # from auth_utils.sh
-fi
+print_header "Deploying Models"  
+deploy_models
 
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Phase 1: Admin Setup (runs as system:admin)
-# All cluster operations requiring admin privileges happen here BEFORE
-# we extract test tokens. This avoids context-switching issues.
-# ═══════════════════════════════════════════════════════════════════════════════
-print_header "Admin Setup (Premium Test Resources)"
-setup_premium_test_token
+run_subscription_tests
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Phase 2: Extract Test Tokens
-# Uses a temporary kubeconfig so the main oc session stays as system:admin.
-# Tests will use TOKEN/ADMIN_OC_TOKEN env vars for API authentication.
-# ═══════════════════════════════════════════════════════════════════════════════
-print_header "Setting up test tokens"
-setup_test_tokens
+# Setup all users first (while logged in as admin)
+print_header "Setting up test users"
+setup_test_user "tester-admin-user" "cluster-admin"
+setup_test_user "tester-edit-user" "edit"
+setup_test_user "tester-view-user" "view"
 
-# 15m matches Prow step timeout; sleep leaves time for cluster debugging before tests
-# echo "Sleeping 15 minutes for cluster debugging (Ctrl+C to skip)..."
-# sleep 900
+# Now run tests for each user
+print_header "Running tests for all users"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Phase 3: Run Tests
-# Tests use TOKEN/ADMIN_OC_TOKEN env vars for API auth.
-# The main oc session is still system:admin for any kubectl/oc commands.
-# ═══════════════════════════════════════════════════════════════════════════════
-print_header "Running E2E Tests"
-run_e2e_tests
+# Test admin user
+print_header "Running Maas e2e Tests as admin user"
+ADMIN_TOKEN=$(oc create token tester-admin-user -n default)
+oc login --token "$ADMIN_TOKEN" --server "$K8S_CLUSTER_URL"
 
-print_header "Validating Deployment"
+print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
+run_token_verification
+
+run_smoke_tests
+
+# Test edit user  
+print_header "Running Maas e2e Tests as edit user"
+EDIT_TOKEN=$(oc create token tester-edit-user -n default)
+oc login --token "$EDIT_TOKEN" --server "$K8S_CLUSTER_URL"
+run_smoke_tests
+
+# Test view user
+print_header "Running Maas e2e Tests as view user"
+VIEW_TOKEN=$(oc create token tester-view-user -n default)
+oc login --token "$VIEW_TOKEN" --server "$K8S_CLUSTER_URL"
+run_smoke_tests
 
 echo "🎉 Deployment completed successfully!"
