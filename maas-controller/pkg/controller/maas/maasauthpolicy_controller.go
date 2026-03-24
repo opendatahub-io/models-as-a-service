@@ -162,8 +162,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 
 		// Aggregate allowed groups and users from ALL auth policies
 		// Will be checked in OPA policy that handles both API keys and K8s tokens
-		var allowedGroups []string
-		var allowedUsers []string
+		// Initialize as empty slices (not nil) so json.Marshal produces [] instead of null
+		allowedGroups := []string{}
+		allowedUsers := []string{}
 		var policyNames []string
 		for _, ap := range allPolicies {
 			policyNames = append(policyNames, ap.Name)
@@ -234,17 +235,45 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			},
 			"authentication": map[string]interface{}{
 				// API Keys - plain authentication, actual validation in metadata layer
+				// Only processes tokens with sk-oai- prefix (OpenAI-compatible API keys)
 				"api-keys": map[string]interface{}{
 					"plain": map[string]interface{}{
 						"selector": "request.headers.authorization",
+					},
+					"when": []map[string]interface{}{
+						{
+							"selector": "request.headers.authorization",
+							"operator": "matches",
+							"value":    "^Bearer sk-oai-.*",
+						},
 					},
 					"metrics":  false,
 					"priority": int64(0),
 				},
 				// Kubernetes/OpenShift tokens - validated via TokenReview API
+				// Only enabled for /v1/models endpoint (read-only model listing)
+				// Inferencing endpoints require API keys for billing/tracking
+				// Only processes tokens that are NOT API keys (don't start with sk-oai-)
 				"kubernetes-tokens": map[string]interface{}{
 					"kubernetesTokenReview": map[string]interface{}{
-						"audiences": []string{}, // Empty means any audience is accepted
+						"audiences": []interface{}{}, // Empty means any audience is accepted
+					},
+					"when": []map[string]interface{}{
+						{
+							"selector": "request.url_path",
+							"operator": "endswith",
+							"value":    "/v1/models",
+						},
+						{
+							"selector": "request.headers.authorization",
+							"operator": "neq",
+							"value":    "",
+						},
+						{
+							"selector": "request.headers.authorization",
+							"operator": "matches",
+							"value":    "^Bearer (?!sk-oai-).*",
+						},
 					},
 					"metrics":  false,
 					"priority": int64(1),
@@ -296,22 +325,29 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 allowed_groups := %s
 allowed_users := %s
 
-# Extract user identity from either API key validation or K8s token
-username := input.auth.metadata.apiKeyValidation.username { "apiKeyValidation" in input.auth.metadata }
-username := input.auth.identity.username { "username" in input.auth.identity }
+# Extract username from API key or K8s token
+username := input.auth.metadata.apiKeyValidation.username
+    { object.get(input.auth, "metadata", {}).apiKeyValidation.username != "" }
+else := input.auth.identity.username
+    { object.get(input.auth, "identity", {}).username != "" }
+else := ""
 
-groups := input.auth.metadata.apiKeyValidation.groups { "apiKeyValidation" in input.auth.metadata }
-groups := input.auth.identity.groups { "groups" in input.auth.identity }
+# Extract groups from API key or K8s token
+groups := input.auth.metadata.apiKeyValidation.groups
+    { object.get(input.auth, "metadata", {}).apiKeyValidation.groups != [] }
+else := input.auth.identity.groups
+    { object.get(input.auth, "identity", {}).groups != [] }
+else := []
 
-# Check if user is in allowed users
-user_match { username == allowed_users[_] }
+# Allow if user is in allowed users
+allow {
+    username == allowed_users[_]
+}
 
-# Check if any user group is in allowed groups
-group_match { groups[_] == allowed_groups[_] }
-
-# Allow if either condition matches
-allow { user_match }
-allow { group_match }
+# Allow if any user group is in allowed groups
+allow {
+    groups[_] == allowed_groups[_]
+}
 `, string(groupsJSON), string(usersJSON)),
 				},
 			}

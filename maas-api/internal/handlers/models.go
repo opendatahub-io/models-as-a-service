@@ -296,12 +296,11 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 					h.logger.Debug("After modelRef filtering", "modelsToCheck", len(modelsToCheck))
 				}
 
-				// For user token requests (no X-MaaS-Subscription header), probe models without subscription header
-				// For API key requests (X-MaaS-Subscription injected), use the subscription for probing
-				probeSubscriptionHeader := ""
-				if requestedSubscription != "" {
-					probeSubscriptionHeader = sub.Namespace + "/" + sub.Name
-				}
+				// Always probe with the subscription header for access validation
+				// For API keys: uses the subscription bound to the key (bare name format)
+				// For user tokens: uses each accessible subscription to check which models are available
+				// Using bare name format to match what's stored in API keys
+				probeSubscriptionHeader := sub.Name
 				h.logger.Debug("Filtering models by subscription", "subscription", sub.Name, "modelCount", len(modelsToCheck), "probeWithSubscriptionHeader", probeSubscriptionHeader != "")
 				filteredModels := h.modelMgr.FilterModelsByAccess(c.Request.Context(), modelsToCheck, authHeader, probeSubscriptionHeader)
 
