@@ -564,9 +564,6 @@ deploy_via_operator() {
     configure_tls_backend
   fi
 
-  # Patch the operator-managed AuthPolicy to restore API key auth and,
-  # when configured, enable OIDC JWT validation.
-  configure_maas_api_authpolicy
 
   # Configure audience for non-standard clusters (Hypershift/ROSA)
   configure_cluster_audience
