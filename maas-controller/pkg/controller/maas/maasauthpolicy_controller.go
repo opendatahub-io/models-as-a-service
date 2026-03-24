@@ -145,6 +145,14 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			return nil, fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", ref.Namespace, ref.Name, err)
 		}
 
+		// Validate model namespace and name for CEL injection prevention
+		if err := validateCELValue(ref.Namespace, "model namespace"); err != nil {
+			return nil, fmt.Errorf("invalid model namespace in modelRef %s/%s: %w", ref.Namespace, ref.Name, err)
+		}
+		if err := validateCELValue(ref.Name, "model name"); err != nil {
+			return nil, fmt.Errorf("invalid model name in modelRef %s/%s: %w", ref.Namespace, ref.Name, err)
+		}
+
 		// Find ALL auth policies for this model (not just the current one)
 		allPolicies, err := findAllAuthPoliciesForModel(ctx, r.Client, ref.Namespace, ref.Name)
 		if err != nil {
@@ -202,20 +210,21 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 						"contentType": "application/json",
 						"method":      "POST",
 						"body": map[string]interface{}{
-							"expression": `{
+							"expression": fmt.Sprintf(`{
   "groups": auth.metadata.apiKeyValidation.groups,
   "username": auth.metadata.apiKeyValidation.username,
-  "requestedSubscription": "x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""
-}`,
+  "requestedSubscription": "x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "",
+  "requestedModel": "%s/%s"
+}`, ref.Namespace, ref.Name),
 						},
 					},
-					// Cache subscription selection results keyed by username, groups, and requested subscription.
-					// Key format: "username|groups-hash|requested-subscription" ensures different cache entries
-					// when the same user has different groups or requests different subscriptions.
+					// Cache subscription selection results keyed by username, groups, requested subscription, and model.
+					// Each model has its own cache entry since subscription validation is model-specific.
+					// Key format: "username|groups-hash|requested-subscription|model-namespace/model-name"
 					// Groups are joined with commas to create a stable string representation.
 					"cache": map[string]interface{}{
 						"key": map[string]interface{}{
-							"selector": `auth.metadata.apiKeyValidation.username + "|" + auth.metadata.apiKeyValidation.groups.join(",") + "|" + ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`,
+							"selector": fmt.Sprintf(`auth.metadata.apiKeyValidation.username + "|" + auth.metadata.apiKeyValidation.groups.join(",") + "|" + ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "") + "|%s/%s"`, ref.Namespace, ref.Name),
 						},
 						"ttl": int64(60),
 					},
@@ -327,6 +336,13 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 								// Subscription metadata from /internal/v1/subscriptions/select endpoint
 								"selected_subscription": map[string]interface{}{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
+								},
+								// Model-scoped subscription key for TRLP isolation: namespace/name@modelNamespace/modelName
+								"selected_subscription_key": map[string]interface{}{
+									"expression": fmt.Sprintf(
+										`has(auth.metadata["subscription-info"].namespace) && has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].namespace + "/" + auth.metadata["subscription-info"].name + "@%s/%s" : ""`,
+										ref.Namespace, ref.Name,
+									),
 								},
 								"organizationId": map[string]interface{}{
 									"expression": `has(auth.metadata["subscription-info"].organizationId) ? auth.metadata["subscription-info"].organizationId : ""`,

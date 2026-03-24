@@ -398,21 +398,20 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	if err != nil || !found {
 		t.Fatalf("failed to get spec.limits from TRLP: found=%v err=%v", found, err)
 	}
-	// Check that sub2's limit exists (map keys use namespace__name format)
-	sub2Key := fmt.Sprintf("%s__%s-%s-tokens", subNS, sub2Name, modelName)
+	// Check that sub2's limit exists (map keys use namespace-name format)
+	sub2Key := fmt.Sprintf("%s-%s-%s-tokens", subNS, sub2Name, modelName)
 	if _, exists := limits[sub2Key]; !exists {
 		t.Errorf("TRLP should contain limits for %s after sub1 deletion", sub2Key)
 	}
 	// Check that sub1's limit is removed
-	sub1Key := fmt.Sprintf("%s__%s-%s-tokens", subNS, sub1Name, modelName)
+	sub1Key := fmt.Sprintf("%s-%s-%s-tokens", subNS, sub1Name, modelName)
 	if _, exists := limits[sub1Key]; exists {
 		t.Errorf("TRLP should NOT contain limits for %s after its deletion", sub1Key)
 	}
-	// Verify subscription annotation only contains sub2 (annotations use namespace/name format)
+	// Verify subscription annotation only contains sub2
 	annotations := trlp.GetAnnotations()
-	expectedSubID := fmt.Sprintf("%s/%s", subNS, sub2Name)
-	if subs, ok := annotations["maas.opendatahub.io/subscriptions"]; !ok || subs != expectedSubID {
-		t.Errorf("TRLP annotation should only contain %s, got: %s", expectedSubID, subs)
+	if subs, ok := annotations["maas.opendatahub.io/subscriptions"]; !ok || subs != sub2Name {
+		t.Errorf("TRLP annotation should only contain %s, got: %s", sub2Name, subs)
 	}
 
 	// Now delete sub2 (the last one)

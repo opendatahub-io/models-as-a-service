@@ -141,10 +141,8 @@ func discoveredToModels(discovered []openai.Model, original Model) []Model {
 		if d.ID == "" {
 			continue
 		}
-		ownedBy := d.OwnedBy
-		if ownedBy == "" {
-			ownedBy = original.OwnedBy
-		}
+		// Always use the trusted namespace from MaaSModelRef (original.OwnedBy)
+		// Never trust backend-returned OwnedBy to prevent namespace spoofing
 		created := d.Created
 		if created == 0 {
 			created = original.Created
@@ -154,7 +152,7 @@ func discoveredToModels(discovered []openai.Model, original Model) []Model {
 				ID:      d.ID,
 				Object:  "model",
 				Created: created,
-				OwnedBy: ownedBy,
+				OwnedBy: original.OwnedBy,
 			},
 			Kind:    original.Kind,
 			URL:     original.URL,
