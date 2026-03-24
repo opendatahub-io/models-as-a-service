@@ -19,6 +19,8 @@ package azureopenai
 import (
 	"fmt"
 	"regexp"
+
+	"github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/api-translation/translator"
 )
 
 const (
@@ -33,8 +35,9 @@ const (
 )
 
 // compile-time interface check
-// var _ translator.Translator = &AzureOpenAITranslator{}
+var _ translator.Translator = &AzureOpenAITranslator{}
 
+// NewAzureOpenAITranslator initializes a new AzureOpenAITranslator and returns its pointer.
 func NewAzureOpenAITranslator() *AzureOpenAITranslator {
 	return &AzureOpenAITranslator{
 		apiVersion:          defaultAPIVersion,

@@ -1,5 +1,5 @@
 /*
-Copyright 2026 The opendatahub.io Authors.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -34,6 +34,7 @@ const (
 // compile-time interface check
 var _ translator.Translator = &AnthropicTranslator{}
 
+// NewAnthropicTranslator initializes a new AnthropicTranslator and returns its pointer.
 func NewAnthropicTranslator() *AnthropicTranslator {
 	return &AnthropicTranslator{}
 }
