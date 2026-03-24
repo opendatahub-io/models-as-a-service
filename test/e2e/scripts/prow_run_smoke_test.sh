@@ -462,8 +462,8 @@ run_e2e_tests() {
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_namespace_scoping.py" \
-        "$test_dir/tests/test_subscription.py"; then
-        # "$test_dir/tests/test_models_endpoint.py" ; then 
+        "$test_dir/tests/test_subscription.py"; \
+        "$test_dir/tests/test_models_endpoint.py" ; then 
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
