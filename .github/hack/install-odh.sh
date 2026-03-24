@@ -8,6 +8,7 @@
 #   OPERATOR_CATALOG - Custom catalog image (optional). When unset, uses community-operators (ODH stable).
 #                      Set to e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest for custom builds.
 #   OPERATOR_CHANNEL - Subscription channel (default: stable for community, fast for custom catalog)
+#   OPERATOR_CSV     - Starting CSV version (default: opendatahub-operator.v3.3.0)
 #   OPERATOR_IMAGE   - Custom operator image to patch into CSV (optional)
 #
 # Usage: ./install-odh.sh
@@ -21,6 +22,7 @@ DATA_DIR="${REPO_ROOT}/scripts/data"
 NAMESPACE="${OPERATOR_NAMESPACE:-opendatahub}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
+OPERATOR_CSV="${OPERATOR_CSV:-opendatahub-operator.v3.3.0}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 
 # Source deployment helpers
@@ -73,13 +75,13 @@ else
 fi
 
 # 2. Install ODH operator via OLM
-echo "2. Installing ODH operator..."
+echo "2. Installing ODH operator (startingCSV: ${OPERATOR_CSV})..."
 install_olm_operator \
   "opendatahub-operator" \
   "$NAMESPACE" \
   "$catalog_source" \
   "$channel" \
-  "" \
+  "$OPERATOR_CSV" \
   "AllNamespaces"
 
 # 3. Patch CSV with custom image if specified
