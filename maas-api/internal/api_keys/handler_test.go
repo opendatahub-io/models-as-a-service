@@ -1047,17 +1047,14 @@ func TestGetAPIKeyHandler(t *testing.T) {
 	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, "hash2", bobKey.Name, "", bobKey.Groups, testSubscriptionName, nil, false)
 	require.NoError(t, err)
 
-	t.Run("OwnerCanGetOwnKey", func(t *testing.T) {
-		aliceUser := &token.UserContext{
-			Username: "alice",
-			Groups:   []string{"tier-free"},
-		}
-
+	// Helper function to test successful key retrieval
+	testSuccessfulGetKey := func(t *testing.T, user *token.UserContext, keyID string) {
+		t.Helper()
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/alice-key-1", nil)
-		c.Set("user", aliceUser)
-		c.Params = gin.Params{{Key: "id", Value: "alice-key-1"}}
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/"+keyID, nil)
+		c.Set("user", user)
+		c.Params = gin.Params{{Key: "id", Value: keyID}}
 
 		handler.GetAPIKey(c)
 
@@ -1065,9 +1062,17 @@ func TestGetAPIKeyHandler(t *testing.T) {
 		var response ApiKey
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		assert.Equal(t, "alice-key-1", response.ID)
+		assert.Equal(t, keyID, response.ID)
 		assert.Equal(t, "alice", response.Username)
 		assert.Equal(t, testSubscriptionName, response.Subscription)
+	}
+
+	t.Run("OwnerCanGetOwnKey", func(t *testing.T) {
+		aliceUser := &token.UserContext{
+			Username: "alice",
+			Groups:   []string{"tier-free"},
+		}
+		testSuccessfulGetKey(t, aliceUser, "alice-key-1")
 	})
 
 	t.Run("RegularUserCannotGetOthersKey_IDOR_Protection", func(t *testing.T) {
@@ -1098,22 +1103,7 @@ func TestGetAPIKeyHandler(t *testing.T) {
 			Username: "admin",
 			Groups:   []string{"admin-users"},
 		}
-
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/alice-key-1", nil)
-		c.Set("user", adminUser)
-		c.Params = gin.Params{{Key: "id", Value: "alice-key-1"}}
-
-		handler.GetAPIKey(c)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-		var response ApiKey
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
-		assert.Equal(t, "alice-key-1", response.ID)
-		assert.Equal(t, "alice", response.Username)
-		assert.Equal(t, testSubscriptionName, response.Subscription)
+		testSuccessfulGetKey(t, adminUser, "alice-key-1")
 	})
 
 	t.Run("NonExistentKeyReturns404", func(t *testing.T) {
