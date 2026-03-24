@@ -62,10 +62,11 @@ func (inj *apiKeyGenerator) generateHeader(apiKey string) (string, string) {
 // defaultApiKeyGenerators returns the built-in provider-to-generator registry.
 func defaultApiKeyGenerators() map[string]*apiKeyGenerator {
 	return map[string]*apiKeyGenerator{
-		provider.OpenAI:      {headerName: "Authorization", headerValuePrefix: "Bearer "},
-		provider.Anthropic:   {headerName: "x-api-key"},
-		provider.AzureOpenAI: {headerName: "api-key"},
-		provider.Vertex:      {headerName: "Authorization", headerValuePrefix: "Bearer "},
+		provider.OpenAI:            {headerName: "Authorization", headerValuePrefix: "Bearer "},
+		provider.Anthropic:         {headerName: "x-api-key"},
+		provider.AzureOpenAI:       {headerName: "api-key"},
+		provider.Vertex:            {headerName: "Authorization", headerValuePrefix: "Bearer "},
+		provider.AWSBedrockOpenAI:  {headerName: "Authorization", headerValuePrefix: "Bearer "},
 	}
 }
 

@@ -17,8 +17,9 @@ limitations under the License.
 package provider
 
 const (
-	OpenAI      = "openai"
-	Anthropic   = "anthropic"
-	AzureOpenAI = "azure-openai"
-	Vertex      = "vertex"
+	OpenAI            = "openai"
+	Anthropic         = "anthropic"
+	AzureOpenAI       = "azure-openai"
+	Vertex            = "vertex"
+	AWSBedrockOpenAI  = "awsbedrock-openai"
 )
