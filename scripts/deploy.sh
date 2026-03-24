@@ -1428,34 +1428,70 @@ resolve_external_oidc_issuer() {
   printf '%s\n' "$oidc_issuer_url"
 }
 
-resolve_external_oidc_client_id() {
-  local oidc_client_id="${OIDC_CLIENT_ID:-}"
-  if [[ -z "$oidc_client_id" ]]; then
-    oidc_client_id=$(get_external_oidc_overlay_param "oidc-client-id" 2>/dev/null || echo "")
-  fi
+patch_authpolicy_from_template() {
+  local authpolicy_name="$1"
+  local template_file="$2"
+  local maas_namespace="$3"
+  local oidc_issuer_url="${4:-}"
 
-  if [[ -z "$oidc_client_id" ]]; then
-    return 1
-  fi
+  local rendered_patch
+  rendered_patch="$(mktemp)"
 
-  printf '%s\n' "$oidc_client_id"
+  sed \
+    -e "s|__MAAS_NAMESPACE__|${maas_namespace}|g" \
+    -e "s|__OIDC_ISSUER_URL__|${oidc_issuer_url}|g" \
+    "$template_file" > "$rendered_patch"
+
+  kubectl patch authpolicy "$authpolicy_name" -n "$NAMESPACE" --type=merge --patch-file "$rendered_patch"
+  rm -f "$rendered_patch"
 }
 
 # configure_maas_api_authpolicy
-#   When --external-oidc is enabled, creates a MaaSPlatformAuth CR so the
-#   maas-controller layers OIDC rules onto the maas-api-auth-policy AuthPolicy.
-#   Without --external-oidc the AuthPolicy is left as kustomize deployed it
-#   (API keys + OpenShift TokenReview only) — no CR is needed.
+#   Ensures the live maas-api AuthPolicy keeps API key support and, when
+#   enabled, layers external OIDC JWT validation on top.
 configure_maas_api_authpolicy() {
-  if [[ "$EXTERNAL_OIDC" != "true" ]]; then
-    log_info "External OIDC not enabled — AuthPolicy uses base config (API keys + OpenShift)"
+  log_info "Configuring MaaS API AuthPolicy..."
+
+  local project_root
+  project_root="$(find_project_root)" || {
+    log_error "Could not determine project root for AuthPolicy patching"
+    return 1
+  }
+
+  local authpolicy_name="maas-api-auth-policy"
+  local wait_timeout=120
+  local elapsed=0
+
+  log_info "  Waiting for AuthPolicy '$authpolicy_name' to be created (timeout: ${wait_timeout}s)..."
+  while [[ $elapsed -lt $wait_timeout ]]; do
+    if kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
+      log_info "  Found AuthPolicy '$authpolicy_name'"
+      break
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+
+  if ! kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
+    log_warn "AuthPolicy '$authpolicy_name' not found after ${wait_timeout}s, skipping auth configuration"
     return 0
   fi
 
-  log_info "Configuring external OIDC via MaaSPlatformAuth CR..."
+  log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
+  kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+    opendatahub.io/managed="false" --overwrite 2>/dev/null || true
 
-  local cr_name="platform-auth"
-  local cr_namespace="$NAMESPACE"
+  local api_keys_patch="$project_root/scripts/data/maas-api-authpolicy-api-keys-patch.yaml"
+  log_info "  Patching AuthPolicy to ensure API key support..."
+  if ! patch_authpolicy_from_template "$authpolicy_name" "$api_keys_patch" "$NAMESPACE"; then
+    log_warn "  Failed to patch AuthPolicy with API key configuration"
+    return 0
+  fi
+
+  if [[ "$EXTERNAL_OIDC" != "true" ]]; then
+    log_info "  External OIDC not enabled, leaving OpenShift auth as the only identity-token path"
+    return 0
+  fi
 
   local oidc_issuer_url
   oidc_issuer_url="$(resolve_external_oidc_issuer)" || {
@@ -1463,48 +1499,14 @@ configure_maas_api_authpolicy() {
     return 1
   }
 
-  local oidc_client_id
-  oidc_client_id="$(resolve_external_oidc_client_id)" || {
-    log_error "External OIDC requested but no oidc-client-id or OIDC_CLIENT_ID was configured"
-    return 1
-  }
+  local oidc_patch="$project_root/scripts/data/maas-api-authpolicy-external-oidc-patch.yaml"
+  log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url"
+  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$NAMESPACE" "$oidc_issuer_url"; then
+    log_warn "  Failed to patch AuthPolicy with external OIDC configuration"
+    return 0
+  fi
 
-  log_info "  Creating MaaSPlatformAuth (issuer: $oidc_issuer_url, clientId: $oidc_client_id)"
-  kubectl apply -f - <<EOF
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSPlatformAuth
-metadata:
-  name: ${cr_name}
-  namespace: ${cr_namespace}
-spec:
-  externalOIDC:
-    issuerUrl: "${oidc_issuer_url}"
-    clientId: "${oidc_client_id}"
-    ttl: 300
-EOF
-
-  local wait_timeout=120
-  local elapsed=0
-  log_info "  Waiting for MaaSPlatformAuth to become Active (timeout: ${wait_timeout}s)..."
-  while [[ $elapsed -lt $wait_timeout ]]; do
-    local phase
-    phase=$(kubectl get maasplatformauth "$cr_name" -n "$cr_namespace" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-    if [[ "$phase" == "Active" ]]; then
-      log_info "  MaaSPlatformAuth is Active — OIDC configured on maas-api AuthPolicy"
-      return 0
-    fi
-    if [[ "$phase" == "Failed" ]]; then
-      log_error "  MaaSPlatformAuth reconciliation failed"
-      kubectl get maasplatformauth "$cr_name" -n "$cr_namespace" -o yaml 2>/dev/null || true
-      return 1
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-
-  log_warn "  MaaSPlatformAuth did not reach Active within ${wait_timeout}s (controller may still be starting)"
-  log_warn "  The controller will reconcile the AuthPolicy when it starts"
-  return 0
+  log_info "  AuthPolicy patched successfully"
 }
 
 # configure_cluster_audience

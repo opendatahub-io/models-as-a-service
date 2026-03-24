@@ -121,34 +121,28 @@ cp docs/samples/install/keycloak/custom-realm-template.json my-realm.json
 
 ## OIDC Configuration for MaaS
 
-Once you have a realm configured with groups and users, create a
-`MaaSPlatformAuth` CR to enable OIDC on the `maas-api` AuthPolicy.
+Once you have a realm configured with groups and users, you'll need to configure MaaS to use Keycloak as an OIDC provider.
 
 ### Required Information
 
 From your Keycloak configuration, you'll need:
 
 1. **Issuer URL:** `https://{keycloak-hostname}/realms/{realm-name}`
-2. **Client ID:** The public client you created (e.g., `maas-cli`)
+2. **Client ID:** The client you created (e.g., `maas`)
+3. **Client Secret:** From the client credentials tab
+4. **Groups Claim:** `groups` (from the mapper configuration)
 
-### Enable OIDC
+### Example Configuration
 
-```bash
-kubectl apply -f - <<EOF
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSPlatformAuth
-metadata:
-  name: platform-auth
-  namespace: <maas-namespace>
-spec:
-  externalOIDC:
-    issuerUrl: "https://keycloak.apps.my-cluster.example.com/realms/my-company"
-    clientId: "maas-cli"
-EOF
+```yaml
+# This will be configured in MaaS (implementation pending)
+oidc:
+  issuer: https://keycloak.apps.my-cluster.example.com/realms/my-company
+  clientId: maas
+  clientSecret: {from-keycloak-client-credentials}
+  groupsClaim: groups
+  usernameClaim: preferred_username  # or "sub" for user ID
 ```
-
-See [External OIDC documentation](../../external-oidc/README.md) for the full
-guide, spec reference, and how to disable OIDC.
 
 ## Verifying Realm Configuration
 
@@ -229,10 +223,10 @@ The secret persists as long as the Keycloak instance exists, so you can retrieve
 
 After configuring Keycloak realms:
 
-1. Create a `MaaSPlatformAuth` CR — see [External OIDC](../../external-oidc/README.md)
-2. Create `MaaSSubscription` resources with groups matching Keycloak groups
-3. Create `MaaSAuthPolicy` resources to grant access to models
-4. Obtain an OIDC token, create an API key, and test model inference
+1. Configure MaaS to use Keycloak as OIDC provider (implementation pending)
+2. Create MaaSSubscription resources with groups matching Keycloak groups
+3. Create MaaSAuthPolicy resources to grant access to models
+4. Test authentication with OIDC tokens
 
 ## Additional Resources
 

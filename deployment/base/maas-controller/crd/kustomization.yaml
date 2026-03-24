@@ -2,5 +2,4 @@
 resources:
   - bases/maas.opendatahub.io_maasauthpolicies.yaml
   - bases/maas.opendatahub.io_maasmodelrefs.yaml
-  - bases/maas.opendatahub.io_maasplatformauths.yaml
   - bases/maas.opendatahub.io_maassubscriptions.yaml

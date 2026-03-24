@@ -51,6 +51,7 @@ patches:
   target:
     kind: Deployment
     name: maas-api
+
 replacements:
 # Gateway policies must be in openshift-ingress to target maas-default-gateway
 - source:

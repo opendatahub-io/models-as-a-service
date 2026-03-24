@@ -1,9 +1,0 @@
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSPlatformAuth
-metadata:
-  name: platform-auth
-spec:
-  externalOIDC:
-    issuerUrl: https://keycloak.apps.example.com/realms/maas
-    clientId: maas-cli
-    ttl: 300
