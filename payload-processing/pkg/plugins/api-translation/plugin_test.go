@@ -1,5 +1,5 @@
 /*
-Copyright 2026 The opendatahub.io Authors.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -95,8 +95,73 @@ func TestProcessRequest_AnthropicProvider(t *testing.T) {
 	assert.NotContains(t, removed, "content-length")
 }
 
-// Azure OpenAI and Vertex tests are commented out until their translators are moved to this repo.
-// See: TestProcessRequest_AzureOpenAIProvider, TestProcessResponse_AzureOpenAI
+func TestProcessRequest_AzureOpenAIProvider(t *testing.T) {
+	p := NewAPITranslationPlugin()
+
+	cs := newCycleStateWithProvider("azure-openai")
+	req := framework.NewInferenceRequest()
+	req.Headers["authorization"] = "Bearer sk-test"
+	req.Headers["content-length"] = "200"
+	req.Body["model"] = "gpt-4o"
+	req.Body["messages"] = []any{
+		map[string]any{"role": "system", "content": "Be concise"},
+		map[string]any{"role": "user", "content": "What is 2+2?"},
+	}
+	req.Body["max_tokens"] = float64(100)
+	req.Body["temperature"] = 0.7
+
+	err := p.ProcessRequest(context.Background(), cs, req)
+	require.NoError(t, err)
+
+	// Azure OpenAI does not mutate the body — same schema as OpenAI
+	assert.False(t, req.BodyMutated())
+
+	// Original body fields are preserved
+	assert.Equal(t, "gpt-4o", req.Body["model"])
+	assert.Equal(t, float64(100), req.Body["max_tokens"])
+	assert.Equal(t, 0.7, req.Body["temperature"])
+
+	mutated := req.MutatedHeaders()
+	assert.Equal(t, "/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21", mutated[":path"])
+	assert.Equal(t, "application/json", mutated["content-type"])
+
+	removed := req.RemovedHeaders()
+	assert.Contains(t, removed, "authorization")
+	assert.NotContains(t, removed, "content-length")
+}
+
+func TestProcessResponse_AzureOpenAI(t *testing.T) {
+	p := NewAPITranslationPlugin()
+
+	cs := newCycleStateWithProvider("azure-openai")
+	cs.Write(state.ModelKey, "gpt-4o")
+
+	resp := framework.NewInferenceResponse()
+	resp.Body["id"] = "chatcmpl-abc123"
+	resp.Body["object"] = "chat.completion"
+	resp.Body["model"] = "gpt-4o"
+	resp.Body["choices"] = []any{
+		map[string]any{
+			"index": float64(0),
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "The answer is 4.",
+			},
+			"finish_reason": "stop",
+		},
+	}
+	resp.Body["usage"] = map[string]any{
+		"prompt_tokens":     float64(10),
+		"completion_tokens": float64(5),
+		"total_tokens":      float64(15),
+	}
+
+	err := p.ProcessResponse(context.Background(), cs, resp)
+	require.NoError(t, err)
+
+	// Azure OpenAI responses are already in OpenAI format — no mutation
+	assert.False(t, resp.BodyMutated())
+}
 
 func TestProcessRequest_UnknownProvider(t *testing.T) {
 	p := NewAPITranslationPlugin()
@@ -228,9 +293,161 @@ func TestProcessResponse_AnthropicToolUse(t *testing.T) {
 	assert.Equal(t, 0, tc["index"])
 }
 
-// Vertex tests are commented out until the Vertex translator is moved to this repo.
-// See: TestProcessRequest_VertexProvider, TestProcessResponse_Vertex,
-//      TestProcessResponse_VertexError, TestProcessResponse_VertexToolCall
+func TestProcessRequest_VertexProvider(t *testing.T) {
+	p := NewAPITranslationPlugin()
+
+	cs := newCycleStateWithProvider("vertex")
+	req := framework.NewInferenceRequest()
+	req.Headers["authorization"] = "Bearer sk-test"
+	req.Headers["content-length"] = "200"
+	req.Body["model"] = "gemini-2.5-flash"
+	req.Body["messages"] = []any{
+		map[string]any{"role": "system", "content": "Be concise"},
+		map[string]any{"role": "user", "content": "What is Kubernetes?"},
+	}
+	req.Body["max_tokens"] = float64(100)
+	req.Body["temperature"] = 0.7
+
+	err := p.ProcessRequest(context.Background(), cs, req)
+	require.NoError(t, err)
+
+	assert.True(t, req.BodyMutated())
+
+	contents, ok := req.Body["contents"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, contents, 1)
+	assert.Equal(t, "user", contents[0]["role"])
+
+	sysInstruction, ok := req.Body["systemInstruction"].(map[string]any)
+	require.True(t, ok)
+	sysParts := sysInstruction["parts"].([]map[string]any)
+	assert.Equal(t, "Be concise", sysParts[0]["text"])
+
+	genConfig, ok := req.Body["generationConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 100, genConfig["maxOutputTokens"])
+	assert.Equal(t, 0.7, genConfig["temperature"])
+
+	mutated := req.MutatedHeaders()
+	assert.Equal(t, "/v1beta/models/gemini-2.5-flash:generateContent", mutated[":path"])
+	assert.Equal(t, "application/json", mutated["content-type"])
+
+	removed := req.RemovedHeaders()
+	assert.Contains(t, removed, "authorization")
+	assert.NotContains(t, removed, "content-length")
+}
+
+func TestProcessResponse_Vertex(t *testing.T) {
+	p := NewAPITranslationPlugin()
+
+	cs := newCycleStateWithProvider("vertex")
+	cs.Write(state.ModelKey, "gemini-2.5-flash")
+
+	resp := framework.NewInferenceResponse()
+	resp.Body["candidates"] = []any{
+		map[string]any{
+			"content": map[string]any{
+				"parts": []any{map[string]any{"text": "Kubernetes is a container orchestration platform."}},
+				"role":  "model",
+			},
+			"finishReason": "STOP",
+		},
+	}
+	resp.Body["usageMetadata"] = map[string]any{
+		"promptTokenCount":     float64(12),
+		"candidatesTokenCount": float64(8),
+		"totalTokenCount":      float64(20),
+	}
+	resp.Body["responseId"] = "resp-abc123"
+
+	err := p.ProcessResponse(context.Background(), cs, resp)
+	require.NoError(t, err)
+
+	assert.True(t, resp.BodyMutated())
+	assert.Equal(t, "chat.completion", resp.Body["object"])
+	assert.Equal(t, "gemini-2.5-flash", resp.Body["model"])
+	assert.Equal(t, "resp-abc123", resp.Body["id"])
+
+	choices := resp.Body["choices"].([]any)
+	choice := choices[0].(map[string]any)
+	msg := choice["message"].(map[string]any)
+	assert.Equal(t, "assistant", msg["role"])
+	assert.Equal(t, "Kubernetes is a container orchestration platform.", msg["content"])
+	assert.Equal(t, "stop", choice["finish_reason"])
+
+	usage := resp.Body["usage"].(map[string]any)
+	assert.Equal(t, 12, usage["prompt_tokens"])
+	assert.Equal(t, 8, usage["completion_tokens"])
+	assert.Equal(t, 20, usage["total_tokens"])
+}
+
+func TestProcessResponse_VertexError(t *testing.T) {
+	p := NewAPITranslationPlugin()
+
+	cs := newCycleStateWithProvider("vertex")
+
+	resp := framework.NewInferenceResponse()
+	resp.Body["error"] = map[string]any{
+		"code":    float64(400),
+		"message": "Invalid value at 'contents'",
+		"status":  "INVALID_ARGUMENT",
+	}
+
+	err := p.ProcessResponse(context.Background(), cs, resp)
+	require.NoError(t, err)
+
+	assert.True(t, resp.BodyMutated())
+	errObj := resp.Body["error"].(map[string]any)
+	assert.Equal(t, "INVALID_ARGUMENT", errObj["type"])
+	assert.Equal(t, "Invalid value at 'contents'", errObj["message"])
+}
+
+func TestProcessResponse_VertexToolCall(t *testing.T) {
+	p := NewAPITranslationPlugin()
+
+	cs := newCycleStateWithProvider("vertex")
+	cs.Write(state.ModelKey, "gemini-2.5-flash")
+
+	resp := framework.NewInferenceResponse()
+	resp.Body["candidates"] = []any{
+		map[string]any{
+			"content": map[string]any{
+				"parts": []any{
+					map[string]any{
+						"functionCall": map[string]any{
+							"name": "get_weather",
+							"args": map[string]any{"location": "Paris"},
+						},
+					},
+				},
+				"role": "model",
+			},
+			"finishReason": "STOP",
+		},
+	}
+	resp.Body["usageMetadata"] = map[string]any{
+		"promptTokenCount":     float64(20),
+		"candidatesTokenCount": float64(10),
+		"totalTokenCount":      float64(30),
+	}
+
+	err := p.ProcessResponse(context.Background(), cs, resp)
+	require.NoError(t, err)
+
+	assert.True(t, resp.BodyMutated())
+
+	choices := resp.Body["choices"].([]any)
+	choice := choices[0].(map[string]any)
+	msg := choice["message"].(map[string]any)
+	toolCalls := msg["tool_calls"].([]any)
+	require.Len(t, toolCalls, 1)
+
+	tc := toolCalls[0].(map[string]any)
+	assert.Equal(t, "call_0", tc["id"])
+	assert.Equal(t, 0, tc["index"])
+	fn := tc["function"].(map[string]any)
+	assert.Equal(t, "get_weather", fn["name"])
+}
 
 func TestProcessResponse_NoProviderPassthrough(t *testing.T) {
 	p := NewAPITranslationPlugin()
