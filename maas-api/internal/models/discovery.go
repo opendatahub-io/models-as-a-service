@@ -228,7 +228,11 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, s
 		lastResult = authRes
 		return lastResult != authRetry, nil
 	}); err != nil {
-		m.logger.Debug("Access validation failed: model fetch backoff exhausted", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
+		if ctx.Err() == context.DeadlineExceeded {
+			m.logger.Debug("Access validation failed: context deadline exceeded", "service", meta.ServiceName, "endpoint", meta.Endpoint, "timeout", accessCheckTimeout)
+		} else {
+			m.logger.Debug("Access validation failed: model fetch backoff exhausted", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
+		}
 		return nil // explicit fail-closed on error
 	}
 
@@ -255,6 +259,10 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 	// #nosec G704 -- Intentional HTTP request to probe model endpoint for authorization check
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			m.logger.Debug("Access validation: request timed out (context deadline exceeded)", "service", meta.ServiceName, "endpoint", meta.Endpoint)
+			return nil, authDenied // fail-closed, no point retrying a deadline
+		}
 		m.logger.Debug("Access validation: GET request failed", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
 		return nil, authRetry
 	}
