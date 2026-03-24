@@ -541,6 +541,7 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 				},
 				requested: "missing-sub",
 				assertErr: func(t *testing.T, err error) {
+					t.Helper()
 					var target *subscription.SubscriptionNotFoundError
 					require.ErrorAs(t, err, &target)
 				},
@@ -552,6 +553,7 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 				},
 				requested: "denied-sub",
 				assertErr: func(t *testing.T, err error) {
+					t.Helper()
 					var target *subscription.AccessDeniedError
 					require.ErrorAs(t, err, &target)
 				},
@@ -563,6 +565,7 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 				},
 				requested: "",
 				assertErr: func(t *testing.T, err error) {
+					t.Helper()
 					var target *subscription.NoSubscriptionError
 					require.ErrorAs(t, err, &target)
 				},
@@ -579,7 +582,8 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 				require.Nil(t, result)
 				tt.assertErr(t, err)
 
-				res, sErr := store.Search(ctx, user, &api_keys.SearchFilters{}, &api_keys.SortParams{By: api_keys.DefaultSortBy, Order: api_keys.DefaultSortOrder}, &api_keys.PaginationParams{Limit: 10, Offset: 0})
+				res, sErr := store.Search(ctx, user, &api_keys.SearchFilters{}, &api_keys.SortParams{By: api_keys.DefaultSortBy, Order: api_keys.DefaultSortOrder},
+					&api_keys.PaginationParams{Limit: 10, Offset: 0})
 				require.NoError(t, sErr)
 				assert.Empty(t, res.Keys)
 			})

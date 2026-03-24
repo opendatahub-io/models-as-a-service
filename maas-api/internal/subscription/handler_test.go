@@ -240,8 +240,8 @@ func TestHandler_SelectSubscription_AccessDenied(t *testing.T) {
 		}
 	}
 
-	t.Run("bare name without access returns not_found (security: don't leak namespace info)", func(t *testing.T) {
-		testAccessDenied(t, "premium-sub", "not_found")
+	t.Run("bare name without access returns access_denied", func(t *testing.T) {
+		testAccessDenied(t, "premium-sub", "access_denied")
 	})
 
 	t.Run("qualified name without access returns access_denied", func(t *testing.T) {

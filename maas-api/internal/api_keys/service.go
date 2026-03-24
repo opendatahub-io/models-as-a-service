@@ -51,11 +51,11 @@ func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub Subscript
 // CreateAPIKeyResponse is returned when creating an API key.
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
 type CreateAPIKeyResponse struct {
-	Key          string  `json:"key"`                 // Plaintext key - SHOWN ONCE, NEVER STORED
-	KeyPrefix    string  `json:"keyPrefix"`           // Display prefix for UI
+	Key          string  `json:"key"`       // Plaintext key - SHOWN ONCE, NEVER STORED
+	KeyPrefix    string  `json:"keyPrefix"` // Display prefix for UI
 	ID           string  `json:"id"`
 	Name         string  `json:"name"`
-	Subscription string  `json:"subscription"`        // MaaSSubscription name bound to this key
+	Subscription string  `json:"subscription"` // MaaSSubscription name bound to this key
 	CreatedAt    string  `json:"createdAt"`
 	ExpiresAt    *string `json:"expiresAt,omitempty"` // RFC3339 timestamp
 	Ephemeral    bool    `json:"ephemeral"`           // Short-lived programmatic key
@@ -121,7 +121,8 @@ func (s *Service) CreateAPIKey(
 	var subResp *subscription.SelectResponse
 	var selectErr error
 	if requestedSubscription != "" {
-		subResp, selectErr = s.subSelector.Select(userGroups, username, requestedSubscription, requestedModel)
+		//nolint:unqueryvet,nolintlint // Select is subscription resolution, not a SQL query
+		subResp, selectErr = s.subSelector.Select(userGroups, username, requestedSubscription, "")
 	} else {
 		subResp, selectErr = s.subSelector.SelectHighestPriority(userGroups, username)
 	}
@@ -130,7 +131,7 @@ func (s *Service) CreateAPIKey(
 	}
 	subscriptionName := subResp.Name
 	if subscriptionName == "" {
-		return nil, fmt.Errorf("resolved subscription name is empty")
+		return nil, errors.New("resolved subscription name is empty")
 	}
 
 	// Generate unique ID for this key
@@ -148,14 +149,14 @@ func (s *Service) CreateAPIKey(
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
 	formatted := expiresAt.Format(time.RFC3339)
 	response := &CreateAPIKeyResponse{
-		Key:            plaintext, // SHOWN ONCE, NEVER AGAIN
-		KeyPrefix:      prefix,
-		ID:             keyID,
-		Name:           name,
-		Subscription:   subscriptionName,
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
-		ExpiresAt:      &formatted,
-		Ephemeral:      ephemeral,
+		Key:          plaintext, // SHOWN ONCE, NEVER AGAIN
+		KeyPrefix:    prefix,
+		ID:           keyID,
+		Name:         name,
+		Subscription: subscriptionName,
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+		ExpiresAt:    &formatted,
+		Ephemeral:    ephemeral,
 	}
 
 	return response, nil
