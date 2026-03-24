@@ -70,7 +70,6 @@ Send a request to the model endpoint (should get a 200 OK response):
 
 ```bash
 curl -sSk -H "Authorization: Bearer $API_KEY" \
-  -H "X-MaaS-Subscription: ${MaaS_SUBSCRIPTION}" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
   "${MODEL_URL}/v1/completions" | jq
@@ -94,7 +93,6 @@ Send multiple requests to trigger rate limit (should get 200 OK followed by 429 
 for i in {1..16}; do
   curl -sSk -o /dev/null -w "%{http_code}\n" \
     -H "Authorization: Bearer $API_KEY" \
-    -H "X-MaaS-Subscription: ${MaaS_SUBSCRIPTION}" \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
     "${MODEL_URL}/v1/completions"

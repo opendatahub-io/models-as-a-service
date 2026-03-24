@@ -40,7 +40,9 @@ var _ MetadataStore = (*MockStore)(nil)
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 // ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool) error {
+func (m *MockStore) AddKey(
+	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool,
+) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
