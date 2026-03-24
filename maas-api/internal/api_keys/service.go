@@ -71,7 +71,7 @@ type CreateAPIKeyResponse struct {
 // Admins can create keys for other users by specifying a different username.
 func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
-	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, requestedModel string,
+	expiresIn *time.Duration, ephemeral bool, requestedSubscription string,
 ) (*CreateAPIKeyResponse, error) {
 	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
 	maxDays := constant.DefaultAPIKeyMaxExpirationDays

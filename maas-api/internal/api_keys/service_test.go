@@ -287,7 +287,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request 7 days - should succeed
 		expiresIn := 7 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -303,7 +303,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request 60 days - should fail
 		expiresIn := 60 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
 
 		require.Error(t, err)
 		assert.Nil(t, result)
@@ -320,7 +320,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request exactly 30 days - should succeed
 		expiresIn := 30 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -334,7 +334,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
 
 		// No expiration requested - should default to APIKeyMaxExpirationDays (30 days)
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", nil, false, "", "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", nil, false, "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -349,7 +349,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request 365 days - should fail because default max is 90 days
 		expiresIn := 365 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
 
 		require.Error(t, err, "should reject expiration exceeding default max (90 days)")
 		assert.Nil(t, result)
@@ -367,7 +367,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request 365 days - should fail because default max is 90 days
 		expiresIn := 365 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
 
 		require.Error(t, err, "should reject expiration exceeding default max (90 days)")
 		assert.Nil(t, result)
@@ -398,7 +398,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 		svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, serviceTestSubSelector{}, logger.Development())
 		now := time.Now().UTC()
 
-		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "ephemeral-test", "", nil, true, "", "")
+		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "ephemeral-test", "", nil, true, "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -412,7 +412,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 		expiresIn := 30 * time.Minute
 		now := time.Now().UTC()
 
-		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "short-lived", "", &expiresIn, true, "", "")
+		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "short-lived", "", &expiresIn, true, "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -424,7 +424,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 		svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, serviceTestSubSelector{}, logger.Development())
 		expiresIn := 1 * time.Hour
 
-		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "exactly-one-hour", "", &expiresIn, true, "", "")
+		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "exactly-one-hour", "", &expiresIn, true, "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -463,7 +463,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 			svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, serviceTestSubSelector{}, logger.Development())
 			expiresIn := tt.expiresIn
 
-			result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "test-key", "", &expiresIn, true, "", "")
+			result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "test-key", "", &expiresIn, true, "")
 
 			require.Error(t, err)
 			assert.Nil(t, result)
@@ -509,7 +509,7 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 		store := api_keys.NewMockStore()
 		svc := api_keys.NewServiceWithLogger(store, cfg, subSelectorStub{}, logger.Development())
 
-		result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, "team-a", "")
+		result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, "team-a")
 		require.NoError(t, err)
 		require.Equal(t, "team-a", result.Subscription)
 
@@ -522,7 +522,7 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 		store := api_keys.NewMockStore()
 		svc := api_keys.NewServiceWithLogger(store, cfg, subSelectorStub{}, logger.Development())
 
-		result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, "", "")
+		result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, "")
 		require.NoError(t, err)
 		require.Equal(t, "from-priority", result.Subscription)
 	})
@@ -577,7 +577,7 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 				store := api_keys.NewMockStore()
 				svc := api_keys.NewServiceWithLogger(store, cfg, tt.stub, logger.Development())
 
-				result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, tt.requested, "")
+				result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, tt.requested)
 				require.Error(t, err)
 				require.Nil(t, result)
 				tt.assertErr(t, err)
