@@ -126,22 +126,25 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 // reconcileTRLPForModel builds or updates the aggregated TokenRateLimitPolicy for a specific model.
 // It finds all active subscriptions for the model and creates a single TRLP covering all of them.
 func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
+	// Find ALL subscriptions for this model (not just the current one)
+	allSubs, err := findAllSubscriptionsForModel(ctx, r.Client, modelNamespace, modelName)
+	if err != nil {
+		return fmt.Errorf("failed to list subscriptions for model %s/%s: %w", modelNamespace, modelName, err)
+	}
+
+	// Resolve HTTPRoute early to check if model/route exist
 	httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, modelNamespace, modelName)
 	if err != nil {
-		if errors.Is(err, ErrModelNotFound) {
-			log.Info("model not found, cleaning up generated TokenRateLimitPolicy", "model", modelNamespace+"/"+modelName)
+		// During cleanup (model not found or no subscriptions), treat missing HTTPRoute as non-fatal.
+		// The TRLP can still be deleted using model labels without needing the HTTPRoute.
+		if errors.Is(err, ErrModelNotFound) || len(allSubs) == 0 {
+			log.Info("model/route not found during cleanup, deleting TokenRateLimitPolicy via labels", "model", modelNamespace+"/"+modelName, "error", err.Error())
 			if delErr := r.deleteModelTRLP(ctx, log, modelNamespace, modelName); delErr != nil {
 				return fmt.Errorf("failed to clean up TokenRateLimitPolicy for missing model %s/%s: %w", modelNamespace, modelName, delErr)
 			}
 			return nil
 		}
 		return fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", modelNamespace, modelName, err)
-	}
-
-	// Find ALL subscriptions for this model (not just the current one)
-	allSubs, err := findAllSubscriptionsForModel(ctx, r.Client, modelNamespace, modelName)
-	if err != nil {
-		return fmt.Errorf("failed to list subscriptions for model %s/%s: %w", modelNamespace, modelName, err)
 	}
 
 	// If no subscriptions remain, delete the TRLP
@@ -229,10 +232,11 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	policy.SetName(policyName)
 	policy.SetNamespace(httpRouteNS)
 	policy.SetLabels(map[string]string{
-		"maas.opendatahub.io/model":    modelName,
-		"app.kubernetes.io/managed-by": "maas-controller",
-		"app.kubernetes.io/part-of":    "maas-subscription",
-		"app.kubernetes.io/component":  "token-rate-limit-policy",
+		"maas.opendatahub.io/model":           modelName,
+		"maas.opendatahub.io/model-namespace": modelNamespace,
+		"app.kubernetes.io/managed-by":        "maas-controller",
+		"app.kubernetes.io/part-of":           "maas-subscription",
+		"app.kubernetes.io/component":         "token-rate-limit-policy",
 	})
 	policy.SetAnnotations(map[string]string{
 		"maas.opendatahub.io/subscriptions": strings.Join(subNames, ","),
@@ -317,14 +321,18 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 	// Always delete the aggregated TokenRateLimitPolicy so remaining MaaSSubscriptions rebuild it
 	// without the rate limits from the deleted subscription. If we skip deletion, the aggregated
 	// TokenRateLimitPolicy will contain stale configuration from the deleted MaaSSubscription.
+	//
+	// Search across all namespaces using model labels since TRLP is created in HTTPRoute namespace
+	// (not model namespace). This allows cleanup even when HTTPRoute is already deleted.
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"})
 	labelSelector := client.MatchingLabels{
-		"maas.opendatahub.io/model":    modelName,
-		"app.kubernetes.io/managed-by": "maas-controller",
-		"app.kubernetes.io/part-of":    "maas-subscription",
+		"maas.opendatahub.io/model":           modelName,
+		"maas.opendatahub.io/model-namespace": modelNamespace,
+		"app.kubernetes.io/managed-by":        "maas-controller",
+		"app.kubernetes.io/part-of":           "maas-subscription",
 	}
-	if err := r.List(ctx, policyList, client.InNamespace(modelNamespace), labelSelector); err != nil {
+	if err := r.List(ctx, policyList, labelSelector); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}

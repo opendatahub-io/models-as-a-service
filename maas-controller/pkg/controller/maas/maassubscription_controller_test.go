@@ -53,10 +53,11 @@ func newPreexistingTRLP(name, namespace, modelName string, annotations map[strin
 	p.SetName(name)
 	p.SetNamespace(namespace)
 	p.SetLabels(map[string]string{
-		"maas.opendatahub.io/model":    modelName,
-		"app.kubernetes.io/managed-by": "maas-controller",
-		"app.kubernetes.io/part-of":    "maas-subscription",
-		"app.kubernetes.io/component":  "token-rate-limit-policy",
+		"maas.opendatahub.io/model":           modelName,
+		"maas.opendatahub.io/model-namespace": namespace,
+		"app.kubernetes.io/managed-by":        "maas-controller",
+		"app.kubernetes.io/part-of":           "maas-subscription",
+		"app.kubernetes.io/component":         "token-rate-limit-policy",
 	})
 	p.SetAnnotations(annotations)
 	_ = unstructured.SetNestedField(p.Object, "sentinel-route", "spec", "targetRef", "name")
