@@ -483,20 +483,22 @@ func (r *MaaSSubscriptionReconciler) mapMaaSModelRefToMaaSSubscriptions(ctx cont
 	if !ok {
 		return nil
 	}
+	// Use field indexer to efficiently find subscriptions for this specific model
+	modelKey := model.Namespace + "/" + model.Name
 	var subscriptions maasv1alpha1.MaaSSubscriptionList
-	if err := r.List(ctx, &subscriptions); err != nil {
+	if err := r.List(ctx, &subscriptions, client.MatchingFields{modelRefIndexKey: modelKey}); err != nil {
 		return nil
 	}
+	// Deduplicate requests (same subscription shouldn't be queued multiple times)
+	seen := make(map[types.NamespacedName]struct{}, len(subscriptions.Items))
 	var requests []reconcile.Request
 	for _, s := range subscriptions.Items {
-		for _, ref := range s.Spec.ModelRefs {
-			if ref.Namespace == model.Namespace && ref.Name == model.Name {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: s.Name, Namespace: s.Namespace},
-				})
-				break
-			}
+		key := types.NamespacedName{Name: s.Name, Namespace: s.Namespace}
+		if _, exists := seen[key]; exists {
+			continue
 		}
+		seen[key] = struct{}{}
+		requests = append(requests, reconcile.Request{NamespacedName: key})
 	}
 	return requests
 }
@@ -513,28 +515,25 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 	if err := r.List(ctx, &models, client.InNamespace(route.Namespace)); err != nil {
 		return nil
 	}
-	// Use namespace-qualified keys to prevent cross-namespace matches
-	modelKeysInNS := map[string]bool{}
-	for _, m := range models.Items {
-		modelKeysInNS[m.Namespace+"/"+m.Name] = true
-	}
-	if len(modelKeysInNS) == 0 {
+	if len(models.Items) == 0 {
 		return nil
 	}
-	// Find MaaSSubscriptions that reference any of these models
-	var subscriptions maasv1alpha1.MaaSSubscriptionList
-	if err := r.List(ctx, &subscriptions); err != nil {
-		return nil
-	}
+	// Use field indexer to find subscriptions for each model, deduplicating results
+	seen := make(map[types.NamespacedName]struct{})
 	var requests []reconcile.Request
-	for _, s := range subscriptions.Items {
-		for _, ref := range s.Spec.ModelRefs {
-			if modelKeysInNS[ref.Namespace+"/"+ref.Name] {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: s.Name, Namespace: s.Namespace},
-				})
-				break
+	for _, m := range models.Items {
+		modelKey := m.Namespace + "/" + m.Name
+		var subscriptions maasv1alpha1.MaaSSubscriptionList
+		if err := r.List(ctx, &subscriptions, client.MatchingFields{modelRefIndexKey: modelKey}); err != nil {
+			continue // skip this model on error, don't fail entire mapping
+		}
+		for _, s := range subscriptions.Items {
+			key := types.NamespacedName{Name: s.Name, Namespace: s.Namespace}
+			if _, exists := seen[key]; exists {
+				continue
 			}
+			seen[key] = struct{}{}
+			requests = append(requests, reconcile.Request{NamespacedName: key})
 		}
 	}
 	return requests
