@@ -22,6 +22,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/api-translation/translator"
 )
 
 const (
@@ -29,8 +31,9 @@ const (
 )
 
 // compile-time interface check
-// var _ translator.Translator = &VertexTranslator{}
+var _ translator.Translator = &VertexTranslator{}
 
+// NewVertexTranslator initializes a new VertexTranslator and returns its pointer.
 func NewVertexTranslator() *VertexTranslator {
 	return &VertexTranslator{
 		modelNamePattern: regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`), // modelNamePattern validates Gemini model names to prevent path injection.
