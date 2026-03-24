@@ -41,6 +41,16 @@
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
+#
+# TIMEOUT CONFIGURATION (all in seconds, sourced from deployment-helpers.sh):
+#   Customize for CI/CD environments or slow clusters:
+#   CUSTOM_RESOURCE_TIMEOUT=600   DataScienceCluster wait
+#   LLMIS_TIMEOUT=300            LLMInferenceService ready
+#   MAASMODELREF_TIMEOUT=300     MaaSModelRef ready
+#   AUTHPOLICY_TIMEOUT=180       AuthPolicy enforced
+#   AUTHORINO_TIMEOUT=120        Authorino ready
+#   ROLLOUT_TIMEOUT=120          Deployment rollout
+#   See deployment-helpers.sh for complete list
 # =============================================================================
 
 set -euo pipefail
@@ -166,8 +176,8 @@ deploy_maas_platform() {
     fi
 
     # Wait for DataScienceCluster (install-odh already waited; deploy may have updated)
-    if ! wait_datasciencecluster_ready "default-dsc" 300; then
-        echo "⚠️  WARNING: DataScienceCluster readiness check had issues, continuing anyway"
+    if ! wait_datasciencecluster_ready "default-dsc" "$CUSTOM_RESOURCE_TIMEOUT"; then
+        echo "⚠️  WARNING: DataScienceCluster readiness check had issues (timeout: ${CUSTOM_RESOURCE_TIMEOUT}s), continuing anyway"
     fi
 
     # Wait for Authorino to be ready and auth service cluster to be healthy
@@ -179,10 +189,10 @@ deploy_maas_platform() {
         echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"
         echo "   This is a temporary workaround for the gateway→Authorino TLS chicken-egg problem"
     else
-        # Using 300s timeout to fit within Prow's 15m job limit
+        # Using configurable timeout (default suitable for Prow's 15m job limit)
         echo "Waiting for Authorino and auth service to be ready (namespace: ${AUTHORINO_NAMESPACE})..."
-        if ! wait_authorino_ready "$AUTHORINO_NAMESPACE" 300; then
-            echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+        if ! wait_authorino_ready "$AUTHORINO_NAMESPACE" "$AUTHORINO_TIMEOUT"; then
+            echo "⚠️  WARNING: Authorino readiness check had issues (timeout: ${AUTHORINO_TIMEOUT}s), continuing anyway"
         fi
     fi
 
@@ -224,26 +234,27 @@ deploy_models() {
     fi
     echo "✅ MaaS system deployed (free + premium + e2e test fixtures)"
 
-    echo "Waiting for models to be ready..."
-    if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for free simulator to be ready"
+    echo "Waiting for models to be ready (timeout: ${LLMIS_TIMEOUT}s)..."
+    if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
+        echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for free simulator to be ready"
         oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
     fi
-    if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for premium simulator to be ready"
+    if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
+        echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for premium simulator to be ready"
         oc get llminferenceservice/premium-simulated-simulated-premium -n llm -o yaml || true
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
     fi
     echo "✅ Simulator models ready"
 
-    # TODO: Currently waits for  ever and bounces controller (seems like they are not reconciled even after llmisvc are reported as up)
-    echo "Waiting for MaaSModelRefs to be Ready..."
+    # TODO: Currently waits forever and bounces controller (seems like they are not reconciled even after llmisvc are reported as up)
+    echo "Waiting for MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s)..."
+    local max_retries=$((MAASMODELREF_TIMEOUT / 5))  # 5 second intervals
     local retries=0
     local all_ready=false
-    while [[ $retries -lt 30 ]]; do
+    while [[ $retries -lt $max_retries ]]; do
         all_ready=true
         while IFS= read -r phase; do
             if [[ "$phase" != "Ready" ]]; then
@@ -261,12 +272,12 @@ deploy_models() {
     if ! $all_ready; then
         # TODO: Remove this workaround once maas-controller reconcile logic is correct.
         # Controller can get stuck in a bad state forever; bouncing may unstick it.
-        echo "  MaaSModelRefs not ready after ${retries} retries, bouncing maas-controller..."
+        echo "  MaaSModelRefs not ready after ${retries} retries (${MAASMODELREF_TIMEOUT}s), bouncing maas-controller..."
         kubectl rollout restart deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
-        kubectl rollout status deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --timeout=120s 2>/dev/null || true
+        kubectl rollout status deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s" 2>/dev/null || true
         echo "  Retrying MaaSModelRefs wait..."
         retries=0
-        while [[ $retries -lt 30 ]]; do
+        while [[ $retries -lt $max_retries ]]; do
             all_ready=true
             while IFS= read -r phase; do
                 if [[ "$phase" != "Ready" ]]; then
@@ -292,7 +303,7 @@ deploy_models() {
 }
 
 wait_for_auth_policies_enforced() {
-    local timeout=180
+    local timeout="$AUTHPOLICY_TIMEOUT"
     echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
 
     local namespaces
