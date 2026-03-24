@@ -402,8 +402,9 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	testLogger := logger.Development()
 
 	// Create mock servers that require specific subscription headers
-	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "premium")
-	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "free")
+	// Use qualified names (namespace/name) to match the format sent by the handler
+	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "test-namespace/premium")
+	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "test-namespace/free")
 
 	// Build MaaSModelRef unstructured list
 	maasModelRefItems := []*unstructured.Unstructured{
@@ -573,9 +574,10 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	testLogger := logger.Development()
 
 	// Create mock servers for models
-	model1Server := createMockModelServerWithSubscriptionCheck(t, "model-1", "sub-a")
-	model2Server := createMockModelServerWithSubscriptionCheck(t, "model-2", "sub-b")
-	model3Server := createMockModelServerWithSubscriptionCheck(t, "model-3", "sub-a")
+	// Use qualified names (namespace/name) to match the format sent by the handler
+	model1Server := createMockModelServerWithSubscriptionCheck(t, "model-1", "test-namespace/sub-a")
+	model2Server := createMockModelServerWithSubscriptionCheck(t, "model-2", "test-namespace/sub-b")
+	model3Server := createMockModelServerWithSubscriptionCheck(t, "model-3", "test-namespace/sub-a")
 
 	// Setup MaaSModelRef lister with three models
 	lister := fakeMaaSModelRefLister{
@@ -1097,8 +1099,9 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 
 	// Create two mock servers that both return the same model ID "gpt-4"
 	// One accessible via sub-a, one via sub-b
-	modelServerA := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "sub-a")
-	modelServerB := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "sub-b")
+	// Use qualified names (namespace/name) to match the format sent by the handler
+	modelServerA := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "test-namespace/sub-a")
+	modelServerB := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "test-namespace/sub-b")
 
 	// Setup MaaSModelRef lister with two different MaaSModelRefs in different namespaces
 	lister := fakeMaaSModelRefLister{

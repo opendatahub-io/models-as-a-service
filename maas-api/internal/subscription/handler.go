@@ -64,14 +64,17 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		"username", req.Username,
 		"groups", req.Groups,
 		"requestedSubscription", req.RequestedSubscription,
+		"requestedModel", req.RequestedModel,
 	)
 
-	response, err := h.selector.Select(req.Groups, req.Username, req.RequestedSubscription)
+	response, err := h.selector.Select(req.Groups, req.Username, req.RequestedSubscription, req.RequestedModel)
 	if err != nil {
 		var noSubErr *NoSubscriptionError
 		var notFoundErr *SubscriptionNotFoundError
 		var accessDeniedErr *AccessDeniedError
 		var multipleSubsErr *MultipleSubscriptionsError
+		var ambiguousErr *SubscriptionAmbiguousError
+		var modelNotInSubErr *ModelNotInSubscriptionError
 
 		if errors.As(err, &noSubErr) {
 			h.logger.Debug("No subscription found for user",
@@ -115,6 +118,29 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 			)
 			c.JSON(http.StatusOK, SelectResponse{
 				Error:   "multiple_subscriptions",
+				Message: err.Error(),
+			})
+			return
+		}
+
+		if errors.As(err, &ambiguousErr) {
+			h.logger.Debug("Subscription name is ambiguous",
+				"username", req.Username,
+			)
+			c.JSON(http.StatusOK, SelectResponse{
+				Error:   "ambiguous_subscription",
+				Message: err.Error(),
+			})
+			return
+		}
+
+		if errors.As(err, &modelNotInSubErr) {
+			h.logger.Debug("Model not included in subscription",
+				"subscription", modelNotInSubErr.Subscription,
+				"model", modelNotInSubErr.Model,
+			)
+			c.JSON(http.StatusOK, SelectResponse{
+				Error:   "model_not_in_subscription",
 				Message: err.Error(),
 			})
 			return
