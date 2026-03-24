@@ -261,8 +261,8 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 					"when": []interface{}{
 						map[string]interface{}{
 							"selector": "request.url_path",
-							"operator": "endswith",
-							"value":    "/v1/models",
+							"operator": "matches",
+							"value":    ".*/v1/models$",
 						},
 						map[string]interface{}{
 							"selector": "request.headers.authorization",
