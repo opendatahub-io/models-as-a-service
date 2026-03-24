@@ -310,6 +310,12 @@ paths:
                                     name: my-short-lived-key
                                     description: 30-day test key
                                     expiresIn: 30d
+                            with_subscription:
+                                summary: API key bound to specific subscription
+                                value:
+                                    name: my-premium-key
+                                    description: Key for premium subscription
+                                    subscription: premium-subscription
                             ephemeral_key:
                                 summary: Ephemeral key for programmatic use (1hr expiration)
                                 value:
@@ -460,11 +466,13 @@ paths:
                                 data:
                                     - id: key_abc123
                                       name: my-production-key
+                                      subscription: premium-subscription
                                       creationDate: "2024-01-15T10:30:00Z"
                                       status: active
                                       ephemeral: false
                                     - id: key_def456
                                       name: my-test-key
+                                      subscription: basic-subscription
                                       creationDate: "2024-01-14T09:15:00Z"
                                       expirationDate: "2024-04-14T09:15:00Z"
                                       status: active
@@ -587,6 +595,7 @@ paths:
                             example:
                                 id: key_abc123
                                 name: my-production-key
+                                subscription: premium-subscription
                                 creationDate: "2024-01-15T10:30:00Z"
                                 status: revoked
                                 ephemeral: false
@@ -969,6 +978,9 @@ components:
                 username:
                     type: string
                     description: Username that owns this API key
+                subscription:
+                    type: string
+                    description: MaaSSubscription name bound to this key at creation time
                 groups:
                     type: array
                     items:
