@@ -59,11 +59,16 @@ func (r *maasModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Extract spec.modelRef fields
 	kind, _, _ := unstructured.NestedString(obj.Object, "spec", "modelRef", "kind")
-	if kind != "ExternalModel" {
+	if kind != ExternalModelKind {
 		return ctrl.Result{}, nil
 	}
 
 	modelName, _, _ := unstructured.NestedString(obj.Object, "spec", "modelRef", "name")
+	if modelName == "" {
+		logger.Info("MaaSModelRef ExternalModel missing modelRef.name, skipping", "name", req.Name)
+		return ctrl.Result{}, nil
+	}
+
 	provider, _, _ := unstructured.NestedString(obj.Object, "spec", "modelRef", "provider")
 	if provider == "" {
 		logger.Info("MaaSModelRef ExternalModel missing provider, skipping", "name", req.Name)

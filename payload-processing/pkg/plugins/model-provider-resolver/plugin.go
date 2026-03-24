@@ -34,6 +34,7 @@ import (
 
 const (
 	ModelProviderResolverPluginType = "model-provider-resolver"
+	ExternalModelKind              = "ExternalModel"
 )
 
 // maasModelRefGVK is the GroupVersionKind for MaaSModelRef CRD.
