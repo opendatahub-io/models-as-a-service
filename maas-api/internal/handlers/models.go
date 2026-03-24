@@ -78,7 +78,8 @@ func (h *ModelsHandler) selectSubscriptionsForListing(
 
 	// Single subscription selection (existing behavior)
 	if h.subscriptionSelector != nil {
-		result, err := h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription)
+		//nolint:unqueryvet,nolintlint // Select is a method, not a SQL query
+		result, err := h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription, "")
 		if err != nil {
 			h.handleSubscriptionSelectionError(c, err)
 			return nil, true
@@ -99,6 +100,7 @@ func (h *ModelsHandler) selectSubscriptionsForListing(
 // handleSubscriptionSelectionError handles errors from subscription selection and sends appropriate HTTP responses.
 func (h *ModelsHandler) handleSubscriptionSelectionError(c *gin.Context, err error) {
 	var multipleSubsErr *subscription.MultipleSubscriptionsError
+	var ambiguousErr *subscription.SubscriptionAmbiguousError
 	var accessDeniedErr *subscription.AccessDeniedError
 	var notFoundErr *subscription.SubscriptionNotFoundError
 	var noSubErr *subscription.NoSubscriptionError
@@ -109,6 +111,16 @@ func (h *ModelsHandler) handleSubscriptionSelectionError(c *gin.Context, err err
 		h.logger.Debug("User has multiple subscriptions, x-maas-subscription header required",
 			"subscriptionCount", len(multipleSubsErr.Subscriptions),
 		)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": err.Error(),
+				"type":    "permission_error",
+			}})
+		return
+	}
+
+	if errors.As(err, &ambiguousErr) {
+		h.logger.Debug("Subscription name is ambiguous")
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
 				"message": err.Error(),
@@ -255,7 +267,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			} else {
 				// User has zero accessible subscriptions - return empty list
 				h.logger.Debug("User has zero accessible subscriptions, returning empty model list")
-				// modelList is already initialized to empty slice at line 235
+				// modelList is already initialized to empty slice above
 			}
 		} else {
 			// Filter models by subscription(s) and aggregate subscriptions
@@ -268,8 +280,22 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			modelsByKey := make(map[modelKey]*models.Model)
 
 			for _, sub := range subscriptionsToUse {
-				h.logger.Debug("Filtering models by subscription", "subscription", sub.Name, "modelCount", len(list))
-				filteredModels := h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, sub.Name)
+				// Pre-filter by modelRefs if available (optimization to reduce HTTP calls)
+				modelsToCheck := list
+				if len(sub.ModelRefs) > 0 {
+					h.logger.Debug("Pre-filtering models by subscription modelRefs",
+						"subscription", sub.Name,
+						"totalModels", len(list),
+						"modelRefsCount", len(sub.ModelRefs),
+					)
+					modelsToCheck = filterModelsBySubscription(list, sub.ModelRefs)
+					h.logger.Debug("After modelRef filtering", "modelsToCheck", len(modelsToCheck))
+				}
+
+				// Use qualified "namespace/name" format for accurate authorization checks
+				qualifiedSubName := sub.Namespace + "/" + sub.Name
+				h.logger.Debug("Filtering models by subscription", "subscription", qualifiedSubName, "modelCount", len(modelsToCheck))
+				filteredModels := h.modelMgr.FilterModelsByAccess(c.Request.Context(), modelsToCheck, authHeader, qualifiedSubName)
 
 				for _, model := range filteredModels {
 					subInfo := models.SubscriptionInfo{
@@ -322,4 +348,30 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		Object: "list",
 		Data:   modelList,
 	})
+}
+
+// filterModelsBySubscription filters models to only those matching the subscription's modelRefs.
+func filterModelsBySubscription(modelList []models.Model, modelRefs []subscription.ModelRefInfo) []models.Model {
+	if len(modelRefs) == 0 {
+		return modelList
+	}
+
+	// Build map of allowed models for fast lookup
+	allowed := make(map[string]bool)
+	for _, ref := range modelRefs {
+		key := ref.Namespace + "/" + ref.Name
+		allowed[key] = true
+	}
+
+	// Filter models
+	filtered := make([]models.Model, 0, len(modelList))
+	for _, model := range modelList {
+		// Models from MaaSModelRefLister have OwnedBy set to namespace
+		modelKey := model.OwnedBy + "/" + model.ID
+		if allowed[modelKey] {
+			filtered = append(filtered, model)
+		}
+	}
+
+	return filtered
 }

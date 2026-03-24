@@ -5,6 +5,13 @@ type SelectRequest struct {
 	Groups                []string `json:"groups"`                                // User's group memberships (optional if username provided)
 	Username              string   `binding:"required"           json:"username"` // User's username
 	RequestedSubscription string   `json:"requestedSubscription"`                 // Optional explicit subscription name
+	RequestedModel        string   `json:"requestedModel"`                        // Optional model reference (format: namespace/name) to validate subscription includes this model
+}
+
+// ModelRef represents a model reference in a subscription.
+type ModelRef struct {
+	Namespace string `json:"namespace"` // Model namespace
+	Name      string `json:"name"`      // Model name
 }
 
 // SelectResponse contains the selected subscription details or error information.
@@ -12,6 +19,7 @@ type SelectRequest struct {
 type SelectResponse struct {
 	// Success fields (populated when selection succeeds)
 	Name           string            `json:"name,omitempty"`           // Subscription name
+	Namespace      string            `json:"namespace,omitempty"`      // Subscription namespace
 	DisplayName    string            `json:"displayName,omitempty"`    // Human-friendly display name for UI
 	Description    string            `json:"description,omitempty"`    // Subscription description
 	Priority       int32             `json:"priority,omitempty"`       // Subscription priority
