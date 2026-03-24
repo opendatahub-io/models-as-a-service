@@ -75,7 +75,6 @@ func NewManager(log *logger.Logger) (*Manager, error) {
 // 2xx or 405 → include, 401/403/404 → exclude.
 // Models with nil URL are skipped. Concurrency is limited by maxDiscoveryConcurrency.
 //
-// The result includes a CheckedAt timestamp indicating when the access probes completed.
 // Because authorization policies propagate asynchronously through the gateway, there is an
 // inherent eventual-consistency window: a model listed here may become inaccessible (or vice versa)
 // by the time the client acts on the response. Actual enforcement always happens at the gateway
@@ -228,7 +227,7 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, s
 		lastResult = authRes
 		return lastResult != authRetry, nil
 	}); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
 			m.logger.Debug("Access validation failed: context deadline exceeded", "service", meta.ServiceName, "endpoint", meta.Endpoint, "timeout", accessCheckTimeout)
 		} else {
 			m.logger.Debug("Access validation failed: model fetch backoff exhausted", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
@@ -259,7 +258,7 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 	// #nosec G704 -- Intentional HTTP request to probe model endpoint for authorization check
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
 			m.logger.Debug("Access validation: request timed out (context deadline exceeded)", "service", meta.ServiceName, "endpoint", meta.Endpoint)
 			return nil, authDenied // fail-closed, no point retrying a deadline
 		}
