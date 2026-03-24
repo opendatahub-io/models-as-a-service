@@ -197,6 +197,46 @@ waitsubscriptioninstalled() {
   fi
 }
 
+# approve_initial_installplan_if_manual namespace subscription_name [timeout_seconds]
+#   When installPlanApproval is Manual, OLM creates an InstallPlan with spec.approved=false.
+#   Approve that InstallPlan once so the first install completes without human action.
+#   Later upgrade InstallPlans remain unapproved until someone approves them manually.
+approve_initial_installplan_if_manual() {
+  local namespace=${1?namespace is required}; shift
+  local subscription_name=${1?subscription name is required}; shift
+  local timeout=${1:-180}
+  local elapsed=0
+  local interval=3
+
+  while [[ $elapsed -lt $timeout ]]; do
+    local ip_name
+    ip_name=$(kubectl get subscription.operators.coreos.com -n "$namespace" "$subscription_name" -o jsonpath='{.status.installPlanRef.name}' 2>/dev/null || true)
+    if [[ -n "$ip_name" ]]; then
+      local approved
+      approved=$(kubectl get installplan "$ip_name" -n "$namespace" -o jsonpath='{.spec.approved}' 2>/dev/null || echo "")
+      if [[ "$approved" == "false" ]]; then
+        log_info "Approving initial InstallPlan $ip_name (Manual subscription)"
+        kubectl patch installplan "$ip_name" -n "$namespace" --type=merge -p '{"spec":{"approved":true}}' || {
+          log_warn "Could not approve InstallPlan $ip_name"
+        }
+      fi
+      return 0
+    fi
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+
+  # Fallback: single pending InstallPlan in namespace (e.g. ref not yet on Subscription)
+  local fallback_ip
+  fallback_ip=$(kubectl get installplan -n "$namespace" -o json 2>/dev/null | jq -r '.items[] | select((.spec.approved // false) == false) | .metadata.name' 2>/dev/null | head -1)
+  if [[ -n "$fallback_ip" ]]; then
+    log_info "Approving pending InstallPlan $fallback_ip (Manual subscription, fallback)"
+    kubectl patch installplan "$fallback_ip" -n "$namespace" --type=merge -p '{"spec":{"approved":true}}' || true
+  else
+    log_warn "No InstallPlan to auto-approve within ${timeout}s; if install stalls, approve the InstallPlan manually"
+  fi
+}
+
 # checksubscriptionexists catalog_namespace catalog_name operator_name
 #   Checks if a subscription exists for the given operator from the specified catalog.
 #   Returns the count of matching subscriptions (0 if none found).
@@ -264,7 +304,7 @@ should_install_operator() {
   return 0
 }
 
-# install_olm_operator operator_name namespace catalog_source channel starting_csv operatorgroup_target source_namespace
+# install_olm_operator operator_name namespace catalog_source channel starting_csv operatorgroup_target source_namespace install_plan_approval
 #   Generic function to install an OLM operator.
 #
 # Arguments:
@@ -275,6 +315,8 @@ should_install_operator() {
 #   starting_csv - Starting CSV (optional, can be empty)
 #   operatorgroup_target - Target namespace for OperatorGroup (optional, uses namespace if empty)
 #   source_namespace - Catalog source namespace (optional, defaults to openshift-marketplace)
+#   install_plan_approval - Automatic or Manual (optional, empty = omit). Manual blocks automatic
+#     upgrades; this script auto-approves only the first InstallPlan so initial install still completes.
 install_olm_operator() {
   local operator_name=${1?operator name is required}; shift
   local namespace=${1?namespace is required}; shift
@@ -283,6 +325,7 @@ install_olm_operator() {
   local starting_csv=${1:-}; shift || true
   local operatorgroup_target=${1:-}; shift || true
   local source_namespace=${1:-openshift-marketplace}; shift || true
+  local install_plan_approval=${1:-}; shift || true
 
   log_info "Installing operator: $operator_name in namespace: $namespace"
 
@@ -333,7 +376,11 @@ EOF
   fi
 
   # Create Subscription
-  log_info "Creating Subscription for $operator_name from $catalog_source (channel: $channel)"
+  local sub_log="Creating Subscription for $operator_name from $catalog_source (channel: $channel"
+  [[ -n "$install_plan_approval" ]] && sub_log+=", installPlanApproval: $install_plan_approval"
+  [[ -n "$starting_csv" ]] && sub_log+=", startingCSV: $starting_csv"
+  sub_log+=")"
+  log_info "$sub_log"
   local subscription_yaml="
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
@@ -347,12 +394,22 @@ spec:
   sourceNamespace: ${source_namespace}
 "
 
+  if [[ -n "$install_plan_approval" ]]; then
+    subscription_yaml="${subscription_yaml}  installPlanApproval: ${install_plan_approval}
+"
+  fi
+
   if [[ -n "$starting_csv" ]]; then
     subscription_yaml="${subscription_yaml}  startingCSV: ${starting_csv}
 "
   fi
 
   echo "$subscription_yaml" | kubectl apply -f -
+
+  if [[ "$install_plan_approval" == "Manual" ]]; then
+    log_info "Manual Subscription: approving initial InstallPlan so first install can proceed..."
+    approve_initial_installplan_if_manual "$namespace" "$operator_name" 180
+  fi
 
   # Wait for subscription to be installed
   log_info "Waiting for subscription to install..."
