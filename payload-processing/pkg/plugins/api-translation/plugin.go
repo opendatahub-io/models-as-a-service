@@ -1,5 +1,5 @@
 /*
-Copyright 2026 The opendatahub.io Authors.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,8 +26,8 @@ import (
 
 	"github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/api-translation/translator"
 	"github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/api-translation/translator/anthropic"
-	// "github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/api-translation/translator/azureopenai"
-	// "github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/api-translation/translator/vertex"
+	"github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/api-translation/translator/azureopenai"
+	"github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/api-translation/translator/vertex"
 	"github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/common/provider"
 	"github.com/opendatahub-io/ai-gateway-payload-processing/pkg/plugins/common/state"
 )
@@ -53,9 +53,9 @@ func NewAPITranslationPlugin() *APITranslationPlugin {
 			Name: APITranslationPluginType,
 		},
 		providers: map[string]translator.Translator{
-			provider.Anthropic: anthropic.NewAnthropicTranslator(),
-			// provider.AzureOpenAI: azureopenai.NewAzureOpenAITranslator(),
-			// provider.Vertex:      vertex.NewVertexTranslator(),
+			provider.Anthropic:   anthropic.NewAnthropicTranslator(),
+			provider.AzureOpenAI: azureopenai.NewAzureOpenAITranslator(),
+			provider.Vertex:      vertex.NewVertexTranslator(),
 		},
 	}
 }
