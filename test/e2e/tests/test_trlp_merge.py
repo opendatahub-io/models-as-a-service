@@ -8,6 +8,7 @@ using defaults.strategy: merge, enabling independent rate limits per model.
 import json
 import logging
 import os
+import shutil
 import subprocess
 import time
 import uuid
@@ -27,6 +28,12 @@ MAAS_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-serv
 DEFAULT_LLMIS_NAME = os.environ.get("E2E_DEFAULT_LLMIS", "facebook-opt-125m-simulated")
 DEFAULT_LLMIS_NAMESPACE = os.environ.get("E2E_DEFAULT_LLMIS_NAMESPACE", "llm")
 
+# kubectl binary path and timeout for all subprocess calls
+KUBECTL_BIN = shutil.which("kubectl")
+if not KUBECTL_BIN or not os.path.isabs(KUBECTL_BIN):
+    raise RuntimeError(f"kubectl not found in PATH or not absolute: {KUBECTL_BIN}")
+KUBECTL_TIMEOUT = int(os.environ.get("E2E_KUBECTL_TIMEOUT", "60"))
+
 
 # ---------------------------------------------------------------------------
 # Helper Function
@@ -40,11 +47,12 @@ def _ns():
 def _apply_cr(cr_dict):
     """Apply a custom resource using kubectl."""
     subprocess.run(
-        ["kubectl", "apply", "-f", "-"],
+        [KUBECTL_BIN, "apply", "-f", "-"],
         input=json.dumps(cr_dict),
         capture_output=True,
         text=True,
         check=True,
+        timeout=KUBECTL_TIMEOUT,
     )
 
 
@@ -52,9 +60,10 @@ def _delete_cr(kind, name, namespace=None):
     """Delete a custom resource."""
     namespace = namespace or _ns()
     subprocess.run(
-        ["kubectl", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"],
+        [KUBECTL_BIN, "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"],
         capture_output=True,
         text=True,
+        timeout=KUBECTL_TIMEOUT,
     )
 
 
@@ -62,9 +71,10 @@ def _get_cr(kind, name, namespace=None):
     """Get a custom resource as a dictionary."""
     namespace = namespace or _ns()
     result = subprocess.run(
-        ["kubectl", "get", kind, name, "-n", namespace, "-o", "json"],
+        [KUBECTL_BIN, "get", kind, name, "-n", namespace, "-o", "json"],
         capture_output=True,
         text=True,
+        timeout=KUBECTL_TIMEOUT,
     )
     if result.returncode != 0:
         return None
@@ -441,6 +451,9 @@ class TestTRLPMergeStrategy:
             )
 
             # Wait for auth policies to be enforced
+            # Note: We attempt to wait for enforcement but don't fail if it times out,
+            # as the test focus is TRLP merge strategy. AuthPolicy enforcement may
+            # complete asynchronously before TRLP validation.
             _wait_for_authpolicy_enforced(auth_a_name, MAAS_NAMESPACE)
             _wait_for_authpolicy_enforced(auth_b_name, MAAS_NAMESPACE)
 
@@ -482,7 +495,7 @@ class TestTRLPMergeStrategy:
 
             assert trlp_a is not None, f"TRLP-A not found: {trlp_a_name}"
             assert trlp_b is not None, f"TRLP-B not found: {trlp_b_name}"
-            log.info(f"VERIFIED: Both TRLPs exist")
+            log.info("VERIFIED: Both TRLPs exist")
 
             # 7. Verify both have merge strategy
             log.info("Verifying both TRLPs have merge strategy...")
@@ -495,7 +508,7 @@ class TestTRLPMergeStrategy:
             assert strategy_b == "merge", (
                 f"TRLP-B strategy should be 'merge', got '{strategy_b}'"
             )
-            log.info(f"VERIFIED: Both TRLPs have strategy='merge'")
+            log.info("VERIFIED: Both TRLPs have strategy='merge'")
 
             # 8. Verify both target same HTTPRoute
             log.info("Verifying both TRLPs target the same HTTPRoute...")
