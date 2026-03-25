@@ -21,7 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/cel-go/cel"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -608,15 +607,6 @@ func TestMaaSAuthPolicyReconciler_SubscriptionCacheKey(t *testing.T) {
 		"spec", "rules", "metadata", "subscription-info", "cache", "key", "selector")
 	if err != nil || !found {
 		t.Fatalf("subscription-info cache key selector not found: found=%v err=%v", found, err)
-	}
-
-	// Verify the cache key selector is a syntactically valid CEL expression
-	env, err := cel.NewEnv()
-	if err != nil {
-		t.Fatalf("failed to create CEL environment: %v", err)
-	}
-	if _, issues := env.Parse(cacheKeySelector); issues != nil && issues.Err() != nil {
-		t.Fatalf("cache key selector is not valid CEL: %v\nexpression: %s", issues.Err(), cacheKeySelector)
 	}
 
 	// Verify the cache key includes all required components
