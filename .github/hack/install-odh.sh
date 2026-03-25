@@ -5,9 +5,12 @@
 # Prerequisites: cert-manager and LWS operators (run install-cert-manager-and-lws.sh first).
 #
 # Environment variables:
-#   OPERATOR_CATALOG - Custom catalog image (optional). When unset, uses community-operators (ODH 3.3).
+#   OPERATOR_CATALOG - Custom catalog image (optional). When unset, uses community-operators.
 #                      Set to e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest for custom builds.
-#   OPERATOR_CHANNEL - Subscription channel (default: fast-3 for community, fast for custom catalog)
+#   OPERATOR_CHANNEL   - Subscription channel (default: fast-3)
+#   OPERATOR_STARTING_CSV - Pin Subscription startingCSV (default: opendatahub-operator.v3.4.0-ea.1). Set to "-" to omit.
+#   OPERATOR_INSTALL_PLAN_APPROVAL - Manual (default) or Automatic; use "-" to omit.
+#     Manual: blocks auto-upgrades; this script auto-approves only the first InstallPlan so install does not stall.
 #   OPERATOR_IMAGE   - Custom operator image to patch into CSV (optional)
 #
 # Usage: ./install-odh.sh
@@ -21,6 +24,8 @@ DATA_DIR="${REPO_ROOT}/scripts/data"
 NAMESPACE="${OPERATOR_NAMESPACE:-opendatahub}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
+OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-}"
+OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 
 # Source deployment helpers
@@ -59,18 +64,26 @@ patch_operator_csv_if_needed() {
 echo "=== Installing OpenDataHub operator ==="
 echo ""
 
-# 1. Catalog setup: use community-operators (ODH 3.3) by default, or custom catalog when OPERATOR_CATALOG is set
+# 1. Catalog setup: community-operators by default, or custom catalog when OPERATOR_CATALOG is set
 echo "1. Setting up ODH catalog..."
 if [[ -n "$OPERATOR_CATALOG" ]]; then
   echo "   Using custom catalog: $OPERATOR_CATALOG"
   create_custom_catalogsource "odh-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
   catalog_source="odh-custom-catalog"
-  channel="${OPERATOR_CHANNEL:-fast}"
+  channel="${OPERATOR_CHANNEL:-fast-3}"
 else
-  echo "   Using community-operators (ODH 3.3)"
+  echo "   Using community-operators"
   catalog_source="community-operators"
   channel="${OPERATOR_CHANNEL:-fast-3}"
 fi
+
+# Pin to ODH 3.4 EA1 unless overridden (omit with OPERATOR_STARTING_CSV=- to follow channel head)
+starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.4.0-ea.1}"
+[[ "$starting_csv" == "-" ]] && starting_csv=""
+
+# Manual = no auto-upgrades; install_olm_operator still approves the first InstallPlan programmatically
+plan_approval="${OPERATOR_INSTALL_PLAN_APPROVAL:-Manual}"
+[[ "$plan_approval" == "-" ]] && plan_approval=""
 
 # 2. Install ODH operator via OLM
 echo "2. Installing ODH operator..."
@@ -79,8 +92,10 @@ install_olm_operator \
   "$NAMESPACE" \
   "$catalog_source" \
   "$channel" \
-  "" \
-  "AllNamespaces"
+  "$starting_csv" \
+  "AllNamespaces" \
+  "openshift-marketplace" \
+  "$plan_approval"
 
 # 3. Patch CSV with custom image if specified
 if [[ -n "$OPERATOR_IMAGE" ]]; then
