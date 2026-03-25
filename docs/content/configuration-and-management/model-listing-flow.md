@@ -57,38 +57,54 @@ If the API is not configured with a MaaSModelRef lister and namespace, or if lis
 
 ## Subscription Filtering and Aggregation
 
-The `/v1/models` endpoint supports filtering and aggregating models across subscriptions using request headers.
+The `/v1/models` endpoint automatically filters models based on your authentication method and optional headers.
 
-### Request Headers
+### Authentication-Based Behavior
 
-- **`X-MaaS-Subscription`** (optional): Filter models to a specific subscription by name
-- **`X-MaaS-Return-All-Models`** (optional): When set to `"true"`, returns models from all subscriptions the user has access to
+#### API Key Authentication (Bearer sk-oai-*)
+When using an API key, the subscription is automatically determined from the key:
+- Returns **only** models from the subscription bound to the API key at mint time
+- The `X-MaaS-Subscription` header is automatically injected by the gateway
+- **No manual headers required**
 
-!!! warning "Conflicting headers"
-    You cannot specify both `X-MaaS-Subscription` and `X-MaaS-Return-All-Models` headers in the same request. This returns `400 Bad Request`.
-
-### Behavior Modes
-
-#### Default (no header)
-Returns models from a single subscription:
-- If the user has access to only one subscription, models from that subscription are returned
-- If the user has access to multiple subscriptions, returns `403 Forbidden` with message: "user has access to multiple subscriptions, must specify subscription using X-MaaS-Subscription header"
-
-#### Single Subscription (`X-MaaS-Subscription: <name>`)
-Returns only models accessible via the specified subscription:
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
+# API key bound to "premium-subscription"
+curl -H "Authorization: Bearer sk-oai-abc123..." \
+     https://maas.example.com/maas-api/v1/models
+
+# Returns models from "premium-subscription" only
+```
+
+#### User Token Authentication (OpenShift/OIDC tokens)
+When using a user token, you have flexible options:
+
+**Default (no X-MaaS-Subscription header)**:
+- Returns **all** models from all subscriptions you have access to
+- Models are deduplicated and subscription metadata is attached
+
+```bash
+# User with access to "basic" and "premium" subscriptions
+curl -H "Authorization: Bearer $(oc whoami -t)" \
+     https://maas.example.com/maas-api/v1/models
+
+# Returns models from both subscriptions with subscription metadata
+```
+
+**With X-MaaS-Subscription header** (optional):
+- Returns only models from the specified subscription
+- Behaves like an API key request - allows you to scope your query to a specific subscription
+
+```bash
+# Filter to only "premium" subscription models
+curl -H "Authorization: Bearer $(oc whoami -t)" \
      -H "X-MaaS-Subscription: premium-subscription" \
      https://maas.example.com/maas-api/v1/models
+
+# Returns only "premium-subscription" models
 ```
 
-#### All Subscriptions (`X-MaaS-Return-All-Models: true`)
-Returns models from all subscriptions the user has access to, with subscription metadata attached. If the user has access to zero subscriptions, returns HTTP 200 with an empty data array (not an error), allowing clients to handle this deterministically:
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-     -H "X-MaaS-Return-All-Models: true" \
-     https://maas.example.com/maas-api/v1/models
-```
+!!! tip "User token filtering"
+    The `X-MaaS-Subscription` header allows user token requests to filter results to a specific subscription. This is useful when you have access to many subscriptions but only want to see models from one.
 
 ### Subscription Metadata
 
@@ -124,16 +140,22 @@ All models in the response include a `subscriptions` array with metadata for eac
 
 ### Deduplication Behavior
 
-When `X-MaaS-Return-All-Models: true` is used, models are deduplicated by `(id, url)` key:
+Models are deduplicated by `(id, url, ownedBy)` key:
 
-- **Same id + same URL**: Single entry with subscriptions aggregated into the `subscriptions` array
-- **Same id + different URLs**: Separate entries (different model endpoints)
+- **Same id + same URL + same MaaSModelRef (ownedBy)**: Single entry with subscriptions aggregated into the `subscriptions` array
+- **Different id, URL, or MaaSModelRef**: Separate entries
 
-**Example:**
-- Model `gpt-3.5` at URL `https://example.com/gpt-3.5` is accessible via subscriptions A and B
+**User token authentication** (multiple subscriptions):
+- Model `gpt-3.5` from MaaSModelRef `namespace-a/model-a` at URL `https://example.com/gpt-3.5` is accessible via subscriptions A and B
   - Result: One entry with `subscriptions: [{name: "A"}, {name: "B"}]`
-- Model `gpt-3.5` at URL `https://example.com/gpt-3.5-premium` is only in subscription B
-  - Result: Separate entry with `subscriptions: [{name: "B"}]`
+- Model `gpt-3.5` from MaaSModelRef `namespace-b/model-b` at the same URL is only in subscription B
+  - Result: Separate entry with `subscriptions: [{name: "B"}]` (different MaaSModelRef)
+- Model `gpt-3.5` at URL `https://example.com/gpt-3.5-premium` from `namespace-a/model-a` is only in subscription B
+  - Result: Separate entry with `subscriptions: [{name: "B"}]` (different URL)
+
+**API key authentication** (single subscription):
+- Deduplication handles edge cases where multiple MaaSModelRef resources point to the same model endpoint
+- Each unique MaaSModelRef resource appears as a separate entry
 
 !!! tip "Subscription metadata fields"
     The `displayName` and `description` fields are read from the MaaSSubscription CRD's `spec.displayName` and `spec.description` fields. If these fields are not set in the CRD, they will be empty strings in the response.

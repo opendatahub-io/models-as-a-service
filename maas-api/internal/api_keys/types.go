@@ -24,6 +24,7 @@ type ApiKey struct {
 	Name           string   `json:"name"`
 	Description    string   `json:"description,omitempty"`
 	Username       string   `json:"username,omitempty"`
+	Subscription   string   `json:"subscription,omitempty"`   // MaaSSubscription name bound at mint time
 	Groups         []string `json:"groups,omitempty"`         // User's groups at creation (immutable snapshot for authorization)
 	CreationDate   string   `json:"creationDate"`
 	ExpirationDate string   `json:"expirationDate,omitempty"` // Empty for permanent keys
@@ -34,12 +35,13 @@ type ApiKey struct {
 
 // ValidationResult holds the result of API key validation (for Authorino HTTP callback).
 type ValidationResult struct {
-	Valid    bool     `json:"valid"`
-	UserID   string   `json:"userId,omitempty"`
-	Username string   `json:"username,omitempty"`
-	KeyID    string   `json:"keyId,omitempty"`
-	Groups   []string `json:"groups,omitempty"` // User groups for subscription-based authorization
-	Reason   string   `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
+	Valid        bool     `json:"valid"`
+	UserID       string   `json:"userId,omitempty"`
+	Username     string   `json:"username,omitempty"`
+	KeyID        string   `json:"keyId,omitempty"`
+	Groups       []string `json:"groups,omitempty"`       // User groups for subscription-based authorization
+	Subscription string   `json:"subscription,omitempty"` // MaaSSubscription name from DB (Authorino → subscription-info)
+	Reason       string   `json:"reason,omitempty"`       // If invalid: "key not found", "revoked", etc.
 }
 
 // PaginationParams holds pagination parameters.

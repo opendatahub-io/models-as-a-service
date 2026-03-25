@@ -82,3 +82,12 @@ spec:
               selector: auth.identity.user.groups.@tostr
             key: X-MaaS-Group
             priority: 1
+          # Subscription: from API key validation (when API key with subscription used)
+          # This header is used by /v1/models to determine which subscription's models to return
+          X-MaaS-Subscription:
+            when:
+              - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+              - predicate: auth.metadata.apiKeyValidation.subscription != ""
+            plain:
+              selector: auth.metadata.apiKeyValidation.subscription
+            priority: 0

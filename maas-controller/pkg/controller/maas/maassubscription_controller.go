@@ -33,10 +33,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -57,6 +59,10 @@ type MaaSSubscriptionReconciler struct {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
 const maasSubscriptionFinalizer = "maas.opendatahub.io/subscription-cleanup"
+
+// ConditionSpecPriorityDuplicate is set True when another MaaSSubscription shares the same spec.priority
+// (API key mint and selector use deterministic tie-break; admins should set distinct priorities).
+const ConditionSpecPriorityDuplicate = "SpecPriorityDuplicate"
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -318,6 +324,15 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 }
 
 func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase, message string, statusSnapshot *maasv1alpha1.MaaSSubscriptionStatus) {
+	// Status-only updates do not bump metadata.generation, so this reconcile may not re-queue.
+	// Merge SpecPriorityDuplicate from the API server so we do not clobber the async duplicate-priority scan.
+	latest := &maasv1alpha1.MaaSSubscription{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(subscription), latest); err == nil {
+		if dup := apimeta.FindStatusCondition(latest.Status.Conditions, ConditionSpecPriorityDuplicate); dup != nil {
+			apimeta.SetStatusCondition(&subscription.Status.Conditions, *dup)
+		}
+	}
+
 	subscription.Status.Phase = phase
 
 	status := metav1.ConditionTrue
@@ -345,6 +360,108 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 	}
 }
 
+// scanForDuplicatePriority lists live MaaSSubscriptions and sets SpecPriorityDuplicate
+// on each. Triggered on create, delete, or when spec.priority changes (see SetupWithManager).
+func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Context) {
+	log := logr.FromContextOrDiscard(ctx).WithName("MaaSSubscriptionDuplicatePriority")
+	var list maasv1alpha1.MaaSSubscriptionList
+	if err := r.List(ctx, &list); err != nil {
+		log.Error(err, "failed to list MaaSSubscriptions for duplicate priority scan")
+		return
+	}
+
+	liveIdx := make([]int, 0, len(list.Items))
+	for i := range list.Items {
+		if list.Items[i].DeletionTimestamp.IsZero() {
+			liveIdx = append(liveIdx, i)
+		}
+	}
+
+	byPriority := make(map[int32][]string)
+	for _, i := range liveIdx {
+		s := &list.Items[i]
+		p := s.Spec.Priority
+		k := s.Namespace + "/" + s.Name
+		byPriority[p] = append(byPriority[p], k)
+	}
+	for p := range byPriority {
+		sort.Strings(byPriority[p])
+	}
+
+	var duplicateDetails []string
+	for p, keys := range byPriority {
+		if len(keys) > 1 {
+			duplicateDetails = append(duplicateDetails, fmt.Sprintf("priority=%d:%v", p, keys))
+		}
+	}
+	sort.Strings(duplicateDetails)
+	if len(duplicateDetails) > 0 {
+		log.Info("duplicate MaaSSubscription spec.priority groups — resolve ties for predictable API key mint / subscription selection",
+			"groups", duplicateDetails)
+	}
+
+	for _, i := range liveIdx {
+		s := &list.Items[i]
+		selfKey := s.Namespace + "/" + s.Name
+		p := s.Spec.Priority
+		keys := byPriority[p]
+		var peers []string
+		for _, k := range keys {
+			if k != selfKey {
+				peers = append(peers, k)
+			}
+		}
+
+		latest := &maasv1alpha1.MaaSSubscription{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: s.Name}, latest); err != nil {
+			log.Error(err, "failed to get MaaSSubscription for duplicate priority status patch", "subscription", selfKey)
+			continue
+		}
+		if !latest.DeletionTimestamp.IsZero() {
+			continue
+		}
+
+		gen := latest.GetGeneration()
+		var desired metav1.Condition
+		if len(peers) == 0 {
+			desired = metav1.Condition{
+				Type:               ConditionSpecPriorityDuplicate,
+				Status:             metav1.ConditionFalse,
+				Reason:             "NoDuplicatePeers",
+				Message:            "",
+				ObservedGeneration: gen,
+			}
+		} else {
+			desired = metav1.Condition{
+				Type:               ConditionSpecPriorityDuplicate,
+				Status:             metav1.ConditionTrue,
+				Reason:             "SharedPriority",
+				Message:            fmt.Sprintf("spec.priority %d is shared with: %s", p, strings.Join(peers, ", ")),
+				ObservedGeneration: gen,
+			}
+		}
+
+		cur := apimeta.FindStatusCondition(latest.Status.Conditions, ConditionSpecPriorityDuplicate)
+		if conditionsSemanticallyEqual(cur, &desired) {
+			continue
+		}
+		apimeta.SetStatusCondition(&latest.Status.Conditions, desired)
+		if err := r.Status().Update(ctx, latest); err != nil {
+			log.Error(err, "failed to update SpecPriorityDuplicate status", "subscription", selfKey)
+		}
+	}
+}
+
+func conditionsSemanticallyEqual(a, b *metav1.Condition) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Type == b.Type && a.Status == b.Status && a.Reason == b.Reason && a.Message == b.Message && a.ObservedGeneration == b.ObservedGeneration
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Watch generated TokenRateLimitPolicies so we re-reconcile when someone manually edits them.
@@ -356,6 +473,13 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			predicate.GenerationChangedPredicate{},
 			predicate.Funcs{UpdateFunc: deletionTimestampSet},
 		))).
+		// Full scan of duplicate spec.priority on create, delete, or priority-only spec update.
+		// Does not enqueue reconciles; only patches status conditions on all subscriptions.
+		Watches(
+			&maasv1alpha1.MaaSSubscription{},
+			duplicatePriorityScanHandler(r),
+			builder.WithPredicates(duplicatePriorityScanPredicate()),
+		).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
 		// (fixes race condition where MaaSSubscription is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
@@ -370,6 +494,37 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.mapGeneratedTRLPToParent,
 		)).
 		Complete(r)
+}
+
+// duplicatePriorityScanHandler runs a full duplicate-priority scan without enqueuing reconciles.
+func duplicatePriorityScanHandler(r *MaaSSubscriptionReconciler) handler.EventHandler {
+	return handler.Funcs{
+		CreateFunc: func(ctx context.Context, _ event.CreateEvent, _ workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			r.scanForDuplicatePriority(ctx)
+		},
+		UpdateFunc: func(ctx context.Context, _ event.UpdateEvent, _ workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			r.scanForDuplicatePriority(ctx)
+		},
+		DeleteFunc: func(ctx context.Context, _ event.DeleteEvent, _ workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			r.scanForDuplicatePriority(ctx)
+		},
+	}
+}
+
+// duplicatePriorityScanPredicate limits full scans to subscription lifecycle / priority changes.
+func duplicatePriorityScanPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(event.CreateEvent) bool { return true },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldSub, ok1 := e.ObjectOld.(*maasv1alpha1.MaaSSubscription)
+			newSub, ok2 := e.ObjectNew.(*maasv1alpha1.MaaSSubscription)
+			if !ok1 || !ok2 {
+				return false
+			}
+			return oldSub.Spec.Priority != newSub.Spec.Priority
+		},
+		DeleteFunc: func(event.DeleteEvent) bool { return true },
+	}
 }
 
 // mapGeneratedTRLPToParent maps a generated TokenRateLimitPolicy back to any
