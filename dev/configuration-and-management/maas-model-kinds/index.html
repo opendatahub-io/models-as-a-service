@@ -21,7 +21,7 @@
     
     
       
-        <title>MaaSModelRef kinds (future) - ODH Models-as-a-Service Documentation</title>
+        <title>MaaSModelRef Kinds - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#maasmodelref-kinds-future" class="md-skip">
+        <a href="#maasmodelref-kinds" class="md-skip">
           Skip to content
         </a>
       
@@ -109,7 +109,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              MaaSModelRef kinds (future)
+              MaaSModelRef Kinds
             
           </span>
         </div>
@@ -1887,6 +1887,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../reference/crds/external-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ExternalModel
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../reference/crds/maas-auth-policy/" class="md-nav__link">
         
   
@@ -2000,10 +2028,49 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#current-behavior" class="md-nav__link">
+  <a href="#supported-kinds" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Current behavior
+        Supported Kinds
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Supported Kinds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#llminferenceservice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LLMInferenceService
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#externalmodel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ExternalModel
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API Behavior
       
     </span>
   </a>
@@ -2052,7 +2119,7 @@
   
 
 
-<h1 id="maasmodelref-kinds-future">MaaSModelRef kinds (future)</h1>
+<h1 id="maasmodelref-kinds">MaaSModelRef Kinds</h1>
 <p>The MaaS API lists models from <strong>MaaSModelRef</strong> CRs only. Each MaaSModelRef defines a <strong>backend reference</strong> (<code>spec.modelRef</code>) that identifies the type and location of the model endpoint—similar in spirit to how <a href="https://gateway-api.sigs.k8s.io/reference/spec/#backendref">Gateway API's BackendRef</a> defines how a Route forwards requests to a Kubernetes resource (group, kind, name, namespace).</p>
 <p>This document describes the current <strong>modelRef</strong> semantics and how new kinds can be supported in the future.</p>
 <h2 id="modelref-backend-reference">ModelRef (backend reference)</h2>
@@ -2095,11 +2162,25 @@
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="nt">endpointOverride</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://correct-hostname.example.com/my-model&quot;</span>
 </code></pre></div>
 <p>The controller still validates the backend (HTTPRoute exists, LLMInferenceService is ready, etc.) — the override only affects the final endpoint URL written to <code>status.endpoint</code>. When the field is empty or omitted, the controller uses its normal discovery logic.</p>
-<h2 id="current-behavior">Current behavior</h2>
+<h2 id="supported-kinds">Supported Kinds</h2>
+<h3 id="llminferenceservice">LLMInferenceService</h3>
+<p>The <code>LLMInferenceService</code> kind (also accepts the alias <code>llmisvc</code> for backwards compatibility) references models deployed on the cluster via the LLMInferenceService CRD. The controller:
+- Sets <code>status.endpoint</code> from the LLMInferenceService status
+- Sets <code>status.phase</code> from LLMInferenceService readiness</p>
+<h3 id="externalmodel">ExternalModel</h3>
+<p>The <code>ExternalModel</code> kind references external AI/ML providers (e.g., OpenAI, Anthropic, Azure OpenAI). When using this kind:
+1. Create an <a href="../../reference/crds/external-model/">ExternalModel</a> CR with provider, endpoint, and credential reference
+2. Create a MaaSModelRef that references the ExternalModel by name</p>
+<p>The controller:
+- Fetches the ExternalModel CR from the same namespace
+- Validates the user-supplied HTTPRoute references the correct gateway
+- Derives <code>status.endpoint</code> from HTTPRoute hostnames or gateway addresses
+- Sets <code>status.phase</code> based on HTTPRoute acceptance by the gateway</p>
+<h2 id="api-behavior">API Behavior</h2>
 <ul>
-<li><strong>Supported kind today:</strong> <code>LLMInferenceService</code> (also accepts the alias <code>llmisvc</code> for backwards compatibility). The MaaS controller reconciles MaaSModelRefs whose <strong>modelRef</strong> points to an LLMInferenceService (by name and optional namespace). It sets <code>status.endpoint</code> from the LLMInferenceService status and <code>status.phase</code> from its readiness.</li>
-<li><strong>API behavior:</strong> The API reads MaaSModelRefs from the informer cache, maps each to an API model (<code>id</code>, <code>url</code>, <code>ready</code>, <code>kind</code>, etc.), then <strong>validates access</strong> by probing each model's <code>/v1/models</code> endpoint with the request's <strong>Authorization header</strong> (passed through as-is). Only models that return 2xx or 405 are included.</li>
-<li><strong>Kind on the wire:</strong> Each model in the GET /v1/models response can carry a <code>kind</code> field (e.g. <code>LLMInferenceService</code>) from <code>spec.modelRef.kind</code> for clients or tooling.</li>
+<li>The API reads MaaSModelRefs from the informer cache, maps each to an API model (<code>id</code>, <code>url</code>, <code>ready</code>, <code>kind</code>, etc.)</li>
+<li><strong>Access validation</strong>: Probes each model's <code>/v1/models</code> endpoint with the request's Authorization header. Only models that return 2xx or 405 are included.</li>
+<li><strong>Kind on the wire</strong>: Each model in the GET /v1/models response carries a <code>kind</code> field from <code>spec.modelRef.kind</code></li>
 </ul>
 <h2 id="adding-a-new-kind-in-the-future">Adding a new kind in the future</h2>
 <p>To support a new backend type (a new <strong>kind</strong> in <code>spec.modelRef</code>):</p>
@@ -2164,7 +2245,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 20, 2026 17:26:33 UTC">March 20, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 18:44:17 UTC">March 25, 2026</span>
   </span>
 
     
