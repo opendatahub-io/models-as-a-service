@@ -26,6 +26,7 @@ const (
 )
 
 // mockAdminChecker is a simple mock for testing that checks if user has "admin-users" group.
+// This simulates the SAR check by checking group membership (for test simplicity).
 type mockAdminChecker struct {
 	adminGroups []string
 }
@@ -36,8 +37,11 @@ func newMockAdminChecker() *mockAdminChecker {
 	}
 }
 
-func (m *mockAdminChecker) IsAdmin(userGroups []string) bool {
-	for _, userGroup := range userGroups {
+func (m *mockAdminChecker) IsAdmin(_ context.Context, user *token.UserContext) bool {
+	if user == nil {
+		return false
+	}
+	for _, userGroup := range user.Groups {
 		if slices.Contains(m.adminGroups, userGroup) {
 			return true
 		}
@@ -68,20 +72,21 @@ func TestIsAuthorizedForKey(t *testing.T) {
 	h := &Handler{
 		adminChecker: newMockAdminChecker(),
 	}
+	ctx := context.Background()
 
 	t.Run("OwnerCanAccess", func(t *testing.T) {
 		user := &token.UserContext{Username: "alice", Groups: []string{"users"}}
-		assert.True(t, h.isAuthorizedForKey(user, "alice"))
+		assert.True(t, h.isAuthorizedForKey(ctx, user, "alice"))
 	})
 
 	t.Run("NonOwnerCannotAccess", func(t *testing.T) {
 		user := &token.UserContext{Username: "bob", Groups: []string{"users"}}
-		assert.False(t, h.isAuthorizedForKey(user, "alice"))
+		assert.False(t, h.isAuthorizedForKey(ctx, user, "alice"))
 	})
 
 	t.Run("AdminCanAccessAnyKey", func(t *testing.T) {
 		admin := &token.UserContext{Username: "admin", Groups: []string{"admin-users"}}
-		assert.True(t, h.isAuthorizedForKey(admin, "alice"))
+		assert.True(t, h.isAuthorizedForKey(ctx, admin, "alice"))
 	})
 }
 
