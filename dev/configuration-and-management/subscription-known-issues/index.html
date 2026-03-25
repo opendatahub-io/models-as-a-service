@@ -1978,34 +1978,6 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#x-maas-subscription-header" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        X-MaaS-Subscription Header
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="X-MaaS-Subscription Header">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#multiple-subscriptions-require-header" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Multiple Subscriptions Require Header
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#subscription-selection-caching" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2094,24 +2066,6 @@
 
 <h1 id="subscription-known-issues">Subscription Known Issues</h1>
 <p>This document describes known issues and operational considerations for the subscription-based MaaS Platform.</p>
-<h2 id="x-maas-subscription-header">X-MaaS-Subscription Header</h2>
-<h3 id="multiple-subscriptions-require-header">Multiple Subscriptions Require Header</h3>
-<p><strong>Impact:</strong> High</p>
-<p><strong>Description:</strong></p>
-<p>When a user belongs to multiple groups that each have a MaaSSubscription, the client <strong>must</strong> send the <code>X-MaaS-Subscription</code> header to specify which subscription's rate limits apply. If the header is omitted, the MaaS API returns an error and the request is denied with <strong>403 Forbidden</strong>.</p>
-<p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>User in groups: [system:authenticated, premium-users]
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>Subscriptions: free-subscription (system:authenticated), premium-subscription (premium-users)
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>Request without header → 403 &quot;must specify X-MaaS-Subscription&quot;
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>Request with X-MaaS-Subscription: premium-subscription → 200 OK (premium limits apply)
-</code></pre></div>
-<p><strong>Workaround:</strong></p>
-<ul>
-<li>Ensure clients send <code>X-MaaS-Subscription: &lt;subscription-name&gt;</code> when users can have multiple subscriptions</li>
-<li>Document which subscription names to use for each user segment</li>
-<li>Consider using a single subscription per user segment to avoid header requirement</li>
-</ul>
 <h2 id="subscription-selection-caching">Subscription Selection Caching</h2>
 <h3 id="cache-ttl-for-subscription-selection">Cache TTL for Subscription Selection</h3>
 <p><strong>Impact:</strong> Medium</p>
@@ -2131,11 +2085,11 @@
 <h3 id="group-snapshot-in-api-keys">Group Snapshot in API Keys</h3>
 <p><strong>Impact:</strong> Medium</p>
 <p><strong>Description:</strong></p>
-<p>API keys store the user's groups at creation time. If a user's group membership changes after the key was created:</p>
+<p>API keys store the user's groups and bound subscription name at creation time. If a user's group membership changes after the key was created:</p>
 <ul>
-<li>The key still carries the <strong>old</strong> groups until it is revoked and recreated</li>
-<li>Subscription selection uses the groups from the key validation response (the stored snapshot)</li>
-<li>The user must create a new API key to get updated group membership and subscription access</li>
+<li>The key still carries the <strong>old</strong> groups and subscription until it is revoked and recreated</li>
+<li>Subscription metadata for gateway inference uses the stored groups and subscription from validation</li>
+<li>The user must create a new API key to pick up new groups or a different default subscription</li>
 </ul>
 <p><strong>Workaround:</strong></p>
 <ul>
@@ -2144,6 +2098,7 @@
 </ul>
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
+<li><a href="../token-management/">Understanding Token Management</a></li>
 <li><a href="../subscription-overview/">Access and Quota Overview</a></li>
 <li><a href="../quota-and-access-configuration/">Quota and Access Configuration</a></li>
 </ul>
@@ -2169,7 +2124,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 18:05:47 UTC">March 25, 2026</span>
   </span>
 
     

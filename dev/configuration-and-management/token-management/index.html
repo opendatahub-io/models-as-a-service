@@ -2446,7 +2446,7 @@
 <p>This guide explains the authentication and credential management used to access models in the MaaS Platform.</p>
 <div class="admonition tip">
 <p class="admonition-title">API keys (current)</p>
-<p>The platform uses <strong>API keys</strong> (<code>sk-oai-*</code>) stored in PostgreSQL for programmatic access. Create keys via <code>POST /v1/api-keys</code> (authenticate with your OpenShift token) and use them with the <code>Authorization: Bearer</code> header. When users have multiple subscriptions, include the <code>X-MaaS-Subscription</code> header. See <a href="../quota-and-access-configuration/">Quota and Access Configuration</a>.</p>
+<p>The platform uses <strong>API keys</strong> (<code>sk-oai-*</code>) stored in PostgreSQL for programmatic access. Create keys via <code>POST /v1/api-keys</code> (authenticate with your OpenShift token) and use them with the <code>Authorization: Bearer</code> header. Each key is bound to one MaaSSubscription at creation time (optional <code>subscription</code> in the request body; if omitted, the <strong>highest <code>spec.priority</code></strong> subscription you can access is chosen). See <a href="../quota-and-access-configuration/">Quota and Access Configuration</a> and <a href="../subscription-known-issues/">Subscription Known Issues</a>.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Prerequisites</p>
@@ -2482,11 +2482,13 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
 <p>When you create an API key, you trade your OpenShift identity for a long-lived credential that can be used for programmatic access.</p>
 <h3 id="key-concepts">Key Concepts</h3>
 <ul>
-<li><strong>Subscription</strong>: Your access is determined by MaaSAuthPolicy and MaaSSubscription, which map groups to models and rate limits.</li>
+<li><strong>Subscription binding</strong>: Each key stores a MaaSSubscription name resolved at mint time. You can set it explicitly with the optional JSON field <code>subscription</code> on <code>POST /v1/api-keys</code>. If you omit it, the API selects your <strong>highest-priority</strong> accessible subscription (ties break deterministically—see operator notes below).</li>
+<li><strong>Subscription access</strong>: Your access is still determined by MaaSAuthPolicy and MaaSSubscription, which map groups to models and rate limits. The bound name is used for gateway subscription resolution and metering.</li>
 <li><strong>User Groups</strong>: At creation time, your current group membership is stored with the key. These groups are used for subscription-based authorization when the key is validated.</li>
 <li><strong>API Key</strong>: A cryptographically secure string with <code>sk-oai-*</code> prefix. The plaintext is shown once; only the SHA-256 hash is stored in PostgreSQL.</li>
 <li><strong>Expiration</strong>: Keys have a configurable TTL via <code>expiresIn</code> (e.g., <code>30d</code>, <code>90d</code>, <code>1h</code>). If omitted, the key defaults to the configured maximum (e.g., 90 days).</li>
 </ul>
+<p>The create response includes a <code>subscription</code> field echoing the bound subscription name.</p>
 <h3 id="api-key-creation-flow">API Key Creation Flow</h3>
 <p>This diagram illustrates the process of creating an API key.</p>
 <pre class="mermaid"><code>sequenceDiagram
@@ -2502,7 +2504,8 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
     AuthPolicy-&gt;&gt;AuthPolicy: Validate OpenShift token (TokenReview)
     AuthPolicy-&gt;&gt;MaaS: 2. Forward request + user context (username, groups)
     MaaS-&gt;&gt;MaaS: Generate sk-oai-* key, hash with SHA-256
-    MaaS-&gt;&gt;DB: 3. Store hash + metadata (username, groups, name, expiresAt)
+    MaaS-&gt;&gt;MaaS: Resolve subscription (explicit or highest priority)
+    MaaS-&gt;&gt;DB: 3. Store hash + metadata (username, groups, subscription, name, expiresAt)
     DB--&gt;&gt;MaaS: Stored
     MaaS--&gt;&gt;User: 4. Return plaintext key ONCE (never stored)
 
@@ -2525,17 +2528,17 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
     AuthPolicy-&gt;&gt;MaaS: 2. POST /internal/v1/api-keys/validate (key)
     MaaS-&gt;&gt;MaaS: Hash key, lookup by hash
     MaaS-&gt;&gt;DB: 3. SELECT by key_hash
-    DB--&gt;&gt;MaaS: username, groups, status
+    DB--&gt;&gt;MaaS: username, groups, subscription, status
     MaaS-&gt;&gt;MaaS: Check status (active/revoked/expired)
-    MaaS--&gt;&gt;AuthPolicy: 4. valid: true, userId, groups
-    AuthPolicy-&gt;&gt;AuthPolicy: Subscription lookup, rate limits
+    MaaS--&gt;&gt;AuthPolicy: 4. valid: true, userId, groups, subscription
+    AuthPolicy-&gt;&gt;AuthPolicy: Subscription check, inject headers (incl. X-MaaS-Subscription), rate limits
     AuthPolicy-&gt;&gt;Model: 5. Authorized request (identity headers)
     Model--&gt;&gt;Gateway: Response
     Gateway--&gt;&gt;User: Response</code></pre>
 <p>The validation endpoint (<code>/internal/v1/api-keys/validate</code>) is called by Authorino on every request that bears an <code>sk-oai-*</code> token. It:</p>
 <ol>
 <li>Hashes the incoming key and looks it up in the database</li>
-<li>Returns <code>valid: true</code> with <code>userId</code> and <code>groups</code> if the key is active and not expired</li>
+<li>Returns <code>valid: true</code> with <code>userId</code>, <code>groups</code>, and <code>subscription</code> if the key is active and not expired</li>
 <li>Returns <code>valid: false</code> with a reason if the key is invalid, revoked, or expired</li>
 </ol>
 <hr />
@@ -2592,7 +2595,10 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
 <hr />
 <h2 id="frequently-asked-questions-faq">Frequently Asked Questions (FAQ)</h2>
 <p><strong>Q: My subscription access is wrong. How do I fix it?</strong></p>
-<p>A: Your access is determined by your group membership in OpenShift at the time the API key was created. Those groups are stored with the key and used for subscription lookup. If your groups have changed, create a new API key to pick up the new membership.</p>
+<p>A: Your access is determined by your group membership in OpenShift at the time the API key was created. Those groups are stored with the key and used for authorization. The subscription name on the key is fixed at mint time; to use a different subscription, create another key with <code>"subscription": "&lt;name&gt;"</code>. If your groups have changed, create a new API key to pick up the new membership.</p>
+<hr />
+<p><strong>Q: What if two MaaSSubscriptions use the same <code>spec.priority</code>?</strong></p>
+<p>A: API key mint and subscription selection use a deterministic order when priorities tie (e.g. token limit, then name). Operators should still assign distinct priorities when possible. The MaaSSubscription controller sets status condition <code>SpecPriorityDuplicate</code> and logs when another subscription shares the same priority—use that to clean up configuration.</p>
 <hr />
 <p><strong>Q: How long should my API keys be valid for?</strong></p>
 <p>A: For interactive use or long-running integrations, keys with long TTL (e.g., 90d) or the default maximum are common. For higher security, use shorter TTLs (e.g., 30d) and rotate keys periodically.</p>
@@ -2601,13 +2607,13 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
 <p>A: Yes. Each call to <code>POST /v1/api-keys</code> creates a new, independent key. You can list and manage them via <code>POST /v1/api-keys/search</code> (with optional filters and pagination) or <code>GET /v1/api-keys/:id</code> for a specific key.</p>
 <hr />
 <p><strong>Q: What happens if the maas-api service is down?</strong></p>
-<p>A: You will not be able to create or validate API keys. Inference requests that use API keys will fail until the service is back. OpenShift token–based requests may still work if the gateway is configured for both auth methods.</p>
+<p>A: You will not be able to create or validate API keys. Inference requests that use API keys will fail until the service is back.</p>
 <hr />
 <p><strong>Q: Can I use one API key to access multiple different models?</strong></p>
-<p>A: Yes. Your API key inherits your group membership at creation time. If your subscription is authorized to use multiple models, a single key works for all of them.</p>
+<p>A: Yes. Your API key is bound to a subscription at creation time. If that subscription provides access to multiple models, a single key works for all of them. To access models from a different subscription, create a new API key bound to that subscription.</p>
 <hr />
 <p><strong>Q: What's the difference between my OpenShift token and an API key?</strong></p>
-<p>A: Your <strong>OpenShift token</strong> is your identity token from authentication (e.g., OpenShift or OIDC). An <strong>API key</strong> is a long-lived credential created via <code>POST /v1/api-keys</code> and stored as a hash in PostgreSQL. For <strong>GET /v1/models</strong>, the API passes your Authorization header as-is to each model endpoint; you can use either. For inference, use a token your gateway accepts (OpenShift token or API key as configured).</p>
+<p>A: Your <strong>OpenShift token</strong> is your identity token from authentication (e.g., OpenShift or OIDC). An <strong>API key</strong> is a long-lived credential created via <code>POST /v1/api-keys</code> and stored as a hash in PostgreSQL. For <strong>GET /v1/models</strong>, the API passes your Authorization header as-is to each model endpoint; you can use either. For inference, use API key.</p>
 <hr />
 <p><strong>Q: Do I need an API key to list available models?</strong></p>
 <p>A: No. Call <strong>GET /v1/models</strong> with your OpenShift/OIDC token (or an API key) in the Authorization header. The API uses that same header to probe each model endpoint and returns only models you can access.</p>
@@ -2643,7 +2649,7 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 18:05:47 UTC">March 25, 2026</span>
   </span>
 
     

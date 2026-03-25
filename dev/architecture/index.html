@@ -2458,7 +2458,7 @@
 <h3 id="inference-flow-through-maas-objects">Inference Flow — Through MaaS Objects</h3>
 <p><strong>Flow summary:</strong></p>
 <ol>
-<li>User sends inference request with API key and <code>X-MaaS-Subscription</code> header.</li>
+<li>User sends inference request with an API key.</li>
 <li>Gateway routes to MaaSAuthPolicy (Authorino).</li>
 <li>MaaSAuthPolicy validates the key via MaaS API and selects subscription; on failure returns 401/403.</li>
 <li>MaaSSubscription (Limitador) checks token rate limits; on exceed returns 429.</li>
@@ -2484,7 +2484,7 @@
         LLM[LLM]
     end
 
-    U --&gt;|"1. Inference + API key&lt;br/&gt;X-MaaS-Subscription"| G
+    U --&gt;|"1. Inference + API key"| G
     G --&gt;|"2. Route"| MAP
     MAP -.-&gt;|"3. Validate key"| API
     MAP --&gt;|"4. Auth OK"| MS
@@ -2505,14 +2505,14 @@
     style INV fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
     style LLM fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff</code></pre>
 <h3 id="auth-validation-flow-deep-dive">Auth &amp; Validation Flow (Deep Dive)</h3>
-<p>The MaaSAuthPolicy delegates to the MaaS API for key validation and subscription selection. The <code>X-MaaS-Subscription</code> header is <strong>required</strong> when a user has access to multiple subscriptions.</p>
+<p>The MaaSAuthPolicy delegates to the MaaS API for key validation and subscription selection. The subscription name comes from the PostgreSQL key record (set at key creation).</p>
 <p><strong>Flow summary:</strong></p>
 <ol>
 <li>Authorino calls MaaS API to validate the API key.</li>
-<li>MaaS API performs basic token validation (format, not revoked, not expired) and returns username + groups.</li>
-<li>Authorino calls MaaS API to check subscription (groups, username, <code>X-MaaS-Subscription</code> header required when user has multiple subscriptions).</li>
-<li>If user has multiple subscriptions and header is missing, or lacks access to requested subscription → return error (403).</li>
-<li>On success, returns selected subscription; Authorino caches the result (e.g., 60s TTL).</li>
+<li>MaaS API validates the key (format, not revoked, not expired) and returns username, groups, and subscription.</li>
+<li>Authorino calls MaaS API to check subscription (groups, username, requested subscription from the key).</li>
+<li>If the user lacks access to the requested subscription → error (403).</li>
+<li>On success, returns selected subscription; Authorino caches the result (e.g., 60s TTL). AuthPolicy may inject <code>X-MaaS-Subscription</code> for downstream rate limiting.</li>
 </ol>
 <pre class="mermaid"><code>graph TB
     subgraph AuthLayer["MaaSAuthPolicy (Authorino)"]
@@ -2533,7 +2533,7 @@
     DB --&gt;|"metadata"| Validate
 
     A --&gt;|"2. Check subscription"| SubSelect
-    SubSelect -.-&gt;|"3. Missing header + multiple subs → 403&lt;br/&gt;No access to requested sub → 403"| A
+    SubSelect -.-&gt;|"3. No access to requested sub → 403"| A
     SubSelect --&gt;|"4. Selected subscription"| A
 
     linkStyle 4 stroke:#c62828,stroke-width:2px,stroke-dasharray:5,5
@@ -2541,10 +2541,6 @@
     style Validate fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
     style SubSelect fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
     style DB fill:#336791,stroke:#333,stroke-width:2px,color:#fff</code></pre>
-<div class="admonition note">
-<p class="admonition-title">X-MaaS-Subscription header</p>
-<p>When a user belongs to multiple subscriptions, the <code>X-MaaS-Subscription</code> header is <strong>required</strong> to select which subscription to use. If omitted, the MaaS API returns an error and the request is denied with 403.</p>
-</div>
 <h3 id="observability-flow">Observability Flow</h3>
 <p>Token usage and rate-limit data flow from Limitador into Prometheus and onward to dashboards.</p>
 <p><strong>Flow summary:</strong></p>
@@ -2596,7 +2592,8 @@
 
     Note over MaaS,DB: Create API Key
     MaaS-&gt;&gt;MaaS: Generate sk-oai-* key, hash with SHA-256
-    MaaS-&gt;&gt;DB: Store hash + metadata (user, groups, name)
+    MaaS-&gt;&gt;MaaS: Resolve subscription (explicit or highest priority)
+    MaaS-&gt;&gt;DB: Store hash + metadata (user, groups, subscription, name)
     DB--&gt;&gt;MaaS: Stored
 
     MaaS--&gt;&gt;User: { "key": "sk-oai-...", "id": "...", ... }&lt;br/&gt;Plaintext shown ONLY ONCE</code></pre>
@@ -2610,16 +2607,16 @@
     participant Limitador
     participant LLMInferenceService
 
-    Client-&gt;&gt;GatewayAPI: Inference + API Key + X-MaaS-Subscription
+    Client-&gt;&gt;GatewayAPI: Inference + API Key
     GatewayAPI-&gt;&gt;Authorino: Validate credentials
 
     alt API key (sk-oai-*)
         Authorino-&gt;&gt;MaaS: POST /internal/v1/api-keys/validate
         MaaS-&gt;&gt;MaaS: Lookup hash in PostgreSQL
-        MaaS--&gt;&gt;Authorino: { valid, userId, groups }
+        MaaS--&gt;&gt;Authorino: { valid, userId, groups, subscription }
     end
 
-    Authorino-&gt;&gt;MaaS: POST /v1/subscriptions/select (subscription check)
+    Authorino-&gt;&gt;MaaS: POST /internal/v1/subscriptions/select (subscription check)
     MaaS--&gt;&gt;Authorino: Selected subscription
 
     Authorino-&gt;&gt;GatewayAPI: Auth success (cached)
@@ -2649,7 +2646,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 18:05:47 UTC">March 25, 2026</span>
   </span>
 
     

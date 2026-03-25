@@ -37,9 +37,18 @@ paths:
             description: |
                 Lists available large language models in OpenAI-compatible format.
 
-                By default, returns models from a single subscription. If the user has access to multiple
-                subscriptions, they must specify which one using the X-MaaS-Subscription header, or use
-                X-MaaS-Return-All-Models to return models from all accessible subscriptions.
+                Behavior depends on authentication method and headers:
+
+                **API key authentication** (Bearer sk-oai-*):
+                - Returns models available via the subscription bound to the API key at mint time
+                - The X-MaaS-Subscription header is automatically injected by the gateway from the key's subscription
+                - No manual headers required
+
+                **User token authentication** (Bearer without sk-oai- prefix):
+                - Default (no X-MaaS-Subscription header): Returns all models from all accessible subscriptions
+                - With X-MaaS-Subscription header: Returns models from the specified subscription only (allows users to scope their query)
+
+                The X-MaaS-Subscription header provides flexible filtering for user tokens while API keys are automatically scoped.
             operationId: models#list_llms
             parameters:
                 - in: header
@@ -48,30 +57,11 @@ paths:
                       type: string
                   required: false
                   description: |
-                      Filter models to a specific subscription. Required when user has access to multiple
-                      subscriptions and X-MaaS-Return-All-Models is not set.
+                      (User tokens only) Filter models to a specific subscription by name.
+                      When provided with a user token, behaves like an API key request - returns only models from that subscription.
+                      For API keys, this header is automatically injected by the gateway and should not be manually specified.
                   example: premium-subscription
-                - in: header
-                  name: X-MaaS-Return-All-Models
-                  schema:
-                      type: string
-                      enum: ["true", "false"]
-                  required: false
-                  description: |
-                      When set to "true", returns models from all subscriptions the user has access to.
-                      Cannot be used together with X-MaaS-Subscription.
-                  example: "true"
             responses:
-                "400":
-                    description: Bad Request. Returned when X-MaaS-Subscription is provided while X-MaaS-Return-All-Models is set to "true" (cannot specify both).
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/ErrorResponse'
-                            example:
-                                error:
-                                    message: "Cannot specify both X-MaaS-Subscription and X-MaaS-Return-All-Models headers"
-                                    type: "invalid_request_error"
                 "401":
                     description: Unauthorized. Missing or invalid Authorization header.
                     content:
@@ -85,20 +75,20 @@ paths:
                 "403":
                     description: |
                         Forbidden. Subscription access error. Possible cases:
-                        - User has multiple subscriptions but didn't specify which one (X-MaaS-Subscription header required)
-                        - Access denied to the requested subscription
-                        - Requested subscription not found
+                        - API key has no subscription bound (invalid state)
+                        - Access denied to the subscription bound to the API key
+                        - Subscription not found
                         - User has no accessible subscriptions
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
                             examples:
-                                multiple_subscriptions:
-                                    summary: Multiple subscriptions without header
+                                no_subscription_bound:
+                                    summary: API key has no subscription bound
                                     value:
                                         error:
-                                            message: "user has access to multiple subscriptions, must specify subscription using X-MaaS-Subscription header"
+                                            message: "API key has no subscription bound"
                                             type: "permission_error"
                                 access_denied:
                                     summary: Access denied to subscription
@@ -133,7 +123,7 @@ paths:
                                             - created: 1672531200
                                               id: llama-2-7b-chat
                                               object: model
-                                              owned_by: model-namespace
+                                              owned_by: model-namespace/llama-2-7b-chat
                                               ready: true
                                               url: https://api.example.com/v1/models/llama-2-7b-chat
                                               kind: LLMInferenceService
@@ -142,7 +132,7 @@ paths:
                                             - created: 1672531200
                                               id: mistral-7b-instruct
                                               object: model
-                                              owned_by: model-namespace
+                                              owned_by: model-namespace/mistral-7b-instruct
                                               ready: true
                                               url: https://api.example.com/v1/models/mistral-7b-instruct
                                               kind: LLMInferenceService
@@ -156,7 +146,7 @@ paths:
                                             - created: 1672531200
                                               id: llama-2-7b-chat
                                               object: model
-                                              owned_by: model-namespace
+                                              owned_by: model-namespace/llama-2-7b-chat
                                               ready: true
                                               url: https://api.example.com/v1/models/llama-2-7b-chat
                                               kind: LLMInferenceService
@@ -169,7 +159,7 @@ paths:
                                             - created: 1672531200
                                               id: granite-8b-code-instruct
                                               object: model
-                                              owned_by: model-namespace
+                                              owned_by: model-namespace/granite-8b-code-instruct
                                               ready: true
                                               url: https://api.example.com/v1/models/granite-8b-code-instruct
                                               kind: LLMInferenceService
@@ -305,6 +295,9 @@ paths:
                                     type: boolean
                                     description: Create a short-lived programmatic key. Defaults to false. Ephemeral keys have 1hr default and maximum expiration (enforced), and optional name.
                                     default: false
+                                subscription:
+                                    type: string
+                                    description: Optional MaaSSubscription resource name to bind to this key. When omitted, the user's highest-priority accessible subscription is used (spec.priority, descending).
                         examples:
                             default_expiration:
                                 summary: API key with default expiration (API_KEY_MAX_EXPIRATION_DAYS)
@@ -317,6 +310,12 @@ paths:
                                     name: my-short-lived-key
                                     description: 30-day test key
                                     expiresIn: 30d
+                            with_subscription:
+                                summary: API key bound to specific subscription
+                                value:
+                                    name: my-premium-key
+                                    description: Key for premium subscription
+                                    subscription: premium-subscription
                             ephemeral_key:
                                 summary: Ephemeral key for programmatic use (1hr expiration)
                                 value:
@@ -333,6 +332,7 @@ paths:
                                     - keyPrefix
                                     - id
                                     - name
+                                    - subscription
                                     - createdAt
                                     - expiresAt
                                     - ephemeral
@@ -349,6 +349,9 @@ paths:
                                     name:
                                         type: string
                                         description: Name of the key
+                                    subscription:
+                                        type: string
+                                        description: MaaSSubscription name bound to this key at creation time
                                     createdAt:
                                         type: string
                                         format: date-time
@@ -361,7 +364,11 @@ paths:
                                         type: boolean
                                         description: Whether this is a short-lived programmatic key
                 "400":
-                    description: Bad Request response.
+                    description: |
+                        Bad Request. Includes validation errors and subscription resolution failures
+                        for API key creation. Subscription-related failures use a single error code
+                        (`invalid_subscription`) and message so clients cannot distinguish
+                        not-found, access denied, or no default subscription.
                 "401":
                     description: Unauthorized response.
     /v1/api-keys/search:
@@ -459,11 +466,13 @@ paths:
                                 data:
                                     - id: key_abc123
                                       name: my-production-key
+                                      subscription: premium-subscription
                                       creationDate: "2024-01-15T10:30:00Z"
                                       status: active
                                       ephemeral: false
                                     - id: key_def456
                                       name: my-test-key
+                                      subscription: basic-subscription
                                       creationDate: "2024-01-14T09:15:00Z"
                                       expirationDate: "2024-04-14T09:15:00Z"
                                       status: active
@@ -586,6 +595,7 @@ paths:
                             example:
                                 id: key_abc123
                                 name: my-production-key
+                                subscription: premium-subscription
                                 creationDate: "2024-01-15T10:30:00Z"
                                 status: revoked
                                 ephemeral: false
@@ -720,7 +730,7 @@ components:
                     - created: 1672531200
                       id: llama-2-7b-chat
                       object: model
-                      owned_by: model-namespace
+                      owned_by: model-namespace/llama-2-7b-chat
                       ready: true
                       url: https://api.example.com/v1/models/llama-2-7b-chat
                       kind: LLMInferenceService
@@ -729,7 +739,7 @@ components:
                     - created: 1672531200
                       id: mistral-7b-instruct
                       object: model
-                      owned_by: model-namespace
+                      owned_by: model-namespace/mistral-7b-instruct
                       ready: true
                       url: https://api.example.com/v1/models/mistral-7b-instruct
                       kind: LLMInferenceService
@@ -758,8 +768,8 @@ components:
                     format: int64
                 owned_by:
                     type: string
-                    description: The organization that owns the model
-                    example: model-namespace
+                    description: "The namespace and MaaSModelRef name (format: namespace/name)"
+                    example: model-namespace/llama-2-7b-chat
                 ready:
                     type: boolean
                     description: Model ready status
@@ -788,7 +798,7 @@ components:
                 created: 1672531200
                 id: llama-2-7b-chat
                 object: model
-                owned_by: model-namespace
+                owned_by: model-namespace/llama-2-7b-chat
                 ready: true
                 url: https://api.example.com/v1/models/llama-2-7b-chat
                 kind: LLMInferenceService
@@ -968,6 +978,9 @@ components:
                 username:
                     type: string
                     description: Username that owns this API key
+                subscription:
+                    type: string
+                    description: MaaSSubscription name bound to this key at creation time
                 groups:
                     type: array
                     items:
