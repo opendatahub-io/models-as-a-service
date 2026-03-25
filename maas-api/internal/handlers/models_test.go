@@ -596,9 +596,9 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	// Setup MaaSModelRef lister with three models
 	lister := fakeMaaSModelRefLister{
 		"test-ns": []*unstructured.Unstructured{
-			maasModelRefUnstructured("model-1", "test-ns", model1Server.URL, true),
-			maasModelRefUnstructured("model-2", "test-ns", model2Server.URL, true),
-			maasModelRefUnstructured("model-3", "test-ns", model3Server.URL, true),
+			maasModelRefUnstructured("model-1", "test-ns", model1Server.URL, true, nil),
+			maasModelRefUnstructured("model-2", "test-ns", model2Server.URL, true, nil),
+			maasModelRefUnstructured("model-3", "test-ns", model3Server.URL, true, nil),
 		},
 	}
 
@@ -794,7 +794,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 	// Setup MaaSModelRef lister with one model
 	lister := fakeMaaSModelRefLister{
 		"test-ns": []*unstructured.Unstructured{
-			maasModelRefUnstructured("shared-model", "test-ns", modelServer.URL, true),
+			maasModelRefUnstructured("shared-model", "test-ns", modelServer.URL, true, nil),
 		},
 	}
 
@@ -903,10 +903,10 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 	// Setup MaaSModelRef lister with two different MaaSModelRefs that return same model ID
 	lister := fakeMaaSModelRefLister{
 		"namespace-a": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true, nil),
 		},
 		"namespace-b": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true, nil),
 		},
 	}
 
@@ -1003,10 +1003,10 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 	// Setup MaaSModelRef lister with two different MaaSModelRefs pointing to the SAME URL
 	lister := fakeMaaSModelRefLister{
 		"namespace-a": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-a", sharedModelServer.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-a", sharedModelServer.URL, true, nil),
 		},
 		"namespace-b": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-another-ref", "namespace-b", sharedModelServer.URL, true),
+			maasModelRefUnstructured("gpt-4-another-ref", "namespace-b", sharedModelServer.URL, true, nil),
 		},
 	}
 
@@ -1101,10 +1101,10 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 	// Setup MaaSModelRef lister with two different MaaSModelRefs in different namespaces
 	lister := fakeMaaSModelRefLister{
 		"namespace-a": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true, nil),
 		},
 		"namespace-b": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true, nil),
 		},
 	}
 
