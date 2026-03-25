@@ -29,7 +29,7 @@ DEFAULT_LLMIS_NAMESPACE = os.environ.get("E2E_DEFAULT_LLMIS_NAMESPACE", "llm")
 
 
 # ---------------------------------------------------------------------------
-# Helper Functions (reusing patterns from test_subscription.py)
+# Helper Function
 # ---------------------------------------------------------------------------
 
 def _ns():
