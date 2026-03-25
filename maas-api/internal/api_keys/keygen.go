@@ -1,8 +1,10 @@
 package api_keys
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -21,6 +23,22 @@ const (
 	// displayPrefixLength is the number of chars to show in the display prefix (after sk-oai-).
 	displayPrefixLength = 12
 )
+
+// hmacKey is the secret key used for HMAC-SHA256 hashing.
+// This is set at startup via SetHMACKey() from configuration.
+// HMAC-SHA256 is FIPS 198-1 approved.
+var hmacKey []byte
+
+// SetHMACKey sets the secret key used for HMAC-SHA256 hashing.
+// Must be called before any hash operations. Key must be at least 32 bytes.
+func SetHMACKey(key []byte) error {
+	if len(key) < 32 {
+		return fmt.Errorf("HMAC key must be at least 32 bytes, got %d", len(key))
+	}
+	hmacKey = make([]byte, len(key))
+	copy(hmacKey, key)
+	return nil
+}
 
 // GenerateAPIKey creates a new API key with format: sk-oai-{base62_encoded_256bit_random}
 // Returns: (plaintext_key, sha256_hash, display_prefix, error)
@@ -58,11 +76,37 @@ func GenerateAPIKey() (plaintext, hash, prefix string, err error) {
 	return plaintext, hash, prefix, nil
 }
 
-// HashAPIKey computes SHA-256 hash of an API key (for validation and storage)
-// This is the canonical hashing function - used by both key creation and validation.
+// HashAPIKey computes HMAC-SHA256 hash of an API key using the configured secret key.
+// HMAC-SHA256 is FIPS 198-1 approved as a keyed-hash message authentication code.
+// Returns the hash as a 64-character hex string.
+// The HMAC key must be set via SetHMACKey() before calling this function.
 func HashAPIKey(key string) string {
-	h := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(h[:])
+	mac := hmac.New(sha256.New, hmacKey)
+	mac.Write([]byte(key))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// ValidateAPIKeyHash validates an API key against its stored hash.
+// Uses HMAC-SHA256 with constant-time comparison to prevent timing attacks.
+func ValidateAPIKeyHash(key, storedHash string) bool {
+	// Validate hash length (32 bytes = 64 hex chars)
+	if len(storedHash) != 64 {
+		return false
+	}
+
+	// Decode expected hash from hex
+	expectedHash, err := hex.DecodeString(storedHash)
+	if err != nil {
+		return false
+	}
+
+	// Compute HMAC-SHA256
+	mac := hmac.New(sha256.New, hmacKey)
+	mac.Write([]byte(key))
+	computedHash := mac.Sum(nil)
+
+	// Compare hashes using constant-time comparison to prevent timing attacks
+	return subtle.ConstantTimeCompare(expectedHash, computedHash) == 1
 }
 
 // IsValidKeyFormat checks if a key has the correct sk-oai-* prefix and valid base62 body.

@@ -7,7 +7,18 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 )
 
+// testHMACKey is a test HMAC key (at least 32 bytes).
+var testHMACKey = []byte("test-hmac-secret-key-that-is-at-least-32-bytes-long")
+
+func setupTestHMACKey(tb testing.TB) {
+	tb.Helper()
+	if err := api_keys.SetHMACKey(testHMACKey); err != nil {
+		tb.Fatalf("failed to set test HMAC key: %v", err)
+	}
+}
+
 func TestGenerateAPIKey(t *testing.T) {
+	setupTestHMACKey(t)
 	plaintext, hash, prefix, err := api_keys.GenerateAPIKey()
 
 	if err != nil {
@@ -50,6 +61,7 @@ func TestGenerateAPIKey(t *testing.T) {
 }
 
 func TestGenerateAPIKey_Uniqueness(t *testing.T) {
+	setupTestHMACKey(t)
 	// Generate multiple keys and ensure they're unique
 	keys := make(map[string]bool)
 	hashes := make(map[string]bool)
@@ -73,6 +85,7 @@ func TestGenerateAPIKey_Uniqueness(t *testing.T) {
 }
 
 func TestHashAPIKey(t *testing.T) {
+	setupTestHMACKey(t)
 	// Compute the hash for the test key
 	testKey := "sk-oai-test123"
 	hash := api_keys.HashAPIKey(testKey)
@@ -95,6 +108,43 @@ func TestHashAPIKey(t *testing.T) {
 	}
 }
 
+func TestValidateAPIKeyHash(t *testing.T) {
+	setupTestHMACKey(t)
+	testKey := "sk-oai-test123"
+
+	t.Run("ValidateHash", func(t *testing.T) {
+		// Create hash using HMAC-SHA256
+		hash := api_keys.HashAPIKey(testKey)
+
+		// Should validate successfully
+		if !api_keys.ValidateAPIKeyHash(testKey, hash) {
+			t.Error("ValidateAPIKeyHash() should validate correct hash")
+		}
+
+		// Should fail with wrong key
+		if api_keys.ValidateAPIKeyHash("sk-oai-wrong", hash) {
+			t.Error("ValidateAPIKeyHash() should reject wrong key")
+		}
+	})
+
+	t.Run("RejectInvalidFormats", func(t *testing.T) {
+		testCases := []string{
+			"invalid-hash",
+			"short",
+			"not-a-valid-hex-string-that-is-64-characters-long-xxxxxxxxxx",
+			// Wrong length (not 64 hex chars)
+			"abc123",
+			"0123456789abcdef0123456789abcdef", // 32 chars, not 64
+		}
+
+		for _, invalidHash := range testCases {
+			if api_keys.ValidateAPIKeyHash(testKey, invalidHash) {
+				t.Errorf("ValidateAPIKeyHash() should reject invalid format: %q", invalidHash)
+			}
+		}
+	})
+}
+
 func TestIsValidKeyFormat(t *testing.T) {
 	t.Run("ValidKey", func(t *testing.T) {
 		if !api_keys.IsValidKeyFormat("sk-oai-ABC123xyz") {
@@ -110,15 +160,29 @@ func TestIsValidKeyFormat(t *testing.T) {
 }
 
 func BenchmarkGenerateAPIKey(b *testing.B) {
+	setupTestHMACKey(b)
 	for b.Loop() {
 		_, _, _, _ = api_keys.GenerateAPIKey()
 	}
 }
 
 func BenchmarkHashAPIKey(b *testing.B) {
+	setupTestHMACKey(b)
 	key := "sk-oai-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"
 
+	b.ResetTimer()
 	for b.Loop() {
 		_ = api_keys.HashAPIKey(key)
+	}
+}
+
+func BenchmarkValidateAPIKeyHash(b *testing.B) {
+	setupTestHMACKey(b)
+	key := "sk-oai-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"
+	hash := api_keys.HashAPIKey(key)
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = api_keys.ValidateAPIKeyHash(key, hash)
 	}
 }

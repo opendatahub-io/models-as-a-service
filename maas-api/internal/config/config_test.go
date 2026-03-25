@@ -48,6 +48,7 @@ func TestConfig_Validate_APIKeyMaxExpirationDays(t *testing.T) {
 				DBConnectionURL:           "postgresql://test:test@localhost/test",
 				MaaSSubscriptionNamespace: "maas-subscription-namespace",
 				APIKeyMaxExpirationDays:   tt.maxDays,
+				APIKeyHMACSecret:          "test-hmac-secret-that-is-at-least-32-bytes-long",
 			}
 
 			err := c.Validate()

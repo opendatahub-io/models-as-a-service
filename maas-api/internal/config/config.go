@@ -46,6 +46,11 @@ type Config struct {
 	// Default: 30 days. Minimum: 1 day.
 	APIKeyMaxExpirationDays int
 
+	// APIKeyHMACSecret is the secret key used for HMAC-SHA256 hashing of API keys.
+	// HMAC-SHA256 is FIPS 198-1 approved. Must be at least 32 bytes.
+	// Loaded from K8s secret.
+	APIKeyHMACSecret string
+
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
 }
@@ -141,6 +146,11 @@ func (c *Config) Validate() error {
 		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
 	}
 
+	// Validate API key HMAC secret (must be at least 32 bytes for HMAC-SHA256)
+	if len(c.APIKeyHMACSecret) < 32 {
+		return errors.New("API_KEY_HMAC_SECRET must be at least 32 characters")
+	}
+
 	return nil
 }
 
@@ -189,5 +199,34 @@ func (c *Config) LoadDatabaseURL(ctx context.Context, clientset *kubernetes.Clie
 	}
 
 	c.DBConnectionURL = string(dbURL)
+	return nil
+}
+
+// LoadAPIKeyHMACSecret reads the API key HMAC secret from the Kubernetes secret.
+// HMAC-SHA256 is FIPS 198-1 approved as a keyed-hash message authentication code.
+//
+// Secret: maas-api-keys-config (in the same namespace as the pod)
+// Key: API_KEY_HMAC_SECRET
+//
+// Returns an error if the secret is missing or the key is not found.
+func (c *Config) LoadAPIKeyHMACSecret(ctx context.Context, clientset *kubernetes.Clientset) error {
+	const (
+		//nolint:gosec // These are secret/key names, not hardcoded credentials.
+		secretName = "maas-api-keys-config"
+		//nolint:gosec // This is the key name within the secret, not a credential.
+		secretKey = "API_KEY_HMAC_SECRET"
+	)
+
+	secret, err := clientset.CoreV1().Secrets(c.Namespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to read secret %s/%s: %w (ensure the secret exists before starting maas-api)", c.Namespace, secretName, err)
+	}
+
+	hmacSecret, ok := secret.Data[secretKey]
+	if !ok || len(hmacSecret) == 0 {
+		return fmt.Errorf("key %q not found or empty in secret %s/%s", secretKey, c.Namespace, secretName)
+	}
+
+	c.APIKeyHMACSecret = string(hmacSecret)
 	return nil
 }
