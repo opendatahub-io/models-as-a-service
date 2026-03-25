@@ -661,11 +661,11 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            # Create API key
+            # Create API key bound to our test subscription
             api_key_response = requests.post(
                 f"{_maas_api_url()}/v1/api-keys",
                 headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-dedup-test-key"},
+                json={"name": "e2e-dedup-test-key", "subscription": subscription_name},
                 timeout=TIMEOUT,
                 verify=TLS_VERIFY,
             )
@@ -826,11 +826,11 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            # Create API key
+            # Create API key bound to our test subscription
             api_key_response = requests.post(
                 f"{_maas_api_url()}/v1/api-keys",
                 headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-diff-refs-test-key"},
+                json={"name": "e2e-diff-refs-test-key", "subscription": subscription_name},
                 timeout=TIMEOUT,
                 verify=TLS_VERIFY,
             )
@@ -993,11 +993,11 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            # Create API key
+            # Create API key bound to our test subscription
             api_key_response = requests.post(
                 f"{_maas_api_url()}/v1/api-keys",
                 headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-distinct-models-test-key"},
+                json={"name": "e2e-distinct-models-test-key", "subscription": subscription_name},
                 timeout=TIMEOUT,
                 verify=TLS_VERIFY,
             )
@@ -1235,8 +1235,8 @@ class TestModelsEndpoint:
             log.info(f"Creating subscription with {UNCONFIGURED_MODEL_REF} (no auth policy = no access)")
             _create_test_subscription(subscription_name, UNCONFIGURED_MODEL_REF, users=[sa_user])
 
-            # Create API key
-            api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
+            # Create API key bound to test subscription
+            api_key = _create_api_key(sa_token, name=f"{sa_name}-key", subscription=subscription_name)
 
             _wait_reconcile()
 
@@ -1436,8 +1436,8 @@ class TestModelsEndpoint:
             _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
 
-            # Create API key (will be bound to subscription_name via PR #584)
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+            # Create API key bound to subscription_name
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key", subscription=subscription_name)
 
             _wait_reconcile()
 
@@ -1501,7 +1501,7 @@ class TestModelsEndpoint:
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
 
             # Create API key bound to subscription
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+            api_key = _create_api_key(oc_token, name=f"{sa_name}-key", subscription=subscription_name)
 
             _wait_reconcile()
 
