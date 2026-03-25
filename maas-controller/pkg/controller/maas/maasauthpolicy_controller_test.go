@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -555,5 +556,97 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, authPolicy)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("AuthPolicy should be deleted after deleting last parent policy, but got error: %v", err)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_SubscriptionCacheKey verifies that the generated AuthPolicy
+// uses a composite cache key for subscription-info metadata that includes username, groups,
+// requested subscription header, and model namespace/name.
+//
+// This prevents stale cached responses when:
+// - A user switches subscriptions via X-MaaS-Subscription header within the cache TTL
+// - Different models are accessed by the same user (cross-model cache collision)
+//
+// Regression test for RHOAIENG-54147.
+func TestMaaSAuthPolicyReconciler_SubscriptionCacheKey(t *testing.T) {
+	const (
+		modelName      = "granite"
+		modelNamespace = "models"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-cache"
+	)
+
+	model := newMaaSModelRef(modelName, modelNamespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, modelNamespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, modelNamespace, "team-cache",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: modelNamespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: modelNamespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	// Fetch the generated AuthPolicy
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+	}
+
+	// Extract the subscription-info cache key selector from the AuthPolicy spec
+	cacheKeySelector, found, err := unstructured.NestedString(got.Object,
+		"spec", "rules", "metadata", "subscription-info", "cache", "key", "selector")
+	if err != nil || !found {
+		t.Fatalf("subscription-info cache key selector not found: found=%v err=%v", found, err)
+	}
+
+	// Verify the cache key includes all required components
+	tests := []struct {
+		name   string
+		substr string
+		reason string
+	}{
+		{
+			name:   "includes username",
+			substr: "auth.metadata.apiKeyValidation.username",
+			reason: "cache key must include username to distinguish different users",
+		},
+		{
+			name:   "includes groups",
+			substr: `auth.metadata.apiKeyValidation.groups.join(",")`,
+			reason: "cache key must include groups to prevent collisions between users with different group memberships",
+		},
+		{
+			name:   "includes X-MaaS-Subscription header",
+			substr: `"x-maas-subscription" in request.headers`,
+			reason: "cache key must include requested subscription to prevent stale results when switching subscriptions",
+		},
+		{
+			name:   "includes model namespace/name",
+			substr: modelNamespace + "/" + modelName,
+			reason: "cache key must include model to prevent cross-model cache collisions",
+		},
+		{
+			name:   "uses pipe delimiters",
+			substr: `+ "|" +`,
+			reason: "cache key components must be separated by pipe delimiters for unambiguous parsing",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(cacheKeySelector, tc.substr) {
+				t.Errorf("cache key selector missing %q: %s\ngot: %s", tc.substr, tc.reason, cacheKeySelector)
+			}
+		})
 	}
 }
