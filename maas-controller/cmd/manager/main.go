@@ -58,9 +58,14 @@ func init() {
 // ensureSubscriptionNamespaceExists creates the subscription namespace if it doesn't exist.
 // This allows users to create MaaS CRs without manually creating the namespace.
 func ensureSubscriptionNamespaceExists(ctx context.Context, namespace string) error {
-	cfg := ctrl.GetConfigOrDie()
+	cfg, err := ctrl.GetConfig()
+	if err != nil {
+		return err
+	}
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
+		return err
+	}
 		return err
 	}
 
