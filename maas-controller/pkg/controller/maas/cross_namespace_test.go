@@ -86,7 +86,7 @@ func TestMaaSAuthPolicyReconciler_CrossNamespace(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: policyNamespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -182,7 +182,7 @@ func TestMaaSAuthPolicyReconciler_SelectiveModelManagement(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: policyNamespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -261,7 +261,7 @@ func TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 
 	// Reconcile both policies
 	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-a", Namespace: namespaceA}}
@@ -388,6 +388,187 @@ func TestMaaSSubscriptionReconciler_CrossNamespace(t *testing.T) {
 	} else if !apierrors.IsNotFound(err) {
 		t.Errorf("unexpected error checking for TRLP in subscription namespace: %v", err)
 	}
+}
+
+// TestMaaSSubscriptionReconciler_DuplicateNameIsolation verifies that two
+// subscriptions with the same name in different namespaces get unique TRLP
+// limit keys and don't cause quota isolation bypass (CWE-284, CWE-706).
+//
+// This test validates the fix for the vulnerability where:
+//   - Tenant A has subscription "gold" (namespace: tenant-a) with limit 100 req/min
+//   - Tenant B has subscription "gold" (namespace: tenant-b) with limit 10000 req/min
+//   - Both reference the same model (default/llm)
+//   - Before fix: TRLP key collision → last subscription wins
+//   - After fix: Unique keys (namespace-name-model) → proper isolation
+func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
+	const (
+		modelName       = "llm"
+		modelNamespace  = "models"
+		httpRouteName   = "maas-model-" + modelName
+		trlpName        = "maas-trlp-" + modelName
+		subscriptionName = "gold" // SAME name in both namespaces
+		namespaceA      = "tenant-a"
+		namespaceB      = "tenant-b"
+	)
+
+	// Model and HTTPRoute (shared by both subscriptions)
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: modelNamespace},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
+		},
+	}
+	route := &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: modelNamespace},
+	}
+
+	// Subscription "gold" in tenant-a namespace (limit: 100)
+	subA := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: subscriptionName, Namespace: namespaceA},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			Owner: maasv1alpha1.OwnerSpec{
+				Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
+			},
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+				{
+					Name:            modelName,
+					Namespace:       modelNamespace,
+					TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}},
+				},
+			},
+		},
+	}
+
+	// Subscription "gold" in tenant-b namespace (limit: 10000) - SAME NAME!
+	subB := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: subscriptionName, Namespace: namespaceB},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			Owner: maasv1alpha1.OwnerSpec{
+				Groups: []maasv1alpha1.GroupReference{{Name: "team-b"}},
+			},
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+				{
+					Name:            modelName,
+					Namespace:       modelNamespace,
+					TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 10000, Window: "1m"}},
+				},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, subA, subB).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+
+	// Reconcile both subscriptions
+	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: subscriptionName, Namespace: namespaceA}}
+	if _, err := r.Reconcile(context.Background(), reqA); err != nil {
+		t.Fatalf("Reconcile subscription in %q: unexpected error: %v", namespaceA, err)
+	}
+
+	reqB := ctrl.Request{NamespacedName: types.NamespacedName{Name: subscriptionName, Namespace: namespaceB}}
+	if _, err := r.Reconcile(context.Background(), reqB); err != nil {
+		t.Fatalf("Reconcile subscription in %q: unexpected error: %v", namespaceB, err)
+	}
+
+	// Get the aggregated TRLP for the model
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: modelNamespace}, trlp); err != nil {
+		t.Fatalf("Get TokenRateLimitPolicy: %v", err)
+	}
+
+	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	if err != nil || !found {
+		t.Fatalf("spec.limits not found: found=%v err=%v", found, err)
+	}
+
+	// CRITICAL: Verify both subscriptions have UNIQUE limit entries
+	// Format: "{namespace}-{name}-{model}-tokens"
+	keyA := namespaceA + "-" + subscriptionName + "-" + modelName + "-tokens"
+	keyB := namespaceB + "-" + subscriptionName + "-" + modelName + "-tokens"
+
+	if keyA == keyB {
+		t.Fatalf("SECURITY BUG: Limit keys are identical (%q), this would cause quota isolation bypass!", keyA)
+	}
+
+	limitA, hasA := limitsMap[keyA]
+	limitB, hasB := limitsMap[keyB]
+
+	if !hasA {
+		t.Errorf("Limit entry for tenant-a subscription not found, expected key %q, got keys: %v", keyA, getMapKeys(limitsMap))
+	}
+	if !hasB {
+		t.Errorf("Limit entry for tenant-b subscription not found, expected key %q, got keys: %v", keyB, getMapKeys(limitsMap))
+	}
+
+	// Verify predicate includes namespace to prevent cross-tenant matching
+	// Format: auth.identity.selected_subscription_key == "{namespace}/{name}@{modelNamespace}/{modelName}"
+	if hasA {
+		limitAMap := limitA.(map[string]interface{})
+		whenSlice, _, _ := unstructured.NestedSlice(limitAMap, "when")
+		if len(whenSlice) > 0 {
+			predMap := whenSlice[0].(map[string]interface{})
+			pred := predMap["predicate"].(string)
+			expectedPredA := `auth.identity.selected_subscription_key == "` + namespaceA + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `"`
+			if pred != expectedPredA {
+				t.Errorf("Tenant-a predicate = %q, want %q", pred, expectedPredA)
+			}
+			// CRITICAL: Predicate must NOT match tenant-b's subscription
+			if !containsString(pred, namespaceA) {
+				t.Errorf("SECURITY BUG: Tenant-a predicate doesn't include namespace: %s", pred)
+			}
+		}
+	}
+
+	if hasB {
+		limitBMap := limitB.(map[string]interface{})
+		whenSlice, _, _ := unstructured.NestedSlice(limitBMap, "when")
+		if len(whenSlice) > 0 {
+			predMap := whenSlice[0].(map[string]interface{})
+			pred := predMap["predicate"].(string)
+			expectedPredB := `auth.identity.selected_subscription_key == "` + namespaceB + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `"`
+			if pred != expectedPredB {
+				t.Errorf("Tenant-b predicate = %q, want %q", pred, expectedPredB)
+			}
+			// CRITICAL: Predicate must NOT match tenant-a's subscription
+			if !containsString(pred, namespaceB) {
+				t.Errorf("SECURITY BUG: Tenant-b predicate doesn't include namespace: %s", pred)
+			}
+		}
+	}
+
+	// Verify both limit entries exist (no overwrite/collision)
+	if len(limitsMap) < 2 {
+		t.Errorf("Expected at least 2 limit entries (one per subscription), got %d: %v", len(limitsMap), getMapKeys(limitsMap))
+	}
+}
+
+// Helper function for test
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && findSubstringInString(s, substr)
+}
+
+func findSubstringInString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // TestMaaSModelRefDeletion_CrossNamespaceIsolation verifies that deleting

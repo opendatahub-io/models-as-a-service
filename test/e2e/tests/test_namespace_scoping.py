@@ -1,12 +1,9 @@
 """
-E2E tests for namespace scoping in MaaS Controller.
+E2E tests for namespace scoping in MaaS.
 
-Tests that MaaSAuthPolicy and MaaSSubscription can reference MaaSModelRef resources
-in different namespaces, and that the generated AuthPolicies and TokenRateLimitPolicies
-are created in the correct (model's) namespace.
-
-Uses real LLMInferenceService models and makes actual inference requests to verify
-the entire flow works end-to-end.
+Tests that (1) MaaS API and controller only watch the subscription namespace for MaaSAuthPolicy and
+MaaSSubscription, and (2) when those CRs reference a model by (name, namespace), only that exact
+model receives the generated AuthPolicy or TokenRateLimitPolicy.
 
 Requires:
   - GATEWAY_HOST env var (e.g. maas.apps.cluster.example.com)
@@ -18,9 +15,9 @@ Requires:
 Environment variables (all optional, with defaults):
   - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_API_BASE_URL: MaaS API URL (required)
-  - MAAS_NAMESPACE: Default MaaS namespace (default: opendatahub)
+  - MAAS_SUBSCRIPTION_NAMESPACE: MaaS subscription namespace (default: models-as-a-service)
   - E2E_TIMEOUT: Request timeout in seconds (default: 30)
-  - E2E_RECONCILE_WAIT: Wait time for controller reconciliation (default: 15)
+  - E2E_RECONCILE_WAIT: Wait time for controller reconciliation (default: 8)
   - E2E_SKIP_TLS_VERIFY: Set to "true" to skip TLS verification
   - E2E_MODEL_REF: Model ref for tests (default: facebook-opt-125m-simulated)
   - E2E_MODEL_NAMESPACE: Namespace where model MaaSModelRef lives (default: llm)
@@ -41,25 +38,15 @@ log = logging.getLogger(__name__)
 
 # Constants
 TIMEOUT = int(os.environ.get("E2E_TIMEOUT", "30"))
-RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "15"))  # Increased from 10 to 15 for reliability
+RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "8"))
 TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
-MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
 
 
 def _ns():
-    """Default MaaS namespace."""
-    return os.environ.get("MAAS_NAMESPACE", "opendatahub")
-
-
-def _gateway_url():
-    """Gateway URL for inference requests."""
-    host = os.environ.get("GATEWAY_HOST", "")
-    if not host:
-        raise RuntimeError("GATEWAY_HOST env var is required")
-    scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
-    return f"{scheme}://{host}"
+    """Default MaaS subscription namespace."""
+    return os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 
 
 def _maas_api_url():
@@ -138,126 +125,6 @@ def _get_cr(kind: str, name: str, namespace: str) -> Optional[dict]:
     return json.loads(result.stdout)
 
 
-def _wait_for_cr(kind: str, name: str, namespace: str, timeout: int = 30) -> bool:
-    """Wait for CR to exist."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _get_cr(kind, name, namespace):
-            return True
-        time.sleep(2)
-    return False
-
-
-def _wait_for_authpolicy_enforced(name: str, namespace: str, timeout: int = 60) -> bool:
-    """Wait for AuthPolicy to be enforced."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        cr = _get_cr("AuthPolicy", name, namespace)
-        if cr:
-            conditions = cr.get("status", {}).get("conditions", [])
-            for condition in conditions:
-                if condition.get("type") == "Enforced" and condition.get("status") == "True":
-                    return True
-        time.sleep(3)
-    return False
-
-
-def _wait_for_trlp_enforced_with_retry(name: str, namespace: str, timeout: int = 90, retries: int = 3) -> bool:
-    """Wait for TokenRateLimitPolicy to be enforced with retry logic.
-
-    Args:
-        name: Name of the TokenRateLimitPolicy
-        namespace: Namespace where TRLP exists
-        timeout: Maximum time to wait per attempt in seconds
-        retries: Number of retry attempts after the initial try
-
-    Returns:
-        True if enforced within timeout and retries, False otherwise
-    """
-    for attempt in range(retries + 1):  # retries + 1 = initial attempt + retries
-        if attempt > 0:
-            log.info(f"Retry {attempt}/{retries} for TRLP {name} enforcement check...")
-            time.sleep(5)  # Brief pause between retries
-
-        if _wait_for_trlp_enforced(name, namespace, timeout):
-            return True
-
-    log.error(f"TRLP {name} not enforced after {retries} retries")
-    return False
-
-
-def _wait_for_trlp_enforced(name: str, namespace: str, timeout: int = 90, expected_generation: Optional[int] = None) -> bool:
-    """Wait for TokenRateLimitPolicy to be enforced.
-
-    Args:
-        name: Name of the TokenRateLimitPolicy
-        namespace: Namespace where TRLP exists
-        timeout: Maximum time to wait in seconds (default: 90)
-        expected_generation: If provided, wait for generation >= this value
-
-    Returns:
-        True if enforced within timeout, False otherwise
-    """
-    deadline = time.time() + timeout
-    last_status = None
-
-    while time.time() < deadline:
-        cr = _get_cr("TokenRateLimitPolicy", name, namespace)
-        if cr:
-            generation = cr.get("metadata", {}).get("generation", 0)
-            conditions = cr.get("status", {}).get("conditions", [])
-
-            # Check generation if expected_generation is specified
-            if expected_generation is not None and generation < expected_generation:
-                last_status = f"generation={generation}, expected>={expected_generation}"
-                time.sleep(3)
-                continue
-
-            # Check enforcement status
-            for condition in conditions:
-                if condition.get("type") == "Enforced" and condition.get("status") == "True":
-                    log.info(f"TRLP {name} enforced (generation={generation})")
-                    return True
-
-            last_status = f"generation={generation}, not enforced yet"
-        else:
-            last_status = "TRLP not found"
-
-        time.sleep(3)
-
-    log.warning(f"TRLP {name} not enforced within {timeout}s. Last status: {last_status}")
-    return False
-
-
-def _get_trlp_generation(name: str, namespace: str) -> int:
-    """Get the current generation of a TokenRateLimitPolicy.
-
-    Returns:
-        Current generation number, or 0 if TRLP doesn't exist
-    """
-    cr = _get_cr("TokenRateLimitPolicy", name, namespace)
-    if cr:
-        return cr.get("metadata", {}).get("generation", 0)
-    return 0
-
-
-def _get_trlp_metadata(name: str, namespace: str) -> dict:
-    """Get the current metadata of a TokenRateLimitPolicy.
-
-    Returns:
-        dict with 'uid', 'resourceVersion', 'generation', or empty dict if not found
-    """
-    cr = _get_cr("TokenRateLimitPolicy", name, namespace)
-    if cr:
-        metadata = cr.get("metadata", {})
-        return {
-            "uid": metadata.get("uid", ""),
-            "resourceVersion": metadata.get("resourceVersion", ""),
-            "generation": metadata.get("generation", 0)
-        }
-    return {}
-
-
 def _create_namespace(name: str):
     """Create namespace if it doesn't exist."""
     result = subprocess.run(
@@ -278,73 +145,39 @@ def _delete_namespace(name: str):
     )
 
 
-def _list_models(api_key: str, model_ref: str, model_namespace: str = None, subscription: str = "simulator-subscription") -> requests.Response:
-    """List available models."""
-    url = f"{_gateway_url()}/llm/{model_ref}/v1/models"
+def _call_subscriptions_select(api_key: str, username: str, groups: list, requested_subscription: str = "") -> requests.Response:
+    """Call MaaS API POST /v1/subscriptions/select. Returns the response (always 200 with body)."""
+    url = f"{_maas_api_url()}/internal/v1/subscriptions/select"
     headers = {"Authorization": f"Bearer {api_key}"}
-    if subscription:
-        headers["x-maas-subscription"] = subscription
-    return requests.get(
-        url,
-        headers=headers,
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
-    )
-
-
-def _inference(api_key: str, model_ref: str, model_namespace: str, subscription: str = "simulator-subscription") -> requests.Response:
-    """Make an inference request to a model."""
-    url = f"{_gateway_url()}/llm/{model_ref}/v1/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    if subscription:
-        headers["x-maas-subscription"] = subscription
+    payload = {"username": username, "groups": groups}
+    if requested_subscription:
+        payload["requestedSubscription"] = requested_subscription
     return requests.post(
         url,
         headers=headers,
-        json={"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
+        json=payload,
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
     )
 
 
-def _poll_status(api_key: str, model_ref: str, model_namespace: str, expected: int, timeout: int = 60, interval: int = 2, subscription: str = "simulator-subscription") -> requests.Response:
-    """Poll inference endpoint until expected status or timeout."""
-    deadline = time.time() + timeout
-    last_response = None
-    last_error = None
-    while time.time() < deadline:
-        try:
-            r = _inference(api_key, model_ref, model_namespace, subscription=subscription)
-            last_response = r
-            if r.status_code == expected:
-                return r
-            log.warning(f"Got status {r.status_code}, expected {expected}. Response: {r.text[:200]}")
-        except Exception as e:
-            log.warning(f"Request failed: {type(e).__name__}: {e}")
-            last_error = e
-        time.sleep(interval)
-
-    if last_response:
-        status = f"{last_response.status_code}: {last_response.text[:200]}"
-    elif last_error:
-        status = f"Exception: {type(last_error).__name__}: {last_error}"
-    else:
-        status = "No response"
-    raise AssertionError(f"Expected status {expected} within {timeout}s, got {status}")
+def _wait_reconcile(seconds=None):
+    """Wait for controller reconciliation."""
+    time.sleep(seconds or RECONCILE_WAIT)
 
 
-@pytest.fixture(scope="module")
-def policy_namespace():
-    """Create a test namespace for policies."""
-    ns = f"e2e-ns-policy-{uuid.uuid4().hex[:6]}"
-    log.info(f"Creating policy namespace: {ns}")
-    _create_namespace(ns)
-    yield ns
-    log.info(f"Cleaning up policy namespace: {ns}")
-    _delete_namespace(ns)
+def _get_cr_annotation(kind: str, name: str, namespace: str, key: str):
+    """Return the annotation value for key on the CR, or \"\" if not found."""
+    result = subprocess.run(
+        ["oc", "get", kind, name, "-n", namespace, "-o", "json"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return ""
+    obj = json.loads(result.stdout)
+    annotations = obj.get("metadata", {}).get("annotations") or {}
+    return annotations.get(key, "") or ""
 
 
 @pytest.fixture(scope="module")
@@ -354,559 +187,304 @@ def api_key():
     return key
 
 
-class TestCrossNamespaceAuthPolicy:
-    """Test MaaSAuthPolicy can reference models in different namespaces."""
+class TestMaaSAPIWatchNamespace:
+    """Test that MaaS API only gets MaaSSubscription from the subscription namespace (MAAS_SUBSCRIPTION_NAMESPACE)."""
 
-    def test_auth_policy_in_different_namespace(self, policy_namespace, api_key):
+    def test_subscription_in_subscription_namespace_visible_to_api(self, api_key):
         """
-        Create MaaSAuthPolicy in policy-namespace that references model in llm namespace.
-        Verify that AuthPolicy is created in llm namespace (model's namespace).
-        Verify that inference requests work.
+        MaaSSubscription in the subscription namespace should be visible to the API.
+        POST /v1/subscriptions/select with that subscription name should succeed.
         """
-        policy_name = f"cross-ns-auth-{uuid.uuid4().hex[:6]}"
-
-        log.info(f"Creating cross-namespace MaaSAuthPolicy {policy_name}")
-        log.info(f"  Policy namespace: {policy_namespace}")
-        log.info(f"  Model namespace: {MODEL_NAMESPACE}")
-
-        # Create MaaSAuthPolicy in policy namespace referencing model in MODEL_NAMESPACE
-        _apply_cr({
-            "apiVersion": "maas.opendatahub.io/v1alpha1",
-            "kind": "MaaSAuthPolicy",
-            "metadata": {"name": policy_name, "namespace": policy_namespace},
-            "spec": {
-                "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                "subjects": {"groups": [{"name": "system:authenticated"}]},
-            },
-        })
-
+        sub_name = f"e2e-api-visible-{uuid.uuid4().hex[:6]}"
+        ns = _ns()
         try:
-            # Wait for controller to reconcile
-            time.sleep(RECONCILE_WAIT)
-
-            # Verify MaaSAuthPolicy exists
-            maas_policy = _get_cr("MaaSAuthPolicy", policy_name, policy_namespace)
-            assert maas_policy is not None, f"MaaSAuthPolicy {policy_name} not found"
-
-            # Verify generated AuthPolicy is created in MODEL namespace (not policy namespace)
-            auth_policy_name = f"maas-auth-{MODEL_REF}"
-            auth_policy = _get_cr("AuthPolicy", auth_policy_name, MODEL_NAMESPACE)
-            assert auth_policy is not None, \
-                f"AuthPolicy {auth_policy_name} not found in model namespace {MODEL_NAMESPACE}"
-
-            # Wait for AuthPolicy to be enforced
-            log.info(f"Waiting for AuthPolicy {auth_policy_name} to be enforced...")
-            enforced = _wait_for_authpolicy_enforced(auth_policy_name, MODEL_NAMESPACE, timeout=60)
-            assert enforced, f"AuthPolicy {auth_policy_name} not enforced within timeout"
-
-            # Verify AuthPolicy is NOT in policy namespace
-            auth_in_policy_ns = _get_cr("AuthPolicy", auth_policy_name, policy_namespace)
-            assert auth_in_policy_ns is None, \
-                f"AuthPolicy should not exist in policy namespace {policy_namespace}"
-
-            # Test model listing endpoint
-            log.info("Testing /v1/models endpoint with cross-namespace AuthPolicy")
-            r = _list_models(api_key, MODEL_REF, MODEL_NAMESPACE)
-            assert r.status_code == 200, f"Model listing failed: {r.status_code}"
-            models_data = r.json()
-            model_ids = [m.get("id") for m in models_data.get("data", [])]
-            assert MODEL_NAME in model_ids, f"Expected model {MODEL_NAME} not in list: {model_ids}"
-            log.info(f"✓ Model {MODEL_NAME} found in /v1/models response")
-
-            # Make inference request to verify everything works
-            log.info("Testing inference request with cross-namespace AuthPolicy")
-            r = _poll_status(api_key, MODEL_REF, MODEL_NAMESPACE, 200, timeout=90)
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}"
-
-            log.info("✓ Cross-namespace AuthPolicy test passed")
-
-        finally:
-            _delete_cr("MaaSAuthPolicy", policy_name, policy_namespace)
-            # Note: We don't delete the AuthPolicy because other tests may rely on it
-
-    def test_multiple_policies_different_namespaces_same_model(self, policy_namespace, api_key):
-        """
-        Create multiple MaaSAuthPolicies in different namespaces referencing the same model.
-        Verify that they aggregate correctly into a single AuthPolicy.
-        Test the deletion bug fix: deleting one policy should NOT delete the AuthPolicy.
-        """
-        policy1_name = f"multi-ns-policy1-{uuid.uuid4().hex[:6]}"
-        policy2_name = f"multi-ns-policy2-{uuid.uuid4().hex[:6]}"
-        test_group = f"test-group-{uuid.uuid4().hex[:4]}"
-
-        # Create second policy namespace
-        policy_namespace2 = f"e2e-ns-policy2-{uuid.uuid4().hex[:6]}"
-        _create_namespace(policy_namespace2)
-
-        try:
-            log.info(f"Creating two MaaSAuthPolicies in different namespaces for same model")
-
-            # Create first policy in policy_namespace
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSAuthPolicy",
-                "metadata": {"name": policy1_name, "namespace": policy_namespace},
-                "spec": {
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                    "subjects": {"groups": [{"name": "system:authenticated"}]},
-                },
-            })
-
-            # Create second policy in policy_namespace2
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSAuthPolicy",
-                "metadata": {"name": policy2_name, "namespace": policy_namespace2},
-                "spec": {
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                    "subjects": {"groups": [{"name": test_group}]},
-                },
-            })
-
-            # Wait for reconciliation
-            time.sleep(RECONCILE_WAIT)
-
-            # Verify AuthPolicy exists in model namespace
-            auth_policy_name = f"maas-auth-{MODEL_REF}"
-            auth_policy = _get_cr("AuthPolicy", auth_policy_name, MODEL_NAMESPACE)
-            assert auth_policy is not None, "Aggregated AuthPolicy should exist"
-
-            # Wait for AuthPolicy to be enforced
-            log.info(f"Waiting for AuthPolicy {auth_policy_name} to be enforced...")
-            enforced = _wait_for_authpolicy_enforced(auth_policy_name, MODEL_NAMESPACE, timeout=60)
-            assert enforced, f"AuthPolicy {auth_policy_name} not enforced within timeout"
-
-            # Verify both policies' subjects are in the AuthPolicy
-            spec = auth_policy.get("spec", {})
-            log.info(f"AuthPolicy spec: {json.dumps(spec, indent=2)[:500]}")
-
-            # Test model listing endpoint
-            r = _list_models(api_key, MODEL_REF, MODEL_NAMESPACE)
-            assert r.status_code == 200, f"Model listing failed: {r.status_code}"
-            models_data = r.json()
-            model_ids = [m.get("id") for m in models_data.get("data", [])]
-            assert MODEL_NAME in model_ids, f"Expected model {MODEL_NAME} not in list: {model_ids}"
-
-            # Make inference request to verify it works
-            r = _poll_status(api_key, MODEL_REF, MODEL_NAMESPACE, 200, timeout=90)
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}"
-
-            # Now delete the FIRST policy (not the last one)
-            log.info(f"Deleting first policy {policy1_name} (should NOT delete AuthPolicy)")
-            _delete_cr("MaaSAuthPolicy", policy1_name, policy_namespace)
-            time.sleep(RECONCILE_WAIT)
-
-            # Verify AuthPolicy still exists (it should be rebuilt)
-            auth_policy_after = _get_cr("AuthPolicy", auth_policy_name, MODEL_NAMESPACE)
-            assert auth_policy_after is not None, \
-                "AuthPolicy should still exist after deleting first policy (other policies reference it)"
-
-            # Inference should still work
-            r = _poll_status(api_key, MODEL_REF, MODEL_NAMESPACE, 200, timeout=60)
-            assert r.status_code == 200, "Inference should still work after deleting first policy"
-
-            # Now delete the LAST test policy
-            log.info(f"Deleting last test policy {policy2_name}")
-            _delete_cr("MaaSAuthPolicy", policy2_name, policy_namespace2)
-            time.sleep(RECONCILE_WAIT)
-
-            # Verify AuthPolicy still exists if there are other MaaSAuthPolicies for this model
-            # (like the pre-existing simulator-access policy)
-            auth_policy_final = _get_cr("AuthPolicy", auth_policy_name, MODEL_NAMESPACE)
-            # Note: AuthPolicy may still exist due to pre-existing policies (e.g. simulator-access)
-            # The key test was that deleting the FIRST policy didn't delete the AuthPolicy
-            log.info(f"AuthPolicy exists after deleting test policies: {auth_policy_final is not None}")
-
-            log.info("✓ Multiple policies deletion test passed (bug fix verified)")
-
-        finally:
-            for resource, name, ns in [
-                ("MaaSAuthPolicy", policy1_name, policy_namespace),
-                ("MaaSAuthPolicy", policy2_name, policy_namespace2),
-            ]:
-                try:
-                    _delete_cr(resource, name, ns)
-                except Exception as e:
-                    log.warning(f"Cleanup failed for {resource}/{name}: {e}")
-            try:
-                _delete_namespace(policy_namespace2)
-            except Exception as e:
-                log.warning(f"Cleanup failed for namespace {policy_namespace2}: {e}")
-
-
-class TestCrossNamespaceSubscription:
-    """Test MaaSSubscription can reference models in different namespaces."""
-
-    def test_subscription_in_different_namespace(self, policy_namespace, api_key):
-        """
-        Create MaaSSubscription in the subscription namespace that references model in llm namespace.
-        Verify that TokenRateLimitPolicy is created in llm namespace (model's namespace).
-        Verify that inference requests work with rate limiting.
-
-        NOTE: MaaSSubscription must be in the MAAS subscription namespace (models-as-a-service)
-        as the controller only watches that namespace. The "cross-namespace" aspect is that
-        the subscription references a model in a DIFFERENT namespace (llm).
-        """
-        subscription_name = f"cross-ns-sub-{uuid.uuid4().hex[:6]}"
-        maas_auth_policy_name = f"cross-ns-auth-for-sub-{uuid.uuid4().hex[:6]}"
-
-        # Get the configured MAAS subscription namespace
-        maas_subscription_ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
-
-        log.info(f"Creating cross-namespace MaaSSubscription {subscription_name}")
-        log.info(f"  Subscription namespace: {maas_subscription_ns}")
-        log.info(f"  Model namespace: {MODEL_NAMESPACE}")
-
-        # First ensure there's an AuthPolicy for the model (subscription needs auth to work)
-        _apply_cr({
-            "apiVersion": "maas.opendatahub.io/v1alpha1",
-            "kind": "MaaSAuthPolicy",
-            "metadata": {"name": maas_auth_policy_name, "namespace": maas_subscription_ns},
-            "spec": {
-                "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                "subjects": {"groups": [{"name": "system:authenticated"}]},
-            },
-        })
-
-        # Create MaaSSubscription in MAAS subscription namespace referencing model in MODEL_NAMESPACE
-        _apply_cr({
-            "apiVersion": "maas.opendatahub.io/v1alpha1",
-            "kind": "MaaSSubscription",
-            "metadata": {"name": subscription_name, "namespace": maas_subscription_ns},
-            "spec": {
-                "owner": {"groups": [{"name": "system:authenticated"}]},
-                "modelRefs": [
-                    {
-                        "name": MODEL_REF,
-                        "namespace": MODEL_NAMESPACE,
-                        "tokenRateLimits": [{"limit": 100, "window": "1m"}],
-                    }
-                ],
-            },
-        })
-
-        try:
-            # Wait for controller to reconcile
-            time.sleep(RECONCILE_WAIT)
-
-            # Verify MaaSSubscription exists
-            maas_sub = _get_cr("MaaSSubscription", subscription_name, maas_subscription_ns)
-            assert maas_sub is not None, f"MaaSSubscription {subscription_name} not found"
-
-            # Wait for AuthPolicy to be enforced (subscription needs auth to work)
-            auth_policy_name = f"maas-auth-{MODEL_REF}"
-            log.info(f"Waiting for AuthPolicy {auth_policy_name} to be enforced...")
-            enforced = _wait_for_authpolicy_enforced(auth_policy_name, MODEL_NAMESPACE, timeout=60)
-            assert enforced, f"AuthPolicy {auth_policy_name} not enforced within timeout"
-
-            # Wait for TokenRateLimitPolicy to be enforced before making requests
-            # This implicitly verifies TRLP exists in the model namespace
-            trlp_name = f"maas-trlp-{MODEL_REF}"
-            log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} to be enforced...")
-            trlp_enforced = _wait_for_trlp_enforced_with_retry(trlp_name, MODEL_NAMESPACE, timeout=60, retries=3)
-            assert trlp_enforced, f"TokenRateLimitPolicy {trlp_name} not enforced within timeout"
-
-            # Verify TokenRateLimitPolicy is NOT in subscription namespace (after enforcement verified)
-            trlp_in_sub_ns = _get_cr("TokenRateLimitPolicy", trlp_name, maas_subscription_ns)
-            assert trlp_in_sub_ns is None, \
-                f"TokenRateLimitPolicy should not exist in subscription namespace {maas_subscription_ns}"
-
-            # Test model listing endpoint
-            log.info(f"Testing /v1/models endpoint with cross-namespace Subscription {subscription_name}")
-            r = _list_models(api_key, MODEL_REF, MODEL_NAMESPACE, subscription=subscription_name)
-            assert r.status_code == 200, f"Model listing failed: {r.status_code}"
-            models_data = r.json()
-            model_ids = [m.get("id") for m in models_data.get("data", [])]
-            assert MODEL_NAME in model_ids, f"Expected model {MODEL_NAME} not in list: {model_ids}"
-            log.info(f"✓ Model {MODEL_NAME} found in /v1/models response")
-
-            # Make inference request to verify everything works
-            log.info(f"Testing inference request with subscription {subscription_name}")
-            r = _poll_status(api_key, MODEL_REF, MODEL_NAMESPACE, 200, timeout=90, subscription=subscription_name)
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}"
-
-            log.info("✓ Cross-namespace Subscription test passed")
-
-        finally:
-            for resource, name, ns in [
-                ("MaaSSubscription", subscription_name, maas_subscription_ns),
-                ("MaaSAuthPolicy", maas_auth_policy_name, maas_subscription_ns),
-            ]:
-                try:
-                    _delete_cr(resource, name, ns)
-                except Exception as e:
-                    log.warning(f"Cleanup failed for {resource}/{name}: {e}")
-
-    def test_multiple_subscriptions_different_namespaces_same_model(self, policy_namespace, api_key):
-        """
-        Create multiple MaaSSubscriptions in the subscription namespace referencing the same model.
-        Verify that they aggregate correctly into a single TokenRateLimitPolicy.
-        Test the deletion bug fix: deleting one subscription should NOT delete the TRLP.
-
-        NOTE: All subscriptions must be in the MAAS subscription namespace (models-as-a-service)
-        as the controller only watches that namespace for MaaSSubscription resources.
-        """
-        sub1_name = f"multi-ns-sub1-{uuid.uuid4().hex[:6]}"
-        sub2_name = f"multi-ns-sub2-{uuid.uuid4().hex[:6]}"
-        maas_auth_policy_name = f"multi-ns-auth-{uuid.uuid4().hex[:6]}"
-        test_group = f"test-group-{uuid.uuid4().hex[:4]}"
-
-        # Get the configured MAAS subscription namespace
-        maas_subscription_ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
-
-        try:
-            log.info(f"Creating two MaaSSubscriptions in {maas_subscription_ns} for same model")
-
-            # Create auth policy first
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSAuthPolicy",
-                "metadata": {"name": maas_auth_policy_name, "namespace": maas_subscription_ns},
-                "spec": {
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                    "subjects": {"groups": [{"name": "system:authenticated"}]},
-                },
-            })
-
-            # Create first subscription in MAAS subscription namespace
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
-                "metadata": {"name": sub1_name, "namespace": maas_subscription_ns},
+                "metadata": {"name": sub_name, "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
+                },
+            })
+            _wait_reconcile()
+
+            r = _call_subscriptions_select(api_key, "e2e-api-user", ["system:authenticated"], requested_subscription=sub_name)
+            assert r.status_code == 200, f"subscriptions/select failed: {r.status_code} {r.text}"
+            data = r.json()
+            assert data.get("error") != "not_found", (
+                f"Subscription {sub_name} in subscription namespace should be visible to API, got: {data}"
+            )
+            assert data.get("name") == sub_name, (
+                f"Expected name={sub_name}, got: {data}"
+            )
+            log.info(f"✓ Subscription {sub_name} in {ns} is visible to MaaS API")
+        finally:
+            _delete_cr("MaaSSubscription", sub_name, ns)
+            _wait_reconcile()
+
+    def test_subscription_in_another_namespace_not_visible_to_api(self, api_key):
+        """
+        MaaSSubscription in a namespace other than the subscription namespace should NOT be visible to the API.
+        POST /v1/subscriptions/select with that subscription name should return not_found.
+        """
+        sub_name = f"e2e-api-hidden-{uuid.uuid4().hex[:6]}"
+        other_ns = "e2e-api-unwatched-ns"
+        _create_namespace(other_ns)
+        try:
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": sub_name, "namespace": other_ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
+                },
+            })
+            _wait_reconcile()
+
+            r = _call_subscriptions_select(api_key, "e2e-api-user", ["system:authenticated"], requested_subscription=sub_name)
+            assert r.status_code == 200, f"subscriptions/select failed: {r.status_code} {r.text}"
+            data = r.json()
+            assert data.get("error") == "not_found", (
+                f"Subscription {sub_name} in {other_ns} should NOT be visible to API (expected not_found), got: {data}"
+            )
+            log.info(f"✓ Subscription {sub_name} in {other_ns} is correctly not visible to MaaS API")
+        finally:
+            _delete_cr("MaaSSubscription", sub_name, other_ns)
+            _delete_namespace(other_ns)
+            _wait_reconcile()
+
+
+class TestMaaSControllerWatchNamespace:
+    """Verifies MaaS controller only reconciles MaaSAuthPolicy and MaaSSubscription in the subscription namespace."""
+
+    def test_authpolicy_and_subscription_in_maas_subscription_namespace(self):
+        """MaaSAuthPolicy and MaaSSubscription in MaaS subscription namespace should be reconciled
+        and should appear in the AuthPolicy and TRLP annotations for the model."""
+        ns = _ns()
+        try:
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-watched-auth", "namespace": ns},
+                "spec": {
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-watched-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
+                },
+            })
+            _wait_reconcile(15)
+
+            auth_name = f"maas-auth-{MODEL_REF}"
+            auth_policies = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
+            assert "e2e-watched-auth" in auth_policies, (
+                f"AuthPolicy {auth_name} not found or MaaSAuthPolicy e2e-watched-auth not reconciled"
+            )
+
+            trlp_name = f"maas-trlp-{MODEL_REF}"
+            subscriptions = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
+            assert "e2e-watched-sub" in subscriptions, (
+                f"TRLP {trlp_name} not found or MaaSSubscription e2e-watched-sub not reconciled"
+            )
+        finally:
+            _delete_cr("MaaSAuthPolicy", "e2e-watched-auth", ns)
+            _delete_cr("MaaSSubscription", "e2e-watched-sub", ns)
+            _wait_reconcile()
+
+    def test_authpolicy_and_subscription_in_another_namespace(self):
+        """MaaSAuthPolicy and MaaSSubscription in another namespace should not be reconciled
+        and should not appear in the AuthPolicy and TRLP annotations for the model."""
+        ns = "e2e-unwatched-ns"
+        _create_namespace(ns)
+        try:
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-unwatched-auth", "namespace": ns},
+                "spec": {
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-unwatched-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
+                },
+            })
+            _wait_reconcile(15)
+
+            auth_name = f"maas-auth-{MODEL_REF}"
+            auth_policies = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
+            assert "e2e-unwatched-auth" not in auth_policies, (
+                "MaaSAuthPolicy e2e-unwatched-auth reconciled"
+            )
+
+            trlp_name = f"maas-trlp-{MODEL_REF}"
+            subscriptions = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
+            assert "e2e-unwatched-sub" not in subscriptions, (
+                "MaaSSubscription e2e-unwatched-sub reconciled"
+            )
+        finally:
+            _delete_cr("MaaSAuthPolicy", "e2e-unwatched-auth", ns)
+            _delete_cr("MaaSSubscription", "e2e-unwatched-sub", ns)
+            _wait_reconcile()
+            _delete_namespace(ns)
+
+
+class TestModelRef:
+    """Test model ref scoping: MaaSAuthPolicy and MaaSSubscription only reconcile into the referenced model's namespace."""
+
+    def test_auth_policy_model_ref(self):
+        """
+        Create a new namespace and two MaaSModelRefs: MODEL_REF in the new namespace, and another
+        name in MODEL_NAMESPACE. Create MaaSAuthPolicy referencing MODEL_REF in MODEL_NAMESPACE.
+        Verify it is reconciled into MODEL_REF's AuthPolicy in MODEL_NAMESPACE, and the other two
+        models' AuthPolicies do not exist.
+        """
+        other_ns = f"e2e-modelref-{uuid.uuid4().hex[:6]}"
+        other_model_ref = f"e2e-other-model-{uuid.uuid4().hex[:6]}"
+        policy_name = f"e2e-auth-ref-{uuid.uuid4().hex[:6]}"
+        ns = _ns()
+
+        _create_namespace(other_ns)
+        try:
+            # MaaSModelRef in the new namespace with same name as MODEL_REF
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSModelRef",
+                "metadata": {"name": MODEL_REF, "namespace": other_ns},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
+            })
+            # MaaSModelRef in MODEL_NAMESPACE with a different name (not referenced by policy)
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSModelRef",
+                "metadata": {"name": other_model_ref, "namespace": MODEL_NAMESPACE},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
+            })
+
+            # MaaSAuthPolicy referencing only MODEL_REF in MODEL_NAMESPACE
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": policy_name, "namespace": ns},
+                "spec": {
+                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+
+            _wait_reconcile(15)
+
+            auth_name = f"maas-auth-{MODEL_REF}"
+            auth_name_other = f"maas-auth-{other_model_ref}"
+
+            # Verify: policy is reconciled into MODEL_REF's AuthPolicy in MODEL_NAMESPACE
+            auth_policies_reconciled = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
+            assert policy_name in auth_policies_reconciled, (
+                f"MaaSAuthPolicy {policy_name} should be in AuthPolicy {auth_name} in {MODEL_NAMESPACE}, got: {auth_policies_reconciled}"
+            )
+
+            # Verify: MODEL_REF's AuthPolicy in the new namespace does not exist
+            auth_in_other_ns = _get_cr("AuthPolicy", auth_name, other_ns)
+            assert auth_in_other_ns is None, (
+                f"AuthPolicy {auth_name} should NOT exist in {other_ns}"
+            )
+
+            # Verify: other model's AuthPolicy in MODEL_NAMESPACE does not exist
+            auth_other_in_model_ns = _get_cr("AuthPolicy", auth_name_other, MODEL_NAMESPACE)
+            assert auth_other_in_model_ns is None, (
+                f"AuthPolicy {auth_name_other} should NOT exist in {MODEL_NAMESPACE} (policy references MODEL_REF only)"
+            )
+            log.info("✓ MaaSAuthPolicy reconciled into MODEL_REF in MODEL_NAMESPACE only; other AuthPolicies do not exist")
+        finally:
+            _delete_cr("MaaSAuthPolicy", policy_name, ns)
+            _delete_cr("MaaSModelRef", MODEL_REF, other_ns)
+            _delete_cr("MaaSModelRef", other_model_ref, MODEL_NAMESPACE)
+            _delete_namespace(other_ns)
+            _wait_reconcile()
+
+    def test_subscription_model_ref(self):
+        """
+        Create a new namespace and two MaaSModelRefs: MODEL_REF in the new namespace, and another
+        name in MODEL_NAMESPACE. Create MaaSSubscription referencing MODEL_REF in MODEL_NAMESPACE.
+        Verify it is reconciled into MODEL_REF's TRLP in MODEL_NAMESPACE, and the other two
+        models' TRLPs do not exist.
+        """
+        other_ns = f"e2e-modelref-{uuid.uuid4().hex[:6]}"
+        other_model_ref = f"e2e-other-model-{uuid.uuid4().hex[:6]}"
+        sub_name = f"e2e-sub-ref-{uuid.uuid4().hex[:6]}"
+        ns = _ns()
+
+        _create_namespace(other_ns)
+        try:
+            # MaaSModelRef in the new namespace with same name as MODEL_REF
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSModelRef",
+                "metadata": {"name": MODEL_REF, "namespace": other_ns},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
+            })
+            # MaaSModelRef in MODEL_NAMESPACE with a different name
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSModelRef",
+                "metadata": {"name": other_model_ref, "namespace": MODEL_NAMESPACE},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
+            })
+
+            # MaaSSubscription referencing only MODEL_REF in MODEL_NAMESPACE
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": sub_name, "namespace": ns},
                 "spec": {
                     "owner": {"groups": [{"name": "system:authenticated"}]},
                     "modelRefs": [
-                        {
-                            "name": MODEL_REF,
-                            "namespace": MODEL_NAMESPACE,
-                            "tokenRateLimits": [{"limit": 100, "window": "1m"}],
-                        }
+                        {"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 100, "window": "1m"}]},
                     ],
                 },
             })
 
-            # Create second subscription in MAAS subscription namespace
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSSubscription",
-                "metadata": {"name": sub2_name, "namespace": maas_subscription_ns},
-                "spec": {
-                    "owner": {"groups": [{"name": test_group}]},
-                    "modelRefs": [
-                        {
-                            "name": MODEL_REF,
-                            "namespace": MODEL_NAMESPACE,
-                            "tokenRateLimits": [{"limit": 200, "window": "1m"}],
-                        }
-                    ],
-                },
-            })
+            _wait_reconcile(15)
 
-            # Wait for reconciliation
-            time.sleep(RECONCILE_WAIT)
-
-            # Wait for AuthPolicy to be enforced (subscription needs auth to work)
-            auth_policy_name = f"maas-auth-{MODEL_REF}"
-            log.info(f"Waiting for AuthPolicy {auth_policy_name} to be enforced...")
-            enforced = _wait_for_authpolicy_enforced(auth_policy_name, MODEL_NAMESPACE, timeout=60)
-            assert enforced, f"AuthPolicy {auth_policy_name} not enforced within timeout"
-
-            # Wait for TokenRateLimitPolicy to be enforced before making requests
-            # This implicitly verifies TRLP exists and is aggregated correctly
             trlp_name = f"maas-trlp-{MODEL_REF}"
-            log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} to be enforced...")
-            trlp_enforced = _wait_for_trlp_enforced_with_retry(trlp_name, MODEL_NAMESPACE, timeout=60, retries=3)
-            assert trlp_enforced, f"TokenRateLimitPolicy {trlp_name} not enforced within timeout"
+            trlp_name_other = f"maas-trlp-{other_model_ref}"
 
-            # Test model listing endpoint
-            log.info(f"Testing /v1/models with subscription {sub1_name}")
-            r = _list_models(api_key, MODEL_REF, MODEL_NAMESPACE, subscription=sub1_name)
-            assert r.status_code == 200, f"Model listing failed: {r.status_code}"
-            models_data = r.json()
-            model_ids = [m.get("id") for m in models_data.get("data", [])]
-            assert MODEL_NAME in model_ids, f"Expected model {MODEL_NAME} not in list: {model_ids}"
+            # Verify: subscription is reconciled into MODEL_REF's TRLP in MODEL_NAMESPACE
+            subscriptions_in_model_ns = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
+            assert sub_name in subscriptions_in_model_ns, (
+                f"MaaSSubscription {sub_name} should be in TRLP {trlp_name} in {MODEL_NAMESPACE}, got: {subscriptions_in_model_ns}"
+            )
 
-            # Make inference request to verify it works
-            r = _poll_status(api_key, MODEL_REF, MODEL_NAMESPACE, 200, timeout=90, subscription=sub1_name)
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}"
+            # Verify: MODEL_REF's TRLP in the new namespace does not exist
+            trlp_in_other_ns = _get_cr("tokenratelimitpolicy", trlp_name, other_ns)
+            assert trlp_in_other_ns is None, (
+                f"TokenRateLimitPolicy {trlp_name} should NOT exist in {other_ns}"
+            )
 
-            # Capture TRLP metadata before deletion for verification
-            # Retry to ensure we have valid metadata (not transient/empty)
-            log.info(f"Capturing TRLP {trlp_name} metadata before deletion...")
-            metadata_before = {}
-            metadata_deadline = time.time() + 30
-            while time.time() < metadata_deadline:
-                metadata_before = _get_trlp_metadata(trlp_name, MODEL_NAMESPACE)
-                # Ensure essential fields are non-empty
-                if (metadata_before and
-                    metadata_before.get('uid') and
-                    metadata_before.get('resourceVersion') and
-                    metadata_before.get('generation', 0) > 0):
-                    break
-                log.info("Retrying metadata capture (transient or empty values)...")
-                time.sleep(2)
-
-            # Verify we have valid metadata before proceeding
-            assert metadata_before, "Failed to capture valid TRLP metadata before deletion"
-            assert metadata_before.get('uid'), "TRLP uid is empty"
-            assert metadata_before.get('resourceVersion'), "TRLP resourceVersion is empty"
-            assert metadata_before.get('generation', 0) > 0, "TRLP generation is 0"
-
-            log.info(f"TRLP before deletion - generation: {metadata_before.get('generation')}, "
-                    f"resourceVersion: {metadata_before.get('resourceVersion')}, "
-                    f"uid: {metadata_before.get('uid', '')[:8]}...")
-
-            # Delete the FIRST subscription (not the last one)
-            log.info(f"Deleting first subscription {sub1_name} (should NOT delete TRLP)")
-            _delete_cr("MaaSSubscription", sub1_name, maas_subscription_ns)
-            time.sleep(RECONCILE_WAIT)
-
-            # Verify TRLP still exists (it should be rebuilt)
-            # Use wait/retry to handle transient delete-recreate windows
-            log.info("Waiting for TokenRateLimitPolicy to exist after subscription deletion...")
-            trlp_after = None
-            wait_deadline = time.time() + 30
-            while time.time() < wait_deadline:
-                trlp_after = _get_cr("TokenRateLimitPolicy", trlp_name, MODEL_NAMESPACE)
-                if trlp_after is not None:
-                    break
-                time.sleep(2)
-            assert trlp_after is not None, \
-                "TokenRateLimitPolicy should still exist after deleting first subscription"
-
-            # Wait for TRLP to be re-enforced AND updated after controller modifies it
-            # (controller deletes and recreates TRLP when subscriptions change)
-            # Must check both enforcement and metadata change in the same loop to avoid race
-            log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} to be re-enforced and updated...")
-            deadline = time.time() + 90
-            metadata_after = {}
-            while time.time() < deadline:
-                # must be enforced
-                if not _wait_for_trlp_enforced(trlp_name, MODEL_NAMESPACE, timeout=15):
-                    continue
-                # must also be a new revision/object
-                metadata_after = _get_trlp_metadata(trlp_name, MODEL_NAMESPACE)
-                uid_changed = metadata_after.get("uid") != metadata_before.get("uid")
-                rv_changed = metadata_after.get("resourceVersion") != metadata_before.get("resourceVersion")
-                if uid_changed or rv_changed:
-                    break
-                time.sleep(3)
-
-            assert metadata_after, f"TokenRateLimitPolicy {trlp_name} did not stabilize after subscription deletion"
-            log.info(f"TRLP after deletion - generation: {metadata_after.get('generation')}, "
-                    f"resourceVersion: {metadata_after.get('resourceVersion')}, "
-                    f"uid: {metadata_after.get('uid', '')[:8]}...")
-
-            # Assert that TRLP was updated: either UID changed (delete+recreate) or resourceVersion changed (update)
-            uid_changed = metadata_after.get("uid") != metadata_before.get("uid")
-            rv_changed = metadata_after.get("resourceVersion") != metadata_before.get("resourceVersion")
-            gen_increased = metadata_after.get("generation", 0) > metadata_before.get("generation", 0)
-
-            assert uid_changed or rv_changed, \
-                f"TRLP metadata should have changed after subscription deletion. " \
-                f"Before: uid={metadata_before.get('uid', '')[:8]}..., rv={metadata_before.get('resourceVersion')}. " \
-                f"After: uid={metadata_after.get('uid', '')[:8]}..., rv={metadata_after.get('resourceVersion')}"
-
-            if uid_changed:
-                log.info("✓ TRLP was deleted and recreated (UID changed)")
-            elif gen_increased:
-                log.info(f"✓ TRLP was updated (generation {metadata_before.get('generation')} → {metadata_after.get('generation')})")
-            else:
-                log.info("✓ TRLP resourceVersion changed (updated in-place)")
-
-            # Inference should still work (use default simulator-subscription since sub1 was deleted)
-            log.info("Testing inference with default simulator-subscription after deleting sub1")
-            r = _poll_status(api_key, MODEL_REF, MODEL_NAMESPACE, 200, timeout=60, subscription="simulator-subscription")
-            assert r.status_code == 200, "Inference should still work after deleting first subscription"
-
-            # Delete the LAST test subscription
-            log.info(f"Deleting last test subscription {sub2_name}")
-            _delete_cr("MaaSSubscription", sub2_name, maas_subscription_ns)
-            time.sleep(RECONCILE_WAIT)
-
-            # Verify TRLP still exists if there are other MaaSSubscriptions for this model
-            # (like the pre-existing simulator-subscription)
-            trlp_final = _get_cr("TokenRateLimitPolicy", trlp_name, MODEL_NAMESPACE)
-            # Note: TRLP may still exist due to pre-existing subscriptions (e.g. simulator-subscription)
-            # The key test was that deleting the FIRST subscription didn't delete the TRLP
-            log.info(f"TokenRateLimitPolicy exists after deleting test subscriptions: {trlp_final is not None}")
-
-            log.info("✓ Multiple subscriptions deletion test passed (bug fix verified)")
-
+            # Verify: other model's TRLP in MODEL_NAMESPACE does not exist
+            trlp_other_in_model_ns = _get_cr("tokenratelimitpolicy", trlp_name_other, MODEL_NAMESPACE)
+            assert trlp_other_in_model_ns is None, (
+                f"TokenRateLimitPolicy {trlp_name_other} should NOT exist in {MODEL_NAMESPACE} (subscription references MODEL_REF only)"
+            )
+            log.info("✓ MaaSSubscription reconciled into MODEL_REF in MODEL_NAMESPACE only; other TRLPs do not exist")
         finally:
-            for resource, name, ns in [
-                ("MaaSSubscription", sub1_name, maas_subscription_ns),
-                ("MaaSSubscription", sub2_name, maas_subscription_ns),
-                ("MaaSAuthPolicy", maas_auth_policy_name, maas_subscription_ns),
-            ]:
-                try:
-                    _delete_cr(resource, name, ns)
-                except Exception as e:
-                    log.warning(f"Cleanup failed for {resource}/{name}: {e}")
-
-
-class TestAuthorizationBoundary:
-    """Test that namespace boundaries provide proper authorization isolation."""
-
-    def test_model_isolation_between_namespaces(self, policy_namespace):
-        """
-        Verify that policies in one namespace cannot accidentally affect models
-        in other namespaces unless explicitly configured.
-        """
-        # This is more of a design verification test
-        # The key security property: MaaSAuthPolicy in namespace A can only affect
-        # models that it explicitly lists with their namespaces in spec.modelRefs
-
-        # If a policy doesn't list a model, it shouldn't affect it
-        # This is enforced by the controller only creating AuthPolicies for
-        # models explicitly listed in spec.modelRefs[]
-
-        policy_name = f"isolated-policy-{uuid.uuid4().hex[:6]}"
-        unmanaged_model_name = f"unmanaged-model-{uuid.uuid4().hex[:6]}"
-
-        # Create a temporary test model that won't be referenced by the policy
-        _apply_cr({
-            "apiVersion": "maas.opendatahub.io/v1alpha1",
-            "kind": "MaaSModelRef",
-            "metadata": {"name": unmanaged_model_name, "namespace": MODEL_NAMESPACE},
-            "spec": {
-                "modelRef": {"kind": "ExternalModel", "name": "test-backend"}
-            }
-        })
-
-        # Create a policy that only targets MODEL_REF (not the temporary model)
-        _apply_cr({
-            "apiVersion": "maas.opendatahub.io/v1alpha1",
-            "kind": "MaaSAuthPolicy",
-            "metadata": {"name": policy_name, "namespace": policy_namespace},
-            "spec": {
-                "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                "subjects": {"groups": [{"name": "system:authenticated"}]},
-            },
-        })
-
-        try:
-            time.sleep(RECONCILE_WAIT)
-
-            # Verify that this policy ONLY created AuthPolicy for the specified model
-            auth_policy_name = f"maas-auth-{MODEL_REF}"
-            auth_policy = _get_cr("AuthPolicy", auth_policy_name, MODEL_NAMESPACE)
-            assert auth_policy is not None, "AuthPolicy should exist for specified model"
-
-            # Negative test: Verify NO Kuadrant resources created for unmanaged model
-            unmanaged_auth_policy = _get_cr("AuthPolicy", f"maas-auth-{unmanaged_model_name}", MODEL_NAMESPACE)
-            assert unmanaged_auth_policy is None, \
-                f"AuthPolicy should NOT exist for unmanaged model {unmanaged_model_name}"
-
-            log.info(f"✓ Verified no AuthPolicy created for unmanaged model {unmanaged_model_name}")
-            log.info("✓ Authorization boundary test passed - policies only affect listed models")
-
-        finally:
-            for resource, name, ns in [
-                ("MaaSAuthPolicy", policy_name, policy_namespace),
-                ("MaaSModelRef", unmanaged_model_name, MODEL_NAMESPACE),
-            ]:
-                try:
-                    _delete_cr(resource, name, ns)
-                except Exception as e:
-                    log.warning(f"Cleanup failed for {resource}/{name}: {e}")
+            _delete_cr("MaaSSubscription", sub_name, ns)
+            _delete_cr("MaaSModelRef", MODEL_REF, other_ns)
+            _delete_cr("MaaSModelRef", other_model_ref, MODEL_NAMESPACE)
+            _delete_namespace(other_ns)
+            _wait_reconcile()

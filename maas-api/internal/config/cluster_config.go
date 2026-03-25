@@ -6,7 +6,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
@@ -34,8 +33,9 @@ type ClusterConfig struct {
 	// MaaSSubscriptionLister lists MaaSSubscription CRs from the informer cache for subscription selection.
 	MaaSSubscriptionLister subscription.Lister
 
-	// AdminChecker checks if a user is an admin based on Auth CR (services.opendatahub.io/v1alpha1).
-	AdminChecker *auth.AdminChecker
+	// AdminChecker uses SubjectAccessReview to check if a user is an admin.
+	// Admin is determined by RBAC: can user create maasauthpolicies in the configured MaaS namespace?
+	AdminChecker *auth.SARAdminChecker
 
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})
@@ -84,7 +84,7 @@ func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	return out, nil
 }
 
-func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterConfig, error) {
+func NewClusterConfig(namespace, subscriptionNamespace string, resyncPeriod time.Duration) (*ClusterConfig, error) {
 	restConfig, err := LoadRestConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
@@ -113,20 +113,16 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 	maasInformer := maasDynamicFactory.ForResource(maasGVR)
 	maasModelRefListerVal := &maasModelRefLister{lister: maasInformer.Lister()}
 
-	// MaaSSubscription informer (cached); watches all namespaces for subscription selection.
+	// MaaSSubscription informer (cached); watches only the configured namespace for subscription selection.
+	subscriptionDynamicFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, resyncPeriod, subscriptionNamespace, nil)
 	subscriptionGVR := subscription.GVR()
-	subscriptionInformer := maasDynamicFactory.ForResource(subscriptionGVR)
+	subscriptionInformer := subscriptionDynamicFactory.ForResource(subscriptionGVR)
 	maasSubscriptionListerVal := &subscriptionLister{lister: subscriptionInformer.Lister()}
 
-	// Auth CR informer (cluster-scoped); used to determine admin groups from services.platform.opendatahub.io/v1alpha1/Auth.
-	// The Auth CR is a singleton named "auth" that defines adminGroups and allowedGroups.
-	authGVR := schema.GroupVersionResource{
-		Group:    "services.platform.opendatahub.io",
-		Version:  "v1alpha1",
-		Resource: "auths",
-	}
-	authInformer := maasDynamicFactory.ForResource(authGVR)
-	adminCheckerVal := auth.NewAdminChecker(authInformer.Lister())
+	// SAR-based admin checker: uses SubjectAccessReview to check RBAC permissions.
+	// Admin is determined by: can user create maasauthpolicies in the MaaS namespace?
+	// This aligns with RBAC from opendatahub-operator#3301 which grants admin groups CRUD access to MaaS resources.
+	adminCheckerVal := auth.NewSARAdminChecker(clientset, subscriptionNamespace)
 
 	return &ClusterConfig{
 		ClientSet: clientset,
@@ -145,12 +141,12 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 			saInformer.Informer().HasSynced,
 			maasInformer.Informer().HasSynced,
 			subscriptionInformer.Informer().HasSynced,
-			authInformer.Informer().HasSynced,
 		},
 		startFuncs: []func(<-chan struct{}){
 			coreFactory.Start,
 			coreFactoryNs.Start,
 			maasDynamicFactory.Start,
+			subscriptionDynamicFactory.Start,
 		},
 	}, nil
 }

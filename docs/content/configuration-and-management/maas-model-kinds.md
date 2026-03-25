@@ -12,13 +12,12 @@ MaaSModelRef's `spec.modelRef` identifies the **referent** (the backend that ser
 | ----------- | ----------- |
 | **kind**    | The type of backend. Determines which controller reconciles this MaaSModelRef and how the endpoint is resolved. Valid values: `LLMInferenceService`, `ExternalModel`. The alias `llmisvc` is also accepted for backwards compatibility. |
 | **name**    | Name of the referent resource (e.g. LLMInferenceService name, or external model identifier). |
-| **namespace** | *(Optional)* Namespace of the referent. If empty, the MaaSModelRef's namespace is used. |
 
-The controller that reconciles MaaSModelRef uses **kind** to decide how to resolve the backend and populate `status.endpoint` and `status.phase`. Cross-namespace references are supported by specifying `modelRef.namespace`.
+The controller that reconciles MaaSModelRef uses **kind** to decide how to resolve the backend and populate `status.endpoint` and `status.phase`. The referent must be in the same namespace as the MaaSModelRef.
 
 ## Endpoint override
 
-MaaSModel supports an optional `spec.endpointOverride` field. When set, the controller uses this value for `status.endpoint` instead of the auto-discovered endpoint from the backend (LLMInferenceService status, Gateway, or HTTPRoute hostnames).
+MaaSModelRef supports an optional `spec.endpointOverride` field. When set, the controller uses this value for `status.endpoint` instead of the auto-discovered endpoint from the backend (LLMInferenceService status, Gateway, or HTTPRoute hostnames).
 
 This is useful when:
 - The controller picks the wrong gateway or hostname for the model endpoint.
@@ -29,7 +28,7 @@ Example:
 
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSModel
+kind: MaaSModelRef
 metadata:
   name: my-model
   namespace: opendatahub
@@ -37,7 +36,6 @@ spec:
   modelRef:
     kind: LLMInferenceService
     name: my-model
-    namespace: llm
   endpointOverride: "https://correct-hostname.example.com/my-model"
 ```
 

@@ -203,8 +203,10 @@ run_auth_debug_report() {
 
   _section "maas-controller"
   _run "maas-controller pods" "kubectl get pods -n $DEPLOYMENT_NAMESPACE -l app=maas-controller -o wide 2>/dev/null || true"
-  _run "maas-controller MAAS_API_NAMESPACE" \
-    "kubectl get deployment maas-controller -n $DEPLOYMENT_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name==\"MAAS_API_NAMESPACE\") | \"\(.name)=\(.value // .valueFrom.fieldRef.fieldPath // \"N/A\")\"' 2>/dev/null || echo 'N/A'"
+
+  local env_display
+  env_display=$(kubectl get deployment maas-controller -n $DEPLOYMENT_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name=="MAAS_API_NAMESPACE") | if .value then "\(.name)=\(.value)" elif .valueFrom.fieldRef.fieldPath then "\(.name)=\(.valueFrom.fieldRef.fieldPath) (resolves to: '"$DEPLOYMENT_NAMESPACE"')" else "\(.name)=N/A" end' 2>/dev/null || echo 'MAAS_API_NAMESPACE=N/A')
+  _run "maas-controller MAAS_API_NAMESPACE" "echo '$env_display'"
   _append ""
 
   _section "Kuadrant AuthPolicies"
@@ -214,7 +216,78 @@ run_auth_debug_report() {
   _section "MaaS CRs"
   _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
   _run "MaaSSubscriptions" "kubectl get maassubscriptions -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
-  _run "MaaSModelRefs" "kubectl get maasmodelrefs -n $DEPLOYMENT_NAMESPACE -o wide 2>/dev/null || true"
+  _run "MaaSModelRefs (all namespaces)" "kubectl get maasmodelrefs -A -o wide 2>/dev/null || true"
+  _append ""
+
+  _section "Test User Information"
+  local test_token
+  test_token=$(oc whoami -t 2>/dev/null || echo "")
+  if [[ -n "$test_token" ]]; then
+    _append "Test user token available: yes"
+
+    # Try to get user info from token review
+    local user_info
+    user_info=$(kubectl create --dry-run=server --raw /apis/authentication.k8s.io/v1/tokenreviews -f - <<EOF 2>/dev/null | jq -r '.status.user // empty'
+{
+  "apiVersion": "authentication.k8s.io/v1",
+  "kind": "TokenReview",
+  "spec": {
+    "token": "$test_token"
+  }
+}
+EOF
+)
+    if [[ -n "$user_info" ]]; then
+      local username groups
+      username=$(echo "$user_info" | jq -r '.username // "N/A"')
+      groups=$(echo "$user_info" | jq -r '.groups // [] | join(", ")')
+      _append "  Username: $username"
+      _append "  Groups: $groups"
+    else
+      _append "  Could not retrieve user info from token"
+    fi
+  else
+    _append "No test token available (not logged in via oc)"
+  fi
+  _append ""
+
+  _section "Subscription → Model Mapping"
+  local subscriptions_json sub_mapping
+  subscriptions_json=$(kubectl get maassubscriptions -n $MAAS_SUBSCRIPTION_NAMESPACE -o json 2>/dev/null | jq -r '.items // []' 2>/dev/null)
+  if [[ -n "$subscriptions_json" ]] && [[ "$subscriptions_json" != "[]" ]]; then
+    sub_mapping=$(echo "$subscriptions_json" | jq -r '.[] |
+      "Subscription: " + .metadata.name +
+      "\n  Owner users: " + ((.spec.owner.users // []) | join(", ") | if . == "" then "(none)" else . end) +
+      "\n  Owner groups: " + ((.spec.owner.groups // [] | map(.name)) | join(", ") | if . == "" then "(none)" else . end) +
+      "\n  Models: " + ((.spec.modelRefs // [] | map(.namespace + "/" + .name)) | join(", ") | if . == "" then "(none)" else . end)' 2>/dev/null)
+    if [[ -n "$sub_mapping" ]]; then
+      _append "$sub_mapping"
+    else
+      _append "Failed to parse subscription data"
+    fi
+  else
+    _append "No subscriptions found in $MAAS_SUBSCRIPTION_NAMESPACE"
+  fi
+  _append ""
+
+  _section "Available Models (MaaSModelRefs)"
+  local models_json model_listing
+  models_json=$(kubectl get maasmodelrefs -A -o json 2>/dev/null | jq -r '.items // []' 2>/dev/null)
+  if [[ -n "$models_json" ]] && [[ "$models_json" != "[]" ]]; then
+    _append "Model Reference → Model ID / Endpoint"
+    model_listing=$(echo "$models_json" | jq -r '.[] |
+      "  " + .metadata.namespace + "/" + .metadata.name +
+      " → " + (.spec.modelRef.name // "N/A") +
+      " (" + (.status.phase // "unknown") + ")" +
+      if .status.endpoint then "\n    Endpoint: " + .status.endpoint else "" end' 2>/dev/null)
+    if [[ -n "$model_listing" ]]; then
+      _append "$model_listing"
+    else
+      _append "Failed to parse model data"
+    fi
+  else
+    _append "No MaaSModelRefs found"
+  fi
   _append ""
 
   _section "Gateway / HTTPRoutes"
@@ -226,14 +299,66 @@ run_auth_debug_report() {
   _run "Authorino pods" "kubectl get pods -n $AUTHORINO_NAMESPACE -l 'app.kubernetes.io/name=authorino' --no-headers 2>/dev/null; kubectl get pods -n openshift-ingress -l 'app.kubernetes.io/name=authorino' --no-headers 2>/dev/null; echo '---'; kubectl get pods -A -l 'app.kubernetes.io/name=authorino' -o wide 2>/dev/null || true"
   _append ""
 
-  # Determine maas-api namespace
+  # Determine maas-api namespace from controller deployment
   local maas_api_ns
-  maas_api_ns=$(kubectl get deployment maas-controller -n $DEPLOYMENT_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name=="MAAS_API_NAMESPACE") | .value' 2>/dev/null || echo "$DEPLOYMENT_NAMESPACE")
+  local env_json
+  env_json=$(kubectl get deployment maas-controller -n $DEPLOYMENT_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null || echo "[]")
+
+  # Try to get direct .value first
+  maas_api_ns=$(echo "$env_json" | jq -r '.[] | select(.name=="MAAS_API_NAMESPACE") | .value // empty' 2>/dev/null)
+
+  # If empty, check if using fieldRef (downward API)
+  if [[ -z "$maas_api_ns" ]]; then
+    local field_path
+    field_path=$(echo "$env_json" | jq -r '.[] | select(.name=="MAAS_API_NAMESPACE") | .valueFrom.fieldRef.fieldPath // empty' 2>/dev/null)
+    if [[ "$field_path" == "metadata.namespace" ]]; then
+      # Using downward API - the value is the controller's namespace
+      maas_api_ns="$DEPLOYMENT_NAMESPACE"
+    fi
+  fi
+
+  # Fallback to deployment namespace if still empty
   [[ -z "$maas_api_ns" ]] && maas_api_ns="$DEPLOYMENT_NAMESPACE"
 
   local sub_select_url="https://maas-api.${maas_api_ns}.svc.cluster.local:8443/internal/v1/subscriptions/select"
   _section "Subscription Selector Endpoint Validation"
   _append "Expected URL (from maas-controller config): $sub_select_url"
+  _append "  (MAAS_API_NAMESPACE resolved to: $maas_api_ns)"
+  _append ""
+
+  # Verify actual AuthPolicy configuration
+  _append "--- Sample AuthPolicy subscription-info configuration ---"
+  local sample_policy_json
+  sample_policy_json=$(kubectl get authpolicies -A -l 'app.kubernetes.io/managed-by=maas-controller' -o json 2>/dev/null | jq -r '.items[0] // empty' 2>/dev/null)
+
+  if [[ -n "$sample_policy_json" ]]; then
+    local policy_name policy_ns
+    policy_name=$(echo "$sample_policy_json" | jq -r '.metadata.name // "unknown"')
+    policy_ns=$(echo "$sample_policy_json" | jq -r '.metadata.namespace // "unknown"')
+    _append "  Inspecting: $policy_ns/$policy_name"
+
+    local actual_url
+    actual_url=$(echo "$sample_policy_json" | jq -r '.spec.rules.metadata."subscription-info".http.url // "N/A"' 2>/dev/null)
+    _append "  Actual URL in AuthPolicy: $actual_url"
+
+    local request_body
+    request_body=$(echo "$sample_policy_json" | jq -r '.spec.rules.metadata."subscription-info".http.body.expression // "N/A"' 2>/dev/null)
+    if echo "$request_body" | grep -q "requestedModel"; then
+      _append "  ✅ Request body includes requestedModel field"
+      # Extract the model reference from the body
+      local model_ref
+      model_ref=$(echo "$request_body" | grep -o '"requestedModel"[^"]*"[^"]*"' | sed 's/.*"\([^"]*\)".*/\1/' || echo "")
+      if [[ -n "$model_ref" ]]; then
+        _append "  Model reference: $model_ref"
+      fi
+    else
+      _append "  ❌ Request body MISSING requestedModel field (should include model namespace/name)"
+    fi
+    _append "  Request body preview:"
+    _append "$(echo "$request_body" | head -5 | sed 's/^/    /')"
+  else
+    _append "  No managed AuthPolicies found"
+  fi
   _append ""
 
   local curl_ns="$AUTHORINO_NAMESPACE"
@@ -259,6 +384,24 @@ run_auth_debug_report() {
   dns_out=$(kubectl run "debug-dns-$(date +%s)" --rm --restart=Never --image=busybox:1.36 -n "$curl_ns" -- \
     nslookup "maas-api.${maas_api_ns}.svc.cluster.local" 2>&1) || dns_out="nslookup failed"
   _append "$dns_out"
+  _append ""
+
+  _section "Configuration Summary"
+  _append "This summary helps compare local vs CI runs:"
+  _append ""
+  local total_models total_subs total_authpolicies total_kuadrant_authpolicies
+  total_models=$(echo "$models_json" | jq '. | length' 2>/dev/null || echo "0")
+  total_subs=$(echo "$subscriptions_json" | jq '. | length' 2>/dev/null || echo "0")
+  total_authpolicies=$(kubectl get maasauthpolicies -n $MAAS_SUBSCRIPTION_NAMESPACE -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+  total_kuadrant_authpolicies=$(kubectl get authpolicies -A -l 'app.kubernetes.io/managed-by=maas-controller' -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+
+  _append "  MaaSModelRefs (all namespaces): $total_models"
+  _append "  MaaSSubscriptions ($MAAS_SUBSCRIPTION_NAMESPACE): $total_subs"
+  _append "  MaaSAuthPolicies ($MAAS_SUBSCRIPTION_NAMESPACE): $total_authpolicies"
+  _append "  Generated Kuadrant AuthPolicies: $total_kuadrant_authpolicies"
+  _append ""
+  _append "  Subscription selector URL: $sub_select_url"
+  _append "  Test user: $(oc whoami 2>/dev/null || echo 'N/A')"
   _append ""
 
   echo "$OUTPUT"
