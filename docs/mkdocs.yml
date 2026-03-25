@@ -89,6 +89,7 @@ nav:
     - MaaS API (Swagger): reference/api-reference.md
     - MaaS CRDs:
       - MaaSModelRef: reference/crds/maas-model-ref.md
+      - ExternalModel: reference/crds/external-model.md
       - MaaSAuthPolicy: reference/crds/maas-auth-policy.md
       - MaaSSubscription: reference/crds/maas-subscription.md
 

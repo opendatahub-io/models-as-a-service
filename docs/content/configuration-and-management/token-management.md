@@ -107,7 +107,7 @@ sequenceDiagram
     DB-->>MaaS: username, groups, subscription, status
     MaaS->>MaaS: Check status (active/revoked/expired)
     MaaS-->>AuthPolicy: 4. valid: true, userId, groups, subscription
-    AuthPolicy->>AuthPolicy: Subscription check, inject headers, rate limits
+    AuthPolicy->>AuthPolicy: Subscription check, inject headers (incl. X-MaaS-Subscription), rate limits
     AuthPolicy->>Model: 5. Authorized request (identity headers)
     Model-->>Gateway: Response
     Gateway-->>User: Response

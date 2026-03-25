@@ -48,7 +48,7 @@ echo "Key prefix: ${API_KEY:0:16}..."
 echo "Bound subscription: ${SUBSCRIPTION}"
 ```
 
-Replace `simulator-subscription` with your real MaaSSubscription name, or remove the `subscription` field to bind the **highest-priority** subscription you can access.
+Replace `simulator-subscription` with your MaaSSubscription metadata name, or remove the `subscription` field to bind the **highest-priority** subscription you can access.
 
 !!! warning "API key shown only once"
     The plaintext API key is returned **only at creation time**. We do not store the API key, so there is no way to retrieve it again. Store it securely when it is displayed. If you run into errors, see [Troubleshooting](../install/troubleshooting.md).
