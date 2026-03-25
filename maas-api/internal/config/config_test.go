@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const testGatewayName = "my-gateway"
+
 // resetGlobalFlags replaces flag.CommandLine with a fresh FlagSet so that
 // Load() can register its flags again without panicking.
 func resetGlobalFlags() {
@@ -22,26 +24,28 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 	}{
 		{
 			name:    "GATEWAY_NAME overrides GatewayName and Name defaults to it",
-			envVars: map[string]string{"GATEWAY_NAME": "my-gateway"},
+			envVars: map[string]string{"GATEWAY_NAME": testGatewayName},
 			check: func(t *testing.T, cfg *Config) {
-				if cfg.GatewayName != "my-gateway" {
-					t.Errorf("expected GatewayName 'my-gateway', got %q", cfg.GatewayName)
+				t.Helper()
+				if cfg.GatewayName != testGatewayName {
+					t.Errorf("expected GatewayName %q, got %q", testGatewayName, cfg.GatewayName)
 				}
 				// Name defaults to GatewayName when INSTANCE_NAME is not set
-				if cfg.Name != "my-gateway" {
-					t.Errorf("expected Name to default to GatewayName 'my-gateway', got %q", cfg.Name)
+				if cfg.Name != testGatewayName {
+					t.Errorf("expected Name to default to GatewayName %q, got %q", testGatewayName, cfg.Name)
 				}
 			},
 		},
 		{
 			name:    "INSTANCE_NAME and GATEWAY_NAME set independently",
-			envVars: map[string]string{"INSTANCE_NAME": "my-instance", "GATEWAY_NAME": "my-gateway"},
+			envVars: map[string]string{"INSTANCE_NAME": "my-instance", "GATEWAY_NAME": testGatewayName},
 			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
 				if cfg.Name != "my-instance" {
 					t.Errorf("expected Name 'my-instance', got %q", cfg.Name)
 				}
-				if cfg.GatewayName != "my-gateway" {
-					t.Errorf("expected GatewayName 'my-gateway', got %q", cfg.GatewayName)
+				if cfg.GatewayName != testGatewayName {
+					t.Errorf("expected GatewayName %q, got %q", testGatewayName, cfg.GatewayName)
 				}
 			},
 		},
