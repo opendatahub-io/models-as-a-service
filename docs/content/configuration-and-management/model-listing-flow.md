@@ -64,7 +64,6 @@ The `/v1/models` endpoint automatically filters models based on your authenticat
 #### API Key Authentication (Bearer sk-oai-*)
 When using an API key, the subscription is automatically determined from the key:
 - Returns **only** models from the subscription bound to the API key at mint time
-- The gateway may inject `X-MaaS-Subscription` **server-side** after validating the key; **do not** send it yourself for listing with an API key
 
 ```bash
 # API key bound to "premium-subscription"
