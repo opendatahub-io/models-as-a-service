@@ -1,6 +1,7 @@
 package subscription_test
 
 import (
+	"errors"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -8,6 +9,8 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
+
+const defaultTestTokenRateLimit int64 = 1000
 
 // fakeLister implements subscription.Lister for testing.
 type fakeLister struct {
@@ -22,7 +25,7 @@ func (f *fakeLister) List() ([]*unstructured.Unstructured, error) {
 	return f.subscriptions, nil
 }
 
-func createSubscription(name string, groups []string, users []string, priority int32, displayName, description string) *unstructured.Unstructured {
+func createSubscription(name string, groups []string, users []string, priority int32, tokenLimit int64, displayName, description string) *unstructured.Unstructured {
 	groupsSlice := make([]any, len(groups))
 	for i, g := range groups {
 		groupsSlice[i] = map[string]any{"name": g}
@@ -44,7 +47,7 @@ func createSubscription(name string, groups []string, users []string, priority i
 				"name": "test-model",
 				"tokenRateLimits": []any{
 					map[string]any{
-						"limit":  int64(1000),
+						"limit":  tokenLimit,
 						"window": "1m",
 					},
 				},
@@ -96,7 +99,7 @@ func TestGetAllAccessible(t *testing.T) {
 		{
 			name: "user has access to single subscription",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, "Basic Tier", "Basic subscription for all users"),
+				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, "Basic Tier", "Basic subscription for all users"),
 			},
 			groups:        []string{"basic-users"},
 			username:      "alice",
@@ -112,8 +115,8 @@ func TestGetAllAccessible(t *testing.T) {
 		{
 			name: "user has access to multiple subscriptions",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, "Basic Tier", "Basic subscription"),
-				createSubscription("premium-sub", []string{"premium-users"}, nil, 20, "Premium Tier", "Premium subscription"),
+				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, "Basic Tier", "Basic subscription"),
+				createSubscription("premium-sub", []string{"premium-users"}, nil, 20, defaultTestTokenRateLimit, "Premium Tier", "Premium subscription"),
 			},
 			groups:        []string{"basic-users", "premium-users"},
 			username:      "alice",
@@ -131,7 +134,7 @@ func TestGetAllAccessible(t *testing.T) {
 		{
 			name: "user has no subscriptions",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, "", ""),
+				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, "", ""),
 			},
 			groups:        []string{"other-users"},
 			username:      "alice",
@@ -149,7 +152,7 @@ func TestGetAllAccessible(t *testing.T) {
 		{
 			name: "user matched by username",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscription("alice-sub", []string{}, []string{"alice"}, 10, "Alice's Subscription", "Personal subscription for Alice"),
+				createSubscription("alice-sub", []string{}, []string{"alice"}, 10, defaultTestTokenRateLimit, "Alice's Subscription", "Personal subscription for Alice"),
 			},
 			groups:        []string{},
 			username:      "alice",
@@ -165,7 +168,7 @@ func TestGetAllAccessible(t *testing.T) {
 		{
 			name: "subscriptions without displayName and description",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, "", ""),
+				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, "", ""),
 			},
 			groups:        []string{"basic-users"},
 			username:      "alice",
@@ -181,9 +184,9 @@ func TestGetAllAccessible(t *testing.T) {
 		{
 			name: "filter out subscriptions user doesn't have access to",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, "", ""),
-				createSubscription("premium-sub", []string{"premium-users"}, nil, 20, "", ""),
-				createSubscription("admin-sub", []string{"admin-users"}, nil, 30, "", ""),
+				createSubscription("basic-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+				createSubscription("premium-sub", []string{"premium-users"}, nil, 20, defaultTestTokenRateLimit, "", ""),
+				createSubscription("admin-sub", []string{"admin-users"}, nil, 30, defaultTestTokenRateLimit, "", ""),
 			},
 			groups:        []string{"basic-users"},
 			username:      "alice",
@@ -263,6 +266,70 @@ func TestGetAllAccessible_ErrorHandling(t *testing.T) {
 		}
 		if err.Error() != "either groups or username must be provided" {
 			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+}
+
+func TestSelectHighestPriority(t *testing.T) {
+	log := logger.New(false)
+
+	t.Run("picks highest priority", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("low-sub", []string{"g1"}, nil, 10, defaultTestTokenRateLimit, "L", "d1"),
+			createSubscription("high-sub", []string{"g1"}, nil, 50, defaultTestTokenRateLimit, "H", "d2"),
+		}}
+		sel := subscription.NewSelector(log, lister)
+		got, err := sel.SelectHighestPriority([]string{"g1"}, "")
+		if err != nil {
+			t.Fatalf("SelectHighestPriority: %v", err)
+		}
+		if got.Name != "high-sub" {
+			t.Errorf("expected high-sub, got %q", got.Name)
+		}
+	})
+
+	t.Run("tie on priority uses maxLimit then name", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("sub-a", []string{"g1"}, nil, 10, 10, "", ""),
+			createSubscription("sub-b", []string{"g1"}, nil, 10, 20, "", ""),
+		}}
+		sel := subscription.NewSelector(log, lister)
+		got, err := sel.SelectHighestPriority([]string{"g1"}, "")
+		if err != nil {
+			t.Fatalf("SelectHighestPriority: %v", err)
+		}
+		if got.Name != "sub-b" {
+			t.Errorf("expected sub-b (higher maxLimit), got %q", got.Name)
+		}
+	})
+
+	t.Run("tie on priority and maxLimit uses name asc", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("zebra", []string{"g1"}, nil, 5, defaultTestTokenRateLimit, "", ""),
+			createSubscription("alpha", []string{"g1"}, nil, 5, defaultTestTokenRateLimit, "", ""),
+		}}
+		sel := subscription.NewSelector(log, lister)
+		got, err := sel.SelectHighestPriority([]string{"g1"}, "")
+		if err != nil {
+			t.Fatalf("SelectHighestPriority: %v", err)
+		}
+		if got.Name != "alpha" {
+			t.Errorf("expected alpha (lexicographic tie-break), got %q", got.Name)
+		}
+	})
+
+	t.Run("no accessible subscription", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("other", []string{"other-group"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		}}
+		sel := subscription.NewSelector(log, lister)
+		_, err := sel.SelectHighestPriority([]string{"g1"}, "")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		var noSub *subscription.NoSubscriptionError
+		if !errors.As(err, &noSub) {
+			t.Fatalf("expected NoSubscriptionError, got %T %v", err, err)
 		}
 	})
 }

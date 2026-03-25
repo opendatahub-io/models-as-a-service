@@ -366,14 +366,14 @@ class TestModelRef:
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSModelRef",
                 "metadata": {"name": MODEL_REF, "namespace": other_ns},
-                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend", "provider": "test"}},
             })
             # MaaSModelRef in MODEL_NAMESPACE with a different name (not referenced by policy)
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSModelRef",
                 "metadata": {"name": other_model_ref, "namespace": MODEL_NAMESPACE},
-                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend", "provider": "test"}},
             })
 
             # MaaSAuthPolicy referencing only MODEL_REF in MODEL_NAMESPACE
@@ -436,14 +436,14 @@ class TestModelRef:
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSModelRef",
                 "metadata": {"name": MODEL_REF, "namespace": other_ns},
-                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend", "provider": "test"}},
             })
             # MaaSModelRef in MODEL_NAMESPACE with a different name
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSModelRef",
                 "metadata": {"name": other_model_ref, "namespace": MODEL_NAMESPACE},
-                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend", "provider": "test"}},
             })
 
             # MaaSSubscription referencing only MODEL_REF in MODEL_NAMESPACE

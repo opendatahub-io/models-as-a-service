@@ -24,6 +24,7 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -198,6 +199,74 @@ func TestMaaSSubscriptionReconciler_DuplicateReconciliation(t *testing.T) {
 			"reconciling sub-b should not update the TokenRateLimitPolicy when content is identical to sub-a's reconciliation",
 			rvAfterA, rvAfterB)
 	}
+}
+
+// TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition checks scanForDuplicatePriority in one pass:
+// sub-a and sub-b share spec.priority; sub-c has a unique priority.
+func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition(t *testing.T) {
+	const (
+		modelName     = "llm"
+		namespace     = "default"
+		httpRouteName = "maas-model-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	subA := newMaaSSubscription("sub-a", namespace, "team-a", modelName, 100)
+	subA.Spec.Priority = 5
+	subB := newMaaSSubscription("sub-b", namespace, "team-b", modelName, 200)
+	subB.Spec.Priority = 5
+	subC := newMaaSSubscription("sub-c", namespace, "team-c", modelName, 300)
+	subC.Spec.Priority = 10
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, subA, subB, subC).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}); err != nil {
+		t.Fatalf("Reconcile sub-a: %v", err)
+	}
+	r.scanForDuplicatePriority(ctx)
+
+	assertSpecPriorityDuplicate := func(t *testing.T, subName string, wantTrue bool, mustContainPeer string) {
+		t.Helper()
+		var got maasv1alpha1.MaaSSubscription
+		if err := c.Get(ctx, types.NamespacedName{Name: subName, Namespace: namespace}, &got); err != nil {
+			t.Fatalf("Get %s: %v", subName, err)
+		}
+		cond := apimeta.FindStatusCondition(got.Status.Conditions, ConditionSpecPriorityDuplicate)
+		if cond == nil {
+			t.Fatalf("expected SpecPriorityDuplicate condition on %s", subName)
+		}
+		if wantTrue {
+			if cond.Status != metav1.ConditionTrue {
+				t.Fatalf("%s: SpecPriorityDuplicate.Status = %s, want True", subName, cond.Status)
+			}
+			if mustContainPeer != "" && !strings.Contains(cond.Message, mustContainPeer) {
+				t.Fatalf("%s: message should mention peer %q, got %q", subName, mustContainPeer, cond.Message)
+			}
+		} else {
+			if cond.Status != metav1.ConditionFalse {
+				t.Fatalf("%s: SpecPriorityDuplicate.Status = %s, want False", subName, cond.Status)
+			}
+		}
+	}
+
+	t.Run("sub-a shares priority with sub-b", func(t *testing.T) {
+		assertSpecPriorityDuplicate(t, "sub-a", true, namespace+"/sub-b")
+	})
+	t.Run("sub-b shares priority with sub-a", func(t *testing.T) {
+		assertSpecPriorityDuplicate(t, "sub-b", true, namespace+"/sub-a")
+	})
+	t.Run("sub-c has unique priority", func(t *testing.T) {
+		assertSpecPriorityDuplicate(t, "sub-c", false, "")
+	})
 }
 
 // TestMaaSSubscriptionReconciler_DeleteAnnotation verifies that the Reconcile deletion

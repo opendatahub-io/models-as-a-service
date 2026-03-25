@@ -402,9 +402,9 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	testLogger := logger.Development()
 
 	// Create mock servers that require specific subscription headers
-	// Use qualified names (namespace/name) to match the format sent by the handler
-	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "test-namespace/premium")
-	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "test-namespace/free")
+	// Use bare subscription names to match what Authorino injects from API key validation
+	premiumModelServer := createMockModelServerWithSubscriptionCheck(t, "premium-model", "premium")
+	freeModelServer := createMockModelServerWithSubscriptionCheck(t, "free-model", "free")
 
 	// Build MaaSModelRef unstructured list
 	maasModelRefItems := []*unstructured.Unstructured{
@@ -437,7 +437,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	v1 := router.Group("/v1")
 	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 
-	// Table-driven tests for subscription header variants
+	// Table-driven tests for API key auth (X-MaaS-Subscription header injected by Authorino)
 	subscriptionTests := []struct {
 		name               string
 		subscription       string
@@ -446,14 +446,14 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		expectedModelCount int
 	}{
 		{
-			name:               "with premium subscription header",
+			name:               "API key - premium subscription",
 			subscription:       "premium",
 			userGroups:         `["premium-users"]`,
 			expectedModelID:    "premium-model",
 			expectedModelCount: 1,
 		},
 		{
-			name:               "with free subscription header",
+			name:               "API key - free subscription",
 			subscription:       "free",
 			userGroups:         `["free-users"]`,
 			expectedModelID:    "free-model",
@@ -468,6 +468,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 			require.NoError(t, err, "Failed to create request")
 
 			req.Header.Set("Authorization", "Bearer valid-token")
+			// Simulate Authorino injecting X-MaaS-Subscription from API key validation
 			req.Header.Set("X-Maas-Subscription", tt.subscription)
 			req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 			req.Header.Set(constant.HeaderGroup, tt.userGroups)
@@ -484,7 +485,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		})
 	}
 
-	t.Run("without subscription header - single subscription auto-selects", func(t *testing.T) {
+	t.Run("user token - single subscription returns all models", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
 		require.NoError(t, err, "Failed to create request")
@@ -500,12 +501,13 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err, "Failed to unmarshal response body")
 
-		// User only has access to "free" subscription, so it auto-selects and returns free model
-		require.Len(t, response.Data, 1, "Expected one model with auto-selected free subscription")
+		// User token (no X-MaaS-Subscription header) returns all accessible models
+		// User only has access to "free" subscription, so returns that one model
+		require.Len(t, response.Data, 1, "Expected one model from accessible subscription")
 		assert.Equal(t, "free-model", response.Data[0].ID)
 	})
 
-	t.Run("without subscription header - multiple subscriptions requires header", func(t *testing.T) {
+	t.Run("without subscription header - user token returns all models", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
 		require.NoError(t, err, "Failed to create request")
@@ -515,32 +517,37 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		req.Header.Set(constant.HeaderGroup, `["free-users", "premium-users"]`)
 		router.ServeHTTP(w, req)
 
-		// User has access to both subscriptions, must specify which one
-		// Returns 403 for consistency with inferencing (Authorino limitation)
-		require.Equal(t, http.StatusForbidden, w.Code, "Expected 403 Forbidden")
+		// User token (no X-MaaS-Subscription header) returns all accessible models
+		require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
 
-		var errorResponse map[string]any
-		err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
-		require.NoError(t, err, "Failed to unmarshal error response")
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err, "Failed to unmarshal response body")
 
-		errorObj, ok := errorResponse["error"].(map[string]any)
-		require.True(t, ok, "Expected error object")
-		assert.Equal(t, "permission_error", errorObj["type"])
+		// User has access to both subscriptions, should return both models
+		require.Len(t, response.Data, 2, "Expected both models from both subscriptions")
+
+		modelIDs := make(map[string]bool)
+		for _, model := range response.Data {
+			modelIDs[model.ID] = true
+		}
+		assert.True(t, modelIDs["premium-model"], "Should include premium model")
+		assert.True(t, modelIDs["free-model"], "Should include free model")
 	})
 
-	// Table-driven tests for subscription error scenarios
+	// Table-driven tests for API key subscription error scenarios
 	subscriptionErrorTests := []struct {
 		name         string
 		subscription string
 		userGroups   string
 	}{
 		{
-			name:         "unknown subscription header - returns 403",
+			name:         "API key - unknown subscription - returns 403",
 			subscription: "nonexistent-subscription",
 			userGroups:   `["free-users"]`,
 		},
 		{
-			name:         "subscription user lacks access to - returns 403",
+			name:         "API key - no access to subscription - returns 403",
 			subscription: "premium",
 			userGroups:   `["free-users"]`,
 		},
@@ -574,10 +581,10 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	testLogger := logger.Development()
 
 	// Create mock servers for models
-	// Use qualified names (namespace/name) to match the format sent by the handler
-	model1Server := createMockModelServerWithSubscriptionCheck(t, "model-1", "test-namespace/sub-a")
-	model2Server := createMockModelServerWithSubscriptionCheck(t, "model-2", "test-namespace/sub-b")
-	model3Server := createMockModelServerWithSubscriptionCheck(t, "model-3", "test-namespace/sub-a")
+	// Use bare subscription names to match what Authorino injects from API key validation
+	model1Server := createMockModelServerWithSubscriptionCheck(t, "model-1", "sub-a")
+	model2Server := createMockModelServerWithSubscriptionCheck(t, "model-2", "sub-b")
+	model3Server := createMockModelServerWithSubscriptionCheck(t, "model-3", "sub-a")
 
 	// Setup MaaSModelRef lister with three models
 	lister := fakeMaaSModelRefLister{
@@ -649,13 +656,13 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	v1 := router.Group("/v1")
 	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 
-	t.Run("returns all models from all subscriptions", func(t *testing.T) {
+	t.Run("user token - returns all models from all subscriptions", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
 		require.NoError(t, err)
 
 		req.Header.Set("Authorization", "Bearer valid-token")
-		req.Header.Set("X-Maas-Return-All-Models", "true")
+		// No X-MaaS-Subscription header = user token authentication
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["group-a", "group-b"]`)
 		router.ServeHTTP(w, req)
@@ -682,7 +689,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		assert.True(t, subscriptionNames["sub-b"], "Should have models from sub-b")
 	})
 
-	t.Run("returns empty list when user has no subscriptions", func(t *testing.T) {
+	t.Run("user token - returns empty list when user has no subscriptions", func(t *testing.T) {
 		emptySubscriptionLister := &fakeSubscriptionListerWithMeta{
 			subscriptions: []*unstructured.Unstructured{
 				createSubscriptionWithMeta("sub-a", []string{"other-group"}, "", ""),
@@ -707,7 +714,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		require.NoError(t, err)
 
 		req.Header.Set("Authorization", "Bearer valid-token")
-		req.Header.Set("X-Maas-Return-All-Models", "true")
+		// No X-MaaS-Subscription header = user token authentication
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
 		router2.ServeHTTP(w, req)
@@ -722,37 +729,13 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		assert.Empty(t, response.Data, "Should return empty list when user has no subscriptions")
 	})
 
-	t.Run("returns 400 when both headers provided", func(t *testing.T) {
+	t.Run("user token - attaches subscription metadata to models", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
 		require.NoError(t, err)
 
 		req.Header.Set("Authorization", "Bearer valid-token")
-		req.Header.Set("X-Maas-Subscription", "sub-a")
-		req.Header.Set("X-Maas-Return-All-Models", "true")
-		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
-		req.Header.Set(constant.HeaderGroup, `["group-a"]`)
-		router.ServeHTTP(w, req)
-
-		require.Equal(t, http.StatusBadRequest, w.Code)
-
-		var errorResponse map[string]any
-		err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
-		require.NoError(t, err)
-
-		errorObj, ok := errorResponse["error"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, "invalid_request_error", errorObj["type"])
-		assert.Contains(t, errorObj["message"], "Cannot specify both")
-	})
-
-	t.Run("attaches subscription metadata to models", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
-		require.NoError(t, err)
-
-		req.Header.Set("Authorization", "Bearer valid-token")
-		req.Header.Set("X-Maas-Return-All-Models", "true")
+		// No X-MaaS-Subscription header = user token authentication
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["group-a"]`)
 		router.ServeHTTP(w, req)
@@ -1066,7 +1049,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 	v1 := router.Group("/v1")
 	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 
-	t.Run("different MaaSModelRefs with same URL and model ID are deduplicated", func(t *testing.T) {
+	t.Run("different MaaSModelRefs with same URL and model ID remain separate entries", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
 		require.NoError(t, err)
@@ -1083,14 +1066,19 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 
-		// Should have 1 entry because same URL and model ID (deduplicated)
-		assert.Len(t, response.Data, 1, "Same URL and model ID should be deduplicated into single entry")
+		// Should have 2 entries because different MaaSModelRef resources (different ownedBy)
+		// even though they have the same URL and model ID
+		assert.Len(t, response.Data, 2, "Different MaaSModelRef resources should remain separate entries")
 
-		model := response.Data[0]
-		assert.Equal(t, "gpt-4", model.ID)
-		assert.Equal(t, sharedModelServer.URL, model.URL.String())
-		require.Len(t, model.Subscriptions, 1, "Model should have 1 subscription")
-		assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
+		// Both should have model ID "gpt-4" and same URL but different ownedBy
+		for _, model := range response.Data {
+			assert.Equal(t, "gpt-4", model.ID)
+			assert.Equal(t, sharedModelServer.URL, model.URL.String())
+			require.Len(t, model.Subscriptions, 1, "Each model should have 1 subscription")
+			assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
+			// OwnedBy should be either namespace-a/gpt-4-ref or namespace-b/gpt-4-another-ref
+			assert.Contains(t, []string{"namespace-a/gpt-4-ref", "namespace-b/gpt-4-another-ref"}, model.OwnedBy)
+		}
 	})
 }
 
@@ -1099,9 +1087,9 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 
 	// Create two mock servers that both return the same model ID "gpt-4"
 	// One accessible via sub-a, one via sub-b
-	// Use qualified names (namespace/name) to match the format sent by the handler
-	modelServerA := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "test-namespace/sub-a")
-	modelServerB := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "test-namespace/sub-b")
+	// Use bare subscription names to match what Authorino injects from API key validation
+	modelServerA := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "sub-a")
+	modelServerB := createMockModelServerWithSubscriptionCheck(t, "gpt-4", "sub-b")
 
 	// Setup MaaSModelRef lister with two different MaaSModelRefs in different namespaces
 	lister := fakeMaaSModelRefLister{
