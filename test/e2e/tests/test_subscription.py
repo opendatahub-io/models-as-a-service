@@ -959,10 +959,10 @@ class TestSubscriptionEnforcement:
     """Tests that MaaSSubscription correctly enforces rate limits using API keys."""
 
     def test_subscribed_user_gets_200(self):
-        """API key with matching group should access the model. Polls for AuthPolicy enforcement."""
-        api_key = _get_default_api_key()
-        r = _poll_status(api_key, 200, timeout=90)
-        log.info(f"Subscribed API key -> {r.status_code}")
+        """Cluster token with matching group should access the model. Polls for AuthPolicy enforcement."""
+        token = _get_cluster_token()
+        r = _poll_status(token, 200, timeout=90)
+        log.info(f"Subscribed user -> {r.status_code}")
 
     def test_auth_pass_no_subscription_gets_403(self):
         """API key with auth pass but no matching subscription should get 403.
