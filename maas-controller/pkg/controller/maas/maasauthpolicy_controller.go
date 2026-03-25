@@ -215,7 +215,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 							"expression": fmt.Sprintf(`{
   "groups": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups,
   "username": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username,
-  "requestedSubscription": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""),
+  "requestedSubscription": "x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "",
   "requestedModel": "%s/%s"
 }`, ref.Namespace, ref.Name),
 						},
@@ -226,7 +226,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 					// Groups are joined with commas to create a stable string representation.
 					"cache": map[string]interface{}{
 						"key": map[string]interface{}{
-							"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
+							"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "") + "|%s/%s"`, ref.Namespace, ref.Name),
 						},
 						"ttl": int64(60),
 					},
@@ -388,11 +388,10 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
-					// Subscription bound to API key (only for API keys)
-					// For K8s tokens, this header is not injected (empty string)
+					// Selected subscription name resolved by Authorino via subscription-select
 					"X-MaaS-Subscription": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ""`,
+							"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
