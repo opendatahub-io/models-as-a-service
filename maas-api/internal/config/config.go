@@ -46,6 +46,11 @@ type Config struct {
 	// Default: 30 days. Minimum: 1 day.
 	APIKeyMaxExpirationDays int
 
+	// APIKeyHashSalt is the constant salt used for hashing API keys.
+	// This enables O(1) lookup while maintaining salted hash security.
+	// Must be at least 32 characters. Loaded from K8s secret.
+	APIKeyHashSalt string
+
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
 }
@@ -141,6 +146,11 @@ func (c *Config) Validate() error {
 		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
 	}
 
+	// Validate API key hash salt
+	if len(c.APIKeyHashSalt) < 32 {
+		return errors.New("API_KEY_HASH_SALT must be at least 32 characters")
+	}
+
 	return nil
 }
 
@@ -189,5 +199,51 @@ func (c *Config) LoadDatabaseURL(ctx context.Context, clientset *kubernetes.Clie
 	}
 
 	c.DBConnectionURL = string(dbURL)
+	return nil
+}
+
+// DefaultAPIKeyHashSalt is the default salt used for POC/development when no secret is configured.
+// WARNING: Do NOT use this default in production - configure a proper secret instead.
+const DefaultAPIKeyHashSalt = "maas-api-default-salt-for-poc-only-do-not-use-in-production"
+
+// LoadAPIKeyHashSalt reads the API key hash salt from the Kubernetes secret.
+// Falls back to DefaultAPIKeyHashSalt if secret is not found (for POC/development).
+//
+// Secret: maas-api-keys-config (in the same namespace as the pod)
+// Key: API_KEY_HASH_SALT
+//
+// Returns nil on success (either from secret or default fallback).
+func (c *Config) LoadAPIKeyHashSalt(ctx context.Context, clientset *kubernetes.Clientset, log *logger.Logger) error {
+	const (
+		//nolint:gosec // These are secret/key names, not hardcoded credentials.
+		secretName = "maas-api-keys-config"
+		//nolint:gosec // This is the key name within the secret, not a credential.
+		secretKey = "API_KEY_HASH_SALT"
+	)
+
+	secret, err := clientset.CoreV1().Secrets(c.Namespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		// Fallback to default salt for POC/development
+		log.Warn("API key hash salt secret not found, using default POC salt",
+			"secret", secretName,
+			"namespace", c.Namespace,
+			"warning", "DO NOT USE IN PRODUCTION - configure the secret for production deployments")
+		c.APIKeyHashSalt = DefaultAPIKeyHashSalt
+		return nil //nolint:nilerr // Intentional: fallback to default is not an error for POC
+	}
+
+	salt, ok := secret.Data[secretKey]
+	if !ok || len(salt) == 0 {
+		// Fallback to default salt for POC/development
+		log.Warn("API key hash salt key not found in secret, using default POC salt",
+			"secret", secretName,
+			"key", secretKey,
+			"warning", "DO NOT USE IN PRODUCTION - configure the secret for production deployments")
+		c.APIKeyHashSalt = DefaultAPIKeyHashSalt
+		return nil
+	}
+
+	c.APIKeyHashSalt = string(salt)
+	log.Info("Loaded API key hash salt from secret", "secret", secretName)
 	return nil
 }

@@ -21,10 +21,21 @@ const (
 
 	// displayPrefixLength is the number of chars to show in the display prefix (after sk-oai-).
 	displayPrefixLength = 12
-
-	// saltBytes is the number of random bytes to generate for salt (256 bits).
-	saltBytes = 32
 )
+
+// hashSalt is the constant salt used for API key hashing.
+// This is set at startup via SetHashSalt() from configuration.
+var hashSalt string
+
+// SetHashSalt sets the constant salt used for API key hashing.
+// Must be called before any hash operations. Salt must be at least 32 characters.
+func SetHashSalt(salt string) error {
+	if len(salt) < 32 {
+		return fmt.Errorf("hash salt must be at least 32 characters, got %d", len(salt))
+	}
+	hashSalt = salt
+	return nil
+}
 
 // GenerateAPIKey creates a new API key with format: sk-oai-{base62_encoded_256bit_random}
 // Returns: (plaintext_key, sha256_hash, display_prefix, error)
@@ -49,11 +60,8 @@ func GenerateAPIKey() (plaintext, hash, prefix string, err error) {
 	// 3. Construct key with OpenShift AI prefix
 	plaintext = KeyPrefix + encoded
 
-	// 4. Compute salted SHA-256 hash for storage
-	hash, err = HashAPIKeyWithSalt(plaintext)
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to hash API key: %w", err)
-	}
+	// 4. Compute salted SHA-256 hash for storage (uses constant salt from config)
+	hash = HashAPIKey(plaintext)
 
 	// 5. Create display prefix (first 12 chars + ellipsis)
 	if len(encoded) >= displayPrefixLength {
@@ -65,60 +73,36 @@ func GenerateAPIKey() (plaintext, hash, prefix string, err error) {
 	return plaintext, hash, prefix, nil
 }
 
-// HashAPIKeyWithSalt computes salted SHA-256 hash of an API key.
-// Returns format: <salt_hex>:<hash_hex> (both 64 hex chars).
-// Uses 256-bit random salt for rainbow table protection.
-func HashAPIKeyWithSalt(key string) (string, error) {
-	// Generate cryptographically secure random salt
-	salt := make([]byte, saltBytes)
-	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("failed to generate salt: %w", err)
-	}
-
-	// Compute salted hash: SHA-256(key + salt)
+// HashAPIKey computes salted SHA-256 hash of an API key using the constant salt.
+// Returns the hash as a 64-character hex string.
+// The constant salt must be set via SetHashSalt() before calling this function.
+func HashAPIKey(key string) string {
+	// Compute salted hash: SHA-256(salt + key)
 	h := sha256.New()
+	h.Write([]byte(hashSalt))
 	h.Write([]byte(key))
-	h.Write(salt)
 	hash := h.Sum(nil)
-
-	// Return format: <salt_hex>:<hash_hex>
-	return fmt.Sprintf("%s:%s",
-		hex.EncodeToString(salt),
-		hex.EncodeToString(hash)), nil
+	return hex.EncodeToString(hash)
 }
 
 // ValidateAPIKeyHash validates an API key against its stored hash.
-// Expected format: <salt_hex>:<hash_hex> (both 64 hex chars).
+// Uses constant salt from configuration for O(1) indexed lookup.
 func ValidateAPIKeyHash(key, storedHash string) bool {
-	// Parse <salt_hex>:<hash_hex>
-	parts := strings.Split(storedHash, ":")
-	if len(parts) != 2 {
-		return false
-	}
-
-	saltHex, hashHex := parts[0], parts[1]
-
-	// Validate hex string lengths (32 bytes = 64 hex chars each)
-	if len(saltHex) != 64 || len(hashHex) != 64 {
-		return false
-	}
-
-	// Decode salt from hex
-	salt, err := hex.DecodeString(saltHex)
-	if err != nil {
+	// Validate hash length (32 bytes = 64 hex chars)
+	if len(storedHash) != 64 {
 		return false
 	}
 
 	// Decode expected hash from hex
-	expectedHash, err := hex.DecodeString(hashHex)
+	expectedHash, err := hex.DecodeString(storedHash)
 	if err != nil {
 		return false
 	}
 
-	// Compute hash of key + salt
+	// Compute hash using constant salt
 	h := sha256.New()
+	h.Write([]byte(hashSalt))
 	h.Write([]byte(key))
-	h.Write(salt)
 	computedHash := h.Sum(nil)
 
 	// Compare hashes using constant-time comparison to prevent timing attacks

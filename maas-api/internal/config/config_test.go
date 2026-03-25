@@ -48,6 +48,7 @@ func TestConfig_Validate_APIKeyMaxExpirationDays(t *testing.T) {
 				DBConnectionURL:           "postgresql://test:test@localhost/test",
 				MaaSSubscriptionNamespace: "maas-subscription-namespace",
 				APIKeyMaxExpirationDays:   tt.maxDays,
+				APIKeyHashSalt:            "test-salt-that-is-at-least-32-characters-long",
 			}
 
 			err := c.Validate()

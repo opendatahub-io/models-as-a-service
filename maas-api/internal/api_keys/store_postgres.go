@@ -397,74 +397,13 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 	return &k, nil
 }
 
-// GetByKeyValidation looks up an API key by validating against all stored hashes.
-// Supports both legacy (plain SHA-256) and new (salted) hash formats.
+// GetByKeyValidation looks up an API key by computing its hash and doing a direct lookup.
+// Uses constant salt from configuration for O(1) indexed lookup.
 // Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked/expired.
 func (s *PostgresStore) GetByKeyValidation(ctx context.Context, key string) (*ApiKey, error) {
-	// Query all active keys and validate against each hash
-	// This approach allows us to support both old and new hash formats during migration
-	query := `
-		SELECT id, username, name, description, user_groups, status, expires_at, last_used_at, ephemeral, key_hash
-		FROM api_keys
-		WHERE status = 'active'
-	`
-	
-	rows, err := s.db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query API keys: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var k ApiKey
-		var expiresAt, lastUsedAt sql.NullTime
-		var description sql.NullString
-		var userGroups []string
-		var keyHash string
-
-		if err := rows.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Status, &expiresAt, &lastUsedAt, &k.Ephemeral, &keyHash); err != nil {
-			s.logger.Warn("Failed to scan key during validation", "error", err)
-			continue
-		}
-
-		// Validate the key against this hash using our enhanced validation
-		if ValidateAPIKeyHash(key, keyHash) {
-			// Found matching key, build the response
-			if description.Valid {
-				k.Description = description.String
-			}
-			k.Groups = userGroups
-
-			if lastUsedAt.Valid {
-				k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
-			}
-
-			// Check expiration and auto-update status if expired
-			if expiresAt.Valid && time.Now().UTC().After(expiresAt.Time) {
-				if k.Status == StatusActive {
-					// Auto-update status to expired
-					updateQuery := `UPDATE api_keys SET status = 'expired' WHERE id = $1 AND status = 'active'`
-					if _, err := s.db.ExecContext(ctx, updateQuery, k.ID); err != nil {
-						s.logger.Warn("Failed to update expired key status", "key_id", k.ID, "error", err)
-					}
-					k.Status = StatusExpired
-				}
-			}
-
-			// Reject revoked/expired keys
-			if k.Status == StatusRevoked || k.Status == StatusExpired {
-				return nil, ErrInvalidKey
-			}
-
-			return &k, nil
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating API keys: %w", err)
-	}
-
-	return nil, ErrKeyNotFound
+	// Compute hash using constant salt - this enables O(1) indexed lookup
+	keyHash := HashAPIKey(key)
+	return s.GetByHash(ctx, keyHash)
 }
 
 // InvalidateAll revokes all active keys for a user.
