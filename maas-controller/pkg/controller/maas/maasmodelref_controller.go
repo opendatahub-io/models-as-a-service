@@ -82,6 +82,7 @@ func (r *MaaSModelRefReconciler) gatewayNamespace() string {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get
 
 const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
 
@@ -130,6 +131,12 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if handler == nil {
 		log.Error(nil, "unknown modelRef kind", "kind", kind)
 		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("unknown kind: %s", kind), statusSnapshot)
+		return ctrl.Result{}, nil
+	}
+
+	// Validate credentialRef namespace matches the CR namespace (prevent cross-namespace Secret access)
+	if ref := model.Spec.CredentialRef; ref != nil && ref.Namespace != "" && ref.Namespace != model.Namespace {
+		r.updateStatus(ctx, model, "Failed", "spec.credentialRef.namespace must match metadata.namespace", statusSnapshot)
 		return ctrl.Result{}, nil
 	}
 
