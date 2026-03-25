@@ -24,6 +24,7 @@ import (
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -42,8 +43,17 @@ type externalModelHandler struct {
 // Users supply the HTTPRoute (the controller does not create it). The HTTPRoute naming convention
 // is "maas-model-<model.Name>" in the model's namespace.
 func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
-	if model.Spec.ModelRef.Provider == "" {
-		return fmt.Errorf("ExternalModel %s/%s is missing required field spec.modelRef.provider", model.Namespace, model.Name)
+	// Fetch the referenced ExternalModel CR to get provider configuration
+	externalModel := &maasv1alpha1.ExternalModel{}
+	externalModelKey := types.NamespacedName{
+		Name:      model.Spec.ModelRef.Name,
+		Namespace: model.Namespace,
+	}
+	if err := h.r.Get(ctx, externalModelKey, externalModel); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("ExternalModel %s not found in namespace %s", model.Spec.ModelRef.Name, model.Namespace)
+		}
+		return fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
 	}
 
 	routeName := fmt.Sprintf("maas-model-%s", model.Name)
@@ -148,7 +158,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 
 	log.Info("HTTPRoute validated for ExternalModel",
 		"routeName", routeName, "namespace", routeNS, "model", model.Name,
-		"provider", model.Spec.ModelRef.Provider,
+		"externalModel", externalModel.Name, "provider", externalModel.Spec.Provider,
 		"gateway", fmt.Sprintf("%s/%s", gatewayNamespace, gatewayName), "hostnames", hostnames)
 
 	return nil

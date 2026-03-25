@@ -4,28 +4,25 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: maasmodelrefs.maas.opendatahub.io
+  name: externalmodels.maas.opendatahub.io
 spec:
   group: maas.opendatahub.io
   names:
-    kind: MaaSModelRef
-    listKind: MaaSModelRefList
-    plural: maasmodelrefs
-    singular: maasmodelref
+    kind: ExternalModel
+    listKind: ExternalModelList
+    plural: externalmodels
+    singular: externalmodel
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .spec.provider
+      name: Provider
       type: string
-    - jsonPath: .status.endpoint
+    - jsonPath: .spec.endpoint
       name: Endpoint
       type: string
-    - jsonPath: .status.httpRouteName
-      name: HTTPRoute
-      type: string
-    - jsonPath: .status.httpRouteGatewayName
-      name: Gateway
+    - jsonPath: .status.phase
+      name: Phase
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -33,7 +30,10 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: MaaSModelRef is the Schema for the maasmodelrefs API
+        description: |-
+          ExternalModel is the Schema for the externalmodels API.
+          It defines an external LLM provider (e.g., OpenAI, Anthropic) that can be
+          referenced by MaaSModelRef resources.
         properties:
           apiVersion:
             description: |-
@@ -53,46 +53,52 @@ spec:
           metadata:
             type: object
           spec:
-            description: MaaSModelSpec defines the desired state of MaaSModelRef
+            description: ExternalModelSpec defines the desired state of ExternalModel
             properties:
-              endpointOverride:
+              credentialRef:
                 description: |-
-                  EndpointOverride, when set, overrides the endpoint URL that the controller
-                  would otherwise discover from the backend (e.g. LLMInferenceService status
-                  or Gateway/HTTPRoute).
-                type: string
-              modelRef:
-                description: ModelRef references the actual model endpoint
+                  CredentialRef references a Kubernetes Secret containing the provider API key.
+                  The Secret must contain a data key "api-key" with the credential value.
                 properties:
-                  kind:
-                    description: |-
-                      Kind determines which backend handles this model reference.
-                      LLMInferenceService: references a KServe LLMInferenceService.
-                      ExternalModel: references an ExternalModel CR containing provider config.
-                    enum:
-                    - LLMInferenceService
-                    - ExternalModel
-                    type: string
                   name:
-                    description: |-
-                      Name is the name of the model resource.
-                      For LLMInferenceService, this is the InferenceService name.
-                      For ExternalModel, this is the ExternalModel CR name.
+                    description: Name is the name of the Secret
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace of the Secret. Defaults
+                      to the ExternalModel namespace if omitted.
                     maxLength: 253
                     type: string
                 required:
-                - kind
                 - name
                 type: object
+              endpoint:
+                description: |-
+                  Endpoint is the FQDN of the external provider (no scheme or path).
+                  e.g. "api.openai.com".
+                  This field is metadata for downstream consumers (e.g. BBR provider-resolver plugin)
+                  and is not used by the controller for endpoint derivation.
+                maxLength: 253
+                pattern: ^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$
+                type: string
+              provider:
+                description: |-
+                  Provider identifies the API format and auth type for the external model.
+                  e.g. "openai", "anthropic".
+                maxLength: 63
+                type: string
             required:
-            - modelRef
+            - credentialRef
+            - endpoint
+            - provider
             type: object
           status:
-            description: MaaSModelStatus defines the observed state of MaaSModelRef
+            description: ExternalModelStatus defines the observed state of ExternalModel
             properties:
               conditions:
                 description: Conditions represent the latest available observations
-                  of the model's state
+                  of the external model's state
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -148,37 +154,11 @@ spec:
                   - type
                   type: object
                 type: array
-              endpoint:
-                description: Endpoint is the endpoint URL for the model
-                type: string
-              httpRouteGatewayName:
-                description: HTTPRouteGatewayName is the name of the Gateway that
-                  the HTTPRoute references
-                type: string
-              httpRouteGatewayNamespace:
-                description: HTTPRouteGatewayNamespace is the namespace of the Gateway
-                  that the HTTPRoute references
-                type: string
-              httpRouteHostnames:
-                description: HTTPRouteHostnames are the hostnames configured on the
-                  HTTPRoute
-                items:
-                  type: string
-                type: array
-              httpRouteName:
-                description: HTTPRouteName is the name of the HTTPRoute associated
-                  with this model
-                type: string
-              httpRouteNamespace:
-                description: HTTPRouteNamespace is the namespace of the HTTPRoute
-                  associated with this model
-                type: string
               phase:
-                description: Phase represents the current phase of the model
+                description: Phase represents the current phase of the external model
                 enum:
                 - Pending
                 - Ready
-                - Unhealthy
                 - Failed
                 type: string
             type: object
