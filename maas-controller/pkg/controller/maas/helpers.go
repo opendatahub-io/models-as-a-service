@@ -90,3 +90,13 @@ func findAnyAuthPolicyForModel(ctx context.Context, c client.Reader, modelNamesp
 	}
 	return &policies[0]
 }
+
+// containsCSV checks if name appears as an exact entry in a comma-separated string.
+func containsCSV(csv, name string) bool {
+	for _, entry := range strings.Split(csv, ",") {
+		if strings.TrimSpace(entry) == name {
+			return true
+		}
+	}
+	return false
+}
