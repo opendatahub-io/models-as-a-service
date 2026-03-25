@@ -1,4 +1,4 @@
-package config
+package config //nolint:testpackage // tests access unexported fields
 
 import (
 	"crypto/tls"
