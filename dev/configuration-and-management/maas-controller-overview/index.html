@@ -2337,11 +2337,9 @@
 </ul>
 <hr />
 <h2 id="9-authentication-current-behavior">9. Authentication (Current Behavior)</h2>
-<p>For <strong>GET /v1/models</strong>, the API forwards the client’s <strong>Authorization</strong> header as-is to each model endpoint (no token exchange). For inference, until MaaS API token minting is in place, use the <strong>OpenShift token</strong>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TOKEN</span><span class="o">=</span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;https://&lt;gateway-host&gt;/llm/&lt;model-name&gt;/v1/chat/completions&quot;</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;...&#39;</span>
-</code></pre></div>
-<p>The Kuadrant AuthPolicy validates this token via <strong>Kubernetes TokenReview</strong> and derives user/groups for authorization and for the identity passed to TokenRateLimitPolicy (including <code>groups_str</code>).</p>
+<p>For <strong>GET /v1/models</strong>, the maas-api forwards the client’s <strong>Authorization</strong> header as-is to each model endpoint (no token exchange). You can use an <strong>OpenShift token</strong> or an <strong>API key</strong> (<code>sk-oai-*</code>). With a user token, you may send <code>X-MaaS-Subscription</code> to filter when you have access to multiple subscriptions.</p>
+<p>For <strong>model inference</strong> (requests to <code>…/llm/&lt;model&gt;/v1/chat/completions</code> and similar), use an <strong>API key</strong> created via <code>POST /v1/api-keys</code> only. Each key is bound to one MaaSSubscription at mint time.</p>
+<p>The Kuadrant AuthPolicy validates API keys via the MaaS API and validates user tokens via <code>Kubernetes TokenReview</code>, deriving user/groups for authorization and for TokenRateLimitPolicy (including <code>groups_str</code>).</p>
 <hr />
 <h2 id="10-summary">10. Summary</h2>
 <table>
@@ -2397,7 +2395,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 10, 2026 19:12:26 UTC">March 10, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 20:23:34 UTC">March 25, 2026</span>
   </span>
 
     
