@@ -1,0 +1,10 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: qwen3
+  namespace: opendatahub
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: qwen3-single-node-no-scheduler-nvidia-gpu
+    namespace: llm

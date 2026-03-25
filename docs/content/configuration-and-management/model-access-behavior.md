@@ -1,166 +1,49 @@
-# Model Tier Access Behavior
+# Model Access Behavior
 
-This document describes the expected behaviors and operational considerations when modifying model tier access in the MaaS Platform Technical Preview release.
+This document describes the expected behaviors and operational considerations when modifying model access (subscription) in the MaaS Platform.
 
-## Model Tier Access Changes During Active Usage
+## Model Access Changes During Active Usage
 
 ### Overview
 
-When a model is removed from a tier's access list (by updating the `alpha.maas.opendatahub.io/tiers` annotation on an `LLMInferenceService` resource), access revocation takes effect immediately. This section describes the expected behaviors and considerations for administrators.
+When a model is removed from a subscription's access list (by updating MaaSAuthPolicy or MaaSSubscription), access revocation takes effect according to how the gateway enforces policies. This section describes the expected behaviors and considerations for administrators.
 
 ### How Model Access Removal Works
 
-1. **Annotation Update**: The administrator updates the `alpha.maas.opendatahub.io/tiers` annotation to remove a tier from the allowed list
-2. **ODH Controller Processing**: The ODH Controller detects the annotation change and updates RBAC resources
-3. **RBAC Update**: The RoleBinding for the removed tier is deleted, revoking POST permissions for that tier's service accounts
-4. **Access Revocation**: Users from the removed tier lose access to the model
+1. **Policy Update**: The administrator updates MaaSAuthPolicy or MaaSSubscription to remove access to a model
+2. **Controller Processing**: The maas-controller reconciles the change and updates AuthPolicy/TokenRateLimitPolicy resources
+3. **Gateway Enforcement**: The gateway (via Authorino) enforces the updated policies
+4. **Access Revocation**: Users lose access to the model per the new policy
 
 ### Expected Behaviors
 
 #### 1. Impact on Active Requests
 
-Access revocation prevents new requests immediately.
+Access revocation prevents new requests once the gateway has the updated policy.
 
-**Description**:
+- **New Requests**: Any request arriving after policy propagation will be denied.
+- **In-Flight Requests**: Requests that have already passed the authorization gate typically complete successfully.
 
-- **New Requests**: Any request arriving after the RBAC update will be denied immediately.
-- **In-Flight Requests**: Requests that have already passed the authorization gate typically complete successfully. However, dependent requests or long-running sessions requiring re-authorization will fail.
+#### 2. Policy Propagation Delay
 
-**Example Scenario**:
-
-```text
-1. User starts a long-running inference request (e.g., 2-minute generation)
-2. Administrator removes the tier from model annotation at 30 seconds
-3. ODH Controller updates RBAC at 45 seconds
-4. Request may fail at next authorization checkpoint (if any)
-```
-
-**Workaround**:
-
-- Avoid removing tier access during peak usage periods
-- Monitor active requests before making changes
-- Consider using maintenance windows for tier access changes
-
-#### 2. RBAC Propagation Delay
-
-**Description**:
-
-- There is a delay between annotation update and RBAC resource update by the ODH Controller
-- During this window (typically seconds to minutes), access behavior is inconsistent:
-  - Some requests may still succeed (if authorization was cached)
-  - New requests may fail immediately
-  - Model may still appear in user's model list but be inaccessible
-
-**Example Timeline**:
-
-```text
-T+0s:  Annotation updated (remove "premium" tier)
-T+5s:  ODH Controller detects change
-T+10s: RoleBinding deleted
-T+15s: RBAC fully propagated to API server
-```
-
-**Workaround**:
-
-- Wait 1-2 minutes after annotation update before verifying access changes
-- Monitor ODH Controller logs to confirm RBAC updates are complete
-- Use `kubectl get rolebinding -n <model-namespace>` to verify RoleBinding removal
+There may be a delay between policy update and gateway enforcement. During this window, access behavior can be inconsistent. Wait 1–2 minutes after policy updates before verifying changes.
 
 #### 3. Model List Visibility vs. Access
 
-**Description**:
+The **GET /v1/models** endpoint lists models from MaaSModelRef CRs and **filters by access**: it probes each model's endpoint with the client's **Authorization** header. Only models that return 2xx or 405 are included. After access removal, a model the client can no longer access should not appear in their list.
 
-- The **GET /v1/models** endpoint lists models from MaaSModelRef CRs and **filters by access**: it probes each model’s `/v1/models` endpoint with the client’s **Authorization** header (passed through as-is). Only models that return 2xx or 405 are included.
-- So after tier removal, a model that the client can no longer access should **not** appear in their list (the probe will get 401/403 and the model is excluded).
-- If there is a short delay between the tier change and the gateway enforcing it, a client might still see a model briefly until their next list call, or see it disappear on the next call.
+#### 4. Token Validity vs. Model Access
 
-**Note**: See [Model listing flow](model-listing-flow.md) for the full flow. Token exchange is not performed; the same Authorization header the client sends is used for the probe.
-
-#### 4. Token Validity vs. Model Access (Expected Behavior)
-
-Tokens are per-user (Service Account), not per-model. Token validity and model access are independent—this is by design.
-
-**Description**:
-
-- Service Account tokens issued before tier removal remain valid until expiration
-- Model access is controlled by RBAC, which is updated independently of token validity
-- When a model is removed from a tier, the RBAC change revokes access immediately
-- Users do not need to request new tokens; their existing tokens simply have access to fewer models
-
-**Example**:
-
-```text
-1. User receives token at T+0 (valid for 1 hour)
-2. User has access to models A, B, C (via RBAC)
-3. Model B removed from tier at T+30min (RBAC updated)
-4. Token still valid, but model access changes:
-   - Model A: ✅ Accessible (RBAC allows)
-   - Model B: ❌ No longer accessible (RBAC denies)
-   - Model C: ✅ Accessible (RBAC allows)
-```
-
-**User Communication**:
-
-- Clearly message users when a model is being removed from a tier to set expectations regarding token validity vs. model access.
-
-#### 5. Immediate Access Revocation
-
-**Description**:
-
-- The platform does not provide a "drain" mechanism to allow existing users to finish their sessions while blocking new ones.
-- Revocation applies to the authorization policy immediately.
-- While in-flight requests often complete (as they have passed the gate), the user experience is an immediate loss of access for any subsequent interaction.
-
-**Workaround**:
-
-- Monitor active requests before making changes:
-
-  ```bash
-  # Check for active connections (example)
-  kubectl top pods -n <model-namespace>
-  ```
-
-- Use maintenance windows for tier access changes
-- Consider implementing request draining in future releases
+API keys and tokens are per-identity, not per-model. Token validity and model access are independent. When access to a model is revoked, existing tokens simply have access to fewer models; users do not need to request new tokens.
 
 ### Recommended Practices
 
-1. **Plan Tier Access Changes**:
-   - Schedule changes during low-usage periods
-   - Notify affected users in advance when possible
-   - Monitor active requests before making changes
-
-2. **Verify Changes**:
-
-   - Wait 1-2 minutes after annotation update
-   - Verify RoleBinding removal:
-
-     ```bash
-     kubectl get rolebinding -n <model-namespace> | grep <tier-name>
-     ```
-
-   - Test access with a token from the affected tier
-
-3. **Monitor for Issues**:
-   - Check ODH Controller logs for RBAC update errors
-   - Monitor API server logs for authorization failures
-   - Watch for increased error rates in user applications
-
-4. **Handle Errors Gracefully**:
-   - Implement retry logic with exponential backoff
-   - Provide clear error messages to end users
-   - Log access denials for troubleshooting
-
-### Future Enhancements
-
-The following improvements are planned for future releases:
-
-1. **Graceful Shutdown**: Implement request draining before access revocation
-2. **Real-time Notifications**: Notify users when tier access changes
-3. **Audit Logging**: Enhanced logging for tier access changes
+1. **Plan Access Changes**: Schedule changes during low-usage periods and notify affected users when possible.
+2. **Verify Changes**: Wait 1–2 minutes after policy updates, then test access.
+3. **Monitor for Issues**: Check maas-controller and gateway logs for policy update errors.
 
 ### Related Documentation
 
-- [Tier Configuration](./tier-configuration.md) - How to configure tier access
-- [Model Setup](./model-setup.md) - How to configure model tier annotations
-- [Token Management](./token-management.md) - Understanding token lifecycle
+- [Quota and Access Configuration](quota-and-access-configuration.md) - How to configure subscription and access
+- [Model Setup (On Cluster)](model-setup.md) - How to configure models for MaaS
+- [Token Management](token-management.md) - Understanding token lifecycle

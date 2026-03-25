@@ -1,71 +1,125 @@
 # MaaS Controller Makefile
 # Build and deploy the MaaS control plane (MaaSModelRef, MaaSAuthPolicy, MaaSSubscription)
 
-.PHONY: build run test tidy install uninstall image-build image-push docker-build generate manifests help
+##@ General
 
-help:
-	@echo "MaaS Controller make targets:"
-	@echo "  make build        - build manager binary to bin/manager"
-	@echo "  make run          - build and run manager locally"
-	@echo "  make test         - run tests"
-	@echo "  make generate     - generate deepcopy code for API types"
-	@echo "  make manifests    - generate CRD manifests"
-	@echo "  make install      - apply deployment/base/maas-controller/default (CRDs, RBAC, deployment)"
-	@echo "  make uninstall    - delete deployment/base/maas-controller/default resources"
-	@echo "  make image-build  - build container image (podman/buildah/docker); default IMAGE=quay.io/opendatahub/maas-controller"
-	@echo "  make image-push   - build and push image; override with IMAGE=... IMAGE_TAG=..."
+# The help target prints out all targets with their descriptions organized
+# beneath their categories. The categories are represented by '##@' and the
+# target descriptions by '##'. The awk command is responsible for reading the
+# entire set of makefiles included in this invocation, looking for lines of the
+# file as xyz: ## something, and then pretty-format the target and help. Then,
+# if there's a line with ##@ something, that gets pretty-printed as a category.
+# More info on the usage of ANSI control characters for terminal formatting:
+# https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_parameters
+# More info on the awk command:
+# http://linuxcommand.org/lc3_adv_awk.php
+
+.PHONY: help
+help: ##	Display this help.
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@echo ""
+	@echo "\033[1mOptional build arguments\033[0m (e.g. \033[36mmake build GO_STRICTFIPS=true\033[0m):"
+	@echo "  \033[36mGO_STRICTFIPS=true\033[0m  strict FIPS runtime for \033[36mbuild\033[0m / \033[36mrun\033[0m / \033[36mbuild-image\033[0m / \033[36mbuild-image-konflux\033[0m"
+
+PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
+
+include tools.mk
 
 BINARY_NAME := manager
-BUILD_DIR := bin
+BUILD_DIR := $(PROJECT_DIR)/bin
 
-# Container build: use podman, buildah, or docker (default: podman if available, else buildah, else docker)
-CONTAINER_RUNTIME := $(shell command -v podman 1>/dev/null 2>&1 && echo podman || (command -v buildah 1>/dev/null 2>&1 && echo buildah || echo docker))
-# Default image
-IMAGE ?= quay.io/opendatahub/maas-controller
-IMAGE_TAG ?= latest
-FULL_IMAGE := $(IMAGE):$(IMAGE_TAG)
+# Go build environment (override on the CLI, e.g. make build GO_STRICTFIPS=true).
+# Strict FIPS uses GOEXPERIMENT=strictfipsruntime; keep CGO_ENABLED=1 for that path.
+GOOS   ?= $(shell go env GOOS)
+GOARCH ?= $(shell go env GOARCH)
+GO_STRICTFIPS ?= false
 
-build: tidy $(BUILD_DIR)
-	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/manager
+CGO_ENABLED ?= 1
+
+ifeq ($(GO_STRICTFIPS),true)
+  GOEXPERIMENT ?= strictfipsruntime
+endif
+
+GO_ENV := GOOS=$(GOOS) GOARCH=$(GOARCH)
+ifdef GOEXPERIMENT
+  GO_ENV += GOEXPERIMENT=$(GOEXPERIMENT)
+endif
+ifdef CGO_ENABLED
+  GO_ENV += CGO_ENABLED=$(CGO_ENABLED)
+endif
+
+CONTROLLER_GEN_VERSION ?= v0.16.4
+CONTROLLER_GEN = $(BUILD_DIR)/controller-gen
+
+##@ Development
+
+.PHONY: build
+build: tidy $(BUILD_DIR) ##	build manager binary to bin/manager
+	$(GO_ENV) go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/manager
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-run: build
-	./$(BUILD_DIR)/$(BINARY_NAME)
+.PHONY: run
+run: build ##	build and run manager locally
+	$(BUILD_DIR)/$(BINARY_NAME)
 
-test: tidy
+.PHONY: test
+test: tidy ##	run tests
 	go test ./...
 
+.PHONY: tidy
 tidy:
 	go mod tidy
 
-# Generate deepcopy code for API types
-generate:
-	controller-gen object paths="./api/..."
+# Install controller-gen into local bin (pinned version)
+$(CONTROLLER_GEN): | $(BUILD_DIR)
+	GOBIN=$(abspath $(BUILD_DIR)) go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
 
-# Generate CRD manifests
-manifests:
-	controller-gen crd paths="./api/..." output:crd:dir=../deployment/base/maas-controller/crd/bases
+LINT_FIX ?= false
+.PHONY: lint
+lint: $(GOLANGCI_LINT) ##	run golangci-lint (use LINT_FIX=true to fix lint issues)
+ifeq ($(LINT_FIX),true)
+	$(GOLANGCI_LINT) fmt
+	$(GOLANGCI_LINT) run --fix
+else
+	$(GOLANGCI_LINT) fmt --diff
+	$(GOLANGCI_LINT) run
+endif
+
+.PHONY: generate
+generate: $(CONTROLLER_GEN) ##	generate deepcopy code for API types
+	$(CONTROLLER_GEN) object paths="./api/..."
+
+.PHONY: manifests
+manifests: $(CONTROLLER_GEN) ##	generate CRD manifests
+	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:dir=../deployment/base/maas-controller/crd/bases
+
+.PHONY: verify-codegen
+verify-codegen: generate manifests ##	run generate + manifests and fail if files changed (CI check)
+	@if ! git diff --quiet HEAD -- api/ ../deployment/base/maas-controller/crd/bases/; then \
+		echo "ERROR: Generated files are out of date. Please run 'make generate manifests' and commit the results."; \
+		git diff --stat HEAD -- api/ ../deployment/base/maas-controller/crd/bases/; \
+		exit 1; \
+	fi
+	@UNTRACKED=$$(git ls-files --others --exclude-standard -- api/ ../deployment/base/maas-controller/crd/bases/); \
+	if [ -n "$$UNTRACKED" ]; then \
+		echo "ERROR: Untracked generated files detected. Please commit them:"; \
+		echo "$$UNTRACKED"; \
+		exit 1; \
+	fi
+	@echo "Generated files are up to date."
+
+##@ Deployment
 
 # Install CRDs, RBAC, and manager deployment (default: opendatahub namespace)
-install:
+.PHONY: install
+install: ##	apply deployment/base/maas-controller/default (CRDs, RBAC, deployment)
 	kubectl apply -k ../deployment/base/maas-controller/default
 
-uninstall:
+.PHONY: uninstall
+uninstall: ##	delete deployment/base/maas-controller/default resources
 	kubectl delete -k ../deployment/base/maas-controller/default --ignore-not-found
 
-# Build container image (podman, buildah, or docker)
-# buildah uses "bud" (build-using-dockerfile) instead of "build"
-BUILD_CMD := $(if $(filter buildah,$(CONTAINER_RUNTIME)),bud,build)
-image-build:
-	$(CONTAINER_RUNTIME) $(BUILD_CMD) -t $(FULL_IMAGE) --platform=linux/amd64 -f Dockerfile .
-	@echo "Built $(FULL_IMAGE) with $(CONTAINER_RUNTIME)"
-
-# Alias for image-build (backward compatibility)
-docker-build: image-build
-
-# Push image to registry (must be logged in, e.g. podman login quay.io)
-image-push: image-build
-	$(CONTAINER_RUNTIME) push $(FULL_IMAGE)
-	@echo "Pushed $(FULL_IMAGE)"
+## Container image
+include container.mk

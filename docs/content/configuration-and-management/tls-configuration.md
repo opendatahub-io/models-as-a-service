@@ -46,11 +46,23 @@ Authorino handles two TLS-protected traffic flows:
 
 For ODH/RHOAI deployments, the inbound flow is a [platform pre-requisite](https://github.com/opendatahub-io/kserve/tree/release-v0.15/docs/samples/llmisvc/ocp-setup-for-GA#ssl-authorino) for secure `LLMInferenceService` communication; only the outbound configuration is needed for MaaS.
 
-For all deployments using `./scripts/deploy.sh` (both operator and kustomize modes with TLS enabled), both flows are configured automatically via `configure-authorino-tls.sh`.
+For all deployments using `./scripts/deploy.sh` (both operator and kustomize modes with TLS enabled), both flows are configured automatically via `scripts/setup-authorino-tls.sh`.
+
+!!! warning "Authorino TLS script modifies operator-managed resources"
+    The `scripts/setup-authorino-tls.sh` script patches Authorino's service and deployment directly. When run (automatically by `deploy.sh` or manually), it will annotate the Authorino service, patch the Authorino CR, and add environment variables to the Authorino deployment. Use `--disable-tls-backend` with `deploy.sh` to skip this if you manage Authorino TLS separately.
 
 #### Gateway → Authorino (Listener TLS)
 
 Enables TLS on Authorino's gRPC listener for incoming authentication requests from the Gateway.
+
+**Quick setup:** Run the standalone script (or let `deploy.sh` run it automatically):
+
+```bash
+./scripts/setup-authorino-tls.sh
+# Use AUTHORINO_NAMESPACE=rh-connectivity-link for RHCL
+```
+
+**Manual configuration:**
 
 ```bash
 # Annotate service for certificate generation
@@ -106,7 +118,7 @@ spec:
 
 #### Authorino → maas-api (Outbound TLS)
 
-Enables Authorino to make HTTPS calls to `maas-api` for tier metadata lookups. Requires the cluster CA bundle and SSL environment variables.
+Enables Authorino to make HTTPS calls to `maas-api` for metadata lookups (e.g., API key validation). Requires the cluster CA bundle and SSL environment variables.
 
 ```bash
 # Configure SSL environment variables for outbound HTTPS

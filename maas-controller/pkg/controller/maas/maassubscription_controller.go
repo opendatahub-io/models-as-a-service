@@ -33,10 +33,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -57,6 +59,10 @@ type MaaSSubscriptionReconciler struct {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
 const maasSubscriptionFinalizer = "maas.opendatahub.io/subscription-cleanup"
+
+// ConditionSpecPriorityDuplicate is set True when another MaaSSubscription shares the same spec.priority
+// (API key mint and selector use deterministic tie-break; admins should set distinct priorities).
+const ConditionSpecPriorityDuplicate = "SpecPriorityDuplicate"
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -122,16 +128,12 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 		}
 
 		limitsMap := map[string]interface{}{}
-		var allGroupNames, allUserNames []string
 		var subNames []string
 
 		type subInfo struct {
-			sub        maasv1alpha1.MaaSSubscription
-			mRef       maasv1alpha1.ModelSubscriptionRef
-			groupNames []string
-			userNames  []string
-			rates      []interface{}
-			maxLimit   int64
+			sub   maasv1alpha1.MaaSSubscription
+			mRef  maasv1alpha1.ModelSubscriptionRef
+			rates []interface{}
 		}
 		var subs []subInfo
 		for _, sub := range allSubs {
@@ -139,136 +141,54 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				if mRef.Namespace != modelRef.Namespace || mRef.Name != modelRef.Name {
 					continue
 				}
-				var groupNames []string
-				for _, group := range sub.Spec.Owner.Groups {
-					if err := validateCELValue(group.Name, "group name"); err != nil {
-						return fmt.Errorf("invalid owner in MaaSSubscription %s: %w", sub.Name, err)
-					}
-					groupNames = append(groupNames, group.Name)
-				}
-				var userNames []string
-				for _, user := range sub.Spec.Owner.Users {
-					if err := validateCELValue(user, "username"); err != nil {
-						return fmt.Errorf("invalid owner in MaaSSubscription %s: %w", sub.Name, err)
-					}
-					userNames = append(userNames, user)
-				}
 				var rates []interface{}
-				var maxLimit int64
 				if len(mRef.TokenRateLimits) > 0 {
 					for _, trl := range mRef.TokenRateLimits {
 						rates = append(rates, map[string]interface{}{"limit": trl.Limit, "window": trl.Window})
-						if trl.Limit > maxLimit {
-							maxLimit = trl.Limit
-						}
 					}
 				} else {
 					rates = append(rates, map[string]interface{}{"limit": int64(100), "window": "1m"})
-					maxLimit = 100
 				}
-				subs = append(subs, subInfo{sub: sub, mRef: mRef, groupNames: groupNames, userNames: userNames, rates: rates, maxLimit: maxLimit})
+				subs = append(subs, subInfo{sub: sub, mRef: mRef, rates: rates})
 				break
 			}
 		}
 
-		// Sort subscriptions by maxLimit descending (highest tier first).
-		sort.Slice(subs, func(i, j int) bool { return subs[i].maxLimit > subs[j].maxLimit })
-
-		// Helper: build a compact CEL predicate that checks if the user belongs to
-		// any of the given groups or matches any of the given usernames. Uses a single
-		// exists() call for groups (e.g. exists(g, g == "a" || g == "b")) instead of
-		// N separate exists() calls, keeping predicates short at scale.
-		buildMembershipCheck := func(groups, users []string) string {
-			var parts []string
-			if len(groups) > 0 {
-				var comparisons []string
-				for _, g := range groups {
-					comparisons = append(comparisons, fmt.Sprintf(`g == "%s"`, g))
-				}
-				parts = append(parts, fmt.Sprintf(`auth.identity.groups_str.split(",").exists(g, %s)`, strings.Join(comparisons, " || ")))
-			}
-			for _, u := range users {
-				parts = append(parts, fmt.Sprintf(`auth.identity.userid == "%s"`, u))
-			}
-			return strings.Join(parts, " || ")
-		}
-
-		headerCheck := `request.headers["x-maas-subscription"]`
-		headerExists := `request.headers.exists(h, h == "x-maas-subscription")`
-
-		for i, si := range subs {
+		// Trust auth.identity.selected_subscription_key from AuthPolicy.
+		// AuthPolicy has already validated subscription selection via /v1/subscriptions/select,
+		// which handles:
+		//  - Validating subscription exists and user has access (groups/users match)
+		//  - Auto-selecting if user has exactly one subscription
+		//  - Returning 403 Forbidden for invalid scenarios (wrong header, no access, multiple without header)
+		// TokenRateLimitPolicy simply applies the rate limit for the validated subscription.
+		//
+		// The selected_subscription_key format is: {subNamespace}/{subName}@{modelNamespace}/{modelName}
+		// This ensures proper isolation between subscriptions in different namespaces and across models.
+		for _, si := range subs {
 			subNames = append(subNames, si.sub.Name)
-			allGroupNames = append(allGroupNames, si.groupNames...)
-			allUserNames = append(allUserNames, si.userNames...)
 
-			membershipCheck := buildMembershipCheck(si.groupNames, si.userNames)
-			if membershipCheck == "" {
-				log.Info("skipping subscription with no owner groups/users — rate limit would be unreachable",
-					"subscription", si.sub.Name, "model", si.mRef.Name)
-				continue
-			}
+			// Build subscription reference: namespace/name
+			subRef := fmt.Sprintf("%s/%s", si.sub.Namespace, si.sub.Name)
+			// Build model-scoped reference: subscription@model
+			modelScopedRef := fmt.Sprintf("%s@%s/%s", subRef, si.mRef.Namespace, si.mRef.Name)
 
-			// Collect higher-tier groups/users for exclusions
-			var excludeGroups, excludeUsers []string
-			for j := 0; j < i; j++ {
-				excludeGroups = append(excludeGroups, subs[j].groupNames...)
-				excludeUsers = append(excludeUsers, subs[j].userNames...)
-			}
-
-			// Build branch selection: explicit header OR auto-select with exclusions.
-			explicitBranch := fmt.Sprintf(`%s == "%s"`, headerCheck, si.sub.Name)
-			autoBranch := "!" + headerExists
-			if exclusionCheck := buildMembershipCheck(excludeGroups, excludeUsers); exclusionCheck != "" {
-				autoBranch += " && !(" + exclusionCheck + ")"
-			}
-
-			limitsMap[fmt.Sprintf("%s-%s-tokens", si.sub.Name, si.mRef.Name)] = map[string]interface{}{
+			// TRLP limit key must be safe for YAML (no slashes)
+			safeKey := strings.ReplaceAll(subRef, "/", "-")
+			limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, si.mRef.Name)] = map[string]interface{}{
 				"rates": si.rates,
 				"when": []interface{}{
-					map[string]interface{}{"predicate": membershipCheck},
-					map[string]interface{}{"predicate": explicitBranch + " || (" + autoBranch + ")"},
+					map[string]interface{}{
+						"predicate": fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, modelScopedRef),
+					},
 				},
 				"counters": []interface{}{
 					map[string]interface{}{"expression": "auth.identity.userid"},
 				},
 			}
-
-			// Deny users who explicitly select this subscription but don't belong to it.
-			limitsMap[fmt.Sprintf("deny-not-member-%s-%s", si.sub.Name, si.mRef.Name)] = map[string]interface{}{
-				"rates": []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
-				"when": []interface{}{
-					map[string]interface{}{"predicate": explicitBranch},
-					map[string]interface{}{"predicate": "!(" + membershipCheck + ")"},
-				},
-				"counters": []interface{}{map[string]interface{}{"expression": "auth.identity.userid"}},
-			}
 		}
 
-		// Deny-unsubscribed: user is not in ANY subscription group/user list.
-		if denyCheck := buildMembershipCheck(allGroupNames, allUserNames); denyCheck != "" {
-			limitsMap[fmt.Sprintf("deny-unsubscribed-%s", modelRef.Name)] = map[string]interface{}{
-				"rates":    []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
-				"when":     []interface{}{map[string]interface{}{"predicate": "!(" + denyCheck + ")"}},
-				"counters": []interface{}{map[string]interface{}{"expression": "auth.identity.userid"}},
-			}
-		}
-
-		// Deny invalid header: header present but doesn't match any known subscription.
-		if len(subNames) > 0 {
-			denyHeaderWhen := []interface{}{
-				map[string]interface{}{"predicate": headerExists},
-			}
-			for _, name := range subNames {
-				denyHeaderWhen = append(denyHeaderWhen,
-					map[string]interface{}{"predicate": fmt.Sprintf(`%s != "%s"`, headerCheck, name)},
-				)
-			}
-			limitsMap[fmt.Sprintf("deny-invalid-header-%s", modelRef.Name)] = map[string]interface{}{
-				"rates":    []interface{}{map[string]interface{}{"limit": int64(0), "window": "1m"}},
-				"when":     denyHeaderWhen,
-				"counters": []interface{}{map[string]interface{}{"expression": "auth.identity.userid"}},
-			}
-		}
+		// Sort subscription names for stable annotation value across reconciles
+		sort.Strings(subNames)
 
 		// Build the aggregated TokenRateLimitPolicy (one per model, covering all subscriptions)
 		policyName := fmt.Sprintf("maas-trlp-%s", modelRef.Name)
@@ -306,7 +226,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			if err := r.Create(ctx, policy); err != nil {
 				return fmt.Errorf("failed to create TokenRateLimitPolicy for model %s: %w", modelRef.Name, err)
 			}
-			log.Info("TokenRateLimitPolicy created", "name", policyName, "model", modelRef.Name, "subscriptions", subNames)
+			log.Info("TokenRateLimitPolicy created", "name", policyName, "model", modelRef.Name, "subscriptionCount", len(subNames), "subscriptions", subNames)
 		} else if err != nil {
 			return fmt.Errorf("failed to get existing TokenRateLimitPolicy: %w", err)
 		} else {
@@ -339,12 +259,12 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				}
 
 				if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
-					log.Info("TokenRateLimitPolicy unchanged, skipping update", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name)
+					log.Info("TokenRateLimitPolicy unchanged, skipping update", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name, "subscriptionCount", len(subNames))
 				} else {
 					if err := r.Update(ctx, existing); err != nil {
 						return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s/%s: %w", modelRef.Namespace, modelRef.Name, err)
 					}
-					log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name, "subscriptions", subNames)
+					log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelRef.Namespace+"/"+modelRef.Name, "subscriptionCount", len(subNames), "subscriptions", subNames)
 				}
 			}
 		}
@@ -404,6 +324,15 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 }
 
 func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase, message string, statusSnapshot *maasv1alpha1.MaaSSubscriptionStatus) {
+	// Status-only updates do not bump metadata.generation, so this reconcile may not re-queue.
+	// Merge SpecPriorityDuplicate from the API server so we do not clobber the async duplicate-priority scan.
+	latest := &maasv1alpha1.MaaSSubscription{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(subscription), latest); err == nil {
+		if dup := apimeta.FindStatusCondition(latest.Status.Conditions, ConditionSpecPriorityDuplicate); dup != nil {
+			apimeta.SetStatusCondition(&subscription.Status.Conditions, *dup)
+		}
+	}
+
 	subscription.Status.Phase = phase
 
 	status := metav1.ConditionTrue
@@ -431,6 +360,108 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 	}
 }
 
+// scanForDuplicatePriority lists live MaaSSubscriptions and sets SpecPriorityDuplicate
+// on each. Triggered on create, delete, or when spec.priority changes (see SetupWithManager).
+func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Context) {
+	log := logr.FromContextOrDiscard(ctx).WithName("MaaSSubscriptionDuplicatePriority")
+	var list maasv1alpha1.MaaSSubscriptionList
+	if err := r.List(ctx, &list); err != nil {
+		log.Error(err, "failed to list MaaSSubscriptions for duplicate priority scan")
+		return
+	}
+
+	liveIdx := make([]int, 0, len(list.Items))
+	for i := range list.Items {
+		if list.Items[i].DeletionTimestamp.IsZero() {
+			liveIdx = append(liveIdx, i)
+		}
+	}
+
+	byPriority := make(map[int32][]string)
+	for _, i := range liveIdx {
+		s := &list.Items[i]
+		p := s.Spec.Priority
+		k := s.Namespace + "/" + s.Name
+		byPriority[p] = append(byPriority[p], k)
+	}
+	for p := range byPriority {
+		sort.Strings(byPriority[p])
+	}
+
+	var duplicateDetails []string
+	for p, keys := range byPriority {
+		if len(keys) > 1 {
+			duplicateDetails = append(duplicateDetails, fmt.Sprintf("priority=%d:%v", p, keys))
+		}
+	}
+	sort.Strings(duplicateDetails)
+	if len(duplicateDetails) > 0 {
+		log.Info("duplicate MaaSSubscription spec.priority groups — resolve ties for predictable API key mint / subscription selection",
+			"groups", duplicateDetails)
+	}
+
+	for _, i := range liveIdx {
+		s := &list.Items[i]
+		selfKey := s.Namespace + "/" + s.Name
+		p := s.Spec.Priority
+		keys := byPriority[p]
+		var peers []string
+		for _, k := range keys {
+			if k != selfKey {
+				peers = append(peers, k)
+			}
+		}
+
+		latest := &maasv1alpha1.MaaSSubscription{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: s.Name}, latest); err != nil {
+			log.Error(err, "failed to get MaaSSubscription for duplicate priority status patch", "subscription", selfKey)
+			continue
+		}
+		if !latest.DeletionTimestamp.IsZero() {
+			continue
+		}
+
+		gen := latest.GetGeneration()
+		var desired metav1.Condition
+		if len(peers) == 0 {
+			desired = metav1.Condition{
+				Type:               ConditionSpecPriorityDuplicate,
+				Status:             metav1.ConditionFalse,
+				Reason:             "NoDuplicatePeers",
+				Message:            "",
+				ObservedGeneration: gen,
+			}
+		} else {
+			desired = metav1.Condition{
+				Type:               ConditionSpecPriorityDuplicate,
+				Status:             metav1.ConditionTrue,
+				Reason:             "SharedPriority",
+				Message:            fmt.Sprintf("spec.priority %d is shared with: %s", p, strings.Join(peers, ", ")),
+				ObservedGeneration: gen,
+			}
+		}
+
+		cur := apimeta.FindStatusCondition(latest.Status.Conditions, ConditionSpecPriorityDuplicate)
+		if conditionsSemanticallyEqual(cur, &desired) {
+			continue
+		}
+		apimeta.SetStatusCondition(&latest.Status.Conditions, desired)
+		if err := r.Status().Update(ctx, latest); err != nil {
+			log.Error(err, "failed to update SpecPriorityDuplicate status", "subscription", selfKey)
+		}
+	}
+}
+
+func conditionsSemanticallyEqual(a, b *metav1.Condition) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Type == b.Type && a.Status == b.Status && a.Reason == b.Reason && a.Message == b.Message && a.ObservedGeneration == b.ObservedGeneration
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Watch generated TokenRateLimitPolicies so we re-reconcile when someone manually edits them.
@@ -442,6 +473,13 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			predicate.GenerationChangedPredicate{},
 			predicate.Funcs{UpdateFunc: deletionTimestampSet},
 		))).
+		// Full scan of duplicate spec.priority on create, delete, or priority-only spec update.
+		// Does not enqueue reconciles; only patches status conditions on all subscriptions.
+		Watches(
+			&maasv1alpha1.MaaSSubscription{},
+			duplicatePriorityScanHandler(r),
+			builder.WithPredicates(duplicatePriorityScanPredicate()),
+		).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
 		// (fixes race condition where MaaSSubscription is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
@@ -456,6 +494,37 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.mapGeneratedTRLPToParent,
 		)).
 		Complete(r)
+}
+
+// duplicatePriorityScanHandler runs a full duplicate-priority scan without enqueuing reconciles.
+func duplicatePriorityScanHandler(r *MaaSSubscriptionReconciler) handler.EventHandler {
+	return handler.Funcs{
+		CreateFunc: func(ctx context.Context, _ event.CreateEvent, _ workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			r.scanForDuplicatePriority(ctx)
+		},
+		UpdateFunc: func(ctx context.Context, _ event.UpdateEvent, _ workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			r.scanForDuplicatePriority(ctx)
+		},
+		DeleteFunc: func(ctx context.Context, _ event.DeleteEvent, _ workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			r.scanForDuplicatePriority(ctx)
+		},
+	}
+}
+
+// duplicatePriorityScanPredicate limits full scans to subscription lifecycle / priority changes.
+func duplicatePriorityScanPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(event.CreateEvent) bool { return true },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldSub, ok1 := e.ObjectOld.(*maasv1alpha1.MaaSSubscription)
+			newSub, ok2 := e.ObjectNew.(*maasv1alpha1.MaaSSubscription)
+			if !ok1 || !ok2 {
+				return false
+			}
+			return oldSub.Spec.Priority != newSub.Spec.Priority
+		},
+		DeleteFunc: func(event.DeleteEvent) bool { return true },
+	}
 }
 
 // mapGeneratedTRLPToParent maps a generated TokenRateLimitPolicy back to any

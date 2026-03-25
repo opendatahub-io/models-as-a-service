@@ -1,0 +1,10 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: facebook-opt-125m-cpu
+  namespace: opendatahub
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: facebook-opt-125m-cpu-single-node-no-scheduler-cpu
+    namespace: llm

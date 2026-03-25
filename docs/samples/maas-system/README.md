@@ -2,12 +2,14 @@
 
 Bundled samples that deploy LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly. LLMInferenceServices reference the existing [models/simulator](../models/simulator) and [models/simulator-premium](../models/simulator-premium) samples.
 
-## Tiers
+## Subscriptions
 
-| Tier | Group | Model | Token Limit |
-|------|-------|-------|-------------|
+| Sample | Group | Model | Token Limit |
+|--------|-------|-------|-------------|
 | **free** | system:authenticated | facebook-opt-125m-simulated | 100/min |
 | **premium** | premium-user | premium-simulated-simulated-premium | 1000/min |
+| **facebook-opt-125m-cpu** | system:authenticated | facebook-opt-125m-cpu-single-node-no-scheduler-cpu | 100/min |
+| **qwen3** | system:authenticated | qwen3-single-node-no-scheduler-nvidia-gpu | 100/min |
 
 ## Usage
 
@@ -19,7 +21,12 @@ kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
 kubectl create namespace models-as-a-service --dry-run=client -o yaml | kubectl apply -f -
 
 # Deploy all (LLMIS + MaaS CRs) at once
-kustomize build docs/samples/maas-system | kubectl apply -f -
+kustomize build docs/samples/maas-system/ | kubectl apply -f -
+
+# Or deploy a specific sample
+kustomize build docs/samples/maas-system/facebook-opt-125m-cpu/ | kubectl apply -f -
+kustomize build docs/samples/maas-system/qwen3/ | kubectl apply -f -
+```
 
 # Verify
 kubectl get maasmodelref -n opendatahub

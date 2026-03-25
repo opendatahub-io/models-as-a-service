@@ -72,7 +72,8 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 		return models
 	}
 	m.logger.Debug("FilterModelsByAccess: validating access for models", "count", len(models), "subscriptionHeaderProvided", subscriptionHeader != "")
-	var out []Model
+	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null when no models are accessible
+	out := []Model{}
 	var mu sync.Mutex
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxDiscoveryConcurrency)
@@ -140,10 +141,8 @@ func discoveredToModels(discovered []openai.Model, original Model) []Model {
 		if d.ID == "" {
 			continue
 		}
-		ownedBy := d.OwnedBy
-		if ownedBy == "" {
-			ownedBy = original.OwnedBy
-		}
+		// Always use the trusted namespace from MaaSModelRef (original.OwnedBy)
+		// Never trust backend-returned OwnedBy to prevent namespace spoofing
 		created := d.Created
 		if created == 0 {
 			created = original.Created
@@ -153,7 +152,7 @@ func discoveredToModels(discovered []openai.Model, original Model) []Model {
 				ID:      d.ID,
 				Object:  "model",
 				Created: created,
-				OwnedBy: ownedBy,
+				OwnedBy: original.OwnedBy,
 			},
 			Kind:    original.Kind,
 			URL:     original.URL,

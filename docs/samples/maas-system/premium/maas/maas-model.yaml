@@ -1,4 +1,4 @@
-# MaaSModelRef for the premium-tier simulator.
+# MaaSModelRef for the premium subscription simulator.
 # LLMIS from docs/samples/models/simulator-premium (name: premium-simulated-simulated-premium in namespace llm).
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef

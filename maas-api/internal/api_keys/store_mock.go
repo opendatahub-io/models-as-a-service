@@ -23,6 +23,7 @@ type storedKey struct {
 	keyHash    string
 	expiresAt  time.Time
 	lastUsedAt *time.Time
+	ephemeral  bool
 }
 
 // NewMockStore creates a new in-memory mock store for testing.
@@ -37,13 +38,19 @@ var _ MetadataStore = (*MockStore)(nil)
 
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
+// ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time) error {
+func (m *MockStore) AddKey(
+	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool,
+) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
 	if name == "" {
 		return ErrEmptyName
+	}
+	if subscription == "" {
+		return errors.New("subscription is required")
 	}
 
 	m.mu.Lock()
@@ -60,13 +67,16 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, 
 			ID:           keyID,
 			Name:         name,
 			Description:  description,
+			Subscription: subscription,
 			Groups:       userGroups,
 			Status:       StatusActive,
 			CreationDate: time.Now().UTC().Format(time.RFC3339),
+			Ephemeral:    ephemeral,
 		},
 		username:  username,
 		keyHash:   keyHash,
 		expiresAt: expiresAtTime,
+		ephemeral: ephemeral,
 	}
 
 	return nil
@@ -76,6 +86,7 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, 
 // Pagination is mandatory - no unbounded queries allowed.
 // username can be empty (all users) or specific username.
 // statuses can filter by status - empty means all statuses.
+// Note: Ephemeral keys are excluded by default (use Search with IncludeEphemeral for full control).
 func (m *MockStore) List(ctx context.Context, username string, params PaginationParams, statuses []string) (*PaginatedResult, error) {
 	// Validate params (same as PostgresStore)
 	if params.Limit < 1 || params.Limit > 100 {
@@ -93,6 +104,11 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 	now := time.Now().UTC()
 
 	for _, k := range m.keys {
+		// Exclude ephemeral keys by default
+		if k.ephemeral {
+			continue
+		}
+
 		// Filter by username (empty = all users)
 		if username != "" && k.username != username {
 			continue
@@ -148,11 +164,16 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 	}, nil
 }
 
-// filterKeys applies username and status filters to API keys.
-func (m *MockStore) filterKeys(username string, statusFilters []string, now time.Time) []ApiKey {
+// filterKeys applies username, status, and ephemeral filters to API keys.
+func (m *MockStore) filterKeys(username string, statusFilters []string, includeEphemeral bool, now time.Time) []ApiKey {
 	filtered := make([]ApiKey, 0, len(m.keys))
 
 	for _, k := range m.keys {
+		// Filter ephemeral keys unless explicitly included
+		if !includeEphemeral && k.ephemeral {
+			continue
+		}
+
 		// Filter by username
 		if username != "" && k.username != username {
 			continue
@@ -287,6 +308,7 @@ func applyPagination(keys []ApiKey, offset, limit int) ([]ApiKey, bool) {
 }
 
 // Search implements flexible API key search with filtering, sorting, pagination.
+// Ephemeral keys are excluded by default unless IncludeEphemeral filter is set to true.
 func (m *MockStore) Search(
 	ctx context.Context,
 	username string,
@@ -305,9 +327,12 @@ func (m *MockStore) Search(
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// Filter keys by username and status
+	// Determine if ephemeral keys should be included
+	includeEphemeral := filters.IncludeEphemeral != nil && *filters.IncludeEphemeral
+
+	// Filter keys by username, status, and ephemeral
 	now := time.Now().UTC()
-	allKeys := m.filterKeys(username, filters.Status, now)
+	allKeys := m.filterKeys(username, filters.Status, includeEphemeral, now)
 
 	// Sort keys
 	sort.Slice(allKeys, func(i, j int) bool {

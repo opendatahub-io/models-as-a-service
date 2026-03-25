@@ -18,8 +18,10 @@ package maas
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -58,13 +60,6 @@ type MaaSAuthPolicyReconciler struct {
 	ClusterAudience string
 }
 
-func (r *MaaSAuthPolicyReconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return defaultGatewayName
-}
-
 func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
 	if r.ClusterAudience != "" {
 		return r.ClusterAudience
@@ -78,6 +73,7 @@ func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
+//+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
 
 // Reconcile is part of the main kubernetes reconciliation loop
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
@@ -145,15 +141,25 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			return nil, fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", ref.Namespace, ref.Name, err)
 		}
 
+		// Validate model namespace and name for CEL injection prevention
+		if err := validateCELValue(ref.Namespace, "model namespace"); err != nil {
+			return nil, fmt.Errorf("invalid model namespace in modelRef %s/%s: %w", ref.Namespace, ref.Name, err)
+		}
+		if err := validateCELValue(ref.Name, "model name"); err != nil {
+			return nil, fmt.Errorf("invalid model name in modelRef %s/%s: %w", ref.Namespace, ref.Name, err)
+		}
+
 		// Find ALL auth policies for this model (not just the current one)
 		allPolicies, err := findAllAuthPoliciesForModel(ctx, r.Client, ref.Namespace, ref.Name)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list auth policies for model %s/%s: %w", ref.Namespace, ref.Name, err)
 		}
 
-		// Aggregate membership conditions from ALL auth policies
-		// Using API key validation selectors (auth.metadata.apiKeyValidation.*)
-		var membershipConditions []interface{}
+		// Aggregate allowed groups and users from ALL auth policies
+		// Will be checked in OPA policy that handles both API keys and K8s tokens
+		// Initialize as empty slices (not nil) so json.Marshal produces [] instead of null
+		allowedGroups := []string{}
+		allowedUsers := []string{}
 		var policyNames []string
 		for _, ap := range allPolicies {
 			policyNames = append(policyNames, ap.Name)
@@ -161,23 +167,25 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 				if err := validateCELValue(group.Name, "group name"); err != nil {
 					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s: %w", ap.Name, err)
 				}
-				membershipConditions = append(membershipConditions, map[string]interface{}{
-					"operator": "incl", "selector": "auth.metadata.apiKeyValidation.groups", "value": group.Name,
-				})
+				allowedGroups = append(allowedGroups, group.Name)
 			}
 			for _, user := range ap.Spec.Subjects.Users {
 				if err := validateCELValue(user, "username"); err != nil {
 					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s: %w", ap.Name, err)
 				}
-				membershipConditions = append(membershipConditions, map[string]interface{}{
-					"operator": "eq", "selector": "auth.metadata.apiKeyValidation.username", "value": user,
-				})
+				allowedUsers = append(allowedUsers, user)
 			}
 		}
 
+		// Deduplicate and sort to ensure stable output across reconciles
+		// (Kubernetes List order is not guaranteed to be deterministic)
+		policyNames = deduplicateAndSort(policyNames)
+		allowedGroups = deduplicateAndSort(allowedGroups)
+		allowedUsers = deduplicateAndSort(allowedUsers)
+
 		// Construct API URLs using configured namespace
 		apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
-		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/v1/subscriptions/select", r.MaaSAPINamespace)
+		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", r.MaaSAPINamespace)
 
 		rule := map[string]interface{}{
 			"metadata": map[string]interface{}{
@@ -194,28 +202,31 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 					"metrics":  false,
 					"priority": int64(0),
 				},
-				// Call subscription selector endpoint to determine user's subscription
-				// Priority 1 ensures this runs after apiKeyValidation (priority 0)
+				// Resolve subscription via maas-api
+				// For API keys: uses subscription bound to the key at mint time
+				// For K8s tokens: uses X-MaaS-Subscription header if provided, otherwise finds all accessible
+				// Priority 1 ensures this runs after apiKeyValidation (priority 0).
 				"subscription-info": map[string]interface{}{
 					"http": map[string]interface{}{
 						"url":         subscriptionSelectorURL,
 						"contentType": "application/json",
 						"method":      "POST",
 						"body": map[string]interface{}{
-							"expression": `{
-  "groups": auth.metadata.apiKeyValidation.groups,
-  "username": auth.metadata.apiKeyValidation.username,
-  "requestedSubscription": "x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""
-}`,
+							"expression": fmt.Sprintf(`{
+  "groups": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups,
+  "username": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username,
+  "requestedSubscription": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""),
+  "requestedModel": "%s/%s"
+}`, ref.Namespace, ref.Name),
 						},
 					},
-					// Cache subscription selection results keyed by username, groups, and requested subscription.
-					// Key format: "username|groups-hash|requested-subscription" ensures different cache entries
-					// when the same user has different groups or requests different subscriptions.
+					// Cache subscription selection results keyed by username, groups, requested subscription, and model.
+					// Each model has its own cache entry since subscription validation is model-specific.
+					// Key format: "username|groups-hash|requested-subscription|model-namespace/model-name"
 					// Groups are joined with commas to create a stable string representation.
 					"cache": map[string]interface{}{
 						"key": map[string]interface{}{
-							"selector": `auth.metadata.apiKeyValidation.username + "|" + auth.metadata.apiKeyValidation.groups.join(",") + "|" + ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`,
+							"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
 						},
 						"ttl": int64(60),
 					},
@@ -225,12 +236,44 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			},
 			"authentication": map[string]interface{}{
 				// API Keys - plain authentication, actual validation in metadata layer
+				// Only processes tokens with sk-oai- prefix (OpenAI-compatible API keys)
 				"api-keys": map[string]interface{}{
 					"plain": map[string]interface{}{
 						"selector": "request.headers.authorization",
 					},
+					"when": []interface{}{
+						map[string]interface{}{
+							"selector": "request.headers.authorization",
+							"operator": "matches",
+							"value":    "^Bearer sk-oai-.*",
+						},
+					},
 					"metrics":  false,
 					"priority": int64(0),
+				},
+				// Kubernetes/OpenShift tokens - validated via TokenReview API
+				// Only enabled for /v1/models endpoint (read-only model listing)
+				// Inferencing endpoints require API keys for billing/tracking
+				// The api-keys authentication (priority 0) runs first and will consume API key requests,
+				// so we don't need to explicitly exclude them here
+				"kubernetes-tokens": map[string]interface{}{
+					"kubernetesTokenReview": map[string]interface{}{
+						"audiences": []interface{}{r.clusterAudience()},
+					},
+					"when": []interface{}{
+						map[string]interface{}{
+							"selector": "request.url_path",
+							"operator": "matches",
+							"value":    ".*/v1/models$",
+						},
+						map[string]interface{}{
+							"selector": "request.headers.authorization",
+							"operator": "neq",
+							"value":    "",
+						},
+					},
+					"metrics":  false,
+					"priority": int64(1),
 				},
 			},
 		}
@@ -238,41 +281,74 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		// Build authorization rules
 		authRules := make(map[string]interface{})
 
-		// Validate that API key is valid
-		authRules["api-key-valid"] = map[string]interface{}{
-			"metrics":  false,
-			"priority": int64(0),
-			"patternMatching": map[string]interface{}{
-				"patterns": []interface{}{
-					map[string]interface{}{
-						"selector": "auth.metadata.apiKeyValidation.valid",
-						"operator": "eq",
-						"value":    "true",
-					},
-				},
-			},
-		}
-
-		// Check for subscription selection errors and deny if present
-		authRules["subscription-error-check"] = map[string]interface{}{
+		// Validate authentication: API key must be valid, OR K8s token must be authenticated
+		// For API keys: check apiKeyValidation.valid == true (boolean)
+		// For K8s tokens: check that identity.username exists (TokenReview succeeded)
+		authRules["auth-valid"] = map[string]interface{}{
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]interface{}{
-				"rego": `allow { not object.get(input.auth.metadata["subscription-info"], "error", false) }`,
+				"rego": `# API key authentication: validate the key
+allow {
+  object.get(input.auth.metadata, "apiKeyValidation", {})
+  input.auth.metadata.apiKeyValidation.valid == true
+}
+
+# Kubernetes token authentication: check identity exists
+allow {
+  object.get(input.auth.identity, "user", {}).username != ""
+}`,
+			},
+		}
+
+		// Fail-close: require successful subscription selection (name must be present)
+		authRules["subscription-valid"] = map[string]interface{}{
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]interface{}{
+				"rego": `allow { object.get(input.auth.metadata["subscription-info"], "name", "") != "" }`,
 			},
 		}
 
 		// Build aggregated authorization rule from ALL auth policies' subjects
-		if len(membershipConditions) > 0 {
-			var patterns []interface{}
-			if len(membershipConditions) == 1 {
-				patterns = membershipConditions
-			} else {
-				patterns = []interface{}{map[string]interface{}{"any": membershipConditions}}
-			}
+		// Uses OPA to check membership for both API keys and K8s tokens
+		if len(allowedGroups) > 0 || len(allowedUsers) > 0 {
+			groupsJSON, _ := json.Marshal(allowedGroups)
+			usersJSON, _ := json.Marshal(allowedUsers)
 			authRules["require-group-membership"] = map[string]interface{}{
-				"metrics": false, "priority": int64(0),
-				"patternMatching": map[string]interface{}{"patterns": patterns},
+				"metrics":  false,
+				"priority": int64(0),
+				"opa": map[string]interface{}{
+					"rego": fmt.Sprintf(`
+# Allowed groups and users from all MaaSAuthPolicies
+allowed_groups := %s
+allowed_users := %s
+
+# Extract username from API key or K8s token
+username := input.auth.metadata.apiKeyValidation.username
+    { object.get(input.auth, "metadata", {}).apiKeyValidation.username != "" }
+else := input.auth.identity.user.username
+    { object.get(input.auth, "identity", {}).user.username != "" }
+else := ""
+
+# Extract groups from API key or K8s token
+groups := input.auth.metadata.apiKeyValidation.groups
+    { object.get(input.auth, "metadata", {}).apiKeyValidation.groups != [] }
+else := input.auth.identity.user.groups
+    { object.get(input.auth, "identity", {}).user.groups != [] }
+else := []
+
+# Allow if user is in allowed users
+allow {
+    username == allowed_users[_]
+}
+
+# Allow if any user group is in allowed groups
+allow {
+    groups[_] == allowed_groups[_]
+}
+`, string(groupsJSON), string(usersJSON)),
+				},
 			}
 		}
 
@@ -283,30 +359,40 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		// Pass ALL user groups unfiltered in the response so TokenRateLimitPolicy predicates can
 		// match against subscription groups (which may differ from auth policy groups).
 		// Also inject subscription metadata from subscription-info for Limitador metrics.
-		// Groups and username come from API key validation.
+		// For API keys: username/groups come from apiKeyValidation metadata
+		// For K8s tokens: username/groups come from auth.identity
 		rule["response"] = map[string]interface{}{
 			"success": map[string]interface{}{
 				"headers": map[string]interface{}{
-					// Username from API key validation
+					// Username from API key validation or K8s token identity
 					"X-MaaS-Username": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"selector": "auth.metadata.apiKeyValidation.username",
+							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
 					},
-					// Groups - construct JSON array string from API key validation groups
+					// Groups - construct JSON array string from API key validation or K8s identity
 					"X-MaaS-Group": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `'["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]'`,
+							"expression": `'["' + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join('","') + '"]'`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
 					},
-					// Key ID for tracking
+					// Key ID for tracking (only for API keys)
 					"X-MaaS-Key-Id": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"selector": "auth.metadata.apiKeyValidation.keyId",
+							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.keyId : ""`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					// Subscription bound to API key (only for API keys)
+					// For K8s tokens, this header is not injected (empty string)
+					"X-MaaS-Subscription": map[string]interface{}{
+						"plain": map[string]interface{}{
+							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ""`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
@@ -324,9 +410,16 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 								"keyId": map[string]interface{}{
 									"selector": "auth.metadata.apiKeyValidation.keyId",
 								},
-								// Subscription metadata from /v1/subscriptions/select endpoint
+								// Subscription metadata from /internal/v1/subscriptions/select endpoint
 								"selected_subscription": map[string]interface{}{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
+								},
+								// Model-scoped subscription key for TRLP isolation: namespace/name@modelNamespace/modelName
+								"selected_subscription_key": map[string]interface{}{
+									"expression": fmt.Sprintf(
+										`has(auth.metadata["subscription-info"].namespace) && has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].namespace + "/" + auth.metadata["subscription-info"].name + "@%s/%s" : ""`,
+										ref.Namespace, ref.Name,
+									),
 								},
 								"organizationId": map[string]interface{}{
 									"expression": `has(auth.metadata["subscription-info"].organizationId) ? auth.metadata["subscription-info"].organizationId : ""`,
@@ -459,8 +552,6 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 
 // deleteModelAuthPolicy deletes the aggregated AuthPolicy for a model in the given namespace.
 func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
-	// Check if there are any remaining (non-deleted) MaaSAuthPolicies that reference this model.
-	// If yes, don't delete the aggregated AuthPolicy - they will rebuild it.
 	// Always delete the aggregated AuthPolicy so remaining MaaSAuthPolicies rebuild it
 	// without the subjects from the deleted policy. If we skip deletion, the aggregated
 	// AuthPolicy will contain stale subjects from the deleted MaaSAuthPolicy.
@@ -690,4 +781,25 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 		}
 	}
 	return requests
+}
+// deduplicateAndSort removes duplicates from a string slice and sorts it.
+// This ensures stable output across reconciles, preventing spurious updates
+// caused by non-deterministic Kubernetes List order.
+func deduplicateAndSort(items []string) []string {
+	if len(items) == 0 {
+		return items
+	}
+	// Use a map to deduplicate
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		seen[item] = true
+	}
+	// Build deduplicated slice
+	result := make([]string, 0, len(seen))
+	for item := range seen {
+		result = append(result, item)
+	}
+	// Sort for deterministic output
+	sort.Strings(result)
+	return result
 }

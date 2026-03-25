@@ -24,21 +24,24 @@ type ApiKey struct {
 	Name           string   `json:"name"`
 	Description    string   `json:"description,omitempty"`
 	Username       string   `json:"username,omitempty"`
+	Subscription   string   `json:"subscription,omitempty"`   // MaaSSubscription name bound at mint time
 	Groups         []string `json:"groups,omitempty"`         // User's groups at creation (immutable snapshot for authorization)
 	CreationDate   string   `json:"creationDate"`
 	ExpirationDate string   `json:"expirationDate,omitempty"` // Empty for permanent keys
 	Status         Status   `json:"status"`                   // "active", "expired", "revoked"
 	LastUsedAt     string   `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
+	Ephemeral      bool     `json:"ephemeral"`                // Short-lived programmatic key
 }
 
 // ValidationResult holds the result of API key validation (for Authorino HTTP callback).
 type ValidationResult struct {
-	Valid    bool     `json:"valid"`
-	UserID   string   `json:"userId,omitempty"`
-	Username string   `json:"username,omitempty"`
-	KeyID    string   `json:"keyId,omitempty"`
-	Groups   []string `json:"groups,omitempty"` // User groups for subscription-based authorization
-	Reason   string   `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
+	Valid        bool     `json:"valid"`
+	UserID       string   `json:"userId,omitempty"`
+	Username     string   `json:"username,omitempty"`
+	KeyID        string   `json:"keyId,omitempty"`
+	Groups       []string `json:"groups,omitempty"`       // User groups for subscription-based authorization
+	Subscription string   `json:"subscription,omitempty"` // MaaSSubscription name from DB (Authorino → subscription-info)
+	Reason       string   `json:"reason,omitempty"`       // If invalid: "key not found", "revoked", etc.
 }
 
 // PaginationParams holds pagination parameters.
@@ -51,13 +54,6 @@ type PaginationParams struct {
 type PaginatedResult struct {
 	Keys    []ApiKey
 	HasMore bool
-}
-
-// ListAPIKeysResponse is the HTTP response for GET /v1/api-keys.
-type ListAPIKeysResponse struct {
-	Object  string   `json:"object"` // Always "list"
-	Data    []ApiKey `json:"data"`
-	HasMore bool     `json:"has_more"`
 }
 
 // ============================================================
@@ -91,6 +87,9 @@ type SearchFilters struct {
 	// Phase 4: Boolean filters (future)
 	HasExpiration *bool `json:"hasExpiration,omitempty"` // true = expiring, false = permanent
 	HasBeenUsed   *bool `json:"hasBeenUsed,omitempty"`   // true = used, false = never used
+
+	// Ephemeral key filter
+	IncludeEphemeral *bool `json:"includeEphemeral,omitempty"` // Include ephemeral keys in results (default: false)
 }
 
 // SortParams specifies sorting criteria.

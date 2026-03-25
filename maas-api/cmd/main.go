@@ -5,7 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -50,7 +52,7 @@ func serve() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cluster, err := config.NewClusterConfig(cfg.Namespace, constant.DefaultResyncPeriod)
+	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
@@ -72,16 +74,8 @@ func serve() error {
 
 	router := gin.Default()
 	if cfg.DebugMode {
-		router.Use(cors.New(cors.Config{
-			AllowMethods:  []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-			AllowHeaders:  []string{"Authorization", "Content-Type", "Accept"},
-			ExposeHeaders: []string{"Content-Type"},
-			AllowOriginFunc: func(origin string) bool {
-				return true
-			},
-			AllowCredentials: true,
-			MaxAge:           12 * time.Hour,
-		}))
+		log.Warn("Debug CORS policy active: allowing localhost origins only")
+		router.Use(cors.New(debugCORSConfig()))
 	}
 
 	router.OPTIONS("/*path", func(c *gin.Context) { c.Status(204) })
@@ -157,7 +151,6 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	v1Routes.POST("/tiers/lookup", tier.NewHandler(tierMapper).TierLookup)
 
 	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister)
-	v1Routes.POST("/subscriptions/select", subscription.NewHandler(log, subscriptionSelector).SelectSubscription)
 
 	modelManager, err := models.NewManager(log)
 	if err != nil {
@@ -165,13 +158,17 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	}
 
 	tokenHandler := token.NewHandler(log, cfg.Name)
+	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister)
+	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector)
 
-	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister, cfg.Namespace)
-
-	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, log)
+	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	// Subscription listing routes
+	v1Routes.GET("/subscriptions", tokenHandler.ExtractUserInfo(), subscriptionHandler.ListSubscriptions)
+	v1Routes.GET("/model/:model-id/subscriptions", tokenHandler.ExtractUserInfo(), subscriptionHandler.ListSubscriptionsForModel)
 
 	// API Key routes - Complete CRUD for hash-based key architecture
 	apiKeyRoutes := v1Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
@@ -184,6 +181,36 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	// Internal routes for Authorino HTTP callback (no auth required - called by Authorino)
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
+	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil
+}
+
+// isLocalhostOrigin reports whether the origin is a localhost address,
+// used by the debug-mode CORS policy to restrict cross-origin access to
+// local development only. Accepts both ported (http://localhost:3000)
+// and default-port (http://localhost) forms.
+func isLocalhostOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Hostname() == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(u.Hostname())
+	return ip != nil && ip.IsLoopback()
+}
+
+func debugCORSConfig() cors.Config {
+	return cors.Config{
+		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:    []string{"Authorization", "Content-Type", "Accept"},
+		ExposeHeaders:   []string{"Content-Type"},
+		AllowOriginFunc: isLocalhostOrigin,
+		MaxAge:          12 * time.Hour,
+	}
 }

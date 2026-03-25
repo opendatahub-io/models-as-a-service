@@ -59,12 +59,9 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 |------|--------|---------|-------------|
 | `--deployment-mode` | `operator`, `kustomize` | `operator` | Deployment method |
 | `--operator-type` | `rhoai`, `odh` | `rhoai` | Which operator to install |
-| `--policy-engine` | `rhcl`, `kuadrant` | auto | Gateway policy engine (rhcl for operators, kuadrant for kustomize) |
 | `--enable-tls-backend` | flag | enabled | TLS for Authorino ↔ MaaS API |
-| `--skip-certmanager` | flag | auto-detect | Skip cert-manager installation |
-| `--skip-lws` | flag | auto-detect | Skip LeaderWorkerSet installation |
+| `--disable-tls-backend` | flag | `false` | Disable TLS backend |
 | `--namespace` | string | auto | Target namespace |
-| `--timeout` | seconds | `300` | Operation timeout |
 | `--verbose` | flag | false | Enable debug logging |
 | `--dry-run` | flag | false | Show plan without executing |
 | `--help` | flag | - | Display full help |
@@ -82,13 +79,15 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `MAAS_API_IMAGE` | Custom MaaS API container image (works in both operator and kustomize modes) | `quay.io/user/maas-api:pr-123` |
+| `MAAS_CONTROLLER_IMAGE` | Custom MaaS controller container image | `quay.io/user/maas-controller:pr-123` |
 | `OPERATOR_CATALOG` | Custom operator catalog | `quay.io/opendatahub/catalog:pr-456` |
 | `OPERATOR_IMAGE` | Custom operator image | `quay.io/opendatahub/operator:pr-456` |
 | `OPERATOR_TYPE` | Operator type (rhoai/odh) | `odh` |
-| `POLICY_ENGINE` | Policy engine (rhcl/kuadrant) | `kuadrant` |
 | `LOG_LEVEL` | Logging verbosity | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 
 **Note:** TLS backend is enabled by default. Use `--disable-tls-backend` to disable.
+
+**Note:** The policy engine is auto-determined based on operator type (`rhcl` for RHOAI, `kuadrant` for ODH/kustomize) and does not need to be set manually.
 
 ### Deployment Examples
 
@@ -119,9 +118,6 @@ MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \
 #### Minimal Deployments
 
 ```bash
-# Skip optional operators (if already installed)
-./scripts/deploy.sh --skip-certmanager --skip-lws
-
 # Deploy without TLS backend (HTTP tier lookup)
 ./scripts/deploy.sh --disable-tls-backend
 ```

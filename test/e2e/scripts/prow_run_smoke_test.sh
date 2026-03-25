@@ -11,9 +11,9 @@
 #   1. Install cert-manager and LeaderWorkerSet (LWS) operators (required for KServe)
 #   2. Deploy MaaS platform via kustomize (RHCL, gateway, MaaS API, maas-controller)
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
-#   4. Deploy MaaS system (free + premium + unconfigured: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
+#   4. Deploy MaaS system (free + premium + e2e test fixtures: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
 #   5. Setup test tokens (admin + regular user) for comprehensive testing
-#   6. Run E2E tests (API keys + subscription tests)
+#   6. Run E2E tests (API keys + subscription + models endpoint tests)
 #   7. Run deployment validation + token metadata verification
 # 
 # USAGE:
@@ -214,15 +214,15 @@ deploy_models() {
     fi
 
     # Deploy all at once so dependencies resolve correctly
-    # Sample kustomizations hardcode namespace: models-as-a-service; override to $MAAS_SUBSCRIPTION_NAMESPACE
+    # E2E test fixtures kustomization hardcodes namespace: models-as-a-service; override to $MAAS_SUBSCRIPTION_NAMESPACE
     # so CRs land in the correct namespace.
-    if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/maas-system/ | \
+    if ! (cd "$PROJECT_ROOT" && kustomize build test/e2e/fixtures/ | \
             sed "s/namespace: models-as-a-service/namespace: $MAAS_SUBSCRIPTION_NAMESPACE/g" | \
             kubectl apply -f -); then
-        echo "❌ ERROR: Failed to deploy MaaS system"
+        echo "❌ ERROR: Failed to deploy MaaS system with e2e fixtures"
         exit 1
     fi
-    echo "✅ MaaS system deployed (free + premium tiers)"
+    echo "✅ MaaS system deployed (free + premium + e2e test fixtures)"
 
     echo "Waiting for models to be ready..."
     if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
@@ -415,7 +415,7 @@ setup_premium_test_token() {
 }
 
 run_e2e_tests() {
-    echo "-- E2E Tests (API Keys + Subscription) --"
+    echo "-- E2E Tests (API Keys + Subscription + Models Endpoint) --"
 
     # Note: setup_premium_test_token() is called earlier in main execution
     # (Phase 1: Admin Setup) while still logged in as system:admin
@@ -454,15 +454,16 @@ run_e2e_tests() {
     echo "  - ADMIN_OC_TOKEN: $(echo "${ADMIN_OC_TOKEN:-not set}" | cut -c1-20)..."
     echo "  - GATEWAY_HOST: ${GATEWAY_HOST}"
 
-    # Run all e2e tests: API keys, subscription, and namespace scoping tests
+    # Run all e2e tests: API keys, subscription, models endpoint, and namespace scoping tests
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
+        "$test_dir/tests/test_namespace_scoping.py" \
         "$test_dir/tests/test_subscription.py" \
-        "$test_dir/tests/test_namespace_scoping.py"; then
+        "$test_dir/tests/test_models_endpoint.py" ; then 
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
@@ -473,34 +474,76 @@ run_e2e_tests() {
 }
 
 
+# Namespace for admin SA in SA fallback (avoids both admin+regular in default → both would be admin)
+E2E_ADMIN_SA_NAMESPACE="${E2E_ADMIN_SA_NAMESPACE:-maas-admin}"
+
 setup_test_user() {
     local username="$1"
     local cluster_role="$2"
+    local namespace="${3:-default}"
+    
+    # Create namespace if it doesn't exist
+    if ! oc get namespace "$namespace" &>/dev/null; then
+        echo "Creating namespace: $namespace"
+        oc create namespace "$namespace"
+    fi
     
     # Check and create service account
-    if ! oc get serviceaccount "$username" -n default >/dev/null 2>&1; then
-        echo "Creating service account: $username"
-        oc create serviceaccount "$username" -n default
+    if ! oc get serviceaccount "$username" -n "$namespace" >/dev/null 2>&1; then
+        echo "Creating service account: $username in $namespace"
+        oc create serviceaccount "$username" -n "$namespace"
     else
-        echo "Service account $username already exists"
+        echo "Service account $username already exists in $namespace"
     fi
     
     # Check and create cluster role binding
     if ! oc get clusterrolebinding "${username}-binding" >/dev/null 2>&1; then
         echo "Creating cluster role binding for $username"
-        oc adm policy add-cluster-role-to-user "$cluster_role" "system:serviceaccount:default:$username"
+        oc adm policy add-cluster-role-to-user "$cluster_role" "system:serviceaccount:${namespace}:${username}"
     else
         echo "Cluster role binding for $username already exists"
     fi
     
-    echo "✅ User setup completed: $username"
+    echo "✅ User setup completed: $username (namespace: $namespace)"
+}
+
+# Patch Auth CR to add system:serviceaccounts:${admin_namespace} so SA-based admin token works.
+# maas-api AdminChecker checks user.Groups against Auth CR spec.adminGroups.
+# SA in namespace X has groups: system:serviceaccounts, system:serviceaccounts:X.
+# We use a dedicated admin namespace (maas-admin) so the regular user (in default) is NOT admin.
+_patch_auth_cr_for_sa_admin() {
+    local admin_namespace="${1:-$E2E_ADMIN_SA_NAMESPACE}"
+    local admin_group="system:serviceaccounts:${admin_namespace}"
+    
+    local auth_cr
+    for gvr in "auths.services.platform.opendatahub.io" "auths.platform.opendatahub.io"; do
+        if oc get "$gvr" auth &>/dev/null; then
+            auth_cr="$gvr"
+            break
+        fi
+    done
+    if [[ -z "$auth_cr" ]]; then
+        echo "⚠️  Auth CR not found - admin tests may fail (SA token not in adminGroups)"
+        return 0
+    fi
+    local current
+    current=$(oc get "$auth_cr" auth -o jsonpath='{.spec.adminGroups[*]}' 2>/dev/null || true)
+    if [[ "$current" == *"${admin_group}"* ]]; then
+        echo "✅ Auth CR already has ${admin_group} in adminGroups"
+        return 0
+    fi
+    if oc patch "$auth_cr" auth --type=json -p="[{\"op\": \"add\", \"path\": \"/spec/adminGroups/-\", \"value\": \"${admin_group}\"}]" 2>/dev/null; then
+        echo "✅ Added ${admin_group} to Auth CR adminGroups (SA admin fallback)"
+    else
+        echo "⚠️  Failed to patch Auth CR - admin tests may fail"
+    fi
 }
 
 setup_test_tokens() {
     # ═══════════════════════════════════════════════════════════════════════════
     # Extract test tokens WITHOUT switching the main oc session.
     # 
-    # Architecture:
+    # Architecture: 
     #   - Main oc session stays as system:admin (for any cluster operations)
     #   - Test tokens are extracted into env vars using a TEMPORARY kubeconfig
     #   - Tests use TOKEN/ADMIN_OC_TOKEN env vars for API authentication
@@ -576,18 +619,22 @@ setup_test_tokens() {
             echo "✅ Admin token for $current_user (added to odh-admins)"
         else
             echo "⚠️  No htpasswd token available - using SA token (admin tests may fail)"
-            setup_test_user "tester-admin-user" "cluster-admin"
-            ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n default --duration=1h)
+            setup_test_user "tester-admin-user" "cluster-admin" "$E2E_ADMIN_SA_NAMESPACE"
+            # maas-api AdminChecker uses Auth CR adminGroups; SA in maas-admin has system:serviceaccounts:maas-admin
+            # Patch Auth CR so only tester-admin-user is admin (regular user stays in default → not admin)
+            _patch_auth_cr_for_sa_admin "$E2E_ADMIN_SA_NAMESPACE"
+            ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n "$E2E_ADMIN_SA_NAMESPACE" --duration=1h)
         fi
     fi
     
     # 3. Fallback for regular user: always use a separate SA to ensure distinct users
     # This is required for IDOR tests that verify users cannot access each other's keys
+    # Regular user stays in default namespace (system:serviceaccounts:default) - NOT in adminGroups
     if [[ -z "$TOKEN" ]]; then
         echo "Creating separate SA token for regular user (required for IDOR tests)..."
-        setup_test_user "tester-regular-user" "view"
+        setup_test_user "tester-regular-user" "view" "default"
         TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
-        echo "✅ Regular user token for tester-regular-user (SA-based)"
+        echo "✅ Regular user token for tester-regular-user (SA-based, namespace: default)"
     fi
     
     echo "Token setup complete (main session unchanged: $(oc whoami))"

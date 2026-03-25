@@ -1,0 +1,12 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: qwen3-access
+  namespace: opendatahub
+spec:
+  modelRefs:
+    - qwen3
+  subjects:
+    groups:
+      - name: system:authenticated
+    users: []

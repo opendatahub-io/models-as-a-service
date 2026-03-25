@@ -1,23 +1,32 @@
 package api_keys
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
+// API key creation: single client-visible outcome for subscription resolution failures so we do not
+// distinguish not-found, access denied, or no default subscription (enumeration / permission hints).
+const (
+	apiKeySubscriptionResolutionErrCode = "invalid_subscription"
+	apiKeySubscriptionResolutionErrMsg  = "Unable to resolve a subscription for this API key" //nolint:gosec // G101: public JSON error text, not a credential
+)
+
 // AdminChecker is an interface for checking if a user is an admin.
-// This allows for different implementations (e.g., Auth CR-based, hardcoded, mock for testing).
+// The SARAdminChecker implementation uses Kubernetes SubjectAccessReview
+// to check if the user can create maasauthpolicies (RBAC-based admin detection).
 type AdminChecker interface {
-	IsAdmin(userGroups []string) bool
+	IsAdmin(ctx context.Context, user *token.UserContext) bool
 }
 
 type Handler struct {
@@ -58,144 +67,26 @@ func (h *Handler) getUserContext(c *gin.Context) *token.UserContext {
 	return user
 }
 
-// isAdmin checks if the user has admin privileges based on Auth CR (services.opendatahub.io/v1alpha1).
-// The Auth CR defines adminGroups that are allowed to perform admin operations.
-// Returns true if the user belongs to at least one admin group, false otherwise.
-func (h *Handler) isAdmin(user *token.UserContext) bool {
-	if h == nil || h.adminChecker == nil || user == nil {
+// isAdmin checks if the user has admin privileges via SubjectAccessReview.
+// Admin is determined by RBAC: can user create maasauthpolicies in the configured MaaS namespace?
+// Returns true if the user has admin RBAC permissions, false otherwise.
+func (h *Handler) isAdmin(ctx context.Context, user *token.UserContext) bool {
+	if h == nil || user == nil {
 		return false
 	}
-	return h.adminChecker.IsAdmin(user.Groups)
+	return h.adminChecker.IsAdmin(ctx, user)
 }
 
 // isAuthorizedForKey checks if the user is authorized to access the API key.
 // User is authorized if they own the key or are an admin.
-func (h *Handler) isAuthorizedForKey(user *token.UserContext, keyOwner string) bool {
+func (h *Handler) isAuthorizedForKey(ctx context.Context, user *token.UserContext, keyOwner string) bool {
 	// Check if user owns the key
 	if user.Username == keyOwner {
 		return true
 	}
 
 	// Check if user is admin
-	return h.isAdmin(user)
-}
-
-// parsePaginationParams extracts and validates pagination query parameters.
-func (h *Handler) parsePaginationParams(c *gin.Context) (PaginationParams, error) {
-	const (
-		defaultLimit = 50
-		maxLimit     = 100
-	)
-
-	params := PaginationParams{
-		Limit:  defaultLimit,
-		Offset: 0,
-	}
-
-	// Parse limit
-	if limitStr := c.Query("limit"); limitStr != "" {
-		limit, err := strconv.Atoi(limitStr)
-		if err != nil {
-			return params, errors.New("invalid limit parameter: must be a number")
-		}
-		if limit < 1 {
-			return params, errors.New("invalid limit parameter: must be at least 1")
-		}
-		// Silently cap at maximum (user-friendly)
-		if limit > maxLimit {
-			limit = maxLimit
-		}
-		params.Limit = limit
-	}
-
-	// Parse offset
-	if offsetStr := c.Query("offset"); offsetStr != "" {
-		offset, err := strconv.Atoi(offsetStr)
-		if err != nil {
-			return params, errors.New("invalid offset parameter: must be a number")
-		}
-		if offset < 0 {
-			return params, errors.New("invalid offset parameter: must be non-negative")
-		}
-		params.Offset = offset
-	}
-
-	return params, nil
-}
-
-func (h *Handler) ListAPIKeys(c *gin.Context) {
-	user := h.getUserContext(c)
-	if user == nil {
-		return
-	}
-
-	// Check if user is admin
-	isAdmin := h.isAdmin(user)
-
-	// Parse filter parameters
-	filterUsername := c.Query("username")
-	filterStatus := c.Query("status")
-
-	// Determine target username for filtering
-	var targetUsername string
-	if isAdmin {
-		// Admin behavior: default to ALL users (empty string), or filter if provided
-		targetUsername = filterUsername // Empty string = all users
-	} else {
-		// Regular user behavior: always filter to own keys only
-		if filterUsername != "" && filterUsername != user.Username {
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": "non-admin users can only view their own API keys",
-			})
-			return
-		}
-		targetUsername = user.Username // Always their own username
-	}
-
-	// Parse status filters
-	var statusFilters []string
-	if filterStatus != "" {
-		statusFilters = strings.Split(filterStatus, ",")
-		// Validate each status using allowlist
-		for _, status := range statusFilters {
-			trimmed := strings.TrimSpace(status)
-			if !ValidStatuses[trimmed] {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": fmt.Sprintf("invalid status '%s': must be active, revoked, or expired", status),
-				})
-				return
-			}
-		}
-	}
-
-	// Parse pagination parameters
-	params, err := h.parsePaginationParams(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Get paginated results with filters
-	result, err := h.service.List(c.Request.Context(), targetUsername, params, statusFilters)
-	if err != nil {
-		h.logger.Error("Failed to list API keys",
-			"error", err,
-			"username", targetUsername,
-			"limit", params.Limit,
-			"offset", params.Offset,
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list api keys"})
-		return
-	}
-
-	// Build response
-	response := ListAPIKeysResponse{
-		Object:  "list",
-		Data:    result.Keys,
-		HasMore: result.HasMore,
-	}
-
-	c.JSON(http.StatusOK, response)
+	return h.isAdmin(ctx, user)
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
@@ -226,7 +117,7 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 	}
 
 	// Check authorization - user must own the key or be admin
-	if !h.isAuthorizedForKey(user, tok.Username) {
+	if !h.isAuthorizedForKey(c.Request.Context(), user, tok.Username) {
 		h.logger.Warn("Unauthorized API key access attempt",
 			"requestingUser", user.Username,
 			"keyOwner", tok.Username,
@@ -241,17 +132,20 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 }
 
 // CreateAPIKeyRequest is the request body for creating an API key.
-// Keys can be permanent (no expiresIn) or expiring (with expiresIn).
+// Name is required for regular keys but optional for ephemeral keys.
+// If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (or 1hr for ephemeral).
 // Users can only create keys for themselves - the key inherits the user's groups.
 type CreateAPIKeyRequest struct {
-	Name        string          `binding:"required"           json:"name"`
-	Description string          `json:"description,omitempty"`
-	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"` // Optional - nil means permanent
+	Name         string          `json:"name,omitempty"`        // Required for regular keys, optional for ephemeral
+	Description  string          `json:"description,omitempty"`
+	Subscription string          `json:"subscription,omitempty"` // Optional MaaSSubscription name; when omitted, highest-priority accessible subscription is used
+	ExpiresIn    *token.Duration `json:"expiresIn,omitempty"`    // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral)
+	Ephemeral    bool            `json:"ephemeral,omitempty"`    // Short-lived programmatic token (default: false)
 }
 
 // CreateAPIKey handles POST /v1/api-keys
 // Creates a new API key (sk-oai-* format) per Feature Refinement.
-// Keys can be permanent (no expiresIn) or expiring (with expiresIn).
+// If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral).
 // Per "Keys Shown Only Once": key is returned ONCE at creation and never again.
 // Users can only create keys for themselves - the key inherits the user's groups.
 func (h *Handler) CreateAPIKey(c *gin.Context) {
@@ -266,18 +160,48 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		return
 	}
 
+	// Validate name requirement for non-ephemeral keys
+	if !req.Ephemeral && req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required for non-ephemeral keys"})
+		return
+	}
+
+	// Auto-generate name for ephemeral keys if not provided
+	name := req.Name
+	if req.Ephemeral && name == "" {
+		name = fmt.Sprintf("ephemeral-%d", time.Now().UnixNano())
+	}
+
 	// Parse expiration duration if provided
 	var expiresIn *time.Duration
 	if req.ExpiresIn != nil {
 		d := req.ExpiresIn.Duration
 		expiresIn = &d
+	} else if req.Ephemeral {
+		// Default 1hr expiration for ephemeral keys
+		d := 1 * time.Hour
+		expiresIn = &d
 	}
 
 	// Create key for the authenticated user with their groups
-	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, req.Name, req.Description, expiresIn)
+	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, name, req.Description, expiresIn, req.Ephemeral, strings.TrimSpace(req.Subscription))
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var notFound *subscription.SubscriptionNotFoundError
+		var accessDenied *subscription.AccessDeniedError
+		var noSub *subscription.NoSubscriptionError
+		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": apiKeySubscriptionResolutionErrMsg,
+				"code":  apiKeySubscriptionResolutionErrCode,
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create API key"})
 		return
 	}
 
@@ -286,6 +210,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		"keyPrefix", result.KeyPrefix,
 		"username", user.Username,
 		"groups", user.Groups,
+		"ephemeral", req.Ephemeral,
 	)
 
 	// Return the key - THIS IS THE ONLY TIME THE PLAINTEXT IS SHOWN
@@ -353,7 +278,7 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	}
 
 	// Check authorization - user must own the key or be admin
-	if !h.isAuthorizedForKey(user, keyMetadata.Username) {
+	if !h.isAuthorizedForKey(c.Request.Context(), user, keyMetadata.Username) {
 		h.logger.Warn("Unauthorized API key revocation attempt",
 			"requestingUser", user.Username,
 			"keyOwner", keyMetadata.Username,
@@ -431,7 +356,7 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	}
 
 	// Determine target username for filtering
-	isAdmin := h.isAdmin(user)
+	isAdmin := h.isAdmin(c.Request.Context(), user)
 	targetUsername := req.Filters.Username
 
 	if !isAdmin {
@@ -527,7 +452,7 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 	}
 
 	// Authorization: users can revoke own keys, admins can revoke any user's keys
-	if req.Username != user.Username && !h.isAdmin(user) {
+	if req.Username != user.Username && !h.isAdmin(c.Request.Context(), user) {
 		h.logger.Warn("Unauthorized bulk revoke attempt",
 			"requestingUser", user.Username,
 			"targetUser", req.Username,
