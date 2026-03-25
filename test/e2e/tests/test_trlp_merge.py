@@ -399,8 +399,22 @@ class TestTRLPMergeStrategy:
             model_a = _get_cr("maasmodelref", model_ref_a_name, MODEL_NAMESPACE)
             model_b = _get_cr("maasmodelref", model_ref_b_name, MODEL_NAMESPACE)
 
-            route_a = model_a["status"]["httpRouteName"]
-            route_b = model_b["status"]["httpRouteName"]
+            # Guard against None or missing keys
+            assert model_a is not None, f"MaaSModelRef {model_ref_a_name} not found"
+            assert model_b is not None, f"MaaSModelRef {model_ref_b_name} not found"
+
+            assert "status" in model_a, f"MaaSModelRef {model_ref_a_name} missing status"
+            assert "status" in model_b, f"MaaSModelRef {model_ref_b_name} missing status"
+
+            route_a = model_a.get("status", {}).get("httpRouteName")
+            route_b = model_b.get("status", {}).get("httpRouteName")
+
+            assert route_a is not None, (
+                f"MaaSModelRef {model_ref_a_name} missing status.httpRouteName"
+            )
+            assert route_b is not None, (
+                f"MaaSModelRef {model_ref_b_name} missing status.httpRouteName"
+            )
 
             log.info(f"Model A HTTPRoute: {route_a}")
             log.info(f"Model B HTTPRoute: {route_b}")
@@ -516,12 +530,24 @@ class TestTRLPMergeStrategy:
             trlp_a_fresh = _get_cr("TokenRateLimitPolicy", trlp_a_name, MODEL_NAMESPACE)
             trlp_b_fresh = _get_cr("TokenRateLimitPolicy", trlp_b_name, MODEL_NAMESPACE)
 
+            # Guard against None CRs
+            assert trlp_a_fresh is not None, (
+                f"TokenRateLimitPolicy {trlp_a_name} not found after enforcement check"
+            )
+            assert trlp_b_fresh is not None, (
+                f"TokenRateLimitPolicy {trlp_b_name} not found after enforcement check"
+            )
+
+            # Safely extract conditions
+            conditions_a = trlp_a_fresh.get("status", {}).get("conditions", [])
+            conditions_b = trlp_b_fresh.get("status", {}).get("conditions", [])
+
             enforced_condition_a = next(
-                (c for c in trlp_a_fresh["status"]["conditions"] if c["type"] == "Enforced"),
+                (c for c in conditions_a if c.get("type") == "Enforced"),
                 None
             )
             enforced_condition_b = next(
-                (c for c in trlp_b_fresh["status"]["conditions"] if c["type"] == "Enforced"),
+                (c for c in conditions_b if c.get("type") == "Enforced"),
                 None
             )
 
