@@ -4,13 +4,13 @@ metadata:
   name: maas-controller-role
 rules:
 - apiGroups: ["maas.opendatahub.io"]
-  resources: ["maasauthpolicies", "maasmodelrefs", "maassubscriptions"]
+  resources: ["externalmodels", "maasauthpolicies", "maasmodelrefs", "maassubscriptions"]
   verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
 - apiGroups: ["maas.opendatahub.io"]
-  resources: ["maasauthpolicies/finalizers", "maasmodelrefs/finalizers", "maassubscriptions/finalizers"]
+  resources: ["externalmodels/finalizers", "maasauthpolicies/finalizers", "maasmodelrefs/finalizers", "maassubscriptions/finalizers"]
   verbs: ["update"]
 - apiGroups: ["maas.opendatahub.io"]
-  resources: ["maasauthpolicies/status", "maasmodelrefs/status", "maassubscriptions/status"]
+  resources: ["externalmodels/status", "maasauthpolicies/status", "maasmodelrefs/status", "maassubscriptions/status"]
   verbs: ["get", "patch", "update"]
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["gateways"]

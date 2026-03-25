@@ -113,6 +113,20 @@ def _delete_cr(kind: str, name: str, namespace: str):
     )
 
 
+def _create_external_model(name: str, namespace: str, provider: str = "test", endpoint: str = "test.example.com"):
+    """Create an ExternalModel CR with the given name and namespace."""
+    _apply_cr({
+        "apiVersion": "maas.opendatahub.io/v1alpha1",
+        "kind": "ExternalModel",
+        "metadata": {"name": name, "namespace": namespace},
+        "spec": {
+            "provider": provider,
+            "endpoint": endpoint,
+            "credentialRef": {"name": f"{name}-credentials"},
+        },
+    })
+
+
 def _get_cr(kind: str, name: str, namespace: str) -> Optional[dict]:
     """Get CR as dict, or None if not found."""
     result = subprocess.run(
@@ -361,6 +375,10 @@ class TestModelRef:
 
         _create_namespace(other_ns)
         try:
+            # Create ExternalModel CRs in both namespaces
+            _create_external_model("test-backend", other_ns)
+            _create_external_model("test-backend", MODEL_NAMESPACE)
+
             # MaaSModelRef in the new namespace with same name as MODEL_REF
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
@@ -414,6 +432,8 @@ class TestModelRef:
             _delete_cr("MaaSAuthPolicy", policy_name, ns)
             _delete_cr("MaaSModelRef", MODEL_REF, other_ns)
             _delete_cr("MaaSModelRef", other_model_ref, MODEL_NAMESPACE)
+            _delete_cr("ExternalModel", "test-backend", other_ns)
+            _delete_cr("ExternalModel", "test-backend", MODEL_NAMESPACE)
             _delete_namespace(other_ns)
             _wait_reconcile()
 
@@ -431,6 +451,10 @@ class TestModelRef:
 
         _create_namespace(other_ns)
         try:
+            # Create ExternalModel CRs in both namespaces
+            _create_external_model("test-backend", other_ns)
+            _create_external_model("test-backend", MODEL_NAMESPACE)
+
             # MaaSModelRef in the new namespace with same name as MODEL_REF
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
@@ -486,5 +510,7 @@ class TestModelRef:
             _delete_cr("MaaSSubscription", sub_name, ns)
             _delete_cr("MaaSModelRef", MODEL_REF, other_ns)
             _delete_cr("MaaSModelRef", other_model_ref, MODEL_NAMESPACE)
+            _delete_cr("ExternalModel", "test-backend", other_ns)
+            _delete_cr("ExternalModel", "test-backend", MODEL_NAMESPACE)
             _delete_namespace(other_ns)
             _wait_reconcile()

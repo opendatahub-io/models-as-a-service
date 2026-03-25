@@ -222,12 +222,6 @@ When a user belongs to multiple groups that each have a subscription, the access
 
 ## Troubleshooting
 
-### 403 Forbidden: "must specify X-MaaS-Subscription"
-
-**Cause:** User has multiple subscriptions and did not send the header.
-
-**Fix:** Add `X-MaaS-Subscription: <subscription-name>` to the request.
-
 ### 403 Forbidden: "no access to subscription"
 
 **Cause:** User requested a subscription they do not belong to (group membership).

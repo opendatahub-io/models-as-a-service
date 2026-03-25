@@ -182,12 +182,16 @@ deny-unsubscribed (0):        matches "NOT in premium-user AND NOT in free-user"
 
 ## Authentication
 
-Until API token minting is in place, the controller uses **OpenShift tokens directly** for inference:
+Create API keys with `POST /v1/api-keys` on the maas-api (authenticate with your OpenShift token). Each key is bound to one MaaSSubscription at mint time: set `"subscription": "<name>"` in the JSON body, or omit it and the platform selects the **highest-priority** accessible subscription (`MaaSSubscription.spec.priority`).
 
 ```bash
-export TOKEN=$(oc whoami -t)
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
+MAAS_API="https://<gateway-host>/maas-api"
+API_KEY=$(curl -sSk -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
+  -X POST -d '{"name":"demo","subscription":"<maas-subscription-name>"}' \
+  "${MAAS_API}/v1/api-keys" | jq -r .key)
+
+curl -sSk "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}],"max_tokens":10}'
 ```
@@ -289,22 +293,29 @@ kubectl get authpolicy,tokenratelimitpolicy -n llm
 
 # Test inference (set GATEWAY_HOST and TOKEN once)
 GATEWAY_HOST="maas.$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
+MAAS_API="https://${GATEWAY_HOST}/maas-api"
 TOKEN=$(oc whoami -t)
 
-# Regular model: 401 without auth, 200 with auth (user must be in free-user)
+# Regular tier: log in as a user in free-user, then mint a key for simulator-subscription
+FREE_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -X POST -d '{"name":"readme-free","subscription":"simulator-subscription"}' \
+  "${MAAS_API}/v1/api-keys" | jq -r .key)
+
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "x-maas-subscription: simulator-subscription" \
+  -H "Authorization: Bearer $FREE_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 
-# Premium model: 401 without auth, 200 with auth (user must be in premium-user)
+# Premium tier: log in as a user in premium-user, mint a key for premium-simulator-subscription, then call the premium route
+PREMIUM_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -X POST -d '{"name":"readme-premium","subscription":"premium-simulator-subscription"}' \
+  "${MAAS_API}/v1/api-keys" | jq -r .key)
+
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "x-maas-subscription: premium-simulator-subscription" \
+  -H "Authorization: Bearer $PREMIUM_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 ```
 
