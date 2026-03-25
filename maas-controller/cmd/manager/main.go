@@ -57,33 +57,37 @@ func init() {
 
 // ensureSubscriptionNamespaceExists creates the subscription namespace if it doesn't exist.
 // This allows users to create MaaS CRs without manually creating the namespace.
+// It retries with exponential backoff to handle transient failures.
 func ensureSubscriptionNamespaceExists(ctx context.Context, namespace string) error {
-	cfg, err := ctrl.GetConfig()
-	if err != nil {
-		return err
-	}
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return err
-	}
-		return err
-	}
+	return wait.ExponentialBackoffWithContext(ctx, wait.Backoff{
+		Steps:    5,
+		Duration: 1 * time.Second,
+		Factor:   2.0,
+	}, func(ctx context.Context) (bool, error) {
+		cfg := ctrl.GetConfigOrDie()
+		clientset, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			setupLog.Info("retrying namespace creation", "namespace", namespace, "error", err)
+			return false, nil // retry
+		}
 
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: namespace,
-			Labels: map[string]string{
-				"opendatahub.io/generated-namespace": "true",
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+				Labels: map[string]string{
+					"opendatahub.io/generated-namespace": "true",
+				},
 			},
-		},
-	}
+		}
 
-	_, err = clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	if err != nil && !errors.IsAlreadyExists(err) {
-		return err
-	}
-	setupLog.Info("subscription namespace ready", "namespace", namespace)
-	return nil
+		_, err = clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+		if err != nil && !errors.IsAlreadyExists(err) {
+			setupLog.Info("retrying namespace creation", "namespace", namespace, "error", err)
+			return false, nil // retry
+		}
+		setupLog.Info("subscription namespace ready", "namespace", namespace)
+		return true, nil // success
+	})
 }
 
 func main() {
@@ -112,21 +116,9 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Ensure subscription namespace exists before starting controllers with retry logic
-	ctx := context.Background()
-	err := wait.ExponentialBackoffWithContext(ctx, wait.Backoff{
-		Steps:    5,
-		Duration: 1 * time.Second,
-		Factor:   2.0,
-	}, func(ctx context.Context) (bool, error) {
-		if err := ensureSubscriptionNamespaceExists(ctx, maasSubscriptionNamespace); err != nil {
-			setupLog.Info("retrying namespace creation", "namespace", maasSubscriptionNamespace, "error", err)
-			return false, nil // retry
-		}
-		return true, nil // success
-	})
-	if err != nil {
-		setupLog.Error(err, "unable to ensure subscription namespace exists after retries", "namespace", maasSubscriptionNamespace)
+	// Ensure subscription namespace exists before starting controllers
+	if err := ensureSubscriptionNamespaceExists(context.Background(), maasSubscriptionNamespace); err != nil {
+		setupLog.Error(err, "unable to ensure subscription namespace exists", "namespace", maasSubscriptionNamespace)
 		os.Exit(1)
 	}
 
