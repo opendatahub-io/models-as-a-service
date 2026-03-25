@@ -511,6 +511,34 @@ setup_test_user() {
 # maas-api AdminChecker checks user.Groups against Auth CR spec.adminGroups.
 # SA in namespace X has groups: system:serviceaccounts, system:serviceaccounts:X.
 # We use a dedicated admin namespace (maas-admin) so the regular user (in default) is NOT admin.
+# Grant the minimal RBAC needed for the SAR-based admin check.
+# SARAdminChecker verifies: can this user "create maasauthpolicies" in the subscription namespace?
+# This creates a namespace-scoped Role + RoleBinding instead of cluster-admin.
+_grant_maas_admin_rbac() {
+    local user="$1"
+    local ns="${MAAS_SUBSCRIPTION_NAMESPACE}"
+    local role_name="maas-admin-e2e"
+
+    oc apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ${role_name}
+  namespace: ${ns}
+rules:
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maasauthpolicies"]
+  verbs: ["create"]
+EOF
+
+    local safe_name
+    safe_name=$(echo "$user" | tr ':/' '-' | cut -c1-50)
+    oc create rolebinding "${role_name}-${safe_name}" \
+        --role="$role_name" \
+        --user="$user" \
+        -n "$ns" 2>/dev/null || true
+}
+
 _patch_auth_cr_for_sa_admin() {
     local admin_namespace="${1:-$E2E_ADMIN_SA_NAMESPACE}"
     local admin_group="system:serviceaccounts:${admin_namespace}"
@@ -586,6 +614,11 @@ setup_test_tokens() {
                 
                 # Add to odh-admins group (using main session which is system:admin)
                 oc adm groups add-users odh-admins "$admin_user" 2>/dev/null || true
+
+                # Grant minimal RBAC so SAR-based admin check passes.
+                # maas-api SARAdminChecker verifies the user can "create maasauthpolicies";
+                # the odh-admins group alone doesn't provide this RBAC in e2e clusters.
+                _grant_maas_admin_rbac "$admin_user"
                 
                 # Extract token using temp kubeconfig (doesn't affect main session)
                 if KUBECONFIG="$temp_kubeconfig" oc login "$api_server" -u "$admin_user" -p "$admin_pass" --insecure-skip-tls-verify=true &>/dev/null; then
@@ -616,10 +649,12 @@ setup_test_tokens() {
         ADMIN_OC_TOKEN=$(oc whoami -t 2>/dev/null || true)
         if [[ -n "$ADMIN_OC_TOKEN" ]]; then
             oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
+            _grant_maas_admin_rbac "$current_user"
             echo "✅ Admin token for $current_user (added to odh-admins)"
         else
             echo "⚠️  No htpasswd token available - using SA token (admin tests may fail)"
-            setup_test_user "tester-admin-user" "cluster-admin" "$E2E_ADMIN_SA_NAMESPACE"
+            setup_test_user "tester-admin-user" "view" "$E2E_ADMIN_SA_NAMESPACE"
+            _grant_maas_admin_rbac "system:serviceaccount:${E2E_ADMIN_SA_NAMESPACE}:tester-admin-user"
             # maas-api AdminChecker uses Auth CR adminGroups; SA in maas-admin has system:serviceaccounts:maas-admin
             # Patch Auth CR so only tester-admin-user is admin (regular user stays in default → not admin)
             _patch_auth_cr_for_sa_admin "$E2E_ADMIN_SA_NAMESPACE"
