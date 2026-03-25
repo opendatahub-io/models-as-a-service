@@ -29,11 +29,6 @@ type MaaSModelSpec struct {
 	// or Gateway/HTTPRoute).
 	// +optional
 	EndpointOverride string `json:"endpointOverride,omitempty"`
-	// CredentialRef references a Kubernetes Secret containing the provider API key.
-	// The Secret must contain a data key "api-key" with the credential value.
-	// Only used when modelRef.kind=ExternalModel.
-	// +optional
-	CredentialRef *CredentialReference `json:"credentialRef,omitempty"`
 }
 
 // CredentialReference references a Kubernetes Secret with provider API credentials.
@@ -42,37 +37,26 @@ type CredentialReference struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
-	// Namespace is the namespace of the Secret. Defaults to the MaaSModelRef namespace if omitted.
+	// Namespace is the namespace of the Secret. Defaults to the ExternalModel namespace if omitted.
 	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// ModelReference references a model endpoint in the same namespace
-// +kubebuilder:validation:XValidation:rule="self.kind != 'ExternalModel' || has(self.provider) && self.provider != ''",message="provider is required when kind is ExternalModel"
+// ModelReference references a model endpoint in the same namespace.
+// For kind=ExternalModel, the Name field references an ExternalModel CR in the same namespace.
 type ModelReference struct {
-	// Kind determines which fields are available
+	// Kind determines which backend handles this model reference.
+	// LLMInferenceService: references a KServe LLMInferenceService.
+	// ExternalModel: references an ExternalModel CR containing provider config.
 	// +kubebuilder:validation:Enum=LLMInferenceService;ExternalModel
 	Kind string `json:"kind"`
 
-	// Name is the name of the model resource
-	Name string `json:"name"`
-
-	// Provider identifies the API format and auth type for external models.
-	// e.g. "openai", "anthropic". Only used when kind=ExternalModel.
-	// +kubebuilder:validation:MaxLength=63
-	// +optional
-	Provider string `json:"provider,omitempty"`
-
-	// Endpoint is the FQDN of the external provider (no scheme or path).
-	// e.g. "api.openai.com". Only used when kind=ExternalModel.
-	// This field is metadata for downstream consumers (e.g. BBR provider-resolver plugin)
-	// and is not used by the controller for endpoint derivation. Use spec.endpointOverride
-	// to override the controller-derived endpoint.
+	// Name is the name of the model resource.
+	// For LLMInferenceService, this is the InferenceService name.
+	// For ExternalModel, this is the ExternalModel CR name.
 	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$`
-	// +optional
-	Endpoint string `json:"endpoint,omitempty"`
+	Name string `json:"name"`
 }
 
 // MaaSModelStatus defines the observed state of MaaSModelRef
