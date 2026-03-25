@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -309,7 +310,7 @@ func (r *MaaSSubscriptionReconciler) cleanupStaleTRLPs(ctx context.Context, log 
 		if currentModels[modelKey] {
 			continue
 		}
-		if !containsCSV(trlp.GetAnnotations()["maas.opendatahub.io/subscriptions"], subscription.Name) {
+		if !slices.Contains(strings.Split(trlp.GetAnnotations()["maas.opendatahub.io/subscriptions"], ","), subscription.Name) {
 			continue
 		}
 		log.Info("Cleaning up stale TokenRateLimitPolicy for removed modelRef", "model", modelKey, "trlp", trlp.GetName())

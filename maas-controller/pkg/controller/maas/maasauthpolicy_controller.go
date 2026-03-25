@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -510,7 +511,7 @@ func (r *MaaSAuthPolicyReconciler) cleanupStaleAuthPolicies(ctx context.Context,
 		if currentModels[modelKey] {
 			continue
 		}
-		if !containsCSV(ap.GetAnnotations()["maas.opendatahub.io/auth-policies"], policy.Name) {
+		if !slices.Contains(strings.Split(ap.GetAnnotations()["maas.opendatahub.io/auth-policies"], ","), policy.Name) {
 			continue
 		}
 		log.Info("Cleaning up stale AuthPolicy for removed modelRef", "model", modelKey, "authPolicy", ap.GetName())
