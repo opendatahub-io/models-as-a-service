@@ -117,37 +117,18 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 
 		// If no qualified match found and request is bare name (no '/'), try bare name matching
 		if !strings.Contains(requestedSubscription, "/") {
-			var matches []subscription
 			for _, sub := range subscriptions {
-				if sub.Name == requestedSubscription {
-					matches = append(matches, sub)
+				if sub.Name != requestedSubscription {
+					continue
 				}
-			}
-
-			// Filter matches by access before exposing namespace information
-			var accessibleMatches []subscription
-			for _, sub := range matches {
-				if userHasAccess(&sub, username, groups) {
-					accessibleMatches = append(accessibleMatches, sub)
+				if !userHasAccess(&sub, username, groups) {
+					return nil, &AccessDeniedError{Subscription: requestedSubscription}
 				}
+				if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
+					return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
+				}
+				return toResponse(&sub), nil
 			}
-
-			if len(accessibleMatches) == 0 {
-				// No accessible matches - don't expose namespaces of inaccessible subscriptions
-				return nil, &SubscriptionNotFoundError{Subscription: requestedSubscription}
-			}
-
-			if len(accessibleMatches) > 1 {
-				// Multiple accessible subscriptions with same bare name in different namespaces.
-				// Don't leak any information - return a generic error requiring qualified names.
-				return nil, &SubscriptionAmbiguousError{}
-			}
-
-			// Exactly one accessible match - use it
-			if requestedModel != "" && !subscriptionIncludesModel(&accessibleMatches[0], requestedModel) {
-				return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
-			}
-			return toResponse(&accessibleMatches[0]), nil
 		}
 
 		// Request had '/' but no match found
@@ -180,6 +161,37 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		subNames[i] = sub.Name
 	}
 	return nil, &MultipleSubscriptionsError{Subscriptions: subNames}
+}
+
+// SelectHighestPriority returns the accessible subscription with highest spec.priority
+// (then max token limit desc, then name asc for deterministic ties).
+func (s *Selector) SelectHighestPriority(groups []string, username string) (*SelectResponse, error) {
+	if len(groups) == 0 && username == "" {
+		return nil, errors.New("either groups or username must be provided")
+	}
+
+	subscriptions, err := s.loadSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
+	}
+
+	if len(subscriptions) == 0 {
+		return nil, &NoSubscriptionError{}
+	}
+
+	var accessible []subscription
+	for _, sub := range subscriptions {
+		if userHasAccess(&sub, username, groups) {
+			accessible = append(accessible, sub)
+		}
+	}
+
+	if len(accessible) == 0 {
+		return nil, &NoSubscriptionError{}
+	}
+
+	sortSubscriptionsByPriority(accessible)
+	return toResponse(&accessible[0]), nil
 }
 
 // loadSubscriptions fetches and parses MaaSSubscription resources.
@@ -381,13 +393,16 @@ func (s subscription) hasModel(modelID string) bool {
 	return false
 }
 
-// sortSubscriptionsByPriority sorts in-place by priority desc, then maxLimit desc.
+// sortSubscriptionsByPriority sorts in-place by priority desc, then maxLimit desc, then name asc.
 func sortSubscriptionsByPriority(subs []subscription) {
 	sort.SliceStable(subs, func(i, j int) bool {
 		if subs[i].Priority != subs[j].Priority {
 			return subs[i].Priority > subs[j].Priority
 		}
-		return subs[i].MaxLimit > subs[j].MaxLimit
+		if subs[i].MaxLimit != subs[j].MaxLimit {
+			return subs[i].MaxLimit > subs[j].MaxLimit
+		}
+		return subs[i].Name < subs[j].Name
 	})
 }
 
@@ -515,14 +530,6 @@ type MultipleSubscriptionsError struct {
 
 func (e *MultipleSubscriptionsError) Error() string {
 	return "user has access to multiple subscriptions, must specify subscription using X-MaaS-Subscription header"
-}
-
-// SubscriptionAmbiguousError indicates multiple subscriptions with the same bare name exist.
-// No details are included to prevent namespace enumeration.
-type SubscriptionAmbiguousError struct{}
-
-func (e *SubscriptionAmbiguousError) Error() string {
-	return "subscription name is ambiguous, use qualified name 'namespace/name'"
 }
 
 // ModelNotInSubscriptionError indicates the requested model is not included in the subscription.

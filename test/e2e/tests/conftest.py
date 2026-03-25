@@ -153,11 +153,12 @@ def api_key(api_keys_base_url: str, headers: dict) -> str:
     Note: The key inherits the authenticated user's groups, which should include
     system:authenticated to satisfy AuthPolicy requirements for model access.
     """
-    print("[api_key] Creating API key for inference tests...")
+    sim_sub = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+    print("[api_key] Creating API key for inference tests (subscription bound at mint)...")
     r = requests.post(
         api_keys_base_url,
         headers=headers,
-        json={"name": "e2e-test-inference-key"},
+        json={"name": "e2e-test-inference-key", "subscription": sim_sub},
         timeout=30,
         verify=TLS_VERIFY,
     )

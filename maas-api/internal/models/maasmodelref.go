@@ -73,12 +73,14 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 	}
 
 	namespace := u.GetNamespace()
+	// OwnedBy includes both namespace and MaaSModelRef name for dashboard display
+	ownedBy := namespace + "/" + name
 	return &Model{
 		Model: openai.Model{
 			ID:      name,
 			Object:  "model",
 			Created: created,
-			OwnedBy: namespace,
+			OwnedBy: ownedBy,
 		},
 		Kind:  kind,
 		URL:   urlPtr,

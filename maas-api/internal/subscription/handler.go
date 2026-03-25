@@ -73,7 +73,6 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		var notFoundErr *SubscriptionNotFoundError
 		var accessDeniedErr *AccessDeniedError
 		var multipleSubsErr *MultipleSubscriptionsError
-		var ambiguousErr *SubscriptionAmbiguousError
 		var modelNotInSubErr *ModelNotInSubscriptionError
 
 		if errors.As(err, &noSubErr) {
@@ -118,17 +117,6 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 			)
 			c.JSON(http.StatusOK, SelectResponse{
 				Error:   "multiple_subscriptions",
-				Message: err.Error(),
-			})
-			return
-		}
-
-		if errors.As(err, &ambiguousErr) {
-			h.logger.Debug("Subscription name is ambiguous",
-				"username", req.Username,
-			)
-			c.JSON(http.StatusOK, SelectResponse{
-				Error:   "ambiguous_subscription",
 				Message: err.Error(),
 			})
 			return
