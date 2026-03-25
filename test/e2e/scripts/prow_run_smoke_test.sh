@@ -41,6 +41,7 @@
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
+#   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
 # =============================================================================
 
 set -euo pipefail
@@ -75,6 +76,7 @@ export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 AUTHORINO_NAMESPACE="kuadrant-system"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
 
 # Artifact collection: OpenShift CI provides ARTIFACT_DIR (docs.ci.openshift.org/docs/architecture/step-registry).
 # Files written here are collected to artifacts/<job>/<step>/ in Prow. Fallbacks: ARTIFACTS, LOG_DIR, or local reports.
@@ -241,22 +243,25 @@ deploy_models() {
 
     # Wait for MaaSModelRefs to transition to Ready phase.
     # The controller now properly handles the race condition where MaaSModelRef is created
-    # before KServe creates the HTTPRoute (sets Pending + requeues, then Ready when route exists).
+    # before KServe creates the HTTPRoute (sets Pending, then Ready when HTTPRoute watch triggers).
     echo "Waiting for MaaSModelRefs to be Ready..."
     local timeout=300  # 5 minutes - sufficient for KServe to create HTTPRoutes
     local deadline=$((SECONDS + timeout))
     local all_ready=false
+    local found_any=false
 
     while [[ $SECONDS -lt $deadline ]]; do
         all_ready=true
+        found_any=false
         while IFS= read -r phase; do
+            found_any=true
             if [[ "$phase" != "Ready" ]]; then
                 all_ready=false
                 break
             fi
-        done < <(oc get maasmodelrefs -n llm -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        done < <(oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
 
-        if $all_ready && [[ -n "$(oc get maasmodelrefs -n llm -o name 2>/dev/null)" ]]; then
+        if $found_any && $all_ready; then
             echo "✅ MaaSModelRefs ready"
             break
         fi
@@ -264,10 +269,10 @@ deploy_models() {
         sleep 5
     done
 
-    if ! $all_ready; then
+    if ! $found_any || ! $all_ready; then
         echo "❌ ERROR: MaaSModelRefs did not reach Ready state within ${timeout}s"
         echo "Dumping MaaSModelRef status:"
-        oc get maasmodelrefs -n llm -o yaml || true
+        oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o yaml || true
         echo "Dumping controller logs:"
         kubectl logs deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --tail=100 || true
         exit 1
@@ -414,7 +419,7 @@ run_e2e_tests() {
     # from its own namespace, but models are deployed in 'llm' namespace.
     # TODO: Fix maas-api to list MaaSModelRefs from ALL namespaces (pass "" to ListFromMaaSModelRefLister)
     export MODEL_NAME="facebook-opt-125m-simulated"
-    export E2E_MODEL_NAMESPACE="llm"
+    export E2E_MODEL_NAMESPACE="$MODEL_NAMESPACE"
     # TOKEN and ADMIN_OC_TOKEN are already exported by setup_test_tokens()
 
     local test_dir="$PROJECT_ROOT/test/e2e"
