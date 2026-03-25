@@ -20,12 +20,14 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -53,9 +55,9 @@ func init() {
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
 }
 
-// ensureNamespace creates the subscription namespace if it doesn't exist.
+// ensureSubscriptionNamespaceExists creates the subscription namespace if it doesn't exist.
 // This allows users to create MaaS CRs without manually creating the namespace.
-func ensureNamespace(ctx context.Context, namespace string) error {
+func ensureSubscriptionNamespaceExists(ctx context.Context, namespace string) error {
 	cfg := ctrl.GetConfigOrDie()
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
@@ -105,9 +107,21 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Ensure subscription namespace exists before starting controllers
-	if err := ensureNamespace(context.Background(), maasSubscriptionNamespace); err != nil {
-		setupLog.Error(err, "unable to ensure subscription namespace exists", "namespace", maasSubscriptionNamespace)
+	// Ensure subscription namespace exists before starting controllers with retry logic
+	ctx := context.Background()
+	err := wait.ExponentialBackoffWithContext(ctx, wait.Backoff{
+		Steps:    5,
+		Duration: 1 * time.Second,
+		Factor:   2.0,
+	}, func(ctx context.Context) (bool, error) {
+		if err := ensureSubscriptionNamespaceExists(ctx, maasSubscriptionNamespace); err != nil {
+			setupLog.Info("retrying namespace creation", "namespace", maasSubscriptionNamespace, "error", err)
+			return false, nil // retry
+		}
+		return true, nil // success
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to ensure subscription namespace exists after retries", "namespace", maasSubscriptionNamespace)
 		os.Exit(1)
 	}
 
