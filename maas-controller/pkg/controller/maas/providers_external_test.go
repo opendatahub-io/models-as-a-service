@@ -288,15 +288,11 @@ func TestExternalModel_CleanupOnDelete(t *testing.T) {
 func TestExternalModel_CredentialRef(t *testing.T) {
 	externalModel := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
 	externalModel.Spec.CredentialRef = maasv1alpha1.CredentialReference{
-		Name:      "openai-api-key",
-		Namespace: "opendatahub",
+		Name: "openai-api-key",
 	}
 
 	if externalModel.Spec.CredentialRef.Name != "openai-api-key" {
 		t.Errorf("CredentialRef.Name = %q, want %q", externalModel.Spec.CredentialRef.Name, "openai-api-key")
-	}
-	if externalModel.Spec.CredentialRef.Namespace != "opendatahub" {
-		t.Errorf("CredentialRef.Namespace = %q, want %q", externalModel.Spec.CredentialRef.Namespace, "opendatahub")
 	}
 }
 

@@ -32,15 +32,12 @@ type MaaSModelSpec struct {
 }
 
 // CredentialReference references a Kubernetes Secret with provider API credentials.
+// The Secret must be in the same namespace as the ExternalModel.
 type CredentialReference struct {
 	// Name is the name of the Secret
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
-	// Namespace is the namespace of the Secret. Defaults to the ExternalModel namespace if omitted.
-	// +kubebuilder:validation:MaxLength=253
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // ModelReference references a model endpoint in the same namespace.
@@ -55,6 +52,7 @@ type ModelReference struct {
 	// Name is the name of the model resource.
 	// For LLMInferenceService, this is the InferenceService name.
 	// For ExternalModel, this is the ExternalModel CR name.
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 }

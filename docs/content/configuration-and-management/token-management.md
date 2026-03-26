@@ -107,7 +107,7 @@ sequenceDiagram
     DB-->>MaaS: username, groups, subscription, status
     MaaS->>MaaS: Check status (active/revoked/expired)
     MaaS-->>AuthPolicy: 4. valid: true, userId, groups, subscription
-    AuthPolicy->>AuthPolicy: Subscription check, inject headers (incl. X-MaaS-Subscription), rate limits
+    AuthPolicy->>AuthPolicy: Subscription check, inject headers, rate limits
     AuthPolicy->>Model: 5. Authorized request (identity headers)
     Model-->>Gateway: Response
     Gateway-->>User: Response
@@ -138,9 +138,12 @@ flowchart LR
 
 This means you can:
 
-1. **Authenticate with OpenShift or OIDC** — use your existing identity and the same token you would use for inference.
-2. **Use an API key** — use your `sk-oai-*` key in the Authorization header.
-3. **Call `/v1/models` immediately** — see only the models you can access, without creating an API key first (if using OpenShift token).
+1. **Authenticate with OpenShift or OIDC** — use your existing identity token for `GET /v1/models` (optional `X-MaaS-Subscription` when you have multiple subscriptions).
+2. **Use an API key** — use your `sk-oai-*` key in the Authorization header for listing and for inference.
+3. **Call `/v1/models` immediately** — see only the models you can access, without creating an API key first (if using an OpenShift token).
+
+!!! note "Inference vs listing"
+    Inference (calls to each model’s chat/completions URL) requires an API key in `Authorization: Bearer` only. Do not send `X-MaaS-Subscription` on inference—the subscription is the one bound at API key mint time. `GET /v1/models` accepts either an API key or an OpenShift token; with a user token, `X-MaaS-Subscription` remains supported for filtering.
 
 ---
 

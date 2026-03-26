@@ -6,7 +6,7 @@ MaaSAuthPolicy and MaaSSubscription are namespace-scoped to `models-as-a-service
 
 ```mermaid
 flowchart TD
-    User([User / App]) -- "Request (Model + SubID)" --> Gateway{MaaS API Gateway}
+    User([User / App]) -- "Request (API key + model)" --> Gateway{MaaS API Gateway}
 
     subgraph Validation ["Dual-Check Gate"]
         direction LR
