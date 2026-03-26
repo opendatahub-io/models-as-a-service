@@ -688,18 +688,25 @@ class TestAPIKeyRevocationE2E:
         assert r_b.status_code in (200, 201), f"Failed to create key B: {r_b.text}"
         key_b = r_b.json()["key"]
 
-        # Wait for revocation to propagate
-        time.sleep(2)
-
-        # Key A should be rejected (403)
-        r_a_inf = requests.post(
-            model_completions_url,
-            headers={"Authorization": f"Bearer {key_a}", "Content-Type": "application/json"},
-            json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
-            timeout=30,
-            verify=TLS_VERIFY,
+        # Poll until revoked key A is rejected (revocation may take time to propagate)
+        max_wait = 30
+        poll_interval = 0.5
+        elapsed = 0
+        while elapsed < max_wait:
+            r_a_inf = requests.post(
+                model_completions_url,
+                headers={"Authorization": f"Bearer {key_a}", "Content-Type": "application/json"},
+                json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+            if r_a_inf.status_code == 403:
+                break
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+        assert r_a_inf.status_code == 403, (
+            f"Revoked key A should be rejected within {max_wait}s, got {r_a_inf.status_code}"
         )
-        assert r_a_inf.status_code == 403, f"Revoked key A should be rejected, got {r_a_inf.status_code}"
 
         # Key B should work (200)
         r_b_inf = requests.post(
@@ -735,6 +742,18 @@ class TestAPIKeyRevocationE2E:
             assert r.status_code in (200, 201), f"Failed to create key {i}: {r.text}"
             keys.append(r.json()["key"])
 
+        # Smoke-test: verify at least one key works before bulk revoke
+        r_smoke = requests.post(
+            model_completions_url,
+            headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
+            json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
+            timeout=60,
+            verify=TLS_VERIFY,
+        )
+        assert r_smoke.status_code == 200, (
+            f"Key should work before bulk revoke, got {r_smoke.status_code}: {r_smoke.text}"
+        )
+
         # Bulk revoke all keys for this user
         r_bulk = requests.post(
             f"{api_keys_base_url}/bulk-revoke",
@@ -744,21 +763,30 @@ class TestAPIKeyRevocationE2E:
             verify=TLS_VERIFY,
         )
         assert r_bulk.status_code == 200, f"Bulk revoke failed: {r_bulk.text}"
-        print(f"[bulk-revoke] Revoked {r_bulk.json().get('revokedCount', '?')} keys")
+        revoked_count = r_bulk.json().get("revokedCount", 0)
+        assert revoked_count >= len(keys), (
+            f"Expected at least {len(keys)} keys revoked, got revokedCount={revoked_count}"
+        )
+        print(f"[bulk-revoke] Revoked {revoked_count} keys")
 
-        # Wait for revocation to propagate through caches
-        time.sleep(2)
-
-        # Try inference with each key — all should be rejected
+        # Poll until all revoked keys are rejected (revocation may take time to propagate)
+        max_wait = 30
+        poll_interval = 0.5
         for i, key in enumerate(keys):
-            r_inf = requests.post(
-                model_completions_url,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
-                timeout=30,
-                verify=TLS_VERIFY,
-            )
+            elapsed = 0
+            while elapsed < max_wait:
+                r_inf = requests.post(
+                    model_completions_url,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
+                    timeout=30,
+                    verify=TLS_VERIFY,
+                )
+                if r_inf.status_code == 403:
+                    break
+                time.sleep(poll_interval)
+                elapsed += poll_interval
             assert r_inf.status_code == 403, (
-                f"Key {i} should be rejected after bulk revoke, got {r_inf.status_code}: {r_inf.text}"
+                f"Key {i} should be rejected within {max_wait}s after bulk revoke, got {r_inf.status_code}: {r_inf.text}"
             )
         print("[bulk-revoke] All 3 keys correctly rejected at gateway after bulk revoke")

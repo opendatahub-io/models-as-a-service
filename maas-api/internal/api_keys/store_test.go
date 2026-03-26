@@ -104,8 +104,15 @@ func TestAPIKeyOperations(t *testing.T) {
 	// Verify that revoking an already-revoked key returns ErrKeyNotFound,
 	// matching PostgreSQL behavior: only keys with status='active' can be revoked.
 	t.Run("RevokeAlreadyRevokedKey", func(t *testing.T) {
-		// key-id-1 was already revoked in RevokeKey subtest above
-		err := store.Revoke(ctx, "key-id-1")
+		// Create a fresh key, revoke it, then try revoking again
+		err := store.AddKey(ctx, "user3", "key-revoke-twice", "hash-revoke-twice", "revoke-twice", "", nil, "sub-1", nil, false)
+		require.NoError(t, err)
+
+		err = store.Revoke(ctx, "key-revoke-twice")
+		require.NoError(t, err)
+
+		// Second revoke should fail — key is no longer active
+		err = store.Revoke(ctx, "key-revoke-twice")
 		require.ErrorIs(t, err, api_keys.ErrKeyNotFound)
 	})
 
