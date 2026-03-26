@@ -778,6 +778,26 @@ components:
                     type: string
                     description: Model URL (optional)
                     example: https://api.example.com/v1/models/llama-2-7b-chat
+                modelDetails:
+                    type: object
+                    description: Additional model metadata from MaaSModelRef annotations
+                    properties:
+                        displayName:
+                            type: string
+                            description: Human-readable display name (from openshift.io/display-name annotation)
+                            example: Llama 2 7B Chat
+                        description:
+                            type: string
+                            description: Model description (from openshift.io/description annotation)
+                            example: A large language model optimized for chat use cases
+                        genaiUseCase:
+                            type: string
+                            description: GenAI use case category (from opendatahub.io/genai-use-case annotation)
+                            example: chat
+                        contextWindow:
+                            type: string
+                            description: Context window size (from opendatahub.io/context-window annotation)
+                            example: "4096"
                 kind:
                     type: string
                     description: The model reference kind (e.g., "LLMInferenceService")
@@ -801,6 +821,11 @@ components:
                 owned_by: model-namespace/llama-2-7b-chat
                 ready: true
                 url: https://api.example.com/v1/models/llama-2-7b-chat
+                modelDetails:
+                    displayName: Llama 2 7B Chat
+                    description: A large language model optimized for chat use cases
+                    genaiUseCase: chat
+                    contextWindow: "4096"
                 kind: LLMInferenceService
                 subscriptions:
                     - name: premium-subscription
