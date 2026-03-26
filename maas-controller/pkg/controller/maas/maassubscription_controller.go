@@ -20,8 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -275,7 +275,6 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			}
 		}
 	}
-
 	if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
 		return err
 	}
@@ -372,7 +371,6 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 		if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
 			return ctrl.Result{}, err
 		}
-
 		controllerutil.RemoveFinalizer(subscription, maasSubscriptionFinalizer)
 		if err := r.Update(ctx, subscription); err != nil {
 			return ctrl.Result{}, err
