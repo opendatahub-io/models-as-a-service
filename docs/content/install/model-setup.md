@@ -91,11 +91,11 @@ kubectl get pods -n llm
 **Validate MaaSModelRef status** — The MaaS controller populates `status.endpoint` and `status.phase` on each MaaSModelRef from the LLMInferenceService. The MaaSModelRef `status.endpoint` should match the URL exposed by the LLMInferenceService (via the gateway). Verify:
 
 ```bash
-# Check MaaSModelRef status (use opendatahub for ODH, redhat-ods-applications for RHOAI)
-kubectl get maasmodelref -n opendatahub -o wide
+# Check MaaSModelRef status (same namespace as the LLMInferenceService, e.g. llm)
+kubectl get maasmodelref -n llm -o wide
 
 # Verify status.endpoint is populated and phase is Ready
-kubectl get maasmodelref -n opendatahub -o jsonpath='{range .items[*]}{.metadata.name}: phase={.status.phase} endpoint={.status.endpoint}{"\n"}{end}'
+kubectl get maasmodelref -n llm -o jsonpath='{range .items[*]}{.metadata.name}: phase={.status.phase} endpoint={.status.endpoint}{"\n"}{end}'
 
 # Compare with LLMInferenceService — status.endpoint should match the URL from LLMIS status.addresses or status.url
 kubectl get llminferenceservice -n llm -o yaml | grep "url:"

@@ -35,8 +35,8 @@ Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway leve
 ### CRDs and what they generate
 
 As MaaS API and controller are conventionally deployed in the operator namespace (e.g., `opendatahub`), MaaS CRs need to be separated so that they can be managed with lower cluster privileges. Therefore,
-- **MaasModelRef** is located in the same namespace as the **HTTPRoute** and **LLMInderenceService** it refers to; and
-- **MaaSAuthPolicy** and **MaaSSubscription** are located in a dedicated subscription namespace (default: `models-as-a-service`). Set `--maas-subscription-namespace` or the `MAAS_SUBSCRIPTION_NAMESPACE` env var in `maas-controller` deployment to use another namespace. MaaS controller will only watch and reconcile those CRs this configured namespace.
+- **MaaSModelRef** is located in the same namespace as the **HTTPRoute** and **LLMInferenceService** it refers to; and
+- **MaaSAuthPolicy** and **MaaSSubscription** are located in a dedicated subscription namespace (default: `models-as-a-service`). Set `--maas-subscription-namespace` or the `MAAS_SUBSCRIPTION_NAMESPACE` env var in `maas-controller` deployment to use another namespace. MaaS controller will only watch and reconcile those CRs in this configured namespace.
 
 | You create | Controller generates | Per | Targets |
 | ---------- | -------------------- | --- | ------- |
@@ -66,12 +66,12 @@ spec:
     kind: LLMInferenceService
     name: my-llmisvc
 ---
-# MaaSAuthPolicy in opendatahub namespace references model in llm namespace
+# MaaSAuthPolicy in models-as-a-service namespace references model in llm namespace
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSAuthPolicy
 metadata:
   name: my-policy
-  namespace: opendatahub
+  namespace: models-as-a-service
 spec:
   modelRefs:
     - name: my-model
@@ -81,7 +81,7 @@ spec:
       - name: my-group
 ```
 
-The controller creates a Kuadrant **AuthPolicy** in the `llm` namespace (where the model and HTTPRoute exist), not in `opendatahub` (where the MaaSAuthPolicy lives).
+The controller creates a Kuadrant **AuthPolicy** in the `llm` namespace (where the model and HTTPRoute exist), not in `models-as-a-service` (where the MaaSAuthPolicy lives).
 
 **Same model name, different namespaces:**
 
@@ -99,7 +99,7 @@ spec:
 
 This creates two separate AuthPolicies: one in `team-a`, one in `team-b`.
 
-**Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModelRef** CRs (in the API's namespace). Each MaaSModelRef's `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModelRef objects is the source of truth for "which models are available" in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
+**Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModelRef** CRs cluster-wide (all namespaces). Each MaaSModelRef's `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModelRef objects is the source of truth for "which models are available" in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
 
 ### Model kinds and the provider pattern
 
@@ -270,13 +270,13 @@ This creates:
 ### Regular tier
 
 - `LLMInferenceService/facebook-opt-125m-simulated` in `llm` namespace
-- `MaaSModelRef/facebook-opt-125m-simulated` in `opendatahub`
+- `MaaSModelRef/facebook-opt-125m-simulated` in `llm`
 - `MaaSAuthPolicy/simulator-access` (group: `free-user`) and `MaaSSubscription/simulator-subscription` (100 tokens/min) in `models-as-a-service`
 
 ### Premium tier
 
 - `LLMInferenceService/premium-simulated-simulated-premium` in `llm` namespace
-- `MaaSModelRef/premium-simulated-simulated-premium` in `opendatahub`
+- `MaaSModelRef/premium-simulated-simulated-premium` in `llm`
 - `MaaSAuthPolicy/premium-simulator-access` (group: `premium-user`) and `MaaSSubscription/premium-simulator-subscription` (1000 tokens/min) in `models-as-a-service`
 
 Replace `free-user` and `premium-user` in the example CRs with groups from your identity provider.
@@ -285,7 +285,7 @@ Then verify:
 
 ```bash
 # Check CRs
-kubectl get maasmodelref -n opendatahub
+kubectl get maasmodelref -n llm
 kubectl get maasauthpolicy,maassubscription -n models-as-a-service
 
 # Check generated Kuadrant policies
