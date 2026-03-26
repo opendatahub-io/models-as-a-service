@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -58,22 +59,33 @@ func init() {
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
 }
 
-// ensureSubscriptionNamespaceExists creates the subscription namespace if it doesn't exist.
-// This allows users to create MaaS CRs without manually creating the namespace.
-// It retries with exponential backoff to handle transient failures.
+// ensureSubscriptionNamespaceExists checks whether the subscription namespace exists
+// and creates it if missing. It checks for existence first so that the controller can
+// start even when the service account lacks namespace-create permission (common in
+// operator-managed deployments where the operator pre-creates the namespace).
+// Permanent errors such as Forbidden are not retried.
 func ensureSubscriptionNamespaceExists(ctx context.Context, namespace string) error {
+	cfg := ctrl.GetConfigOrDie()
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("unable to create Kubernetes client: %w", err)
+	}
+
+	_, err = clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err == nil {
+		setupLog.Info("subscription namespace already exists", "namespace", namespace)
+		return nil
+	}
+	if !errors.IsNotFound(err) {
+		return fmt.Errorf("unable to check if namespace %q exists: %w", namespace, err)
+	}
+
+	setupLog.Info("subscription namespace not found, attempting to create it", "namespace", namespace)
 	return wait.ExponentialBackoffWithContext(ctx, wait.Backoff{
 		Steps:    5,
 		Duration: 1 * time.Second,
 		Factor:   2.0,
 	}, func(ctx context.Context) (bool, error) {
-		cfg := ctrl.GetConfigOrDie()
-		clientset, err := kubernetes.NewForConfig(cfg)
-		if err != nil {
-			setupLog.Info("retrying namespace creation", "namespace", namespace, "error", err)
-			return false, nil // retry
-		}
-
 		ns := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace,
@@ -83,13 +95,18 @@ func ensureSubscriptionNamespaceExists(ctx context.Context, namespace string) er
 			},
 		}
 
-		_, err = clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-		if err != nil && !errors.IsAlreadyExists(err) {
-			setupLog.Info("retrying namespace creation", "namespace", namespace, "error", err)
-			return false, nil // retry
+		_, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+		if err == nil || errors.IsAlreadyExists(err) {
+			setupLog.Info("subscription namespace ready", "namespace", namespace)
+			return true, nil
 		}
-		setupLog.Info("subscription namespace ready", "namespace", namespace)
-		return true, nil // success
+		if errors.IsForbidden(err) {
+			return false, fmt.Errorf("service account lacks permission to create namespace %q — "+
+				"either pre-create the namespace or grant 'create' on namespaces to the controller service account: %w",
+				namespace, err)
+		}
+		setupLog.Info("retrying namespace creation", "namespace", namespace, "error", err)
+		return false, nil // transient error, retry
 	})
 }
 

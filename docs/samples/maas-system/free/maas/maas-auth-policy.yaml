@@ -3,6 +3,9 @@ kind: MaaSAuthPolicy
 metadata:
   name: simulator-access
   namespace: models-as-a-service
+  annotations:
+    openshift.io/display-name: "Simulator Access (Free)"
+    openshift.io/description: "Grants all authenticated users access to the free-tier simulator model"
 spec:
   modelRefs:
     - name: facebook-opt-125m-simulated
