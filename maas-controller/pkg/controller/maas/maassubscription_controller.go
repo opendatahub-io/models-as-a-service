@@ -158,6 +158,21 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		return fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", modelNamespace, modelName, err)
 	}
 
+	// Check if existing TRLP is opted-out before doing any expensive work
+	policyName := fmt.Sprintf("maas-trlp-%s", modelName)
+	existingCheck := &unstructured.Unstructured{}
+	existingCheck.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	existingCheck.SetName(policyName)
+	existingCheck.SetNamespace(httpRouteNS)
+	if err := r.Get(ctx, client.ObjectKeyFromObject(existingCheck), existingCheck); err == nil {
+		if !isManaged(existingCheck) {
+			log.Info("TokenRateLimitPolicy opted out, skipping reconciliation", "name", policyName, "namespace", httpRouteNS, "model", modelNamespace+"/"+modelName)
+			return nil
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to check existing TokenRateLimitPolicy: %w", err)
+	}
+
 	// If no subscriptions remain, delete the TRLP
 	if len(allSubs) == 0 {
 		log.Info("no active subscriptions for model, deleting TokenRateLimitPolicy", "model", modelNamespace+"/"+modelName)
@@ -237,7 +252,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	sort.Strings(subNames)
 
 	// Build the aggregated TokenRateLimitPolicy (one per model, covering all subscriptions)
-	policyName := fmt.Sprintf("maas-trlp-%s", modelName)
+	// policyName already declared during early opt-out check
 	policy := &unstructured.Unstructured{}
 	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 	policy.SetName(policyName)
@@ -282,8 +297,10 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	} else if err != nil {
 		return fmt.Errorf("failed to get existing TokenRateLimitPolicy: %w", err)
 	} else {
+		// Double-check managed status as a safety check for races (TRLP could have been
+		// opted-out between the early check and now).
 		if !isManaged(existing) {
-			log.Info("TokenRateLimitPolicy opted out, skipping", "name", policyName)
+			log.Info("TokenRateLimitPolicy opted out during reconciliation, skipping update", "name", policyName)
 		} else {
 			// Ensure owner reference is set on managed existing policy.
 			if err := controllerutil.SetControllerReference(route, existing, r.Scheme); err != nil {
