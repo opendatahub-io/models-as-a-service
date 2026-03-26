@@ -65,11 +65,6 @@ spec:
                     maxLength: 253
                     minLength: 1
                     type: string
-                  namespace:
-                    description: Namespace is the namespace of the Secret. Defaults
-                      to the ExternalModel namespace if omitted.
-                    maxLength: 253
-                    type: string
                 required:
                 - name
                 type: object

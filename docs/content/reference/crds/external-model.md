@@ -14,8 +14,7 @@ Defines an external AI/ML model hosted outside the cluster (e.g., OpenAI, Anthro
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| name | string | Yes | Name of the Secret containing the credentials. Max length: 253 characters. |
-| namespace | string | No | Namespace of the Secret. Defaults to the ExternalModel's namespace if not specified. |
+| name | string | Yes | Name of the Secret containing the credentials. Must be in the same namespace as the ExternalModel. Max length: 253 characters. |
 
 ## ExternalModelStatus
 

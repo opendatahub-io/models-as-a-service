@@ -79,6 +79,7 @@ spec:
                       For LLMInferenceService, this is the InferenceService name.
                       For ExternalModel, this is the ExternalModel CR name.
                     maxLength: 253
+                    minLength: 1
                     type: string
                 required:
                 - kind
