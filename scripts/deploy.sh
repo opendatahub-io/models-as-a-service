@@ -29,6 +29,7 @@
 # ENVIRONMENT VARIABLES:
 #   MAAS_API_IMAGE            Custom MaaS API container image
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+#   MAAS_SUBSCRIPTION_NAMESPACE  Subscription namespace for MaaS CRs (default: models-as-a-service)
 #   OPERATOR_TYPE             Operator type (rhoai/odh)
 #   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #   KUSTOMIZE_FORCE_CONFLICTS When true, use --force-conflicts on kubectl apply in kustomize mode
@@ -172,6 +173,7 @@ ADVANCED OPTIONS (PR Testing):
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+  MAAS_SUBSCRIPTION_NAMESPACE  Subscription namespace for MaaS CRs (default: models-as-a-service)
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
   OPERATOR_STARTING_CSV     ODH Subscription startingCSV (default: opendatahub-operator.v3.4.0-ea.1; "-" to omit)
