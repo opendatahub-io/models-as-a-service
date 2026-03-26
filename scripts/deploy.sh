@@ -892,6 +892,11 @@ deploy_via_kustomize() {
   # created by maas-controller when it starts (see maas-controller/cmd/manager/main.go).
   # We only set the variable here for use in manifest patching below.
   local subscription_namespace="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+  # Validate namespace format (DNS-1123 label)
+  if [[ ! "$subscription_namespace" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+    log_error "Invalid MAAS_SUBSCRIPTION_NAMESPACE: '$subscription_namespace' must be a valid Kubernetes namespace"
+    exit 1
+  fi
 
   #──────────────────────────────────────────────────────────────
   # POSTGRESQL
