@@ -57,7 +57,7 @@ flowchart TB
 
 **Summary:** You declare intent with MaaS CRs; the controller turns that into Gateway/Kuadrant resources that attach to the same HTTPRoute and backend (e.g. KServe LLMInferenceService).
 
-The **MaaS API** GET /v1/models endpoint uses MaaSModelRef CRs as its primary source: it lists them in the API namespace, then **validates access** by probing each model’s `/v1/models` endpoint with the client’s **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is. (Once minting is in place, this may be revisited.)
+The **MaaS API** GET /v1/models endpoint uses MaaSModelRef CRs as its primary source: it reads them cluster-wide (all namespaces), then **validates access** by probing each model’s `/v1/models` endpoint with the client’s **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is.
 
 ---
 
@@ -213,7 +213,7 @@ flowchart LR
     Deploy --> Examples
 ```
 
-- **Namespace**: Controller and default MaaS CRs live in **opendatahub** (configurable).
+- **Namespaces**: MaaS API and controller default to **opendatahub** (configurable). MaaSAuthPolicy and MaaSSubscription default to **models-as-a-service** (configurable). MaaSModelRef must live in the **same namespace** as the model it references (e.g. **llm**).
 - **Install**: `./scripts/deploy.sh` installs the full stack including the controller. Optionally run `./scripts/install-examples.sh` for sample MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription.
 
 ---
@@ -233,7 +233,7 @@ The Kuadrant AuthPolicy validates API keys via the MaaS API and validates user t
 | Topic | Summary |
 |-------|---------|
 | **What** | MaaS Controller = control plane that reconciles MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription into Gateway API and Kuadrant resources. |
-| **Where** | Single controller in `maas-controller`; CRs and generated resources can live in opendatahub or other namespaces. |
+| **Where** | Single controller in `opendatahub`; MaaSAuthPolicy / MaaSSubscription default to `models-as-a-service`; MaaSModelRef and generated Kuadrant policies target their model’s namespace. |
 | **How** | Three reconcilers watch MaaS CRs (and related resources); each creates/updates HTTPRoutes, AuthPolicies, or TokenRateLimitPolicies. |
 | **Identity bridge** | AuthPolicy exposes all user groups as a comma-separated `groups_str`; TokenRateLimitPolicy uses `groups_str.split(",").exists(...)` for subscription matching (the “string trick”). |
 | **Deploy** | Run `./scripts/deploy.sh`; optionally install examples. |

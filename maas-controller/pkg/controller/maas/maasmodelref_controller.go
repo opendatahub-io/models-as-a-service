@@ -139,6 +139,13 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
 			return ctrl.Result{}, nil
 		}
+		if errors.Is(err, ErrHTTPRouteNotFound) {
+			// HTTPRoute doesn't exist yet - this is normal during startup.
+			// Set status to Pending (not Failed). The HTTPRoute watch will trigger reconciliation when the route is created.
+			model.Status.Endpoint = ""
+			r.updateStatus(ctx, model, "Pending", "Waiting for HTTPRoute to be created", statusSnapshot)
+			return ctrl.Result{}, nil
+		}
 		log.Error(err, "failed to reconcile HTTPRoute")
 		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to reconcile HTTPRoute: %v", err), statusSnapshot)
 		return ctrl.Result{}, err

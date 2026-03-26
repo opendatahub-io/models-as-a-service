@@ -31,7 +31,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
   name: my-model
-  namespace: opendatahub
+  namespace: llm
 spec:
   modelRef:
     kind: LLMInferenceService
@@ -63,7 +63,7 @@ The controller:
 
 ## API Behavior
 
-- The API reads MaaSModelRefs from the informer cache, maps each to an API model (`id`, `url`, `ready`, `kind`, etc.)
+- The API reads MaaSModelRefs cluster-wide, maps each to an API model (`id`, `url`, `ready`, `kind`, etc.)
 - **Access validation**: Probes each model's `/v1/models` endpoint with the request's Authorization header. Only models that return 2xx or 405 are included.
 - **Kind on the wire**: Each model in the GET /v1/models response carries a `kind` field from `spec.modelRef.kind`
 
@@ -92,6 +92,6 @@ To support a new backend type (a new **kind** in `spec.modelRef`):
 ## Summary
 
 - **modelRef** is the backend reference (kind, name, optional namespace), analogous to [Gateway API BackendRef](https://gateway-api.sigs.k8s.io/reference/spec/#backendref).
-- **Listing:** Always from MaaSModelRef cache; no kind-specific listing logic.
+- **Listing:** Always from MaaSModelRef resources cluster-wide; no kind-specific listing logic.
 - **Access validation:** Same probe (GET endpoint with the request's Authorization header as-is) for all kinds unless kind-specific probes are added later.
 - **New kinds:** Implement in the controller (resolve referent, set status.endpoint and status.phase); extend the API only if the new kind cannot use the same probe path or needs different enrichment.
