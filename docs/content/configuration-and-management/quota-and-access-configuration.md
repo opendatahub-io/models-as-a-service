@@ -121,6 +121,7 @@ spec:
       tokenRateLimits:
         - limit: 100
           window: 1m
+  priority: 10
 EOF
 ```
 
@@ -162,6 +163,7 @@ spec:
       tokenRateLimits:
         - limit: 100000
           window: 24h
+  priority: 20
   tokenMetadata:
     organizationId: "premium-org"
     costCenter: "ai-team"
@@ -216,28 +218,9 @@ Users will get subscription access on their next request (after group membership
 
 ## Multiple Subscriptions per User
 
-When a user belongs to multiple groups that each have a subscription:
-
-1. **Single subscription** — No `X-MaaS-Subscription` header needed
-2. **Multiple subscriptions** — Client **must** send `X-MaaS-Subscription: <subscription-name>` to specify which subscription's rate limits apply
-
-Example for a user in both `free-users` and `premium-users`:
-
-```bash
-# Use free subscription limits
-curl -H "X-MaaS-Subscription: free-subscription" ...
-
-# Use premium subscription limits
-curl -H "X-MaaS-Subscription: premium-subscription" ...
-```
+When a user belongs to multiple groups that each have a subscription, the access depends on the API key used. A subscription is bound to each API key at minting (explicit or highest priority). See [Understanding Token Management](token-management.md).
 
 ## Troubleshooting
-
-### 403 Forbidden: "must specify X-MaaS-Subscription"
-
-**Cause:** User has multiple subscriptions and did not send the header.
-
-**Fix:** Add `X-MaaS-Subscription: <subscription-name>` to the request.
 
 ### 403 Forbidden: "no access to subscription"
 

@@ -30,6 +30,11 @@ rules:
   resources: ["tokenreviews"]
   verbs: ["create"]
 
+# Subject access review for admin authorization (SAR-based admin check)
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+
 # MaaS CRs for the models endpoint and subscription selector (cached via informer)
 - apiGroups: ["maas.opendatahub.io"]
   resources: ["maasmodelrefs", "maassubscriptions"]

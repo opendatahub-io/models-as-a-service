@@ -220,14 +220,11 @@ flowchart LR
 
 ## 9. Authentication (Current Behavior)
 
-For **GET /v1/models**, the API forwards the client’s **Authorization** header as-is to each model endpoint (no token exchange). For inference, until MaaS API token minting is in place, use the **OpenShift token**:
+For **GET /v1/models**, the maas-api forwards the client’s **Authorization** header as-is to each model endpoint (no token exchange). You can use an **OpenShift token** or an **API key** (`sk-oai-*`). With a user token, you may send `X-MaaS-Subscription` to filter when you have access to multiple subscriptions.
 
-```bash
-export TOKEN=$(oc whoami -t)
-curl -H "Authorization: Bearer $TOKEN" "https://<gateway-host>/llm/<model-name>/v1/chat/completions" -d '...'
-```
+For **model inference** (requests to `…/llm/<model>/v1/chat/completions` and similar), use an **API key** created via `POST /v1/api-keys` only. Each key is bound to one MaaSSubscription at mint time.
 
-The Kuadrant AuthPolicy validates this token via **Kubernetes TokenReview** and derives user/groups for authorization and for the identity passed to TokenRateLimitPolicy (including `groups_str`).
+The Kuadrant AuthPolicy validates API keys via the MaaS API and validates user tokens via `Kubernetes TokenReview`, deriving user/groups for authorization and for TokenRateLimitPolicy (including `groups_str`).
 
 ---
 

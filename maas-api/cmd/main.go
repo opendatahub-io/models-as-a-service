@@ -161,7 +161,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister)
 	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector)
 
-	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, log)
+	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
