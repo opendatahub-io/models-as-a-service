@@ -602,12 +602,12 @@ func TestCleanupExpiredEphemeral(t *testing.T) {
 		svc, store := createTestService(t)
 
 		// Add active regular key
-		err := store.AddKey(ctx, "alice", "regular-1", "hash-1", "Regular", "", nil, nil, false)
+		err := store.AddKey(ctx, "alice", "regular-1", "hash-1", "Regular", "", nil, "default-sub", nil, false)
 		require.NoError(t, err)
 
 		// Add expired ephemeral key
 		pastExpiry := time.Now().Add(-1 * time.Hour)
-		err = store.AddKey(ctx, "alice", "ephemeral-1", "hash-2", "Ephemeral", "", nil, &pastExpiry, true)
+		err = store.AddKey(ctx, "alice", "ephemeral-1", "hash-2", "Ephemeral", "", nil, "default-sub", &pastExpiry, true)
 		require.NoError(t, err)
 
 		count, err := svc.CleanupExpiredEphemeral(ctx)
