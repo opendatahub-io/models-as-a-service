@@ -38,7 +38,7 @@ API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer ${OC_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST \
-  -d '{"name": "my-api-key", "description": "Key for model access", "expiresIn": "90d"}' \
+  -d '{"name": "my-api-key", "description": "Key for model access", "expiresIn": "90d", "subscription": "simulator-subscription"}' \
   "${MAAS_API_URL}/maas-api/v1/api-keys")
 
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
@@ -48,7 +48,7 @@ echo "Key prefix: ${API_KEY:0:16}..."
 echo "Bound subscription: ${SUBSCRIPTION}"
 ```
 
-To pin a specific subscription, add it to the JSON body, for example: `"subscription": "my-team-subscription"`.
+Replace `simulator-subscription` with your MaaSSubscription metadata name, or remove the `subscription` field to bind the **highest-priority** subscription you can access.
 
 !!! warning "API key shown only once"
     The plaintext API key is returned **only at creation time**. We do not store the API key, so there is no way to retrieve it again. Store it securely when it is displayed. If you run into errors, see [Troubleshooting](../install/troubleshooting.md).
@@ -109,6 +109,8 @@ echo $MODEL_INFO | jq .
 ```
 
 ## Making Inference Requests
+
+Use **only** your API key in `Authorization: Bearer`. The subscription is fixed when the key was created.
 
 ### Basic Chat Completion
 

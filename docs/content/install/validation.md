@@ -33,7 +33,7 @@ API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
-  -d '{"name": "validation-key", "description": "Key for validation", "expiresIn": "1h"}' \
+  -d '{"name": "validation-key", "description": "Key for validation", "expiresIn": "1h", "subscription": "simulator-subscription"}' \
   "${HOST}/maas-api/v1/api-keys") && \
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key) && \
 echo "API key obtained: ${API_KEY:0:20}..."
@@ -43,21 +43,16 @@ echo "API key obtained: ${API_KEY:0:20}..."
     The plaintext API key is returned **only at creation time**. We do not store the API key, so there is no way to retrieve it again. Store it securely when it is displayed. If you run into errors, see [Troubleshooting](troubleshooting.md).
 
 !!! note
-    For more information about API keys, see [Understanding Token Management](../configuration-and-management/token-management.md).
+    `subscription` is the MaaSSubscription metadata name to bind (here `simulator-subscription` matches the [maas-system](https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/maas-system) free sample). Use your own name or omit the field to auto-select by `spec.priority`. For details, see [Understanding Token Management](../configuration-and-management/token-management.md).
 
 ### 3. List Available Models
 
-Set the subscription name (required when your API key matches multiple subscriptions; use the name from your MaaSSubscription CR):
-
-```bash
-export MaaS_SUBSCRIPTION="simulator-subscription"  # or your subscription name
-```
+Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models` with an API key does not require `X-MaaS-Subscription`—the list is scoped to that subscription. (With an OpenShift user token instead of an API key, you can optionally send `X-MaaS-Subscription` to filter when you have access to multiple subscriptions.)
 
 ```bash
 MODELS=$(curl -sSk ${HOST}/maas-api/v1/models \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $API_KEY" \
-    -H "X-MaaS-Subscription: ${MaaS_SUBSCRIPTION}" | jq -r .) && \
+    -H "Authorization: Bearer $API_KEY" | jq -r .) && \
 echo $MODELS | jq . && \
 MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id') && \
 MODEL_URL=$(echo $MODELS | jq -r '.data[0].url') && \
