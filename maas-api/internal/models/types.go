@@ -12,9 +12,10 @@ import (
 
 // Details contains additional metadata from LLMInferenceService annotations.
 type Details struct {
-	GenAIUseCase string `json:"genaiUseCase,omitempty"`
-	Description  string `json:"description,omitempty"`
-	DisplayName  string `json:"displayName,omitempty"`
+	GenAIUseCase  string `json:"genaiUseCase,omitempty"`
+	Description   string `json:"description,omitempty"`
+	DisplayName   string `json:"displayName,omitempty"`
+	ContextWindow string `json:"contextWindow,omitempty"`
 }
 
 // SubscriptionInfo contains metadata about which subscription provides access to a model.

@@ -25,10 +25,9 @@ kustomize build docs/samples/maas-system/ | kubectl apply -f -
 # Or deploy a specific sample
 kustomize build docs/samples/maas-system/facebook-opt-125m-cpu/ | kubectl apply -f -
 kustomize build docs/samples/maas-system/qwen3/ | kubectl apply -f -
-```
 
 # Verify
-kubectl get maasmodelref -n opendatahub
+kubectl get maasmodelref -n llm
 kubectl get maasauthpolicy,maassubscription -n models-as-a-service
 kubectl get llminferenceservice -n llm
 ```
@@ -44,7 +43,7 @@ kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
 kustomize build docs/samples/maas-system | sed "s/namespace: models-as-a-service/namespace: my-namespace/g" | kubectl apply -f -
 
 # Verify
-kubectl get maasmodelref -n opendatahub
+kubectl get maasmodelref -n llm
 kubectl get maasauthpolicy,maassubscription -n my-namespace
 kubectl get llminferenceservice -n llm
 ```

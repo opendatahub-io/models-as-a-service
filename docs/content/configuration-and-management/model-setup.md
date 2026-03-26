@@ -122,6 +122,77 @@ spec:
 
 ### Complete example
 
+Add the `alpha.maas.opendatahub.io/tiers` annotation to enable automatic RBAC setup for tier-based access:
+
+```yaml
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: my-production-model
+  namespace: llm
+  annotations:
+    alpha.maas.opendatahub.io/tiers: '[]'
+spec:
+  # ... rest of spec ...
+```
+
+**Annotation Values:**
+
+- **Empty list `[]`**: Grants access to **all tiers** (recommended for most models)
+- **List of tier names**: Grants access to specific tiers only
+  - Example: `'["premium","enterprise"]'` - only premium and enterprise tiers can access
+- **Missing annotation**: **No tiers** have access by default (model won't be accessible via MaaS)
+
+**Examples:**
+
+Allow all tiers:
+
+```yaml
+annotations:
+  alpha.maas.opendatahub.io/tiers: '[]'
+```
+
+Allow specific tiers:
+
+```yaml
+annotations:
+  alpha.maas.opendatahub.io/tiers: '["premium","enterprise"]'
+```
+
+### Step 3: Add Display Metadata (Optional)
+
+Add standard annotations to your **MaaSModelRef** to provide human-readable names and descriptions in the `GET /v1/models` API response:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: my-production-model
+  namespace: llm
+  annotations:
+    openshift.io/display-name: "My Production Model"
+    openshift.io/description: "A fine-tuned model for production workloads"
+    opendatahub.io/genai-use-case: "chat"
+    opendatahub.io/context-window: "8192"
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: my-production-model
+```
+
+These annotations are returned in the `modelDetails` field of the API response. All are optional. See [CRD annotations](crd-annotations.md) for the full list of supported annotations across all MaaS CRDs.
+
+### What the Annotation Does
+
+This annotation automatically creates the necessary RBAC resources (Roles and RoleBindings) that allow tier-specific service accounts to POST to your `LLMInferenceService`. The ODH Controller handles this automatically when the annotation is present.
+
+Behind the scenes, it creates:
+
+- **Role**: Grants `POST` permission on `llminferenceservices` resource
+- **RoleBinding**: Binds tier service account groups (e.g., `system:serviceaccounts:maas-default-gateway-tier-premium`) to the role
+
+### Complete Example
+
 Here's a complete example of an LLMInferenceService configured for MaaS:
 
 ```yaml

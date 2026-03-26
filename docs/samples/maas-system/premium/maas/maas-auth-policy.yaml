@@ -3,6 +3,9 @@ kind: MaaSAuthPolicy
 metadata:
   name: premium-simulator-access
   namespace: models-as-a-service
+  annotations:
+    openshift.io/display-name: "Premium Simulator Access"
+    openshift.io/description: "Grants premium-user group access to the premium simulator model"
 spec:
   modelRefs:
     - name: premium-simulated-simulated-premium

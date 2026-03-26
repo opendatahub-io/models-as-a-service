@@ -33,8 +33,8 @@ const (
 	maasModelRefGVRResource = "maasmodelrefs"
 )
 
-// maasModelRefUnstructured returns an unstructured MaaSModelRef for testing (name, namespace, endpoint URL, ready).
-func maasModelRefUnstructured(name, namespace, endpoint string, ready bool) *unstructured.Unstructured {
+// maasModelRefUnstructured returns an unstructured MaaSModelRef for testing (name, namespace, endpoint URL, ready, annotations).
+func maasModelRefUnstructured(name, namespace, endpoint string, ready bool, annotations map[string]string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   maasModelRefGVRGroup,
@@ -49,6 +49,9 @@ func maasModelRefUnstructured(name, namespace, endpoint string, ready bool) *uns
 		_ = unstructured.SetNestedField(u.Object, "Ready", "status", "phase")
 	}
 	_ = unstructured.SetNestedField(u.Object, "llmisvc", "spec", "modelRef", "kind")
+	if len(annotations) > 0 {
+		u.SetAnnotations(annotations)
+	}
 	return u
 }
 
@@ -262,10 +265,12 @@ func TestListingModels(t *testing.T) {
 				constant.AnnotationDescription:  "A large language model for general AI tasks",
 				constant.AnnotationDisplayName:  "Test Model Alpha",
 			},
-			// MaaSModelRef listing does not populate Details from annotations.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
-				_ = model
+				require.NotNil(t, model.Details, "Expected modelDetails to be populated from annotations")
+				assert.Equal(t, "Test Model Alpha", model.Details.DisplayName)
+				assert.Equal(t, "A large language model for general AI tasks", model.Details.Description)
+				assert.Equal(t, "General purpose LLM", model.Details.GenAIUseCase)
 			},
 		},
 		{
@@ -278,10 +283,12 @@ func TestListingModels(t *testing.T) {
 			Annotations: map[string]string{
 				constant.AnnotationDisplayName: "Test Model Beta",
 			},
-			// MaaSModelRef listing does not populate Details.
 			AssertDetails: func(t *testing.T, model models.Model) {
 				t.Helper()
-				_ = model
+				require.NotNil(t, model.Details, "Expected modelDetails to be populated from annotations")
+				assert.Equal(t, "Test Model Beta", model.Details.DisplayName)
+				assert.Empty(t, model.Details.Description)
+				assert.Empty(t, model.Details.GenAIUseCase)
 			},
 		},
 		{
@@ -304,7 +311,7 @@ func TestListingModels(t *testing.T) {
 	maasModelRefItems := make([]*unstructured.Unstructured, 0, len(llmTestScenarios))
 	for _, s := range llmTestScenarios {
 		endpoint := s.URL.String()
-		maasModelRefItems = append(maasModelRefItems, maasModelRefUnstructured(s.Name, fixtures.TestNamespace, endpoint, s.Ready))
+		maasModelRefItems = append(maasModelRefItems, maasModelRefUnstructured(s.Name, fixtures.TestNamespace, endpoint, s.Ready, s.Annotations))
 	}
 	maasModelRefLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelRefItems}
 
@@ -408,8 +415,8 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 
 	// Build MaaSModelRef unstructured list
 	maasModelRefItems := []*unstructured.Unstructured{
-		maasModelRefUnstructured("premium-model", fixtures.TestNamespace, premiumModelServer.URL, true),
-		maasModelRefUnstructured("free-model", fixtures.TestNamespace, freeModelServer.URL, true),
+		maasModelRefUnstructured("premium-model", fixtures.TestNamespace, premiumModelServer.URL, true, nil),
+		maasModelRefUnstructured("free-model", fixtures.TestNamespace, freeModelServer.URL, true, nil),
 	}
 	maasModelRefLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelRefItems}
 
@@ -589,9 +596,9 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	// Setup MaaSModelRef lister with three models
 	lister := fakeMaaSModelRefLister{
 		"test-ns": []*unstructured.Unstructured{
-			maasModelRefUnstructured("model-1", "test-ns", model1Server.URL, true),
-			maasModelRefUnstructured("model-2", "test-ns", model2Server.URL, true),
-			maasModelRefUnstructured("model-3", "test-ns", model3Server.URL, true),
+			maasModelRefUnstructured("model-1", "test-ns", model1Server.URL, true, nil),
+			maasModelRefUnstructured("model-2", "test-ns", model2Server.URL, true, nil),
+			maasModelRefUnstructured("model-3", "test-ns", model3Server.URL, true, nil),
 		},
 	}
 
@@ -787,7 +794,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 	// Setup MaaSModelRef lister with one model
 	lister := fakeMaaSModelRefLister{
 		"test-ns": []*unstructured.Unstructured{
-			maasModelRefUnstructured("shared-model", "test-ns", modelServer.URL, true),
+			maasModelRefUnstructured("shared-model", "test-ns", modelServer.URL, true, nil),
 		},
 	}
 
@@ -896,10 +903,10 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 	// Setup MaaSModelRef lister with two different MaaSModelRefs that return same model ID
 	lister := fakeMaaSModelRefLister{
 		"namespace-a": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true, nil),
 		},
 		"namespace-b": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true, nil),
 		},
 	}
 
@@ -996,10 +1003,10 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 	// Setup MaaSModelRef lister with two different MaaSModelRefs pointing to the SAME URL
 	lister := fakeMaaSModelRefLister{
 		"namespace-a": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-a", sharedModelServer.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-a", sharedModelServer.URL, true, nil),
 		},
 		"namespace-b": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-another-ref", "namespace-b", sharedModelServer.URL, true),
+			maasModelRefUnstructured("gpt-4-another-ref", "namespace-b", sharedModelServer.URL, true, nil),
 		},
 	}
 
@@ -1094,10 +1101,10 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 	// Setup MaaSModelRef lister with two different MaaSModelRefs in different namespaces
 	lister := fakeMaaSModelRefLister{
 		"namespace-a": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-a", modelServerA.URL, true, nil),
 		},
 		"namespace-b": []*unstructured.Unstructured{
-			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true),
+			maasModelRefUnstructured("gpt-4-ref", "namespace-b", modelServerB.URL, true, nil),
 		},
 	}
 

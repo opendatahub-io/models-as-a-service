@@ -2,7 +2,7 @@
 
 This document describes how the **GET /v1/models** endpoint discovers and returns the list of available models.
 
-The list is **based on MaaSModelRef** custom resources: the API returns models that are registered as MaaSModelRefs in its configured namespace.
+The list is **based on MaaSModelRef** custom resources: the API considers MaaSModelRef objects cluster-wide (all namespaces), then filters by access.
 
 ## Overview
 
@@ -17,15 +17,17 @@ Each entry includes an `id`, **`url`** (the model’s endpoint), a `ready` flag,
 
 ## MaaSModelRef flow
 
-When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed and the API is configured with a MaaSModelRef lister and namespace, the flow is:
+When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed and the API is configured with a MaaSModelRef lister, the flow is:
 
-1. The MaaS API lists all **MaaSModelRef** custom resources in its configured namespace (e.g. `opendatahub`). It reads them from an **in-memory cache** in the maas-api component (maintained by a Kubernetes informer), so it does not call the Kubernetes API on every request.
+1. The MaaS API discovers **MaaSModelRef** custom resources **cluster-wide** (all namespaces) without calling the Kubernetes API on every request.
 
 2. For each MaaSModelRef, it reads **id** (`metadata.name`), **url** (`status.endpoint`), **ready** (`status.phase == "Ready"`), and related metadata. The controller has populated `status.endpoint` and `status.phase` from the underlying LLMInferenceService (for llmisvc) or HTTPRoute/Gateway.
 
 3. **Access validation**: The API probes each model’s `/v1/models` endpoint with the **exact Authorization header** the client sent (passed through as-is). Only models that return **2xx**, **3xx** or **405** are included in the response. This ensures the list only shows models the client is authorized to use.
 
-4. The filtered list is returned to the client.
+4. For each model, the API reads **annotations** from the MaaSModelRef to populate `modelDetails` in the response (display name, description, use case, context window). See [CRD annotations](crd-annotations.md) for the full list.
+
+5. The filtered list is returned to the client.
 
 ```mermaid
 sequenceDiagram
@@ -53,7 +55,7 @@ sequenceDiagram
 
 - **Consistent with gateway**: The same model names and routes are used for inference; the list matches what the gateway will accept for that client.
 
-If the API is not configured with a MaaSModelRef lister and namespace, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.
+If the API is not configured with a MaaSModelRef lister, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.
 
 ## Subscription Filtering and Aggregation
 
@@ -172,14 +174,18 @@ To have models appear via the **MaaSModelRef** flow:
         kind: MaaSModelRef
         metadata:
           name: my-model-name   # This becomes the model "id" in GET /v1/models
-          namespace: opendatahub
+          namespace: llm          # Same namespace as the LLMInferenceService
+          annotations:
+            openshift.io/display-name: "My Model"                  # optional: human-readable name
+            openshift.io/description: "A general-purpose LLM"      # optional: description
+            opendatahub.io/genai-use-case: "chat"                  # optional: use case
+            opendatahub.io/context-window: "4096"                  # optional: context window
         spec:
           modelRef:
             kind: LLMInferenceService
             name: my-llm-isvc-name
-            namespace: llm
 
-4. The controller reconciles the MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API (in the same namespace) will then include this model in GET /v1/models when it lists MaaSModelRef CRs.
+4. The controller reconciles the MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API will then include this model in GET /v1/models when it lists MaaSModelRef CRs.
 
 You can use the [maas-system samples](https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/maas-system) as a template; the install script deploys LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly.
 
