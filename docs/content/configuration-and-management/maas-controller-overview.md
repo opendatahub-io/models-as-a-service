@@ -57,7 +57,7 @@ flowchart TB
 
 **Summary:** You declare intent with MaaS CRs; the controller turns that into Gateway/Kuadrant resources that attach to the same HTTPRoute and backend (e.g. KServe LLMInferenceService).
 
-The **MaaS API** GET /v1/models endpoint uses MaaSModelRef CRs as its primary source: it reads them from an informer cache that watches all namespaces, then **validates access** by probing each model’s `/v1/models` endpoint with the client’s **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is.
+The **MaaS API** GET /v1/models endpoint uses MaaSModelRef CRs as its primary source: it reads them cluster-wide (all namespaces), then **validates access** by probing each model’s `/v1/models` endpoint with the client’s **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is.
 
 ---
 
@@ -213,7 +213,7 @@ flowchart LR
     Deploy --> Examples
 ```
 
-- **Namespaces**: MaaS API and controller default to **opendatahub** (configurable). MaaSAuthPolicy and MaaSSubscription default to **models-as-a-service** (configurable). MaaSModelRef should live in the **same namespace** as the model it references (e.g. **llm**).
+- **Namespaces**: MaaS API and controller default to **opendatahub** (configurable). MaaSAuthPolicy and MaaSSubscription default to **models-as-a-service** (configurable). MaaSModelRef must live in the **same namespace** as the model it references (e.g. **llm**).
 - **Install**: `./scripts/deploy.sh` installs the full stack including the controller. Optionally run `./scripts/install-examples.sh` for sample MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription.
 
 ---
