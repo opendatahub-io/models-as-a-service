@@ -127,8 +127,8 @@ pytest tests/test_models_endpoint.py::TestModelsEndpoint::test_multi_subscriptio
 
 **What's Being Validated:**
 The `/v1/models` endpoint implements subscription-aware model filtering:
-- Users with a single subscription don't need to specify `x-maas-subscription` header
-- Users with multiple subscriptions must use `x-maas-subscription` header to select
+- With a **user token**, a single matching subscription can be auto-selected; with multiple subscriptions, the tests expect `X-MaaS-Subscription` when the platform cannot disambiguate.
+- With an **API key**, the subscription is fixed at mint time—listing does not rely on sending `X-MaaS-Subscription` for that case.
 - Returns proper error responses (403/401) with `permission_error`/`authentication_error` types
 - Models are correctly filtered to only show those from the specified subscription
 - Response structure matches OpenAPI schema: `{"object": "list", "data": [...]}`

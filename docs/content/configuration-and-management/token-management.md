@@ -3,7 +3,7 @@
 This guide explains the authentication and credential management used to access models in the MaaS Platform.
 
 !!! tip "API keys (current)"
-    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. When users have multiple subscriptions, include the `X-MaaS-Subscription` header. See [Quota and Access Configuration](quota-and-access-configuration.md).
+    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time (optional `subscription` in the request body; if omitted, the **highest `spec.priority`** subscription you can access is chosen). See [Quota and Access Configuration](quota-and-access-configuration.md) and [Subscription Known Issues](subscription-known-issues.md).
 
 !!! note "Prerequisites"
     This document assumes you have configured subscriptions (MaaSAuthPolicy, MaaSSubscription).
@@ -47,10 +47,13 @@ When you create an API key, you trade your OpenShift identity for a long-lived c
 
 ### Key Concepts
 
-- **Subscription**: Your access is determined by MaaSAuthPolicy and MaaSSubscription, which map groups to models and rate limits.
+- **Subscription binding**: Each key stores a MaaSSubscription name resolved at mint time. You can set it explicitly with the optional JSON field `subscription` on `POST /v1/api-keys`. If you omit it, the API selects your **highest-priority** accessible subscription (ties break deterministically—see operator notes below).
+- **Subscription access**: Your access is still determined by MaaSAuthPolicy and MaaSSubscription, which map groups to models and rate limits. The bound name is used for gateway subscription resolution and metering.
 - **User Groups**: At creation time, your current group membership is stored with the key. These groups are used for subscription-based authorization when the key is validated.
 - **API Key**: A cryptographically secure string with `sk-oai-*` prefix. The plaintext is shown once; only the SHA-256 hash is stored in PostgreSQL.
 - **Expiration**: Keys have a configurable TTL via `expiresIn` (e.g., `30d`, `90d`, `1h`). If omitted, the key defaults to the configured maximum (e.g., 90 days).
+
+The create response includes a `subscription` field echoing the bound subscription name.
 
 ### API Key Creation Flow
 
@@ -70,7 +73,8 @@ sequenceDiagram
     AuthPolicy->>AuthPolicy: Validate OpenShift token (TokenReview)
     AuthPolicy->>MaaS: 2. Forward request + user context (username, groups)
     MaaS->>MaaS: Generate sk-oai-* key, hash with SHA-256
-    MaaS->>DB: 3. Store hash + metadata (username, groups, name, expiresAt)
+    MaaS->>MaaS: Resolve subscription (explicit or highest priority)
+    MaaS->>DB: 3. Store hash + metadata (username, groups, subscription, name, expiresAt)
     DB-->>MaaS: Stored
     MaaS-->>User: 4. Return plaintext key ONCE (never stored)
 
@@ -100,10 +104,10 @@ sequenceDiagram
     AuthPolicy->>MaaS: 2. POST /internal/v1/api-keys/validate (key)
     MaaS->>MaaS: Hash key, lookup by hash
     MaaS->>DB: 3. SELECT by key_hash
-    DB-->>MaaS: username, groups, status
+    DB-->>MaaS: username, groups, subscription, status
     MaaS->>MaaS: Check status (active/revoked/expired)
-    MaaS-->>AuthPolicy: 4. valid: true, userId, groups
-    AuthPolicy->>AuthPolicy: Subscription lookup, rate limits
+    MaaS-->>AuthPolicy: 4. valid: true, userId, groups, subscription
+    AuthPolicy->>AuthPolicy: Subscription check, inject headers, rate limits
     AuthPolicy->>Model: 5. Authorized request (identity headers)
     Model-->>Gateway: Response
     Gateway-->>User: Response
@@ -112,7 +116,7 @@ sequenceDiagram
 The validation endpoint (`/internal/v1/api-keys/validate`) is called by Authorino on every request that bears an `sk-oai-*` token. It:
 
 1. Hashes the incoming key and looks it up in the database
-2. Returns `valid: true` with `userId` and `groups` if the key is active and not expired
+2. Returns `valid: true` with `userId`, `groups`, and `subscription` if the key is active and not expired
 3. Returns `valid: false` with a reason if the key is invalid, revoked, or expired
 
 ---
@@ -134,9 +138,12 @@ flowchart LR
 
 This means you can:
 
-1. **Authenticate with OpenShift or OIDC** — use your existing identity and the same token you would use for inference.
-2. **Use an API key** — use your `sk-oai-*` key in the Authorization header.
-3. **Call `/v1/models` immediately** — see only the models you can access, without creating an API key first (if using OpenShift token).
+1. **Authenticate with OpenShift or OIDC** — use your existing identity token for `GET /v1/models` (optional `X-MaaS-Subscription` when you have multiple subscriptions).
+2. **Use an API key** — use your `sk-oai-*` key in the Authorization header for listing and for inference.
+3. **Call `/v1/models` immediately** — see only the models you can access, without creating an API key first (if using an OpenShift token).
+
+!!! note "Inference vs listing"
+    Inference (calls to each model’s chat/completions URL) requires an API key in `Authorization: Bearer` only. Do not send `X-MaaS-Subscription` on inference—the subscription is the one bound at API key mint time. `GET /v1/models` accepts either an API key or an OpenShift token; with a user token, `X-MaaS-Subscription` remains supported for filtering.
 
 ---
 
@@ -195,7 +202,13 @@ Revocation updates the key status to `revoked` in the database. The next validat
 
 **Q: My subscription access is wrong. How do I fix it?**
 
-A: Your access is determined by your group membership in OpenShift at the time the API key was created. Those groups are stored with the key and used for subscription lookup. If your groups have changed, create a new API key to pick up the new membership.
+A: Your access is determined by your group membership in OpenShift at the time the API key was created. Those groups are stored with the key and used for authorization. The subscription name on the key is fixed at mint time; to use a different subscription, create another key with `"subscription": "<name>"`. If your groups have changed, create a new API key to pick up the new membership.
+
+---
+
+**Q: What if two MaaSSubscriptions use the same `spec.priority`?**
+
+A: API key mint and subscription selection use a deterministic order when priorities tie (e.g. token limit, then name). Operators should still assign distinct priorities when possible. The MaaSSubscription controller sets status condition `SpecPriorityDuplicate` and logs when another subscription shares the same priority—use that to clean up configuration.
 
 ---
 
@@ -213,19 +226,19 @@ A: Yes. Each call to `POST /v1/api-keys` creates a new, independent key. You can
 
 **Q: What happens if the maas-api service is down?**
 
-A: You will not be able to create or validate API keys. Inference requests that use API keys will fail until the service is back. OpenShift token–based requests may still work if the gateway is configured for both auth methods.
+A: You will not be able to create or validate API keys. Inference requests that use API keys will fail until the service is back.
 
 ---
 
 **Q: Can I use one API key to access multiple different models?**
 
-A: Yes. Your API key inherits your group membership at creation time. If your subscription is authorized to use multiple models, a single key works for all of them.
+A: Yes. Your API key is bound to a subscription at creation time. If that subscription provides access to multiple models, a single key works for all of them. To access models from a different subscription, create a new API key bound to that subscription.
 
 ---
 
 **Q: What's the difference between my OpenShift token and an API key?**
 
-A: Your **OpenShift token** is your identity token from authentication (e.g., OpenShift or OIDC). An **API key** is a long-lived credential created via `POST /v1/api-keys` and stored as a hash in PostgreSQL. For **GET /v1/models**, the API passes your Authorization header as-is to each model endpoint; you can use either. For inference, use a token your gateway accepts (OpenShift token or API key as configured).
+A: Your **OpenShift token** is your identity token from authentication (e.g., OpenShift or OIDC). An **API key** is a long-lived credential created via `POST /v1/api-keys` and stored as a hash in PostgreSQL. For **GET /v1/models**, the API passes your Authorization header as-is to each model endpoint; you can use either. For inference, use API key.
 
 ---
 
