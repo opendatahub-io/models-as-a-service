@@ -4,12 +4,30 @@ import (
 	"context"
 	"testing"
 
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+// newHTTPRouteForLLMISvc creates an HTTPRoute with labels expected by the LLMInferenceService route resolver
+func newHTTPRouteForLLMISvc(name, ns, llmisvcName string) *gatewayapiv1.HTTPRoute {
+	return &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      llmisvcName,
+				"app.kubernetes.io/component": "llminferenceservice-router",
+				"app.kubernetes.io/part-of":   "llminferenceservice",
+			},
+		},
+	}
+}
 
 // TestMaaSSubscriptionReconciler_TRLPMergeStrategy verifies that generated
 // TokenRateLimitPolicy resources use defaults.strategy: merge instead of
@@ -24,8 +42,8 @@ func TestMaaSSubscriptionReconciler_TRLPMergeStrategy(t *testing.T) {
 		maasSubName   = "sub-a"
 	)
 
-	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
-	route := newHTTPRoute(httpRouteName, namespace)
+	model := newMaaSModelRef(modelName, namespace, "LLMInferenceService", modelName)
+	route := newHTTPRouteForLLMISvc(httpRouteName, namespace, modelName)
 	maasSub := newMaaSSubscription(maasSubName, namespace, "team-a", modelName, 1000)
 
 	c := fake.NewClientBuilder().
@@ -88,7 +106,7 @@ func TestMaaSSubscriptionReconciler_TRLPMergeStrategyMultipleModels(t *testing.T
 		namespace = "default"
 		modelA    = "model-a"
 		modelB    = "model-b"
-		routeA    = "maas-model-model-a" // ExternalModel naming convention
+		routeA    = "maas-model-model-a"
 		routeB    = "maas-model-model-b"
 		trlpA     = "maas-trlp-model-a"
 		trlpB     = "maas-trlp-model-b"
@@ -98,10 +116,10 @@ func TestMaaSSubscriptionReconciler_TRLPMergeStrategyMultipleModels(t *testing.T
 
 	// Create two models with separate routes (in unit tests, we can't easily
 	// simulate RouteResolver finding a shared route, so we create separate routes)
-	modelRefA := newMaaSModelRef(modelA, namespace, "ExternalModel", modelA)
-	modelRefB := newMaaSModelRef(modelB, namespace, "ExternalModel", modelB)
-	httpRouteA := newHTTPRoute(routeA, namespace)
-	httpRouteB := newHTTPRoute(routeB, namespace)
+	modelRefA := newMaaSModelRef(modelA, namespace, "LLMInferenceService", modelA)
+	modelRefB := newMaaSModelRef(modelB, namespace, "LLMInferenceService", modelB)
+	httpRouteA := newHTTPRouteForLLMISvc(routeA, namespace, modelA)
+	httpRouteB := newHTTPRouteForLLMISvc(routeB, namespace, modelB)
 
 	subscriptionA := newMaaSSubscription(subA, namespace, "team-a", modelA, 1000)
 	subscriptionB := newMaaSSubscription(subB, namespace, "team-b", modelB, 5000)
