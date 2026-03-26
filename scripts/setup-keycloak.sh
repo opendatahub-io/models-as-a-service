@@ -92,7 +92,6 @@ spec:
   name: keycloak-operator
   source: community-operators
   sourceNamespace: openshift-marketplace
-  startingCSV: keycloak-operator.v26.5.6
   installPlanApproval: Automatic
 EOF
 
