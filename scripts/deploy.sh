@@ -592,15 +592,280 @@ deploy_via_kustomize() {
     exit 1
   }
 
-  # Install rate limiter component (RHCL or Kuadrant)
-  install_policy_engine
+  #──────────────────────────────────────────────────────────────
+  # PRE-FLIGHT CHECKS
+  #──────────────────────────────────────────────────────────────
+
+  log_info ""
+  log_info "═══════════════════════════════════════════════════════════"
+  log_info "  🔍 CLUSTER DISCOVERY"
+  log_info "═══════════════════════════════════════════════════════════"
+  log_info ""
+  log_info "Scanning cluster for existing components..."
+  log_info ""
+
+  # Detect existing components
+  local detected_operator_type
+  detected_operator_type=$(detect_operator_type)
+
+  local detected_policy_engine
+  detected_policy_engine=$(detect_policy_engine)
+
+  local detected_dsc
+  detected_dsc=$(detect_dsc 2>/dev/null)
+  local detected_dsc_namespace=""
+  if [[ -n "$detected_dsc" ]]; then
+    detected_dsc_namespace=$(detect_dsc 2>&1 >/dev/null)
+  fi
+
+  # Determine target namespace based on detected operator
+  local auto_namespace=""
+  if [[ -n "$detected_operator_type" ]]; then
+    case "$detected_operator_type" in
+      rhoai)
+        auto_namespace="redhat-ods-applications"
+        ;;
+      odh)
+        auto_namespace="opendatahub"
+        ;;
+    esac
+
+    # Validate user-specified namespace matches operator type
+    if [[ -n "$NAMESPACE" && "$NAMESPACE" != "$auto_namespace" ]]; then
+      log_error ""
+      log_error "╔═══════════════════════════════════════════════════════════╗"
+      log_error "║ ✗ DEPLOYMENT FAILED: Namespace Mismatch                  ║"
+      log_error "╚═══════════════════════════════════════════════════════════╝"
+      log_error ""
+      log_error "Detected operator: $detected_operator_type"
+      log_error "Expected namespace: $auto_namespace"
+      log_error "Specified namespace: $NAMESPACE"
+      log_error ""
+      log_error "To fix, choose one option:"
+      log_error ""
+      log_error "  Option 1: Use the correct namespace"
+      log_error "    ./scripts/deploy.sh --deployment-mode kustomize --namespace $auto_namespace"
+      log_error ""
+      log_error "  Option 2: Uninstall $detected_operator_type operator first"
+      if [[ "$detected_operator_type" == "rhoai" ]]; then
+        log_error "    kubectl delete subscription rhods-operator -n redhat-ods-operator"
+        log_error "    kubectl delete csv -n redhat-ods-operator -l operators.coreos.com/rhods-operator"
+      else
+        log_error "    kubectl delete subscription opendatahub-operator -n opendatahub"
+        log_error "    kubectl delete csv -n opendatahub -l operators.coreos.com/opendatahub-operator"
+      fi
+      log_error ""
+      exit 1
+    fi
+
+    # Auto-set namespace if not specified
+    if [[ -z "$NAMESPACE" ]]; then
+      NAMESPACE="$auto_namespace"
+    fi
+  else
+    # No operator detected - use default or user-specified namespace
+    if [[ -z "$NAMESPACE" ]]; then
+      NAMESPACE="opendatahub"
+    fi
+  fi
+
+  # Update POLICY_ENGINE if one is already detected on cluster
+  # For kustomize mode, we prefer using what's already installed over the default
+  if [[ -n "$detected_policy_engine" ]]; then
+    if [[ "$POLICY_ENGINE" != "$detected_policy_engine" ]]; then
+      log_debug "Updating policy engine from $POLICY_ENGINE to detected $detected_policy_engine"
+      POLICY_ENGINE="$detected_policy_engine"
+    fi
+  fi
+
+  # Validate DSC if it exists
+  if [[ -n "$detected_dsc" ]]; then
+    local dsc_validation_errors
+    if ! dsc_validation_errors=$(validate_dsc_for_maas "$detected_dsc" 2>&1); then
+      log_error ""
+      log_error "╔═══════════════════════════════════════════════════════════╗"
+      log_error "║ ✗ DEPLOYMENT FAILED: Invalid DataScienceCluster          ║"
+      log_error "╚═══════════════════════════════════════════════════════════╝"
+      log_error ""
+      log_error "Component: DataScienceCluster Validation"
+      log_error "Problem: Existing DSC '$detected_dsc' does not meet MaaS requirements"
+      log_error ""
+      log_error "Configuration mismatches:"
+      while IFS= read -r line; do
+        log_error "  • $line"
+      done <<< "$dsc_validation_errors"
+      log_error ""
+      log_error "To fix:"
+      log_error "  1. Edit the DataScienceCluster:"
+      log_error "     kubectl edit datasciencecluster $detected_dsc"
+      log_error ""
+      log_error "  2. Set the required fields as shown above"
+      log_error ""
+      log_error "  3. Re-run the deployment script:"
+      log_error "     ./scripts/deploy.sh --deployment-mode kustomize"
+      log_error ""
+      exit 1
+    fi
+  fi
+
+  # Detect component status
+  local postgres_status
+  postgres_status=$(detect_postgresql "$NAMESPACE")
+
+  local gateway_status
+  gateway_status=$(detect_gateway)
+
+  local kuadrant_status="N/A"
+  local csv_gateway_patch="N/A"
+  if [[ -n "$detected_policy_engine" ]]; then
+    kuadrant_status=$(detect_kuadrant_cr "$detected_policy_engine")
+    if detect_csv_gateway_patch "$detected_policy_engine"; then
+      csv_gateway_patch="true"
+    else
+      csv_gateway_patch="false"
+    fi
+  fi
+
+  # Display discovered state
+  local operator_display="Not detected"
+  if [[ -n "$detected_operator_type" ]]; then
+    local operator_upper
+    operator_upper=$(echo "$detected_operator_type" | tr '[:lower:]' '[:upper:]')
+    operator_display="$operator_upper (detected)"
+  fi
+
+  local policy_display="Not detected"
+  if [[ -n "$detected_policy_engine" ]]; then
+    local policy_upper
+    policy_upper=$(echo "$detected_policy_engine" | tr '[:lower:]' '[:upper:]')
+    policy_display="$policy_upper (installed)"
+  fi
+
+  local dsc_display="Not detected"
+  if [[ -n "$detected_dsc" ]]; then
+    dsc_display="$detected_dsc (validated ✓)"
+  fi
+
+  printf "  %-32s → %s\n" "Operator Type" "$operator_display"
+  printf "  %-32s → %s\n" "Target Namespace" "$NAMESPACE"
+  printf "  %-32s → %s\n" "Policy Engine" "$policy_display"
+  if [[ -n "$detected_policy_engine" ]]; then
+    printf "  %-32s → %s\n" "  └─ Kuadrant CR" "$(echo "$kuadrant_status" | sed 's/ready/Ready ✓/;s/exists/Exists ⚠/;s/missing/Not found ✗/')"
+    printf "  %-32s → %s\n" "  └─ CSV Gateway Patch" "$(echo "$csv_gateway_patch" | sed 's/true/Applied ✓/;s/false/Missing ⚠/;s/N\/A/N\/A/')"
+  fi
+  printf "  %-32s → %s\n" "DataScienceCluster" "$dsc_display"
+  printf "  %-32s → %s\n" "PostgreSQL" "$(echo "$postgres_status" | sed 's/ready/Ready ✓/;s/exists/Exists ⚠/;s/missing/Not found ✗/')"
+  printf "  %-32s → %s\n" "Gateway" "$(echo "$gateway_status" | sed 's/programmed/Ready ✓/;s/exists/Exists ⚠/;s/missing/Not found ✗/')"
+
+  log_info ""
+  log_info "───────────────────────────────────────────────────────────"
+  log_info ""
+
+  #──────────────────────────────────────────────────────────────
+  # DEPLOYMENT PLAN
+  #──────────────────────────────────────────────────────────────
+
+  log_info "═══════════════════════════════════════════════════════════"
+  log_info "  📋 DEPLOYMENT PLAN"
+  log_info "═══════════════════════════════════════════════════════════"
+  log_info ""
+
+  # Determine actions for each component
+  local policy_action="APPLY"
+  local policy_reason="Installing policy engine"
+  if [[ -n "$detected_policy_engine" ]]; then
+    if [[ "$kuadrant_status" == "ready" && "$csv_gateway_patch" == "true" ]]; then
+      policy_action="SKIP"
+      policy_reason="Already installed and configured"
+    else
+      policy_action="VERIFY"
+      policy_reason="Checking configuration"
+    fi
+  fi
+
+  local postgres_action="APPLY"
+  local postgres_reason="Installing database"
+  if [[ "$postgres_status" == "ready" ]]; then
+    postgres_action="SKIP"
+    postgres_reason="Already deployed and ready"
+  elif [[ "$postgres_status" == "exists" ]]; then
+    postgres_action="VERIFY"
+    postgres_reason="Exists but not ready"
+  fi
+
+  local gateway_action="APPLY"
+  local gateway_reason="Creating gateway"
+  if [[ "$gateway_status" == "programmed" ]]; then
+    gateway_action="SKIP"
+    gateway_reason="Already configured"
+  elif [[ "$gateway_status" == "exists" ]]; then
+    gateway_action="VERIFY"
+    gateway_reason="Exists but not programmed"
+  fi
+
+  # Display plan
+  local action_emoji
+  case "$policy_action" in
+    SKIP) action_emoji="✓" ;;
+    VERIFY) action_emoji="⚠" ;;
+    APPLY) action_emoji="→" ;;
+  esac
+  printf "  %s %-30s %-8s %s\n" "$action_emoji" "Policy Engine ($POLICY_ENGINE)" "$policy_action" "$policy_reason"
+
+  case "$postgres_action" in
+    SKIP) action_emoji="✓" ;;
+    VERIFY) action_emoji="⚠" ;;
+    APPLY) action_emoji="→" ;;
+  esac
+  printf "  %s %-30s %-8s %s\n" "$action_emoji" "PostgreSQL" "$postgres_action" "$postgres_reason"
+
+  case "$gateway_action" in
+    SKIP) action_emoji="✓" ;;
+    VERIFY) action_emoji="⚠" ;;
+    APPLY) action_emoji="→" ;;
+  esac
+  printf "  %s %-30s %-8s %s\n" "$action_emoji" "Gateway" "$gateway_action" "$gateway_reason"
+
+  printf "  %s %-30s %-8s %s\n" "→" "MaaS Platform" "APPLY" "Deploying via kustomize"
+
+  log_info ""
+  log_info "───────────────────────────────────────────────────────────"
+  log_info ""
+
+  #──────────────────────────────────────────────────────────────
+  # POLICY ENGINE
+  #──────────────────────────────────────────────────────────────
+
+  log_info "┌─────────────────────────────────────────────────────────┐"
+  log_info "│ 🔧 Policy Engine ($POLICY_ENGINE)"
+  log_info "└─────────────────────────────────────────────────────────┘"
+  log_info ""
+
+  if [[ "$policy_action" == "SKIP" ]]; then
+    log_info "  ✓ Policy engine already installed and healthy"
+    log_info "  ✓ CSV Gateway controller patch applied"
+    log_info "  ✓ Kuadrant CR ready"
+    log_info ""
+  elif [[ "$policy_action" == "VERIFY" ]]; then
+    log_info "  → Verifying policy engine configuration..."
+    install_policy_engine
+    log_info ""
+  else
+    log_info "  → Installing policy engine..."
+    install_policy_engine
+    log_info ""
+  fi
+
+  #──────────────────────────────────────────────────────────────
+  # NAMESPACE AND OVERLAY SETUP
+  #──────────────────────────────────────────────────────────────
 
   local overlay="$project_root/deployment/overlays/http-backend"
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
-    log_info "Using TLS backend overlay"
+    log_debug "Using TLS backend overlay"
     overlay="$project_root/deployment/overlays/tls-backend"
   else
-    log_info "Using HTTP backend overlay"
+    log_debug "Using HTTP backend overlay"
   fi
 
   # Set namespace and image from script (overlay kustomization is restored on exit)
@@ -610,8 +875,14 @@ deploy_via_kustomize() {
   set_overlay_namespace "$overlay" "$NAMESPACE"
 
   if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
-    log_info "Creating namespace: $NAMESPACE"
+    log_info "┌─────────────────────────────────────────────────────────┐"
+    log_info "│ 🔧 Namespace"
+    log_info "└─────────────────────────────────────────────────────────┘"
+    log_info ""
+    log_info "  → Creating namespace: $NAMESPACE"
     kubectl create namespace "$NAMESPACE"
+    log_info "  ✓ Namespace created"
+    log_info ""
   fi
 
   # Note: The subscription namespace (default: models-as-a-service) is automatically
@@ -619,15 +890,50 @@ deploy_via_kustomize() {
   # We only set the variable here for use in manifest patching below.
   local subscription_namespace="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 
-  # Deploy PostgreSQL for API key storage (requires namespace to exist)
-  deploy_postgresql
+  #──────────────────────────────────────────────────────────────
+  # POSTGRESQL
+  #──────────────────────────────────────────────────────────────
+
+  log_info "┌─────────────────────────────────────────────────────────┐"
+  log_info "│ 🔧 PostgreSQL"
+  log_info "└─────────────────────────────────────────────────────────┘"
+  log_info ""
+
+  if [[ "$postgres_action" == "SKIP" ]]; then
+    log_info "  ✓ PostgreSQL already deployed and ready"
+    # Verify Secret exists
+    if kubectl get secret maas-db-config -n "$NAMESPACE" &>/dev/null; then
+      log_info "  ✓ Database Secret exists"
+    else
+      log_warn "  ⚠ PostgreSQL running but Secret missing, recreating..."
+      deploy_postgresql
+    fi
+    log_info ""
+  else
+    log_info "  → Deploying PostgreSQL..."
+    deploy_postgresql
+    log_info ""
+  fi
+
+  #──────────────────────────────────────────────────────────────
+  # KEYCLOAK (optional)
+  #──────────────────────────────────────────────────────────────
 
   # Deploy Keycloak identity provider (optional, if enabled)
   if [[ "$ENABLE_KEYCLOAK" == "true" ]]; then
     deploy_keycloak
   fi
 
-  log_info "Applying kustomize manifests..."
+  #──────────────────────────────────────────────────────────────
+  # MAAS PLATFORM
+  #──────────────────────────────────────────────────────────────
+
+  log_info "┌─────────────────────────────────────────────────────────┐"
+  log_info "│ 🔧 MaaS Platform"
+  log_info "└─────────────────────────────────────────────────────────┘"
+  log_info ""
+
+  log_info "  → Applying kustomize manifests ($(basename "$overlay") overlay)..."
   # Patch the maas-api URL placeholder with actual namespace
   # Patch MAAS_SUBSCRIPTION_NAMESPACE env var with the configured subscription namespace
   kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
@@ -635,18 +941,31 @@ deploy_via_kustomize() {
     sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g" | \
     perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}'"$subscription_namespace"'"/smg'
   )
+  log_info "  ✓ Kustomize manifests applied"
 
   # Apply gateway policies separately so they stay in openshift-ingress (overlay
   # namespace would otherwise overwrite them to $NAMESPACE)
   local policies_dir="$project_root/deployment/base/maas-controller/policies"
   if [[ -d "$policies_dir" ]]; then
-    log_info "Applying gateway policies (openshift-ingress)..."
+    log_info "  → Applying gateway policies (openshift-ingress)..."
     kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$policies_dir")
+    log_info "  ✓ Gateway policies applied"
   fi
+
+  log_info ""
+
+  #──────────────────────────────────────────────────────────────
+  # POST-DEPLOYMENT CONFIGURATION
+  #──────────────────────────────────────────────────────────────
 
   # Configure TLS backend (if enabled)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
+    log_info "┌─────────────────────────────────────────────────────────┐"
+    log_info "│ 🔧 TLS Backend Configuration"
+    log_info "└─────────────────────────────────────────────────────────┘"
+    log_info ""
     configure_tls_backend
+    log_info ""
   fi
 
   # Patch the live AuthPolicy after kustomize apply so OIDC and API key
@@ -656,7 +975,52 @@ deploy_via_kustomize() {
   # Configure audience for non-standard clusters (HyperShift/ROSA)
   configure_cluster_audience
 
-  log_info "Kustomize deployment completed"
+  #──────────────────────────────────────────────────────────────
+  # DEPLOYMENT SUMMARY
+  #──────────────────────────────────────────────────────────────
+
+  log_info ""
+  log_info "╔═══════════════════════════════════════════════════════════╗"
+  log_info "║ ✓ DEPLOYMENT COMPLETED SUCCESSFULLY                       ║"
+  log_info "╚═══════════════════════════════════════════════════════════╝"
+  log_info ""
+  log_info "Components deployed:"
+
+  # Show what was done for each component
+  case "$policy_action" in
+    SKIP)
+      log_info "  ✓ Policy Engine ($POLICY_ENGINE)     - Already installed"
+      ;;
+    VERIFY)
+      log_info "  ✓ Policy Engine ($POLICY_ENGINE)     - Verified and configured"
+      ;;
+    APPLY)
+      log_info "  ✓ Policy Engine ($POLICY_ENGINE)     - Installed"
+      ;;
+  esac
+
+  case "$postgres_action" in
+    SKIP)
+      log_info "  ✓ PostgreSQL                  - Already deployed"
+      ;;
+    *)
+      log_info "  ✓ PostgreSQL                  - Deployed"
+      ;;
+  esac
+
+  log_info "  ✓ MaaS API                    - Deployed"
+  log_info "  ✓ MaaS Controller             - Deployed"
+  log_info "  ✓ Gateway Policies            - Applied"
+
+  log_info ""
+  log_info "Next steps:"
+  log_info "  • Create MaaSModelRef resources to register models"
+  log_info "  • Create MaaSAuthPolicy to grant access to users/groups"
+  log_info "  • Create MaaSSubscription for rate limiting"
+  log_info ""
+  log_info "For documentation and examples, see:"
+  log_info "  https://opendatahub-io.github.io/models-as-a-service/"
+  log_info ""
 }
 
 #──────────────────────────────────────────────────────────────
@@ -843,11 +1207,66 @@ patch_kuadrant_csv_for_gateway() {
 }
 
 install_policy_engine() {
-  log_info "Installing policy engine: $POLICY_ENGINE"
+  # Check if policy engine is already installed
+  local existing_engine
+  existing_engine=$(detect_policy_engine)
+
+  if [[ "$existing_engine" == "$POLICY_ENGINE" ]]; then
+    log_info "  ✓ $POLICY_ENGINE operator already installed"
+
+    # Verify and patch CSV if needed
+    local namespace
+    local operator_prefix
+    case "$POLICY_ENGINE" in
+      rhcl)
+        namespace="rh-connectivity-link"
+        operator_prefix="rhcl-operator"
+        ;;
+      kuadrant)
+        namespace="kuadrant-system"
+        operator_prefix="kuadrant-operator"
+        ;;
+    esac
+
+    # Check CSV Gateway patch
+    if detect_csv_gateway_patch "$POLICY_ENGINE"; then
+      log_info "  ✓ CSV Gateway controller patch already applied"
+    else
+      log_info "  → Applying CSV Gateway controller patch..."
+      patch_kuadrant_csv_for_gateway "$namespace" "$operator_prefix"
+      log_info "  ✓ CSV patched"
+    fi
+
+    # Check Kuadrant CR
+    local kuadrant_status
+    kuadrant_status=$(detect_kuadrant_cr "$POLICY_ENGINE")
+    if [[ "$kuadrant_status" == "ready" ]]; then
+      log_info "  ✓ Kuadrant CR already exists and ready"
+    elif [[ "$kuadrant_status" == "exists" ]]; then
+      log_warn "  ⚠ Kuadrant CR exists but not ready, waiting..."
+      # Wait for it to become ready
+      wait_for_custom_check "Kuadrant ready in $namespace" \
+        "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
+        120 5 || log_warn "Kuadrant not ready yet"
+    else
+      log_info "  → Creating Kuadrant CR..."
+      apply_kuadrant_cr "$namespace"
+      log_info "  ✓ Kuadrant CR created"
+    fi
+
+    return 0
+  elif [[ -n "$existing_engine" && "$existing_engine" != "$POLICY_ENGINE" ]]; then
+    log_error "  ✗ Conflicting policy engine installed: $existing_engine (expected: $POLICY_ENGINE)"
+    log_error "    Cannot proceed - remove $existing_engine first or use --policy-engine $existing_engine"
+    return 1
+  fi
+
+  # Policy engine not installed - proceed with installation
+  log_info "  → Installing $POLICY_ENGINE policy engine..."
 
   case "$POLICY_ENGINE" in
     rhcl)
-      log_info "Installing RHCL (Red Hat Connectivity Link - downstream)"
+      log_info "  → Installing RHCL (Red Hat Connectivity Link - downstream)"
       install_olm_operator \
         "rhcl-operator" \
         "rh-connectivity-link" \
@@ -859,21 +1278,24 @@ install_policy_engine() {
         ""
 
       # Patch RHCL CSV to recognize OpenShift Gateway controller
+      log_info "  → Patching RHCL CSV for OpenShift Gateway controller..."
       patch_kuadrant_csv_for_gateway "rh-connectivity-link" "rhcl-operator"
 
       # Apply RHCL/Kuadrant custom resource
+      log_info "  → Creating Kuadrant CR..."
       apply_kuadrant_cr "rh-connectivity-link"
+      log_info "  ✓ RHCL installed successfully"
       ;;
 
     kuadrant)
-      log_info "Installing Kuadrant v1.3.1 (upstream community)"
+      log_info "  → Installing Kuadrant v1.3.1 (upstream community)"
 
       # Create custom catalog for upstream Kuadrant v1.3.1
       # This version provides AuthPolicy v1 API required by ODH
       local kuadrant_catalog="kuadrant-operator-catalog"
       local kuadrant_ns="kuadrant-system"
 
-      log_info "Creating Kuadrant v1.3.1 catalog source..."
+      log_info "  → Creating Kuadrant v1.3.1 catalog source..."
       kubectl create namespace "$kuadrant_ns" 2>/dev/null || true
 
       cat <<EOF | kubectl apply -f -
@@ -893,7 +1315,7 @@ spec:
 EOF
 
       # Wait for catalog to be ready
-      log_info "Waiting for Kuadrant catalog to be ready..."
+      log_info "  → Waiting for Kuadrant catalog to be ready..."
       sleep 10
 
       # Create OperatorGroup for Kuadrant
@@ -908,6 +1330,7 @@ EOF
 
       # Install Kuadrant operator from the custom catalog
       # IMPORTANT: source_namespace must match where CatalogSource was created (kuadrant_ns)
+      log_info "  → Installing Kuadrant operator..."
       install_olm_operator \
         "kuadrant-operator" \
         "$kuadrant_ns" \
@@ -919,10 +1342,13 @@ EOF
         ""
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
+      log_info "  → Patching Kuadrant CSV for OpenShift Gateway controller..."
       patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
 
       # Apply Kuadrant custom resource
+      log_info "  → Creating Kuadrant CR..."
       apply_kuadrant_cr "$kuadrant_ns"
+      log_info "  ✓ Kuadrant installed successfully"
       ;;
   esac
 }

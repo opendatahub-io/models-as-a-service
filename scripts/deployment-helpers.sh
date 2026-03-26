@@ -1373,3 +1373,397 @@ wait_authorino_ready() {
   echo "  WARNING: Auth request verification timed out, continuing anyway"
   return 0
 }
+
+# ============================================================================
+# Cluster State Detection Functions
+# ============================================================================
+
+# detect_policy_engine
+#   Detects installed policy engine (RHCL or Kuadrant).
+#   Checks for subscription existence and CSV health.
+#
+#   Returns:
+#     "rhcl"     - RHCL is installed and healthy
+#     "kuadrant" - Kuadrant is installed and healthy
+#     ""         - No policy engine detected
+#
+# Usage:
+#   policy_engine=$(detect_policy_engine)
+#   if [[ -n "$policy_engine" ]]; then
+#     echo "Found: $policy_engine"
+#   fi
+detect_policy_engine() {
+  # Check for RHCL subscription in rh-connectivity-link namespace
+  if kubectl get subscription rhcl-operator -n rh-connectivity-link &>/dev/null; then
+    # Verify CSV is healthy (Succeeded phase)
+    # CSV name format: "rhcl-operator.v1.3.1   Red Hat Connectivity Link   1.3.1   ...   Succeeded"
+    if kubectl get csv -n rh-connectivity-link --no-headers 2>/dev/null | awk '/^rhcl-operator/ && $NF == "Succeeded" {found=1} END {exit !found}'; then
+      echo "rhcl"
+      return 0
+    fi
+  fi
+
+  # Check for Kuadrant subscription in kuadrant-system namespace
+  if kubectl get subscription kuadrant-operator -n kuadrant-system &>/dev/null; then
+    # Verify CSV is healthy (Succeeded phase)
+    # CSV name format: "kuadrant-operator.v1.3.1   Kuadrant Operator   1.3.1   ...   Succeeded"
+    if kubectl get csv -n kuadrant-system --no-headers 2>/dev/null | awk '/^kuadrant-operator/ && $NF == "Succeeded" {found=1} END {exit !found}'; then
+      echo "kuadrant"
+      return 0
+    fi
+  fi
+
+  echo ""
+  return 0
+}
+
+# detect_operator_type
+#   Detects which operator (ODH or RHOAI) is installed.
+#   Checks subscriptions first, then falls back to DSC namespace.
+#
+#   Returns:
+#     "rhoai" - RHOAI operator is installed
+#     "odh"   - ODH operator is installed
+#     ""      - No operator detected
+#
+# Usage:
+#   operator=$(detect_operator_type)
+#   if [[ "$operator" == "rhoai" ]]; then
+#     namespace="redhat-ods-applications"
+#   fi
+detect_operator_type() {
+  # Check for RHOAI operator subscription
+  if kubectl get subscription rhods-operator -n redhat-ods-operator &>/dev/null 2>&1; then
+    echo "rhoai"
+    return 0
+  fi
+
+  # Check for ODH operator subscription (can be in multiple namespaces)
+  if kubectl get subscription opendatahub-operator --all-namespaces &>/dev/null 2>&1; then
+    echo "odh"
+    return 0
+  fi
+
+  # Fallback: Check DSC namespace
+  local dsc_ns
+  dsc_ns=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null || echo "")
+
+  if [[ "$dsc_ns" == "redhat-ods-applications" ]]; then
+    echo "rhoai"
+    return 0
+  elif [[ "$dsc_ns" == "opendatahub" ]]; then
+    echo "odh"
+    return 0
+  fi
+
+  echo ""
+  return 0
+}
+
+# detect_dsc
+#   Detects existing DataScienceCluster resources.
+#   Returns DSC name and outputs namespace via stderr for separate capture.
+#
+#   Returns (stdout):
+#     DSC name if exists, empty string otherwise
+#
+#   Returns (stderr):
+#     DSC namespace if DSC exists
+#
+# Usage:
+#   dsc_name=$(detect_dsc 2>/dev/null)
+#   dsc_namespace=$(detect_dsc 2>&1 >/dev/null)
+detect_dsc() {
+  local dsc_name
+  dsc_name=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+
+  if [[ -n "$dsc_name" ]]; then
+    # Output namespace to stderr for caller to capture separately
+    local dsc_ns
+    dsc_ns=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null)
+    >&2 echo "$dsc_ns"
+  fi
+
+  echo "$dsc_name"
+}
+
+# validate_dsc_for_maas
+#   Validates that an existing DataScienceCluster meets MaaS requirements.
+#   Compares actual DSC spec.components against expected values from manifest.
+#
+#   Args:
+#     $1 - DSC name to validate
+#
+#   Returns:
+#     0 - DSC is valid for MaaS
+#     1 - DSC has mismatches (outputs errors to stderr)
+#
+# Usage:
+#   if validate_dsc_for_maas "default-dsc" 2>/tmp/errors; then
+#     echo "Valid"
+#   else
+#     cat /tmp/errors
+#   fi
+validate_dsc_for_maas() {
+  local dsc_name=$1
+
+  if [[ -z "$dsc_name" ]]; then
+    >&2 echo "Error: DSC name not provided"
+    return 1
+  fi
+
+  # Find the script directory (relative to this file)
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local data_dir="${script_dir}/data"
+  local dsc_manifest="${data_dir}/datasciencecluster.yaml"
+
+  if [[ ! -f "$dsc_manifest" ]]; then
+    log_warn "DSC manifest not found at $dsc_manifest, skipping validation"
+    return 0
+  fi
+
+  # Extract expected fields from manifest (reuse operator mode logic)
+  local expected_fields
+  if ! expected_fields=$(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
+    def leaf_paths:
+      . as $in |
+      paths(scalars) | . as $p |
+      ($in | getpath($p)) as $v |
+      [($p | map(tostring) | join(".")), ($v | tostring)];
+    .spec.components | leaf_paths | ".\(.[0])=\(.[1])"
+  ' 2>/dev/null); then
+    log_warn "Failed to parse DSC manifest, skipping validation"
+    return 0
+  fi
+
+  if [[ -z "$expected_fields" ]]; then
+    log_warn "DSC manifest produced no fields, skipping validation"
+    return 0
+  fi
+
+  local mismatches=()
+  while IFS='=' read -r field_path expected; do
+    [[ -z "$field_path" ]] && continue
+
+    local full_path=".spec.components${field_path}"
+    local actual
+    actual=$(kubectl get datasciencecluster "$dsc_name" -o jsonpath="{${full_path}}" 2>/dev/null || echo "")
+
+    if [[ "$actual" != "$expected" ]]; then
+      mismatches+=("${full_path}: '${actual:-unset}' (expected '${expected}')")
+    fi
+  done <<< "$expected_fields"
+
+  if [[ ${#mismatches[@]} -gt 0 ]]; then
+    for mismatch in "${mismatches[@]}"; do
+      >&2 echo "$mismatch"
+    done
+    return 1
+  fi
+
+  return 0
+}
+
+# detect_postgresql
+#   Detects PostgreSQL deployment status in a namespace.
+#   The setup-database.sh script creates a Deployment named "postgres".
+#
+#   Args:
+#     $1 - Namespace to check
+#
+#   Returns (stdout):
+#     "ready"   - Deployment exists and available
+#     "exists"  - Deployment exists but not available
+#     "missing" - Deployment does not exist
+#
+# Usage:
+#   postgres_status=$(detect_postgresql "opendatahub")
+detect_postgresql() {
+  local namespace=$1
+
+  if [[ -z "$namespace" ]]; then
+    echo "missing"
+    return 0
+  fi
+
+  # Check for postgres Deployment (created by setup-database.sh)
+  if ! kubectl get deployment postgres -n "$namespace" &>/dev/null; then
+    echo "missing"
+    return 0
+  fi
+
+  # Check if deployment is available
+  local available
+  available=$(kubectl get deployment postgres -n "$namespace" -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo "")
+
+  if [[ "$available" == "True" ]]; then
+    echo "ready"
+  else
+    echo "exists"
+  fi
+}
+
+# detect_gateway
+#   Detects MaaS default gateway status.
+#
+#   Returns (stdout):
+#     "programmed" - Gateway exists and is programmed
+#     "exists"     - Gateway exists but not programmed
+#     "missing"    - Gateway does not exist
+#
+# Usage:
+#   gateway_status=$(detect_gateway)
+detect_gateway() {
+  if ! kubectl get gateway maas-default-gateway -n openshift-ingress &>/dev/null; then
+    echo "missing"
+    return 0
+  fi
+
+  local programmed
+  programmed=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || echo "")
+
+  if [[ "$programmed" == "True" ]]; then
+    echo "programmed"
+  else
+    echo "exists"
+  fi
+}
+
+# detect_kuadrant_cr
+#   Detects Kuadrant CR status in policy engine namespace.
+#
+#   Args:
+#     $1 - Policy engine type ("rhcl" or "kuadrant")
+#
+#   Returns (stdout):
+#     "ready"   - Kuadrant CR exists and is ready
+#     "exists"  - Kuadrant CR exists but not ready
+#     "missing" - Kuadrant CR does not exist
+#
+# Usage:
+#   kuadrant_status=$(detect_kuadrant_cr "rhcl")
+detect_kuadrant_cr() {
+  local policy_engine=$1
+  local namespace
+
+  case "$policy_engine" in
+    rhcl)
+      namespace="rh-connectivity-link"
+      ;;
+    kuadrant)
+      namespace="kuadrant-system"
+      ;;
+    *)
+      echo "missing"
+      return 0
+      ;;
+  esac
+
+  if ! kubectl get kuadrant kuadrant -n "$namespace" &>/dev/null; then
+    echo "missing"
+    return 0
+  fi
+
+  local ready_status
+  ready_status=$(kubectl get kuadrant kuadrant -n "$namespace" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+
+  if [[ "$ready_status" == "True" ]]; then
+    echo "ready"
+  else
+    echo "exists"
+  fi
+}
+
+# detect_csv_gateway_patch
+#   Checks if policy engine CSV has OpenShift Gateway controller configuration.
+#
+#   Args:
+#     $1 - Policy engine type ("rhcl" or "kuadrant")
+#
+#   Returns:
+#     0 - CSV has correct Gateway controller config
+#     1 - CSV missing or incorrect config
+#
+# Usage:
+#   if detect_csv_gateway_patch "rhcl"; then
+#     echo "Gateway config OK"
+#   fi
+detect_csv_gateway_patch() {
+  local policy_engine=$1
+  local namespace
+  local operator_prefix
+
+  case "$policy_engine" in
+    rhcl)
+      namespace="rh-connectivity-link"
+      operator_prefix="rhcl-operator"
+      ;;
+    kuadrant)
+      namespace="kuadrant-system"
+      operator_prefix="kuadrant-operator"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  local csv_name
+  csv_name=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | awk '{print $1}' | head -1)
+
+  if [[ -z "$csv_name" ]]; then
+    return 1
+  fi
+
+  local current_value
+  current_value=$(kubectl get csv "$csv_name" -n "$namespace" -o jsonpath='{.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[?(@.name=="ISTIO_GATEWAY_CONTROLLER_NAMES")].value}' 2>/dev/null || echo "")
+
+  if [[ "$current_value" == *"istio.io/gateway-controller"* && "$current_value" == *"openshift.io/gateway-controller"* ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+# detect_maas_deployments
+#   Detects MaaS API and Controller deployment status.
+#
+#   Args:
+#     $1 - Namespace to check
+#
+#   Returns (stdout):
+#     JSON object with deployment status:
+#     {"api": "ready|exists|missing", "controller": "ready|exists|missing"}
+#
+# Usage:
+#   maas_status=$(detect_maas_deployments "opendatahub")
+#   api_status=$(echo "$maas_status" | jq -r '.api')
+detect_maas_deployments() {
+  local namespace=$1
+  local api_status="missing"
+  local controller_status="missing"
+
+  # Check MaaS API
+  if kubectl get deployment maas-api -n "$namespace" &>/dev/null; then
+    local api_ready
+    api_ready=$(kubectl get deployment maas-api -n "$namespace" -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo "")
+    if [[ "$api_ready" == "True" ]]; then
+      api_status="ready"
+    else
+      api_status="exists"
+    fi
+  fi
+
+  # Check MaaS Controller
+  if kubectl get deployment maas-controller -n "$namespace" &>/dev/null; then
+    local controller_ready
+    controller_ready=$(kubectl get deployment maas-controller -n "$namespace" -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo "")
+    if [[ "$controller_ready" == "True" ]]; then
+      controller_status="ready"
+    else
+      controller_status="exists"
+    fi
+  fi
+
+  echo "{\"api\": \"$api_status\", \"controller\": \"$controller_status\"}"
+}
