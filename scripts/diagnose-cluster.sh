@@ -117,7 +117,6 @@ echo ""
 operator_type=$(detect_operator_type)
 policy_engine=$(detect_policy_engine)
 dsc_name=$(detect_dsc 2>/dev/null)
-dsc_namespace=$(detect_dsc 2>&1 >/dev/null)
 
 # Determine target namespace
 if [[ -n "$operator_type" ]]; then
@@ -202,9 +201,9 @@ if [[ "$dsc_validated" == "false" ]]; then
   echo "  ⚠ DSC VALIDATION ERRORS"
   echo "───────────────────────────────────────────────────────────"
   echo ""
-  echo "$dsc_validation_errors" | while read -r line; do
+  while IFS= read -r line || [[ -n "$line" ]]; do
     echo "  • $line"
-  done
+  done <<< "$dsc_validation_errors"
   echo ""
 fi
 
