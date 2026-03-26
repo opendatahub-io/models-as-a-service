@@ -30,6 +30,7 @@
 # ENVIRONMENT VARIABLES:
 #   MAAS_API_IMAGE            Custom MaaS API image (passed to Tenant reconciler via RELATED_IMAGE)
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+#   MAAS_SUBSCRIPTION_NAMESPACE  Subscription namespace for MaaS CRs (default: models-as-a-service)
 #   OPERATOR_TYPE             Operator type (rhoai/odh)
 #   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #   FORCE_OVERWRITE           When true, re-apply manifests even if the resource already exists
@@ -201,6 +202,7 @@ ADVANCED OPTIONS (PR Testing):
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+  MAAS_SUBSCRIPTION_NAMESPACE  Subscription namespace for MaaS CRs (default: models-as-a-service)
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
   OPERATOR_STARTING_CSV     ODH Subscription startingCSV (optional; when unset, follows the channel head)

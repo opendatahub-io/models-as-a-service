@@ -23,14 +23,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deployment-helpers.sh
 source "${SCRIPT_DIR}/deployment-helpers.sh"
 
-# Default: INFO level
-VERBOSE=false
-
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
     --verbose)
-      VERBOSE=true
       CURRENT_LOG_LEVEL=$LOG_LEVEL_DEBUG
       shift
       ;;
