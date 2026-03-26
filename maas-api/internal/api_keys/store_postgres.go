@@ -38,6 +38,7 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 // AddKey stores an API key with hash-only storage (no plaintext).
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 // ephemeral marks the key as short-lived for programmatic use.
+// keyHash is SHA-256(key_id + secret) where key_id is the per-key salt embedded in the API key.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 func (s *PostgresStore) AddKey(
 	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool,

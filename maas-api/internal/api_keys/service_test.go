@@ -598,7 +598,7 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 // createTestAPIKey generates a valid API key and its hash for testing.
 func createTestAPIKey(t *testing.T) (string, string) {
 	t.Helper()
-	plainKey, hash, _, err := api_keys.GenerateAPIKey()
+	plainKey, _, hash, _, err := api_keys.GenerateAPIKey()
 	require.NoError(t, err)
 	return plainKey, hash
 }
