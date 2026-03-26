@@ -20,12 +20,18 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -50,6 +56,41 @@ func init() {
 	utilruntime.Must(kservev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayapiv1.Install(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
+}
+
+// ensureSubscriptionNamespaceExists creates the subscription namespace if it doesn't exist.
+// This allows users to create MaaS CRs without manually creating the namespace.
+// It retries with exponential backoff to handle transient failures.
+func ensureSubscriptionNamespaceExists(ctx context.Context, namespace string) error {
+	return wait.ExponentialBackoffWithContext(ctx, wait.Backoff{
+		Steps:    5,
+		Duration: 1 * time.Second,
+		Factor:   2.0,
+	}, func(ctx context.Context) (bool, error) {
+		cfg := ctrl.GetConfigOrDie()
+		clientset, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			setupLog.Info("retrying namespace creation", "namespace", namespace, "error", err)
+			return false, nil // retry
+		}
+
+		ns := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+				Labels: map[string]string{
+					"opendatahub.io/generated-namespace": "true",
+				},
+			},
+		}
+
+		_, err = clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+		if err != nil && !errors.IsAlreadyExists(err) {
+			setupLog.Info("retrying namespace creation", "namespace", namespace, "error", err)
+			return false, nil // retry
+		}
+		setupLog.Info("subscription namespace ready", "namespace", namespace)
+		return true, nil // success
+	})
 }
 
 // getClusterServiceAccountIssuer fetches the cluster's service account issuer from OpenShift/ROSA configuration.
@@ -106,6 +147,12 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Ensure subscription namespace exists before starting controllers
+	if err := ensureSubscriptionNamespaceExists(context.Background(), maasSubscriptionNamespace); err != nil {
+		setupLog.Error(err, "unable to ensure subscription namespace exists", "namespace", maasSubscriptionNamespace)
+		os.Exit(1)
+	}
 
 	setupLog.Info("watching namespace for MaaS AuthPolicy and MaaSSubscription", "namespace", maasSubscriptionNamespace)
 	cacheOpts := cache.Options{
