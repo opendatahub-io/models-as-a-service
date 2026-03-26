@@ -243,7 +243,7 @@ The controller-generated AuthPolicies do **not** inject identity-related HTTP he
 
 All identity information remains available to **gateway-level features** through Authorino's `auth.identity` and `auth.metadata` contexts, which are consumed by:
 
-- **TokenRateLimitPolicy (TRLP)**: Uses `selected_subscription_key`, `userid`, `groups`, and `subscription_labels` from `filters.identity`
+- **TokenRateLimitPolicy (TRLP)**: Uses `selected_subscription_key`, `userid`, `groups`, and `subscription_info` from `filters.identity` (access `subscription_info.labels` for tier-based rate limiting)
 - **Gateway telemetry/metrics**: Accesses identity fields with `metrics: true` enabled on `filters.identity`
 - **Authorization policies**: OPA/Rego rules evaluate `auth.identity` and `auth.metadata` directly
 

@@ -1137,7 +1137,7 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 			"groups",                      // User groups
 			"selected_subscription_key",   // Model-scoped subscription key for TRLP
 			"selected_subscription",       // Subscription name
-			"subscription_labels",         // Labels for rate limit tiers
+			"subscription_info",           // Full subscription object (includes labels, organizationId, costCenter, etc.)
 		}
 
 		for _, field := range requiredFields {
@@ -1148,14 +1148,53 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 
 		// Verify telemetry/observability fields
 		observabilityFields := []string{
-			"keyId",          // API key tracking
-			"organizationId", // Cost attribution
-			"costCenter",     // Chargeback
+			"keyId", // API key tracking
 		}
 
 		for _, field := range observabilityFields {
 			if _, exists := identity[field]; !exists {
 				t.Errorf("filters.identity should include %q for observability, but it's missing", field)
+			}
+		}
+
+		// Verify subscription_info contains full object (not just individual fields)
+		// This object should contain: name, namespace, labels, organizationId, costCenter
+		// Consumers should access nested fields like:
+		//   - subscription_info.organizationId (for billing/cost attribution)
+		//   - subscription_info.costCenter (for chargeback)
+		//   - subscription_info.labels (for tier-based rate limiting)
+		subscriptionInfoField, exists := identity["subscription_info"]
+		if !exists {
+			t.Error("filters.identity must include 'subscription_info' field (full object from subscription-select)")
+		} else {
+			// Verify it's an expression that returns the full object
+			subscriptionInfoMap, ok := subscriptionInfoField.(map[string]interface{})
+			if !ok {
+				t.Errorf("subscription_info should be a map, got %T", subscriptionInfoField)
+			} else {
+				expr, hasExpr := subscriptionInfoMap["expression"]
+				if !hasExpr {
+					t.Error("subscription_info should have an 'expression' field")
+				} else {
+					exprStr, ok := expr.(string)
+					if !ok {
+						t.Errorf("subscription_info expression should be a string, got %T", expr)
+					} else {
+						// Verify it returns the full object, not just a sub-field
+						if !contains(exprStr, `auth.metadata["subscription-info"]`) {
+							t.Errorf("subscription_info expression should reference full subscription-info object, got: %s", exprStr)
+						}
+						// Verify it doesn't extract only labels (old behavior)
+						if contains(exprStr, ".labels") && !contains(exprStr, "?") {
+							t.Errorf("subscription_info expression should return full object, not just .labels, got: %s", exprStr)
+						}
+						// Note: We can't verify organizationId and costCenter exist at runtime here
+						// (they're optional fields that depend on MaaSSubscription configuration)
+						// but the full object is passed, so consumers can access them via:
+						// auth.identity.subscription_info.organizationId
+						// auth.identity.subscription_info.costCenter
+					}
+				}
 			}
 		}
 	})

@@ -477,14 +477,11 @@ allow {
 										ref.Namespace, ref.Name,
 									),
 								},
-								"organizationId": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].organizationId) ? auth.metadata["subscription-info"].organizationId : ""`,
-								},
-								"costCenter": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].costCenter) ? auth.metadata["subscription-info"].costCenter : ""`,
-								},
-								"subscription_labels": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].labels) ? auth.metadata["subscription-info"].labels : {}`,
+								// Full subscription-info object from subscription-select endpoint
+								// Contains: name, namespace, labels, organizationId, costCenter, error, message
+								// Consumers should access nested fields (e.g., subscription_info.organizationId)
+								"subscription_info": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"]) ? auth.metadata["subscription-info"] : {}`,
 								},
 								// Error information (for debugging - only populated when selection fails)
 								"subscription_error": map[string]interface{}{
