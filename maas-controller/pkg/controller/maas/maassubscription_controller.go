@@ -150,6 +150,11 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 			}
 			return nil
 		}
+		if errors.Is(err, ErrHTTPRouteNotFound) {
+			// HTTPRoute doesn't exist yet - skip for now. HTTPRoute watch will trigger reconciliation when route is created.
+			log.Info("HTTPRoute not found for model, skipping TokenRateLimitPolicy creation", "model", modelNamespace+"/"+modelName)
+			return nil
+		}
 		return fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", modelNamespace, modelName, err)
 	}
 

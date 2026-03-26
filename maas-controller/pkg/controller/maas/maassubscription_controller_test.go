@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -238,6 +239,7 @@ func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition(t *testing.T)
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(model, route, subA, subB, subC).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}

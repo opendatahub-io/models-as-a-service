@@ -24,3 +24,6 @@ rules:
 - apiGroups: ["serving.kserve.io"]
   resources: ["llminferenceservices"]
   verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["create", "get", "list", "watch"]

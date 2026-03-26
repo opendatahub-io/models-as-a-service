@@ -260,8 +260,8 @@ kubectl get crd | grep maas.opendatahub.io
 Install both **regular** and **premium** simulator models and their MaaS policies/subscriptions (from the repository root):
 
 ```bash
+# Create model namespace (models-as-a-service namespace is auto-created by controller)
 kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
-kubectl create namespace models-as-a-service --dry-run=client -o yaml | kubectl apply -f -
 kustomize build docs/samples/maas-system | kubectl apply -f -
 ```
 
