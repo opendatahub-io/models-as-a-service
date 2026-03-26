@@ -459,10 +459,11 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
-					// Groups - construct JSON array string from API key validation or K8s identity
+					// Groups - serialize to JSON array string from API key validation or K8s identity
+					// Using string() conversion of JSON-serialized groups for proper escaping
 					"X-MaaS-Group": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `'["' + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join('","') + '"]'`,
+							"expression": `string(((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups))`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
@@ -758,16 +759,25 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 	}
 }
 
-func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// Validate cache TTL configuration
-	log := ctrl.Log.WithName("maas-authpolicy-controller")
-
-	// Reject negative TTL values
+// ValidateCacheTTLs validates that cache TTL configuration is valid.
+// Returns an error if either TTL is negative (fail-closed validation).
+func (r *MaaSAuthPolicyReconciler) ValidateCacheTTLs() error {
 	if r.MetadataCacheTTL < 0 {
 		return fmt.Errorf("metadata cache TTL must be non-negative, got %d", r.MetadataCacheTTL)
 	}
 	if r.AuthzCacheTTL < 0 {
 		return fmt.Errorf("authorization cache TTL must be non-negative, got %d", r.AuthzCacheTTL)
+	}
+	return nil
+}
+
+func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Validate cache TTL configuration
+	log := ctrl.Log.WithName("maas-authpolicy-controller")
+
+	// Reject negative TTL values
+	if err := r.ValidateCacheTTLs(); err != nil {
+		return err
 	}
 
 	if r.AuthzCacheTTL > r.MetadataCacheTTL {

@@ -585,18 +585,24 @@ func TestMaaSAuthPolicyReconciler_NegativeTTLRejection(t *testing.T) {
 				AuthzCacheTTL:    tc.authzTTL,
 			}
 
-			// SetupWithManager requires a manager, but we can't easily create one in unit tests.
-			// Instead, directly test the validation logic by checking the authzCacheTTL() defensive clamp
-			// and noting that SetupWithManager would reject negative values.
+			// Test the validation logic used by SetupWithManager
+			err := r.ValidateCacheTTLs()
 
-			// The defensive clamp in authzCacheTTL() should never return negative values
-			effectiveTTL := r.authzCacheTTL()
-			if effectiveTTL < 0 {
-				t.Errorf("authzCacheTTL() returned negative value %d, should be clamped to 0", effectiveTTL)
+			if tc.expectSetupFail {
+				if err == nil {
+					t.Errorf("Expected validation to fail for negative TTLs, but got no error")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected validation to succeed, but got error: %v", err)
+				}
+
+				// Also verify authzCacheTTL() defensive clamp never returns negative
+				effectiveTTL := r.authzCacheTTL()
+				if effectiveTTL < 0 {
+					t.Errorf("authzCacheTTL() returned negative value %d, should be clamped to 0", effectiveTTL)
+				}
 			}
-
-			// Note: Full SetupWithManager validation is tested via integration tests
-			// as it requires a controller-runtime manager.
 		})
 	}
 }
