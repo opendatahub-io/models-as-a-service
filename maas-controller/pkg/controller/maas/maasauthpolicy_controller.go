@@ -265,9 +265,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 						"method":      "POST",
 						"body": map[string]interface{}{
 							"expression": fmt.Sprintf(`{
-  "groups": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups,
-  "username": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username,
-  "requestedSubscription": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""),
+  "groups": (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups,
+  "username": (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.username : auth.identity.user.username,
+  "requestedSubscription": (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""),
   "requestedModel": "%s/%s"
 }`, ref.Namespace, ref.Name),
 						},
@@ -280,7 +280,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 					// Groups are joined with commas to create a stable string representation.
 					"cache": map[string]interface{}{
 						"key": map[string]interface{}{
-							"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.userId : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
+							"selector": fmt.Sprintf(`((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.userId : auth.identity.user.username) + "|" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
 						},
 						"ttl": r.MetadataCacheTTL,
 					},
@@ -380,7 +380,7 @@ allow {
 			// TTL cannot exceed metadata TTL (subscription-valid depends on subscription-info metadata)
 			"cache": map[string]interface{}{
 				"key": map[string]interface{}{
-					"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.userId : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
+					"selector": fmt.Sprintf(`((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.userId : auth.identity.user.username) + "|" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
 				},
 				"ttl": r.authzCacheTTL(),
 			},
@@ -432,7 +432,7 @@ allow {
 				// TTL cannot exceed metadata TTL (require-group-membership depends on apiKeyValidation metadata for groups)
 				"cache": map[string]interface{}{
 					"key": map[string]interface{}{
-						"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.userId : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|%s/%s"`, ref.Namespace, ref.Name),
+						"selector": fmt.Sprintf(`((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.userId : auth.identity.user.username) + "|" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|%s/%s"`, ref.Namespace, ref.Name),
 					},
 					"ttl": r.authzCacheTTL(),
 				},
@@ -454,7 +454,7 @@ allow {
 					// Username from API key validation or K8s token identity
 					"X-MaaS-Username": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username`,
+							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.username : auth.identity.user.username`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
@@ -462,7 +462,7 @@ allow {
 					// Groups - construct JSON array string from API key validation or K8s identity
 					"X-MaaS-Group": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `'["' + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join('","') + '"]'`,
+							"expression": `'["' + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join('","') + '"]'`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
@@ -470,7 +470,7 @@ allow {
 					// Key ID for tracking (only for API keys)
 					"X-MaaS-Key-Id": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.keyId : ""`,
+							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyId : ""`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
@@ -479,7 +479,7 @@ allow {
 					// For K8s tokens, this header is not injected (empty string)
 					"X-MaaS-Subscription": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ""`,
+							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : ""`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
