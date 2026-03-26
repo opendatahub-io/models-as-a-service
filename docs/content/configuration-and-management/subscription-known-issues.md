@@ -2,32 +2,6 @@
 
 This document describes known issues and operational considerations for the subscription-based MaaS Platform.
 
-## X-MaaS-Subscription Header
-
-### Multiple Subscriptions Require Header
-
-**Impact:** High
-
-**Description:**
-
-When a user belongs to multiple groups that each have a MaaSSubscription, the client **must** send the `X-MaaS-Subscription` header to specify which subscription's rate limits apply. If the header is omitted, the MaaS API returns an error and the request is denied with **403 Forbidden**.
-
-**Example:**
-
-```text
-User in groups: [system:authenticated, premium-users]
-Subscriptions: free-subscription (system:authenticated), premium-subscription (premium-users)
-
-Request without header → 403 "must specify X-MaaS-Subscription"
-Request with X-MaaS-Subscription: premium-subscription → 200 OK (premium limits apply)
-```
-
-**Workaround:**
-
-- Ensure clients send `X-MaaS-Subscription: <subscription-name>` when users can have multiple subscriptions
-- Document which subscription names to use for each user segment
-- Consider using a single subscription per user segment to avoid header requirement
-
 ## Subscription Selection Caching
 
 ### Cache TTL for Subscription Selection
@@ -55,11 +29,11 @@ Authorino caches the result of the MaaS API subscription selection call (e.g., 6
 
 **Description:**
 
-API keys store the user's groups at creation time. If a user's group membership changes after the key was created:
+API keys store the user's groups and bound subscription name at creation time. If a user's group membership changes after the key was created:
 
-- The key still carries the **old** groups until it is revoked and recreated
-- Subscription selection uses the groups from the key validation response (the stored snapshot)
-- The user must create a new API key to get updated group membership and subscription access
+- The key still carries the **old** groups and subscription until it is revoked and recreated
+- Subscription metadata for gateway inference uses the stored groups and subscription from validation
+- The user must create a new API key to pick up new groups or a different default subscription
 
 **Workaround:**
 
@@ -68,5 +42,6 @@ API keys store the user's groups at creation time. If a user's group membership 
 
 ## Related Documentation
 
+- [Understanding Token Management](token-management.md)
 - [Access and Quota Overview](subscription-overview.md)
 - [Quota and Access Configuration](quota-and-access-configuration.md)

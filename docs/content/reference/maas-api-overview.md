@@ -38,7 +38,7 @@ All endpoints except `/health` require authentication via the `Authorization: Be
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/v1/api-keys` | Create a new API key. Returns plaintext key **once**; only the hash is stored. |
+| POST | `/v1/api-keys` | Create a new API key. Returns plaintext key **once**; only the hash is stored. Optional body field `subscription` selects the MaaSSubscription; if omitted, the highest-priority accessible subscription is used. |
 | POST | `/v1/api-keys/search` | Search and filter API keys with pagination, sorting, and status filters. |
 | GET | `/v1/api-keys/{id}` | Get metadata for a specific API key. |
 | DELETE | `/v1/api-keys/{id}` | Revoke a specific API key. |
