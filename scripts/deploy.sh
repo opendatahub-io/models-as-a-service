@@ -574,11 +574,20 @@ deploy_via_kustomize() {
     kubectl create namespace "$NAMESPACE"
   fi
 
+  # Note: The subscription namespace (default: models-as-a-service) is automatically
+  # created by maas-controller when it starts (see maas-controller/cmd/manager/main.go).
+  # We only set the variable here for use in manifest patching below.
+  local subscription_namespace="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
 
   log_info "Applying kustomize manifests..."
-  kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$overlay")
+  # Patch MAAS_SUBSCRIPTION_NAMESPACE env var with the configured subscription namespace
+  kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
+    kustomize build "$overlay" | \
+    perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}'"$subscription_namespace"'"/smg'
+  )
 
   # Apply gateway policies separately so they stay in openshift-ingress (overlay
   # namespace would otherwise overwrite them to $NAMESPACE)

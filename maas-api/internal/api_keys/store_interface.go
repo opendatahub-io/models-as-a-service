@@ -32,7 +32,7 @@ type MetadataStore interface {
 	// userGroups is an array of user's groups (used for authorization).
 	// ephemeral marks the key as short-lived for programmatic use.
 	// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-	AddKey(ctx context.Context, username string, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time, ephemeral bool) error
+	AddKey(ctx context.Context, username string, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool) error
 
 	// Search returns API keys matching the search criteria
 	// Supports filtering, sorting, and pagination

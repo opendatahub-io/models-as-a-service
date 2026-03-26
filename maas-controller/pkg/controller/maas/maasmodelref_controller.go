@@ -134,15 +134,16 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	// Validate credentialRef namespace matches the CR namespace (prevent cross-namespace Secret access)
-	if ref := model.Spec.CredentialRef; ref != nil && ref.Namespace != "" && ref.Namespace != model.Namespace {
-		r.updateStatus(ctx, model, "Failed", "spec.credentialRef.namespace must match metadata.namespace", statusSnapshot)
-		return ctrl.Result{}, nil
-	}
-
 	if err := handler.ReconcileRoute(ctx, log, model); err != nil {
 		if errors.Is(err, ErrKindNotImplemented) {
 			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
+			return ctrl.Result{}, nil
+		}
+		if errors.Is(err, ErrHTTPRouteNotFound) {
+			// HTTPRoute doesn't exist yet - this is normal during startup.
+			// Set status to Pending (not Failed). The HTTPRoute watch will trigger reconciliation when the route is created.
+			model.Status.Endpoint = ""
+			r.updateStatus(ctx, model, "Pending", "Waiting for HTTPRoute to be created", statusSnapshot)
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "failed to reconcile HTTPRoute")
