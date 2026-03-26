@@ -2154,7 +2154,7 @@
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModelRef</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-model</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">opendatahub</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm</span>
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
@@ -2178,7 +2178,7 @@
 - Sets <code>status.phase</code> based on HTTPRoute acceptance by the gateway</p>
 <h2 id="api-behavior">API Behavior</h2>
 <ul>
-<li>The API reads MaaSModelRefs from the informer cache, maps each to an API model (<code>id</code>, <code>url</code>, <code>ready</code>, <code>kind</code>, etc.)</li>
+<li>The API reads MaaSModelRefs cluster-wide, maps each to an API model (<code>id</code>, <code>url</code>, <code>ready</code>, <code>kind</code>, etc.)</li>
 <li><strong>Access validation</strong>: Probes each model's <code>/v1/models</code> endpoint with the request's Authorization header. Only models that return 2xx or 405 are included.</li>
 <li><strong>Kind on the wire</strong>: Each model in the GET /v1/models response carries a <code>kind</code> field from <code>spec.modelRef.kind</code></li>
 </ul>
@@ -2219,7 +2219,7 @@
 <h2 id="summary">Summary</h2>
 <ul>
 <li><strong>modelRef</strong> is the backend reference (kind, name, optional namespace), analogous to <a href="https://gateway-api.sigs.k8s.io/reference/spec/#backendref">Gateway API BackendRef</a>.</li>
-<li><strong>Listing:</strong> Always from MaaSModelRef cache; no kind-specific listing logic.</li>
+<li><strong>Listing:</strong> Always from MaaSModelRef resources cluster-wide; no kind-specific listing logic.</li>
 <li><strong>Access validation:</strong> Same probe (GET endpoint with the request's Authorization header as-is) for all kinds unless kind-specific probes are added later.</li>
 <li><strong>New kinds:</strong> Implement in the controller (resolve referent, set status.endpoint and status.phase); extend the API only if the new kind cannot use the same probe path or needs different enrichment.</li>
 </ul>
@@ -2245,7 +2245,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 18:44:17 UTC">March 25, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 26, 2026 14:32:04 UTC">March 26, 2026</span>
   </span>
 
     
