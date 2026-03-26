@@ -31,7 +31,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
   name: my-model
-  namespace: opendatahub
+  namespace: llm
 spec:
   modelRef:
     kind: LLMInferenceService
