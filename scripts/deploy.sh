@@ -238,6 +238,11 @@ parse_arguments() {
         OPERATOR_TYPE="$2"
         shift 2
         ;;
+      --policy-engine)
+        require_flag_value "$1" "${2:-}"
+        POLICY_ENGINE="$2"
+        shift 2
+        ;;
       --enable-tls-backend)
         ENABLE_TLS_BACKEND="true"
         shift
@@ -613,10 +618,6 @@ deploy_via_kustomize() {
 
   local detected_dsc
   detected_dsc=$(detect_dsc 2>/dev/null)
-  local detected_dsc_namespace=""
-  if [[ -n "$detected_dsc" ]]; then
-    detected_dsc_namespace=$(detect_dsc 2>&1 >/dev/null)
-  fi
 
   # Determine target namespace based on detected operator
   local auto_namespace=""
@@ -906,7 +907,23 @@ deploy_via_kustomize() {
       log_info "  ✓ Database Secret exists"
     else
       log_warn "  ⚠ PostgreSQL running but Secret missing, recreating..."
-      deploy_postgresql
+      # Cannot call deploy_postgresql - it exits early if deployment exists
+      # Extract credentials from existing postgres-creds secret and recreate maas-db-config
+      local pg_user pg_password pg_db
+      pg_user=$(kubectl get secret postgres-creds -n "$NAMESPACE" -o jsonpath='{.data.POSTGRES_USER}' 2>/dev/null | base64 -d || echo "maas")
+      pg_password=$(kubectl get secret postgres-creds -n "$NAMESPACE" -o jsonpath='{.data.POSTGRES_PASSWORD}' 2>/dev/null | base64 -d || echo "")
+      pg_db=$(kubectl get secret postgres-creds -n "$NAMESPACE" -o jsonpath='{.data.POSTGRES_DB}' 2>/dev/null | base64 -d || echo "maas")
+
+      if [[ -z "$pg_password" ]]; then
+        log_error "  ✗ Cannot retrieve PostgreSQL password from postgres-creds secret"
+        log_error "    Secret may be missing or corrupt. Run setup-database.sh manually."
+        exit 1
+      fi
+
+      kubectl create secret generic maas-db-config -n "$NAMESPACE" \
+        --from-literal=DB_CONNECTION_URL="postgresql://${pg_user}:${pg_password}@postgres:5432/${pg_db}?sslmode=disable" \
+        --dry-run=client -o yaml | kubectl apply -f -
+      log_info "  ✓ Database Secret recreated"
     fi
     log_info ""
   else
@@ -939,7 +956,7 @@ deploy_via_kustomize() {
   kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
     kustomize build "$overlay" | \
     sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g" | \
-    perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}'"$subscription_namespace"'"/smg'
+    MAAS_SUB_NS="$subscription_namespace" perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}$ENV{MAAS_SUB_NS}"/smg'
   )
   log_info "  ✓ Kustomize manifests applied"
 
