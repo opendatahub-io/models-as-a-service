@@ -7,6 +7,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"knative.dev/pkg/apis"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 )
 
 const (
@@ -58,6 +60,19 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 	if kind == "" {
 		kind = "llmisvc"
 	}
+	annotations := u.GetAnnotations()
+	var details *Details
+	if annotations != nil {
+		d := Details{
+			DisplayName:   annotations[constant.AnnotationDisplayName],
+			Description:   annotations[constant.AnnotationDescription],
+			GenAIUseCase:  annotations[constant.AnnotationGenAIUseCase],
+			ContextWindow: annotations[constant.AnnotationContextWindow],
+		}
+		if d.DisplayName != "" || d.Description != "" || d.GenAIUseCase != "" || d.ContextWindow != "" {
+			details = &d
+		}
+	}
 
 	var urlPtr *apis.URL
 	if endpoint != "" {
@@ -82,8 +97,9 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 			Created: created,
 			OwnedBy: ownedBy,
 		},
-		Kind:  kind,
-		URL:   urlPtr,
-		Ready: ready,
+		Kind:    kind,
+		URL:     urlPtr,
+		Ready:   ready,
+		Details: details,
 	}
 }
