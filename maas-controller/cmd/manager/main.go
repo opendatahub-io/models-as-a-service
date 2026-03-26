@@ -25,7 +25,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -90,6 +93,35 @@ func ensureSubscriptionNamespaceExists(ctx context.Context, namespace string) er
 	})
 }
 
+// getClusterServiceAccountIssuer fetches the cluster's service account issuer from OpenShift/ROSA configuration.
+// Returns empty string if not found or not running on OpenShift/ROSA.
+// Uses client.Reader (not client.Client) so it can be called before the manager cache starts.
+func getClusterServiceAccountIssuer(c client.Reader) (string, error) {
+	// Try to fetch the OpenShift Authentication config resource
+	// This works on OpenShift/ROSA but not on vanilla Kubernetes
+	authConfig := &unstructured.Unstructured{}
+	authConfig.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "config.openshift.io",
+		Version: "v1",
+		Kind:    "Authentication",
+	})
+
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "cluster"}, authConfig); err != nil {
+		return "", err
+	}
+
+	// Extract spec.serviceAccountIssuer
+	issuer, found, err := unstructured.NestedString(authConfig.Object, "spec", "serviceAccountIssuer")
+	if err != nil {
+		return "", err
+	}
+	if !found || issuer == "" {
+		return "", nil
+	}
+
+	return issuer, nil
+}
+
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -141,6 +173,17 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
+	}
+
+	// Auto-detect cluster audience from OpenShift/ROSA if using default value
+	// Use GetAPIReader() instead of GetClient() because the cache hasn't started yet
+	if clusterAudience == "https://kubernetes.default.svc" {
+		if detectedAudience, err := getClusterServiceAccountIssuer(mgr.GetAPIReader()); err == nil && detectedAudience != "" {
+			setupLog.Info("auto-detected cluster service account issuer", "audience", detectedAudience)
+			clusterAudience = detectedAudience
+		} else if err != nil {
+			setupLog.Info("unable to auto-detect cluster service account issuer, using default", "error", err, "default", clusterAudience)
+		}
 	}
 
 	if err := (&maas.MaaSModelRefReconciler{

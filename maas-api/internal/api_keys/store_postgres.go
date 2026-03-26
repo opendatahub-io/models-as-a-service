@@ -39,7 +39,9 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 // ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time, ephemeral bool) error {
+func (s *PostgresStore) AddKey(
+	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool,
+) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
@@ -49,16 +51,19 @@ func (s *PostgresStore) AddKey(ctx context.Context, username, keyID, keyHash, na
 	if keyHash == "" {
 		return errors.New("key hash is required")
 	}
+	if subscription == "" {
+		return errors.New("subscription is required")
+	}
 	if userGroups == nil {
 		userGroups = []string{}
 	}
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, status, created_at, expires_at, ephemeral)
-		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9)
+		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, subscription, status, created_at, expires_at, ephemeral)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10)
 	`
 	// Use pq.Array to handle PostgreSQL TEXT[] type
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), time.Now().UTC(), expiresAt, ephemeral)
+	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), subscription, time.Now().UTC(), expiresAt, ephemeral)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
@@ -116,7 +121,7 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 
 	//nolint:gosec // Dynamic WHERE clause is safe - uses parameterized queries
 	query := fmt.Sprintf(`
-		SELECT id, name, description, created_at, expires_at, status, last_used_at, ephemeral
+		SELECT id, name, description, subscription, created_at, expires_at, status, last_used_at, ephemeral
 		FROM api_keys
 		%s
 		ORDER BY created_at DESC
@@ -138,7 +143,7 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 		var expiresAt, lastUsedAt sql.NullTime
 		var description sql.NullString
 
-		if err := rows.Scan(&k.ID, &k.Name, &description, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral); err != nil {
+		if err := rows.Scan(&k.ID, &k.Name, &description, &k.Subscription, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
 
@@ -241,7 +246,7 @@ func (s *PostgresStore) Search(
 
 	//nolint:gosec // Dynamic ORDER BY is safe - sort.By/Order validated against allowlist in handler
 	query := fmt.Sprintf(`
-		SELECT id, name, description, username, created_at, expires_at, status, last_used_at, ephemeral
+		SELECT id, name, description, subscription, username, created_at, expires_at, status, last_used_at, ephemeral
 		FROM api_keys
 		%s
 		%s
@@ -267,6 +272,7 @@ func (s *PostgresStore) Search(
 			&key.ID,
 			&key.Name,
 			&description,
+			&key.Subscription,
 			&key.Username,
 			&createdAt,
 			&expiresAt,
@@ -314,7 +320,7 @@ func (s *PostgresStore) Search(
 // Get retrieves a single API key by ID.
 func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 	query := `
-		SELECT id, name, description, username, created_at, expires_at, status, last_used_at, ephemeral
+		SELECT id, name, description, username, subscription, created_at, expires_at, status, last_used_at, ephemeral
 		FROM api_keys
 		WHERE id = $1
 	`
@@ -325,7 +331,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
 
-	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral); err != nil {
+	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}
@@ -349,7 +355,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 // GetByHash looks up an API key by its SHA-256 hash (critical path for validation).
 func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, error) {
 	query := `
-		SELECT id, username, name, description, user_groups, status, expires_at, last_used_at, ephemeral
+		SELECT id, username, name, description, user_groups, subscription, status, expires_at, last_used_at, ephemeral
 		FROM api_keys
 		WHERE key_hash = $1
 	`
@@ -361,7 +367,7 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 	var userGroups []string
 
 	// Use pq.Array to scan PostgreSQL TEXT[] into []string
-	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Status, &expiresAt, &lastUsedAt, &k.Ephemeral); err != nil {
+	if err := row.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Subscription, &k.Status, &expiresAt, &lastUsedAt, &k.Ephemeral); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}
