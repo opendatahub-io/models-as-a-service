@@ -58,7 +58,7 @@ func TestValidateAPIKey_ValidKey(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.True(t, result.Valid)
-	assert.Equal(t, username, result.UserID)
+	assert.Equal(t, keyID, result.UserID) // UserID is the database-assigned key ID (UUID)
 	assert.Equal(t, username, result.Username)
 	assert.Equal(t, keyID, result.KeyID)
 	assert.Equal(t, groups, result.Groups)
@@ -170,7 +170,7 @@ func TestValidateAPIKey_EmptyGroups(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.True(t, result.Valid)
-	assert.Equal(t, username, result.UserID)
+	assert.Equal(t, keyID, result.UserID) // UserID is the database-assigned key ID (UUID)
 	assert.NotNil(t, result.Groups, "Groups should be empty array, not nil")
 	assert.Empty(t, result.Groups, "Groups should be empty")
 }

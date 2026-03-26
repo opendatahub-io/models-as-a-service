@@ -88,24 +88,29 @@ Cache keys are carefully designed to prevent data leakage between principals, su
 
 Cache keys use single-character delimiters (`|` and `,`) to separate components:
 
-- **Field delimiter**: `|` separates major components (username, groups, subscription, model)
+- **Field delimiter**: `|` separates major components (user ID, groups, subscription, model)
 - **Group delimiter**: `,` joins multiple group names
 
-**Theoretical Collision Risk:**
-OIDC/LDAP identities can contain arbitrary characters, including delimiter characters. This creates theoretical collision potential where crafted usernames or group names could produce identical cache keys.
+**For API Keys - Collision Resistant:**
+Cache keys use database-assigned UUIDs instead of usernames:
+- User ID: Database primary key (UUID format in `api_keys.id` column)
+- Immutable and unique per API key
+- Not user-controllable (assigned by database on creation)
+- Example key: `550e8400-e29b-41d4-a716-446655440000|team,admin|sub1|ns/model`
+- No collision risk even if groups contain delimiters (UUID prefix ensures uniqueness)
 
-**Why not use base64 or hash?**
-Authorino uses CEL (Common Expression Language) for cache key construction, which does not provide:
-- Base64 encoding functions
-- Cryptographic hash functions (sha256, etc.)
-- URL encoding functions
+**For Kubernetes Tokens - Already Safe:**
+Kubernetes usernames follow validated format enforced by the K8s API:
+- Pattern: `system:serviceaccount:namespace:sa-name`
+- Kubernetes validates namespace/SA names (DNS-1123: alphanumeric + hyphens only)
+- No special characters like `|` or `,` allowed in usernames
+- Creating service accounts requires cluster permissions (not user self-service)
 
-**Practical Impact:**
-Real-world collision probability is low because:
-- Most OIDC providers use standard username formats (email addresses, alphanumeric IDs)
-- Collision requires crafted input with exact delimiter sequences in specific positions
-- Cache entries are isolated per-model, reducing collision scope
-- For Kubernetes tokens: usernames follow validated format `system:serviceaccount:namespace:sa-name` (K8s API enforces alphanumeric + hyphens only)
+**Implementation:**
+The `apiKeyValidation` metadata evaluator returns a `userId` field:
+- API keys: Set to `api_keys.id` (database UUID)
+- Cache keys reference `auth.metadata.apiKeyValidation.userId` in CEL expressions
+- This eliminates username-based collision attacks
 
 ### Metadata Caches
 
@@ -114,9 +119,12 @@ Real-world collision probability is low because:
 - Key: `<api-key-value>`
 - Ensures each unique API key has its own cache entry
 - Does not run for Kubernetes token requests (prevents cache pollution)
+- Returns `userId` field set to database UUID (`api_keys.id`)
 
 **subscription-info:**
-- Key: `<username>|<groups>|<requested-subscription>|<model-namespace>/<model-name>`
+- Key: `<userId>|<groups>|<requested-subscription>|<model-namespace>/<model-name>`
+- For API keys: `userId` is database UUID from `apiKeyValidation` response
+- For K8s tokens: `userId` is validated K8s username (`system:serviceaccount:...`)
 - Groups joined with `,` delimiter
 - Ensures cache isolation per user, group membership, requested subscription, and model
 
@@ -129,10 +137,12 @@ Real-world collision probability is low because:
 
 **subscription-valid:**
 - Key: Same as subscription-info metadata (ensures cache coherence)
-- Format: `<username>|<groups>|<requested-subscription>|<model>`
+- Format: `<userId>|<groups>|<requested-subscription>|<model>`
+- For API keys: `userId` is database UUID. For K8s tokens: validated username.
 
 **require-group-membership:**
-- Key: `<username>|<groups>|<model-namespace>/<model-name>`
+- Key: `<userId>|<groups>|<model-namespace>/<model-name>`
+- For API keys: `userId` is database UUID. For K8s tokens: validated username.
 - Groups joined with `,` delimiter
 - Ensures cache isolation per user identity and model
 
@@ -174,26 +184,27 @@ All cache keys include sufficient dimensions to prevent cross-principal or cross
 
 ### Cache Key Collision Risk
 
-**Theoretical Risk:**
-Cache keys use string concatenation with delimiters. OIDC/LDAP groups can contain delimiter characters (`,` or `|`), creating potential for collision.
+**API Keys - No Collision Risk:**
+Cache keys use database-assigned UUIDs instead of usernames:
+- User IDs are unique 128-bit UUIDs (format: `550e8400-e29b-41d4-a716-446655440000`)
+- Immutable and assigned by PostgreSQL at API key creation
+- Not user-controllable (no self-service user ID selection)
+- Even if groups contain delimiters (`,` or `|`), the UUID prefix prevents collision
+- Example: Two users with groups `["team,admin"]` and `["team", "admin"]` have different UUIDs, so no collision
 
-**Example Collision Scenario:**
-```
-User: "alice", Groups: ["team,admin"] → "alice|team,admin|..."
-User: "alice", Groups: ["team", "admin"] → "alice|team,admin|..."
-```
-Both produce identical cache keys despite different group membership.
+**Kubernetes Tokens - No Collision Risk:**
+Kubernetes usernames are validated by the K8s API server:
+- Format: `system:serviceaccount:namespace:sa-name`
+- Kubernetes enforces DNS-1123 naming: `[a-z0-9]([-a-z0-9]*[a-z0-9])?`
+- No special characters like `|` or `,` allowed
+- Creating service accounts requires cluster RBAC permissions (not user self-service)
 
-**Practical Mitigation:**
-- Most OIDC providers use standard formats that don't include delimiters
-- For Kubernetes tokens: usernames are validated by K8s API (pattern `system:serviceaccount:namespace:sa-name`, alphanumeric + hyphens only)
-- Per-model isolation limits collision scope
-- Collision requires both same username AND crafted groups with delimiters in specific positions
-
-**Known Limitations:**
-- CEL (Common Expression Language) lacks base64/hash functions for cryptographic collision resistance
-- Group ordering affects cache keys: `["admin", "user"]` ≠ `["user", "admin"]` (CEL has no sort function)
-- Future improvements could include length-prefixing or upstream CEL enhancements
+**Remaining Edge Case - Group Ordering:**
+Group array ordering affects cache keys:
+- `["admin", "user"]` produces different key than `["user", "admin"]`
+- CEL has no array sort() function
+- Impact: Suboptimal cache hit rate if group order varies between OIDC token refreshes
+- Mitigation: OIDC providers and K8s TokenReview typically return groups in consistent order
 
 ### Stale Data Window
 

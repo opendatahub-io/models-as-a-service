@@ -272,13 +272,15 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 }`, ref.Namespace, ref.Name),
 						},
 					},
-					// Cache subscription selection results keyed by username, groups, requested subscription, and model.
+					// Cache subscription selection results keyed by user ID, groups, requested subscription, and model.
 					// Each model has its own cache entry since subscription validation is model-specific.
-					// Key format: "username|groups|requested-subscription|model-namespace/model-name"
+					// Key format: "userId|groups|requested-subscription|model-namespace/model-name"
+					// For API keys: userId is database-assigned UUID (collision-resistant)
+					// For K8s tokens: userId is validated username (system:serviceaccount:namespace:sa-name)
 					// Groups are joined with commas to create a stable string representation.
 					"cache": map[string]interface{}{
 						"key": map[string]interface{}{
-							"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
+							"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.userId : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
 						},
 						"ttl": r.MetadataCacheTTL,
 					},
@@ -373,11 +375,12 @@ allow {
 			},
 			// Cache authorization result keyed by subscription selection inputs.
 			// Uses same key dimensions as subscription-info metadata to ensure cache coherence.
-			// Key format: "username|groups|requested-subscription|model"
+			// Key format: "userId|groups|requested-subscription|model"
+			// For API keys: userId is database UUID. For K8s tokens: validated username.
 			// TTL cannot exceed metadata TTL (subscription-valid depends on subscription-info metadata)
 			"cache": map[string]interface{}{
 				"key": map[string]interface{}{
-					"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
+					"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.userId : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
 				},
 				"ttl": r.authzCacheTTL(),
 			},
@@ -422,13 +425,14 @@ allow {
 }
 `, string(groupsJSON), string(usersJSON)),
 				},
-				// Cache authorization result keyed by username, groups, and model.
+				// Cache authorization result keyed by user ID, groups, and model.
 				// The allowed groups/users are baked into the OPA rego, so the cache is per-model-policy.
-				// Key format: "username|groups|model"
+				// Key format: "userId|groups|model"
+				// For API keys: userId is database UUID. For K8s tokens: validated username.
 				// TTL cannot exceed metadata TTL (require-group-membership depends on apiKeyValidation metadata for groups)
 				"cache": map[string]interface{}{
 					"key": map[string]interface{}{
-						"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|%s/%s"`, ref.Namespace, ref.Name),
+						"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.userId : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|%s/%s"`, ref.Namespace, ref.Name),
 					},
 					"ttl": r.authzCacheTTL(),
 				},

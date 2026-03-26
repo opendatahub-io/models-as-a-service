@@ -242,7 +242,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	// Success - return user identity and groups for Authorino
 	return &ValidationResult{
 		Valid:        true,
-		UserID:       metadata.Username,
+		UserID:       metadata.ID, // Database-assigned UUID (immutable, collision-resistant)
 		Username:     metadata.Username,
 		KeyID:        metadata.ID,
 		Groups:       groups, // Original user groups for subscription-based authorization
