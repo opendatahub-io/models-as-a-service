@@ -448,45 +448,12 @@ allow {
 		// match against subscription groups (which may differ from auth policy groups).
 		// Also inject subscription metadata from subscription-info for Limitador metrics.
 		// For API keys: username/groups come from apiKeyValidation metadata
-		// For K8s tokens: username/groups come from auth.identity
+		// Identity headers intentionally removed for defense-in-depth:
+		// User identity, groups, and key IDs are not forwarded to upstream model workloads
+		// to prevent accidental disclosure in logs or dumps. All identity information remains
+		// available to TRLP and telemetry via auth.identity and filters.identity below.
 		rule["response"] = map[string]interface{}{
 			"success": map[string]interface{}{
-				"headers": map[string]interface{}{
-					// Username from API key validation or K8s token identity
-					"X-MaaS-Username": map[string]interface{}{
-						"plain": map[string]interface{}{
-							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.username : auth.identity.user.username`,
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					// Groups - serialize to JSON array string from API key validation or K8s identity
-					// Using string() conversion of JSON-serialized groups for proper escaping
-					"X-MaaS-Group": map[string]interface{}{
-						"plain": map[string]interface{}{
-							"expression": `string(((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups))`,
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					// Key ID for tracking (only for API keys)
-					"X-MaaS-Key-Id": map[string]interface{}{
-						"plain": map[string]interface{}{
-							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyId : ""`,
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					// Subscription bound to API key (only for API keys)
-					// For K8s tokens, this header is not injected (empty string)
-					"X-MaaS-Subscription": map[string]interface{}{
-						"plain": map[string]interface{}{
-							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : ""`,
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-				},
 				"filters": map[string]interface{}{
 					"identity": map[string]interface{}{
 						"json": map[string]interface{}{

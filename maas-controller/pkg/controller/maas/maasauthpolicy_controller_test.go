@@ -1062,6 +1062,117 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	}
 }
 
+// TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream verifies that identity headers
+// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Key-Id, X-MaaS-Subscription) are NOT injected
+// into requests forwarded to upstream model workloads (defense-in-depth).
+// All identity information remains available to TRLP and telemetry via filters.identity.
+func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+	}
+
+	// Test 1: Verify response.success.headers does NOT exist (identity headers not forwarded upstream)
+	t.Run("identity headers not forwarded to upstream", func(t *testing.T) {
+		headers, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "headers")
+		if err != nil {
+			t.Fatalf("Error checking headers: %v", err)
+		}
+
+		// Headers should either not exist or be empty
+		if found && len(headers) > 0 {
+			// Check that identity headers specifically are not present
+			forbiddenHeaders := []string{"X-MaaS-Username", "X-MaaS-Group", "X-MaaS-Key-Id", "X-MaaS-Subscription"}
+			for _, header := range forbiddenHeaders {
+				if _, exists := headers[header]; exists {
+					t.Errorf("Identity header %q should NOT be forwarded to upstream workloads (defense-in-depth)", header)
+				}
+			}
+		}
+	})
+
+	// Test 2: Verify filters.identity exists and contains all necessary data for TRLP and telemetry
+	t.Run("identity data available for TRLP and telemetry", func(t *testing.T) {
+		identity, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "filters", "identity", "json", "properties")
+		if err != nil || !found {
+			t.Fatalf("filters.identity.json.properties missing: found=%v err=%v", found, err)
+		}
+
+		// Verify essential fields for TRLP
+		requiredFields := []string{
+			"userid",                      // User identification
+			"groups",                      // User groups
+			"selected_subscription_key",   // Model-scoped subscription key for TRLP
+			"selected_subscription",       // Subscription name
+			"subscription_labels",         // Labels for rate limit tiers
+		}
+
+		for _, field := range requiredFields {
+			if _, exists := identity[field]; !exists {
+				t.Errorf("filters.identity must include %q for TRLP/telemetry, but it's missing", field)
+			}
+		}
+
+		// Verify telemetry/observability fields
+		observabilityFields := []string{
+			"keyId",          // API key tracking
+			"organizationId", // Cost attribution
+			"costCenter",     // Chargeback
+		}
+
+		for _, field := range observabilityFields {
+			if _, exists := identity[field]; !exists {
+				t.Errorf("filters.identity should include %q for observability, but it's missing", field)
+			}
+		}
+	})
+
+	// Test 3: Verify metrics are enabled on identity filter
+	t.Run("identity filter has metrics enabled", func(t *testing.T) {
+		metricsEnabled, found, err := unstructured.NestedBool(got.Object, "spec", "rules", "response", "success", "filters", "identity", "metrics")
+		if err != nil || !found {
+			t.Fatalf("filters.identity.metrics missing: found=%v err=%v", found, err)
+		}
+
+		if !metricsEnabled {
+			t.Error("filters.identity.metrics must be true for telemetry to access identity data")
+		}
+	})
+}
+
 // contains is a helper to check if a string contains a substring (case-sensitive).
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
