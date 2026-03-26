@@ -564,9 +564,6 @@ deploy_via_operator() {
     configure_tls_backend
   fi
 
-  # Patch the operator-managed AuthPolicy to restore API key auth and,
-  # when configured, enable OIDC JWT validation.
-  configure_maas_api_authpolicy
 
   # Configure audience for non-standard clusters (Hypershift/ROSA)
   configure_cluster_audience
@@ -1428,11 +1425,25 @@ resolve_external_oidc_issuer() {
   printf '%s\n' "$oidc_issuer_url"
 }
 
+resolve_external_oidc_client_id() {
+  local oidc_client_id="${OIDC_CLIENT_ID:-}"
+  if [[ -z "$oidc_client_id" ]]; then
+    oidc_client_id=$(get_odh_overlay_param "oidc-client-id" 2>/dev/null || echo "")
+  fi
+
+  if [[ -z "$oidc_client_id" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$oidc_client_id"
+}
+
 patch_authpolicy_from_template() {
   local authpolicy_name="$1"
   local template_file="$2"
   local maas_namespace="$3"
   local oidc_issuer_url="${4:-}"
+  local oidc_client_id="${5:-}"
 
   local rendered_patch
   rendered_patch="$(mktemp)"
@@ -1440,6 +1451,7 @@ patch_authpolicy_from_template() {
   sed \
     -e "s|__MAAS_NAMESPACE__|${maas_namespace}|g" \
     -e "s|__OIDC_ISSUER_URL__|${oidc_issuer_url}|g" \
+    -e "s|__OIDC_CLIENT_ID__|${oidc_client_id}|g" \
     "$template_file" > "$rendered_patch"
 
   kubectl patch authpolicy "$authpolicy_name" -n "$NAMESPACE" --type=merge --patch-file "$rendered_patch"
@@ -1484,8 +1496,8 @@ configure_maas_api_authpolicy() {
   local api_keys_patch="$project_root/scripts/data/maas-api-authpolicy-api-keys-patch.yaml"
   log_info "  Patching AuthPolicy to ensure API key support..."
   if ! patch_authpolicy_from_template "$authpolicy_name" "$api_keys_patch" "$NAMESPACE"; then
-    log_warn "  Failed to patch AuthPolicy with API key configuration"
-    return 0
+    log_error "  Failed to patch AuthPolicy with API key configuration"
+    return 1
   fi
 
   if [[ "$EXTERNAL_OIDC" != "true" ]]; then
@@ -1499,11 +1511,17 @@ configure_maas_api_authpolicy() {
     return 1
   }
 
+  local oidc_client_id
+  oidc_client_id="$(resolve_external_oidc_client_id)" || {
+    log_error "External OIDC requested but no oidc-client-id or OIDC_CLIENT_ID was configured"
+    return 1
+  }
+
   local oidc_patch="$project_root/scripts/data/maas-api-authpolicy-external-oidc-patch.yaml"
-  log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url"
-  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$NAMESPACE" "$oidc_issuer_url"; then
-    log_warn "  Failed to patch AuthPolicy with external OIDC configuration"
-    return 0
+  log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url, clientId: $oidc_client_id"
+  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$NAMESPACE" "$oidc_issuer_url" "$oidc_client_id"; then
+    log_error "  Failed to patch AuthPolicy with external OIDC configuration"
+    return 1
   fi
 
   log_info "  AuthPolicy patched successfully"
