@@ -109,7 +109,10 @@ func (s *Service) CreateAPIKey(
 	// Calculate absolute expiration timestamp (always set since we default to max)
 	expiresAt := time.Now().UTC().Add(*expiresIn)
 
-	// Generate the API key
+	// Generate the API key with embedded key_id (used as per-key salt).
+	// Format: sk-oai-{key_id}_{secret}
+	// Hash: SHA-256(key_id + "\x00" + secret) - null delimiter prevents length-ambiguity
+	// Note: key_id here is the embedded salt in the API key, distinct from keyID (DB UUID) below.
 	plaintext, hash, prefix, err := GenerateAPIKey()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate API key: %w", err)
@@ -139,6 +142,7 @@ func (s *Service) CreateAPIKey(
 	// Store in database (hash only, plaintext NEVER stored)
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
+	// Hash is SHA-256(key_id + secret) where key_id is embedded in the API key as per-key salt
 	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, &expiresAt, ephemeral); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
@@ -165,10 +169,11 @@ func (s *Service) GetAPIKey(ctx context.Context, id string) (*ApiKey, error) {
 	return s.store.Get(ctx, id)
 }
 
-// ValidateAPIKey validates an API key by hash lookup (called by Authorino HTTP callback)
+// ValidateAPIKey validates an API key (called by Authorino HTTP callback).
 // Per Feature Refinement "Gateway Integration (Inference Flow)":
-// - Computes SHA-256 hash of incoming key
-// - Looks up hash in database
+// - Parses the key to extract key_id and secret
+// - Computes SHA-256(key_id + secret) - key_id acts as per-key salt
+// - Looks up by hash (O(1) indexed lookup)
 // - Returns user identity if valid, rejection reason if invalid.
 func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationResult, error) {
 	// Check key format
@@ -179,10 +184,17 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		}, nil
 	}
 
-	// Compute hash of incoming key
+	// Compute salted hash: SHA-256(key_id + secret)
+	// key_id is embedded in the API key and serves as per-key salt
 	hash := HashAPIKey(key)
+	if hash == "" {
+		return &ValidationResult{
+			Valid:  false,
+			Reason: "invalid key format",
+		}, nil
+	}
 
-	// Lookup in database
+	// Lookup by hash (O(1) indexed lookup)
 	metadata, err := s.store.GetByHash(ctx, hash)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
