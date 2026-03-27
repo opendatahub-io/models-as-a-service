@@ -11,7 +11,7 @@
         <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-setup/">
       
       
-        <link rel="prev" href="../tls-configuration/">
+        <link rel="prev" href="../subscription-known-issues/">
       
       
         <link rel="next" href="../model-listing-flow/">
@@ -1334,6 +1334,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../subscription-known-issues/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Subscription Known Issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1473,6 +1501,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Supported model types">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#supported-llms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supported LLMs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supported-inference-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supported inference services
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1757,6 +1813,62 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../model-access-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Access Behavior
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maas-model-kinds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS Model Kinds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1800,7 +1912,7 @@
   <span class="md-ellipsis">
     
   
-    Advanced Administration
+    MaaS Controller
   
 
     
@@ -1813,6 +1925,99 @@
         
         <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    MaaS Controller
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../maas-controller-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Controller Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Administration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -2336,6 +2541,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Supported model types">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#supported-llms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supported LLMs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supported-inference-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supported inference services
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2609,8 +2842,34 @@
 <p>When using the <strong>MaaS controller</strong>, model access and rate limits are controlled by <strong>MaaSModelRef</strong>, <strong>MaaSAuthPolicy</strong>, and <strong>MaaSSubscription</strong> CRDs. See <a href="../quota-and-access-configuration/">Quota and Access Configuration</a> and <a href="../model-listing-flow/">Model Listing Flow</a>.</p>
 </div>
 <h2 id="supported-model-types">Supported model types</h2>
-<p>MaaS is planning support for multiple model types through a <strong>provider paradigm</strong>: each MaaSModelRef references a model backend by <code>kind</code> (e.g., <code>LLMInferenceService</code>, <code>ExternalModel</code>). The controller uses provider-specific logic to reconcile and resolve each type.</p>
-<p><strong>LLMInferenceService</strong> will be initially supported. The initial release focuses on using KServe for on-cluster models. This guide describes the configuration differences between the default LLMInferenceService and the MaaS-enabled one to help users understand the differences.</p>
+<p>MaaS distinguishes between <strong>supported LLMs</strong> (the model weights/architectures) and <strong>supported inference services</strong> (the runtime backends).</p>
+<h3 id="supported-llms">Supported LLMs</h3>
+<p>Most LLM model families should work (e.g., Llama, Mistral, Qwen, GPT-style models). We are working on an official validated list. If you encounter issues with a specific model, please report them.</p>
+<h3 id="supported-inference-services">Supported inference services</h3>
+<p>MaaS uses a <strong>provider paradigm</strong>: each MaaSModelRef references a model backend by <code>kind</code> (e.g., <code>LLMInferenceService</code>, <code>ExternalModel</code>). The controller uses provider-specific logic to reconcile and resolve each type. Supported inference runtimes include:</p>
+<table>
+<thead>
+<tr>
+<th>Inference service</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>vLLM</strong> (via LLMInferenceService / KServe)</td>
+<td>Initial supported release. This is the primary supported backend for on-cluster models.</td>
+</tr>
+<tr>
+<td><strong>KServe</strong> (LLMInferenceService)</td>
+<td>Runtime framework. vLLM workloads run through LLMInferenceService.</td>
+</tr>
+<tr>
+<td><strong>Additional backends</strong></td>
+<td>Planned for future releases.</td>
+</tr>
+</tbody>
+</table>
+<p>This guide describes the configuration differences between the default LLMInferenceService and the MaaS-enabled one to help users understand the differences.</p>
 <h2 id="how-the-model-list-is-built">How the model list is built</h2>
 <p>When the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS controller</a> is installed, you register models by creating <strong>MaaSModelRef</strong> CRs that reference a model backend (e.g., an LLMInferenceService). The controller reconciles each MaaSModelRef and sets <code>status.endpoint</code> and <code>status.phase</code>. The MaaS API lists these MaaSModelRef CRs and returns them as the model list. Access and quotas are controlled by <strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong>. See <a href="../model-listing-flow/">Model listing flow</a> for details.</p>
 <h2 id="maas-capable-vs-standard-gateways">MaaS-capable vs standard gateways</h2>
@@ -2900,7 +3159,7 @@ graph TB
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 26, 2026 16:21:53 UTC">March 26, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 27, 2026 16:04:28 UTC">March 27, 2026</span>
   </span>
 
     
