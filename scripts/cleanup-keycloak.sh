@@ -63,7 +63,7 @@ if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
     echo ""
     echo "⚠️  Keycloak CRDs still exist (cluster-scoped resources)"
 
-    if [[ "$DELETE_CRDS" == true ]] || [[ "$FORCE" == true ]]; then
+    if [[ "$DELETE_CRDS" == true ]]; then
       echo "Deleting Keycloak CRDs..."
       kubectl delete crd keycloaks.k8s.keycloak.org --ignore-not-found=true
       kubectl delete crd keycloakrealmimports.k8s.keycloak.org --ignore-not-found=true

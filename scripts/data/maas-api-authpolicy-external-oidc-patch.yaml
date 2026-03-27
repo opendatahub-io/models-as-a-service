@@ -26,12 +26,14 @@ spec:
         headers:
           X-MaaS-Username-OC:
             plain:
+              selector: null
               expression: >-
                 has(auth.identity.preferred_username) ?
                 auth.identity.preferred_username :
                 (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)
           X-MaaS-Group-OC:
             plain:
+              selector: null
               expression: >-
                 has(auth.identity.groups) ?
                 (size(auth.identity.groups) > 0 ?
