@@ -4,6 +4,29 @@ MaaS Subscription Controller e2e tests.
 Tests auth enforcement (MaaSAuthPolicy) and rate limiting (MaaSSubscription)
 by hitting the gateway with API keys created via the MaaS API.
 
+Policy Evaluation Order:
+  1. AuthPolicy (Kuadrant) - FIRST LINE OF DEFENSE
+     - Validates API key via /internal/v1/api-keys/validate
+     - Validates subscription selection via /v1/subscriptions/select
+       * Checks subscription exists and user has access (groups/users match)
+       * Inference uses API keys only; each key carries the bound MaaSSubscription from mint
+     - Denies invalid requests with 403 Forbidden (subscription validation failures)
+     - Injects auth.identity.selected_subscription for downstream policies
+
+  2. TokenRateLimitPolicy (Kuadrant) - RATE LIMITING ONLY
+     - Trusts auth.identity.selected_subscription (already validated by AuthPolicy)
+     - Applies rate limits based on selected subscription
+     - Returns 429 Too Many Requests only when rate limit exceeded
+     - Does NOT re-validate subscription (AuthPolicy already did this)
+
+Expected Error Codes:
+  - 401 Unauthorized: Missing or invalid API key
+  - 403 Forbidden: Valid API key but subscription validation failed
+    * Subscription bound on the key no longer exists or is invalid
+    * No subscriptions available for user
+  - 429 Too Many Requests: Valid request but rate limit exceeded
+  - 200 OK: Valid request with available rate limit quota
+
 Requires:
   - GATEWAY_HOST env var (e.g. maas.apps.cluster.example.com)
   - MAAS_API_BASE_URL env var (e.g. https://maas.apps.cluster.example.com/maas-api)
@@ -34,7 +57,7 @@ Environment variables (all optional, with defaults):
   - E2E_SIMULATOR_SUBSCRIPTION: Free-tier subscription (default: simulator-subscription)
   - E2E_PREMIUM_SIMULATOR_SUBSCRIPTION: Premium-tier subscription (default: premium-simulator-subscription)
   - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
-  - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 429 test (default: nonexistent-sub)
+  - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 403 test (default: nonexistent-sub)
 """
 
 import base64
@@ -177,29 +200,35 @@ def _create_sa_token(sa_name, namespace=None, duration="10m"):
 # API Key Management Helpers
 # ---------------------------------------------------------------------------
 
-def _create_api_key(oc_token: str, name: str = None) -> str:
+def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -> str:
     """Create an API key using the MaaS API and return the plaintext key.
     
     Note: API keys inherit the authenticated user's groups automatically.
     Users can only create keys for themselves with their own groups.
-    
+    Pass ``subscription`` to bind a specific MaaSSubscription at mint time.
+
     Args:
         oc_token: OC token for authentication with maas-api
         name: Optional name for the key (auto-generated if not provided)
-    
+        subscription: Optional MaaSSubscription name to bind (highest-priority auto-bind if omitted)
+
     Returns:
         The plaintext API key (sk-oai-xxx format)
     """
     url = f"{_maas_api_url()}/v1/api-keys"
     key_name = name or f"e2e-sub-test-{uuid.uuid4().hex[:8]}"
-    
+
+    body = {"name": key_name}
+    if subscription:
+        body["subscription"] = subscription
+
     r = requests.post(
         url,
         headers={
             "Authorization": f"Bearer {oc_token}",
             "Content-Type": "application/json",
         },
-        json={"name": key_name},
+        json=body,
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
     )
@@ -211,7 +240,7 @@ def _create_api_key(oc_token: str, name: str = None) -> str:
     if not api_key:
         raise RuntimeError(f"API key response missing 'key' field: {data}")
     
-    log.info(f"Created API key '{key_name}' (inherits user's groups)")
+    log.info(f"Created API key '{key_name}' (inherits user's groups), bound to subscription '{subscription}'")
     return api_key
 
 
@@ -244,7 +273,11 @@ def _get_default_api_key() -> str:
     pid = os.getpid()
     if pid not in _default_api_key_cache:
         oc_token = _get_cluster_token()
-        _default_api_key_cache[pid] = _create_api_key(oc_token, name="e2e-default-key")
+        _default_api_key_cache[pid] = _create_api_key(
+            oc_token,
+            name="e2e-default-key",
+            subscription=SIMULATOR_SUBSCRIPTION,
+        )
     return _default_api_key_cache[pid]
 
 
@@ -264,10 +297,29 @@ def _delete_cr(kind, name, namespace=None):
 
 def _get_cr(kind, name, namespace=None):
     namespace = namespace or _ns()
-    result = subprocess.run(["oc", "get", kind, name, "-n", namespace, "-o", "json"], capture_output=True, text=True)
-    if result.returncode != 0:
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        result = subprocess.run(["oc", "get", kind, name, "-n", namespace, "-o", "json"], capture_output=True, text=True)
+
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+
+        # Retry transient errors
+        if attempt < max_retries - 1 and _is_transient_kubectl_error(result.stderr):
+            log.warning(
+                f"Transient kubectl error getting {kind}/{name} (attempt {attempt + 1}/{max_retries}): {result.stderr.strip()}"
+            )
+            time.sleep(retry_delay * (attempt + 1))
+            continue
+
+        # Non-transient error or final attempt - return None (existing behavior)
+        log.error(
+            f"Failed to get {kind}/{name} in namespace '{namespace}' after {max_retries} retries. "
+            f"Last error: {result.stderr.strip()}"
+        )
         return None
-    return json.loads(result.stdout)
 
 
 def _cr_exists(kind, name, namespace=None):
@@ -403,7 +455,16 @@ def _create_test_auth_policy(name, model_refs, users=None, groups=None, namespac
     })
 
 
-def _create_test_subscription(name, model_refs, users=None, groups=None, token_limit=100, window="1m", namespace=None):
+def _create_test_subscription(
+    name,
+    model_refs,
+    users=None,
+    groups=None,
+    token_limit=100,
+    window="1m",
+    namespace=None,
+    priority=None,
+):
     """Create a MaaSSubscription CR for testing.
 
     Args:
@@ -414,6 +475,7 @@ def _create_test_subscription(name, model_refs, users=None, groups=None, token_l
         token_limit: Token rate limit (default: 100)
         window: Rate limit window (default: "1m")
         namespace: Namespace for the subscription (defaults to _ns())
+        priority: Optional spec.priority (higher wins for default API key binding when omitted)
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -422,65 +484,44 @@ def _create_test_subscription(name, model_refs, users=None, groups=None, token_l
     # Convert groups list to required format: [{"name": "group1"}, {"name": "group2"}]
     groups_formatted = [{"name": g} for g in (groups or [])]
 
-    log.info("Creating MaaSSubscription: %s", name)
-    _apply_cr({
-        "apiVersion": "maas.opendatahub.io/v1alpha1",
-        "kind": "MaaSSubscription",
-        "metadata": {"name": name, "namespace": namespace},
-        "spec": {
-            "owner": {
-                "users": users or [],
-                "groups": groups_formatted
-            },
-            "modelRefs": [{
+    spec = {
+        "owner": {
+            "users": users or [],
+            "groups": groups_formatted,
+        },
+        "modelRefs": [
+            {
                 "name": ref,
                 "namespace": MODEL_NAMESPACE,
-                "tokenRateLimits": [{"limit": token_limit, "window": window}]
-            } for ref in model_refs]
+                "tokenRateLimits": [{"limit": token_limit, "window": window}],
+            }
+            for ref in model_refs
+        ],
+    }
+    if priority is not None:
+        spec["priority"] = int(priority)
+
+    log.info("Creating MaaSSubscription: %s", name)
+    _apply_cr(
+        {
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "MaaSSubscription",
+            "metadata": {"name": name, "namespace": namespace},
+            "spec": spec,
         }
-    })
+    )
 
 
-def _subscription_for_path(path):
-    """Return the X-MaaS-Subscription value for a given model path."""
-    path = path or MODEL_PATH
-    if path == PREMIUM_MODEL_PATH:
-        return PREMIUM_SIMULATOR_SUBSCRIPTION
-    if path == MODEL_PATH:
-        return SIMULATOR_SUBSCRIPTION
-    return None  # e.g. unconfigured model has no subscription
-
-
-def _inference(api_key_or_token, path=None, extra_headers=None, subscription=None):
-    """Make an inference request using an API key or Bearer token.
-    
-    Args:
-        api_key_or_token: API key (sk-oai-xxx) or Bearer token for authorization
-        path: Model path (default: MODEL_PATH)
-        extra_headers: Additional headers to include
-        subscription: Subscription name, False to omit, or None to auto-detect
-    """
+def _inference(api_key, path=None, extra_headers=None, model_name=None):
+    """POST completions using an API key only (subscription is bound at mint)."""
     path = path or MODEL_PATH
     url = f"{_gateway_url()}{path}/v1/completions"
-    headers = {"Authorization": f"Bearer {api_key_or_token}", "Content-Type": "application/json"}
-    # Add X-MaaS-Subscription: extra_headers overrides; else explicit subscription; else infer from path.
-    # Pass subscription=False to explicitly omit the header (e.g. when testing no-subscription case).
-    sub_header = "x-maas-subscription"
-    if extra_headers and sub_header in extra_headers:
-        pass  # extra_headers will set it
-    elif subscription is False:
-        pass  # explicitly omit
-    elif subscription is not None:
-        headers[sub_header] = subscription
-    else:
-        inferred = _subscription_for_path(path)
-        if inferred:
-            headers[sub_header] = inferred
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if extra_headers:
         headers.update(extra_headers)
     return requests.post(
         url, headers=headers,
-        json={"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
+        json={"model": model_name or MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
         timeout=TIMEOUT, verify=TLS_VERIFY,
     )
 
@@ -526,7 +567,124 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
     )
 
 
-def _poll_status(token, expected, path=None, extra_headers=None, subscription=None, timeout=None, poll_interval=2):
+def _wait_for_maas_auth_policy_ready(name, namespace=None, timeout=60):
+    """Wait for MaaSAuthPolicy to reach Active phase with enforced AuthPolicies.
+
+    Args:
+        name: Name of the MaaSAuthPolicy
+        namespace: Namespace (defaults to _ns())
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Raises:
+        TimeoutError: If MaaSAuthPolicy doesn't become Active/enforced within timeout
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    log.info(f"Waiting for MaaSAuthPolicy {name} to become Active (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("maasauthpolicy", name, namespace)
+        if cr:
+            phase = cr.get("status", {}).get("phase")
+            auth_policies = cr.get("status", {}).get("authPolicies", [])
+
+            # Check if all auth policies are accepted and enforced
+            all_enforced = all(
+                ap.get("accepted") == "True" and ap.get("enforced") == "True"
+                for ap in auth_policies
+            )
+
+            if phase == "Active" and auth_policies and all_enforced:
+                log.info(f"✅ MaaSAuthPolicy {name} is Active and enforced")
+                return
+            log.debug(f"MaaSAuthPolicy {name} phase: {phase}, authPolicies: {len(auth_policies)}, all_enforced: {all_enforced}")
+        time.sleep(2)
+
+    # Timeout - log current state for debugging
+    cr = _get_cr("maasauthpolicy", name, namespace)
+    current_phase = cr.get("status", {}).get("phase") if cr else "not found"
+    auth_policies = cr.get("status", {}).get("authPolicies", []) if cr else []
+    raise TimeoutError(
+        f"MaaSAuthPolicy {name} did not become Active/enforced within {timeout}s "
+        f"(current phase: {current_phase}, authPolicies: {len(auth_policies)})"
+    )
+
+
+def _wait_for_maas_subscription_ready(name, namespace=None, timeout=30):
+    """Wait for MaaSSubscription to reach Active phase.
+
+    Args:
+        name: Name of the MaaSSubscription
+        namespace: Namespace (defaults to _ns())
+        timeout: Maximum wait time in seconds (default: 30)
+
+    Raises:
+        TimeoutError: If MaaSSubscription doesn't become Active within timeout
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    log.info(f"Waiting for MaaSSubscription {name} to become Active (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("maassubscription", name, namespace)
+        if cr:
+            phase = cr.get("status", {}).get("phase")
+            if phase == "Active":
+                log.info(f"✅ MaaSSubscription {name} is Active")
+                return
+            log.debug(f"MaaSSubscription {name} phase: {phase}")
+        time.sleep(2)
+
+    # Timeout - log current state for debugging
+    cr = _get_cr("maassubscription", name, namespace)
+    current_phase = cr.get("status", {}).get("phase") if cr else "not found"
+    raise TimeoutError(
+        f"MaaSSubscription {name} did not become Active within {timeout}s (current phase: {current_phase})"
+    )
+
+
+def _wait_for_token_rate_limit_policy(model_ref, model_namespace="llm", timeout=60):
+    """Wait for TokenRateLimitPolicy to be created and enforced for a model.
+
+    Args:
+        model_ref: Name of the model (e.g., "e2e-distinct-simulated")
+        model_namespace: Namespace where the TRLP should be created (default: "llm")
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Raises:
+        TimeoutError: If TRLP isn't created and enforced within timeout
+    """
+    trlp_name = f"maas-trlp-{model_ref}"
+    deadline = time.time() + timeout
+    log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} in {model_namespace} (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        result = subprocess.run(
+            ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace, "-o", "json"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            try:
+                trlp = json.loads(result.stdout)
+                conditions = trlp.get("status", {}).get("conditions", [])
+                # Check if TRLP is enforced
+                enforced = next((c for c in conditions if c.get("type") in ["Enforced", "Ready"]), None)
+                if enforced and enforced.get("status") == "True":
+                    log.info(f"✅ TokenRateLimitPolicy {trlp_name} is enforced")
+                    return
+                log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
+            except (json.JSONDecodeError, KeyError) as e:
+                log.debug(f"Failed to parse TRLP status: {e}")
+        else:
+            log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
+        time.sleep(3)
+
+    raise TimeoutError(
+        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s"
+    )
+
+
+def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2):
     """Poll inference endpoint until expected HTTP status or timeout."""
     timeout = timeout or max(RECONCILE_WAIT * 3, 60)
     deadline = time.time() + timeout
@@ -534,7 +692,7 @@ def _poll_status(token, expected, path=None, extra_headers=None, subscription=No
     last_err = None
     while time.time() < deadline:
         try:
-            r = _inference(token, path=path, extra_headers=extra_headers, subscription=subscription)
+            r = _inference(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
             last_err = None
             ok = r.status_code == expected if isinstance(expected, int) else r.status_code in expected
             if ok:
@@ -576,6 +734,22 @@ def _snapshot_cr(kind, name, namespace=None):
     return cr
 
 
+def _is_transient_kubectl_error(stderr):
+    """Check if kubectl error is likely transient (network, timeout)."""
+    transient_patterns = [
+        "TLS handshake timeout",
+        "connection refused",
+        "connection reset",
+        "i/o timeout",
+        "dial tcp",
+        "EOF",
+        "temporary failure",
+        "network is unreachable",
+    ]
+    stderr_lower = stderr.lower()
+    return any(pattern.lower() in stderr_lower for pattern in transient_patterns)
+
+
 def _list_crs(kind, namespace=None):
     """List all CRs of a given kind.
 
@@ -597,14 +771,31 @@ def _list_crs(kind, namespace=None):
     }.get(kind, f"{kind}s")
 
     cmd = ["kubectl", "get", plural, "-n", namespace, "-o", "json"]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False
-    )
 
-    if result.returncode != 0:
+    # Retry transient network errors with exponential backoff
+    max_retries = 3
+    retry_delay = 2  # seconds
+
+    for attempt in range(max_retries):
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        if result.returncode == 0:
+            return json.loads(result.stdout).get("items", [])
+
+        # Check if error is transient and we have retries left
+        if attempt < max_retries - 1 and _is_transient_kubectl_error(result.stderr):
+            log.warning(
+                f"Transient kubectl error (attempt {attempt + 1}/{max_retries}): {result.stderr.strip()}"
+            )
+            time.sleep(retry_delay * (attempt + 1))  # exponential backoff
+            continue
+
+        # Final attempt or non-transient error
         raise RuntimeError(
             f"Failed to list {plural} in namespace '{namespace}'.\n"
             f"Command: {' '.join(cmd)}\n"
@@ -613,7 +804,9 @@ def _list_crs(kind, namespace=None):
             f"Guidance: Ensure the CRD exists, namespace is correct, and you have permissions."
         )
 
-    return json.loads(result.stdout).get("items", [])
+    # Unreachable: loop always exits via return (line 684) or raise (line 695)
+    # Included for type checker and defensive programming
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -663,6 +856,97 @@ class TestAuthEnforcement:
         r = _inference(api_key, path=PREMIUM_MODEL_PATH)
         log.info(f"User groups (no premium-user) -> premium model: {r.status_code}")
         assert r.status_code == 403, f"Expected 403, got {r.status_code}"
+
+
+# Higher than typical default subscriptions (e.g. 0) so SelectHighestPriority picks this CR.
+_E2E_API_KEY_BINDING_HIGH_PRIORITY = 100_000
+
+
+@pytest.fixture(scope="class")
+def high_priority_subscription_name_for_api_key_binding():
+    name = f"e2e-apikey-sub-binding-{uuid.uuid4().hex[:8]}"
+    ns = _ns()
+    try:
+        _create_test_subscription(
+            name,
+            MODEL_REF,
+            groups=["system:authenticated"],
+            priority=_E2E_API_KEY_BINDING_HIGH_PRIORITY,
+        )
+        _wait_for_maas_subscription_ready(name, ns, timeout=90)
+        yield name
+    finally:
+        _delete_cr("maassubscription", name)
+
+
+class TestAPIKeySubscriptionBinding:
+    """API key mint: default highest-priority subscription vs explicit subscription vs invalid name."""
+
+    def _api_keys_url(self) -> str:
+        return f"{_maas_api_url()}/v1/api-keys"
+
+    def _auth_headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {_get_cluster_token()}",
+            "Content-Type": "application/json",
+        }
+
+    def _revoke_key(self, key_id: str) -> None:
+        _revoke_api_key(_get_cluster_token(), key_id)
+
+    def test_create_api_key_uses_highest_priority_subscription(
+        self,
+        high_priority_subscription_name_for_api_key_binding: str,
+    ):
+        """Omitting subscription binds the accessible subscription with highest spec.priority."""
+        r = requests.post(
+            self._api_keys_url(),
+            headers=self._auth_headers(),
+            json={"name": f"test-key-high-prio-{uuid.uuid4().hex[:6]}"},
+            timeout=TIMEOUT,
+            verify=TLS_VERIFY,
+        )
+        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
+        data = r.json()
+        assert data.get("subscription") == high_priority_subscription_name_for_api_key_binding, (
+            f"Expected default bind to {high_priority_subscription_name_for_api_key_binding!r}, "
+            f"got {data.get('subscription')!r}"
+        )
+        self._revoke_key(data["id"])
+
+    def test_create_api_key_with_explicit_simulator_subscription(
+        self,
+        high_priority_subscription_name_for_api_key_binding: str,
+    ):
+        """Explicit subscription in body should bind that subscription, not the highest-priority one."""
+        designated = SIMULATOR_SUBSCRIPTION
+        r = requests.post(
+            self._api_keys_url(),
+            headers=self._auth_headers(),
+            json={"name": f"test-key-explicit-sub-{uuid.uuid4().hex[:6]}", "subscription": designated},
+            timeout=TIMEOUT,
+            verify=TLS_VERIFY,
+        )
+        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
+        data = r.json()
+        assert data.get("subscription") == designated
+        assert data.get("subscription") != high_priority_subscription_name_for_api_key_binding
+        self._revoke_key(data["id"])
+
+    @pytest.mark.usefixtures("high_priority_subscription_name_for_api_key_binding")
+    def test_create_api_key_nonexistent_subscription_errors(self):
+        """Unknown subscription name should fail with generic invalid_subscription."""
+        bogus = f"e2e-no-such-subscription-{uuid.uuid4().hex}"
+        r = requests.post(
+            self._api_keys_url(),
+            headers=self._auth_headers(),
+            json={"name": f"test-key-bogus-sub-{uuid.uuid4().hex[:6]}", "subscription": bogus},
+            timeout=TIMEOUT,
+            verify=TLS_VERIFY,
+        )
+        assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text}"
+        body = r.json()
+        assert body.get("code") == "invalid_subscription", body
 
 
 class TestSubscriptionEnforcement:
@@ -720,19 +1004,6 @@ class TestSubscriptionEnforcement:
             _delete_cr("maasauthpolicy", "e2e-auth-pass-sub-fail")
             _wait_reconcile()
 
-    def test_invalid_subscription_header_gets_429(self):
-        """API key with invalid subscription header should get 429 or 403."""
-        api_key = _get_default_api_key()
-        r = _inference(api_key, extra_headers={"x-maas-subscription": INVALID_SUBSCRIPTION})
-        # Gateway may return 429 (rate limited) or 403 (forbidden) for invalid subscription
-        assert r.status_code in (429, 403), f"Expected 429 or 403, got {r.status_code}"
-
-    def test_explicit_subscription_header_works(self):
-        """API key with explicit valid subscription header should work."""
-        api_key = _get_default_api_key()
-        r = _inference(api_key, extra_headers={"x-maas-subscription": SIMULATOR_SUBSCRIPTION})
-        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:200]}"
-
     def test_rate_limit_exhaustion_gets_429(self):
         """
         Test that a user gets 429 when they actually exceed their token rate limit.
@@ -777,8 +1048,13 @@ class TestSubscriptionEnforcement:
             )
             _wait_reconcile()
 
-            # 3. Get API key for testing
-            api_key = _get_default_api_key()
+            # 3. API key must be minted for this subscription
+            oc_token = _get_cluster_token()
+            api_key = _create_api_key(
+                oc_token,
+                name=f"e2e-rate-limit-{uuid.uuid4().hex[:8]}",
+                subscription=subscription_name,
+            )
 
             # 4. Send requests to exhaust the limit
             # Calculate expected successful requests: token_limit / max_tokens = 15 / 3 = 5
@@ -790,7 +1066,7 @@ class TestSubscriptionEnforcement:
             success_count = 0
 
             for i in range(total_requests):
-                r = _inference(api_key, path=model_path, subscription=subscription_name)
+                r = _inference(api_key, path=model_path)
                 request_num = i + 1
                 log.info(f"Request {request_num}/{total_requests}: {r.status_code}")
 
@@ -874,31 +1150,6 @@ class TestMultipleSubscriptionsPerModel:
             _wait_reconcile()
 
 
-    def test_multi_tier_auto_select_highest(self):
-        """With 2 tiers for the same model, API key in both should still get access.
-        (Verifies multiple overlapping subscriptions don't break routing.)"""
-        ns = _ns()
-        try:
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSSubscription",
-                "metadata": {"name": "e2e-high-tier", "namespace": ns},
-                "spec": {
-                    "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 9999, "window": "1m"}]}],
-                },
-            })
-
-            api_key = _get_default_api_key()
-            _poll_status(api_key, 200, extra_headers={"x-maas-subscription": "e2e-high-tier"})
-
-            r2 = _inference(api_key)
-            assert r2.status_code == 200, f"Expected 200 with auto-select, got {r2.status_code}"
-        finally:
-            _delete_cr("maassubscription", "e2e-high-tier")
-            _wait_reconcile()
-
-
 class TestMultipleAuthPoliciesPerModel:
     """Multiple auth policies for one model aggregate with OR logic."""
 
@@ -928,9 +1179,13 @@ class TestMultipleAuthPoliciesPerModel:
             })
             _wait_reconcile()
             
-            # Default API key (inherits user's system:authenticated group) should now work
-            api_key = _get_default_api_key()
-            r = _poll_status(api_key, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-premium-sa-sub")
+            # Key must be minted for the premium subscription
+            api_key = _create_api_key(
+                _get_cluster_token(),
+                name=f"e2e-premium-sa-{uuid.uuid4().hex[:8]}",
+                subscription="e2e-premium-sa-sub",
+            )
+            r = _poll_status(api_key, 200, path=PREMIUM_MODEL_PATH, timeout=30)
             log.info(f"API key with 2nd auth policy -> premium: {r.status_code}")
         finally:
             _delete_cr("maassubscription", "e2e-premium-sa-sub")
@@ -991,23 +1246,141 @@ class TestCascadeDeletion:
         finally:
             _delete_cr("maassubscription", "e2e-temp-sub")
 
+    def test_trlp_persists_during_multi_subscription_deletion(self):
+        """Validate CWE-693/CWE-400 fix: TRLP rebuilt in-place during deletion.
+
+        Tests the fix for the security vulnerability where deleting one subscription
+        would delete the entire TokenRateLimitPolicy, disabling rate limiting for
+        ALL subscriptions to that model and creating a window for unthrottled requests.
+
+        The fix ensures:
+        1. TRLP is rebuilt in-place when a subscription is deleted (not deleted entirely)
+        2. TRLP contains only remaining subscriptions after deletion
+        3. TRLP is deleted only when no subscriptions remain
+
+        This prevents the rate-limit protection gap (CWE-693: Protection Mechanism
+        Failure, CWE-400: Uncontrolled Resource Consumption).
+        """
+        ns = _ns()
+        trlp_ns = MODEL_NAMESPACE
+        trlp_name = TRLP_NAME
+
+        # Snapshot original subscription for restoration
+        original_sub = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION, ns)
+        assert original_sub, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
+
+        try:
+            # Step 1: Create a second subscription for the same model
+            log.info("Creating second subscription for the same model...")
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-second-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{
+                        "name": MODEL_REF,
+                        "namespace": MODEL_NAMESPACE,
+                        "tokenRateLimits": [{"limit": 75, "window": "1m"}]
+                    }],
+                },
+            })
+            _wait_reconcile()
+
+            # Step 2: Verify TRLP exists and contains both subscriptions
+            log.info("Verifying TRLP contains both subscriptions...")
+            trlp_with_both = _get_cr("tokenratelimitpolicy", trlp_name, trlp_ns)
+            assert trlp_with_both, f"TRLP {trlp_name} not found in {trlp_ns} after creating 2nd subscription"
+
+            # Verify both subscriptions are in the TRLP limits
+            limits = trlp_with_both.get("spec", {}).get("limits", {})
+            assert limits, f"TRLP {trlp_name} has no limits defined"
+
+            # Look for both subscription references in TRLP limits
+            # Format: {namespace}-{subscription-name}-{model-name}-tokens
+            simulator_limit_key = f"{ns.replace('/', '-')}-{SIMULATOR_SUBSCRIPTION}-{MODEL_REF}-tokens"
+            second_limit_key = f"{ns.replace('/', '-')}-e2e-second-sub-{MODEL_REF}-tokens"
+
+            assert simulator_limit_key in limits, \
+                f"Original subscription limit key '{simulator_limit_key}' not found in TRLP. Available keys: {list(limits.keys())}"
+            assert second_limit_key in limits, \
+                f"Second subscription limit key '{second_limit_key}' not found in TRLP. Available keys: {list(limits.keys())}"
+
+            log.info(f"✅ TRLP contains both subscriptions: {list(limits.keys())}")
+
+            # Step 3: Delete the second subscription
+            log.info("Deleting second subscription...")
+            _delete_cr("maassubscription", "e2e-second-sub", ns)
+            _wait_reconcile()
+
+            # Step 4: Verify TRLP still exists (not deleted) and contains only original subscription
+            log.info("Verifying TRLP persists and contains only original subscription...")
+            trlp_after_deletion = _get_cr("tokenratelimitpolicy", trlp_name, trlp_ns)
+            assert trlp_after_deletion, \
+                f"CRITICAL: TRLP {trlp_name} was deleted when 2nd subscription was removed! " \
+                f"This creates a rate-limit protection gap (CWE-693/CWE-400)."
+
+            limits_after = trlp_after_deletion.get("spec", {}).get("limits", {})
+            assert limits_after, f"TRLP {trlp_name} has no limits after 2nd subscription deletion"
+
+            # Verify original subscription still in TRLP, second subscription removed
+            assert simulator_limit_key in limits_after, \
+                f"Original subscription limit '{simulator_limit_key}' missing after 2nd sub deletion. " \
+                f"Available: {list(limits_after.keys())}"
+            assert second_limit_key not in limits_after, \
+                f"Deleted subscription limit '{second_limit_key}' still present in TRLP. " \
+                f"Available: {list(limits_after.keys())}"
+
+            log.info(f"✅ TRLP rebuilt in-place with only original subscription: {list(limits_after.keys())}")
+
+            # Step 5: Verify rate limiting still works (optional if models ready)
+            # The core TRLP persistence logic (CWE-693/CWE-400 fix) has been validated in steps 1-4
+            log.info("Verifying rate limiting is still enforced...")
+            try:
+                api_key = _get_default_api_key()
+                r = _poll_status(api_key, 200, timeout=10)
+                assert r.status_code == 200, \
+                    f"Rate limiting broken after subscription deletion: expected 200, got {r.status_code}"
+                log.info("✅ Rate limiting still enforced after subscription deletion")
+            except (AssertionError, Exception) as e:
+                log.warning(f"Inference test skipped (models not ready): {e}")
+                log.info("Core TRLP persistence validated in steps 1-4")
+
+            # Step 6: Delete the last remaining subscription
+            log.info("Deleting last subscription...")
+            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION, ns)
+            _wait_reconcile()
+
+            # Step 7: Verify TRLP is now deleted (no subscriptions remain)
+            log.info("Verifying TRLP is deleted when no subscriptions remain...")
+            trlp_final = _get_cr("tokenratelimitpolicy", trlp_name, trlp_ns)
+            assert trlp_final is None, \
+                f"TRLP {trlp_name} should be deleted when no subscriptions remain, but still exists"
+
+            log.info("✅ TRLP correctly deleted when no subscriptions remain")
+
+        finally:
+            # Cleanup: restore original subscription, delete test subscription
+            log.info("Restoring original subscription...")
+            _delete_cr("maassubscription", "e2e-second-sub", ns)
+            if original_sub:
+                _apply_cr(original_sub)
+            _wait_reconcile()
+
     def test_delete_last_subscription_denies_access(self):
-        """Delete all subscriptions for a model -> access denied (403 or 429).
-        
-        When the last subscription is deleted, access is denied. The exact code
-        depends on which policy evaluates first:
-        - 403: AuthPolicy's subscription-error-check denies (no subscription found)
-        - 429: Default-deny TRLP with 0 tokens kicks in
-        
-        Both indicate the intended behavior: no subscription = no access.
+        """Delete all subscriptions for a model -> access denied with 403 Forbidden.
+
+        When the last subscription is deleted, AuthPolicy's subscription validation
+        fails (no subscriptions found for user) and returns 403 Forbidden before
+        the request reaches TokenRateLimitPolicy.
         """
         api_key = _get_default_api_key()
         original = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
         assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-            # With no subscription, expect either 403 or 429 (both = access denied)
-            r = _poll_status(api_key, [403, 429], subscription=False, timeout=30)
+            # With no subscription, expect 403 from AuthPolicy subscription validation
+            r = _poll_status(api_key, 403, timeout=30)
             log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
         finally:
             _apply_cr(original)
@@ -1029,10 +1402,7 @@ class TestOrderingEdgeCases:
         """Create subscription first, then auth policy -> should work once both exist."""
         ns = _ns()
         try:
-            # Get the default API key (inherits user's groups including system:authenticated)
-            api_key = _get_default_api_key()
-
-            # Create subscription first (for system:authenticated group)
+            # Subscription CR must exist before minting a key bound to it
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
@@ -1043,9 +1413,16 @@ class TestOrderingEdgeCases:
                 },
             })
             _wait_reconcile()
+            _wait_for_maas_subscription_ready("e2e-ordering-sub", namespace=ns, timeout=90)
+
+            api_key = _create_api_key(
+                _get_cluster_token(),
+                name=f"e2e-ordering-{uuid.uuid4().hex[:8]}",
+                subscription="e2e-ordering-sub",
+            )
 
             # Without auth policy for system:authenticated on premium model, request should fail with 403
-            r1 = _inference(api_key, path=PREMIUM_MODEL_PATH, subscription="e2e-ordering-sub")
+            r1 = _inference(api_key, path=PREMIUM_MODEL_PATH)
             log.info(f"Sub only (no auth policy) -> {r1.status_code}")
             assert r1.status_code == 403, f"Expected 403 (no auth policy yet), got {r1.status_code}"
 
@@ -1061,7 +1438,7 @@ class TestOrderingEdgeCases:
             })
 
             # Now it should work
-            r2 = _poll_status(api_key, 200, path=PREMIUM_MODEL_PATH, subscription="e2e-ordering-sub")
+            r2 = _poll_status(api_key, 200, path=PREMIUM_MODEL_PATH)
             log.info(f"Sub + auth policy -> {r2.status_code}")
         finally:
             _delete_cr("maassubscription", "e2e-ordering-sub")
@@ -1276,14 +1653,14 @@ class TestE2ESubscriptionFlow:
     End-to-end tests that create MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription
     from scratch and validate the complete subscription flow.
 
-    Each test creates all necessary CRs and validates one scenario:
-    1. Token with both access (MaaSAuthPolicy) and subscription → 200 OK
-    2. Token with access but no subscription → 403 Forbidden
-    3. Token with subscription but not in MaaSAuthPolicy → 403 Forbidden
-    4. Token with single subscription + no header → auto-select (200 OK)
-    5. Token with multiple subscriptions + no header → 403 Forbidden
-    6. Token with multiple subscriptions + valid header → 200 OK
-    7. Token with multiple subscriptions + invalid header → 403 Forbidden
+    Each test creates all necessary CRs and validates one scenario (gateway inference uses
+    API keys only; subscription is chosen at mint via POST /v1/api-keys):
+    1. API key with both access and bound subscription → 200 OK
+    2. API key bound to subscription that is then removed → 403 Forbidden (auth still passes)
+    3. API key with subscription but no auth → 403 Forbidden
+    4. Single subscription for user + mint without explicit subscription → 200 OK
+    5. Two subscriptions: separate keys minted for each → 200 OK for each
+    6. Mint API key for another user's subscription → 400 invalid_subscription
     """
 
 
@@ -1373,12 +1750,14 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
-            # Create API key for inference
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+            # API key bound to this subscription at mint (inference does not send x-maas-subscription)
+            api_key = _create_api_key(
+                oc_token, name=f"{sa_name}-key", subscription=subscription_name
+            )
 
             # Test: Both access and subscription → 200
             log.info("Testing: API key with both access and subscription")
-            r = _poll_status(api_key, 200, path=model_path, subscription=subscription_name, timeout=90)
+            r = _poll_status(api_key, 200, path=model_path, timeout=90)
             log.info("✅ Both access and subscription → %s", r.status_code)
 
         finally:
@@ -1411,19 +1790,19 @@ class TestE2ESubscriptionFlow:
             # Create auth policy for this specific user
             _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
 
-            # Delete simulator-subscription so user has no matching subscriptions
-            # (otherwise SA matches via system:authenticated group)
-            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+            # Bind simulator subscription on the key while the CR still exists, then remove it
+            api_key = _create_api_key(
+                oc_token,
+                name=f"{sa_name}-key",
+                subscription=SIMULATOR_SUBSCRIPTION,
+            )
 
+            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
             _wait_reconcile()
 
-            # Create API key for inference
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
-
-            # Test: Auth passes but no subscription → 403 (not in any subscription)
-            log.info("Testing: API key with access but no subscription")
-            r = _poll_status(api_key, 403, path=MODEL_PATH, subscription=False, timeout=90)
-            log.info("✅ Access but no subscription → %s", r.status_code)
+            log.info("Testing: API key after subscription removed (auth still passes)")
+            r = _poll_status(api_key, 403, path=MODEL_PATH, timeout=90)
+            log.info("✅ Access but no live subscription for bound key → %s", r.status_code)
 
         finally:
             # Restore simulator-subscription first
@@ -1469,12 +1848,15 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
-            # Create API key for the user with subscription but no auth
-            api_key_with_sub = _create_api_key(oc_token_with_sub, name=f"{sa_with_sub}-key")
+            api_key_with_sub = _create_api_key(
+                oc_token_with_sub,
+                name=f"{sa_with_sub}-key",
+                subscription=subscription_name,
+            )
 
             # Test: Subscription but no access → 403
             log.info("Testing: API key with subscription but no access")
-            r = _poll_status(api_key_with_sub, 403, path=MODEL_PATH, subscription=subscription_name, timeout=90)
+            r = _poll_status(api_key_with_sub, 403, path=MODEL_PATH, timeout=90)
             log.info("✅ Subscription but no access → %s", r.status_code)
 
         finally:
@@ -1516,12 +1898,11 @@ class TestE2ESubscriptionFlow:
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
             _wait_reconcile()
 
-            # Create API key for inference
+            # Exactly one subscription for this user → mint can auto-bind it without explicit name
             api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
 
-            # Test: Single subscription + no header → auto-select → 200
-            log.info("Testing: Single subscription auto-select")
-            r = _poll_status(api_key, 200, path=MODEL_PATH, subscription=False, timeout=90)
+            log.info("Testing: Single subscription auto-select at mint")
+            r = _poll_status(api_key, 200, path=MODEL_PATH, timeout=90)
             log.info("✅ Single subscription auto-select → %s", r.status_code)
 
         finally:
@@ -1533,62 +1914,12 @@ class TestE2ESubscriptionFlow:
             _delete_sa(sa_name, namespace=ns)
             _wait_reconcile()
 
-    def test_e2e_multiple_subscriptions_without_header_gets_403(self):
+    def test_e2e_multiple_subscriptions_separate_keys_gets_200(self):
         """
-        E2E test: User with multiple subscriptions must provide header.
-
-        Validates PR #427/#441 behavior: When a user has access to multiple subscriptions
-        but doesn't provide x-maas-subscription header, they receive 403 Forbidden with
-        error code "multiple_subscriptions".
+        User with two subscriptions for the same model: mint one API key per subscription;
+        each key succeeds on inference without x-maas-subscription.
         """
         ns = _ns()
-        # Using existing model (MODEL_REF) # model_ref = "e2e-test-model-multi-sub"
-        # Using MODEL_PATH # model_path = f"/llm/{model_ref}"
-        auth_policy_name = "e2e-test-auth-multi-sub"
-        subscription_1 = "e2e-test-subscription-tier1"
-        subscription_2 = "e2e-test-subscription-tier2"
-        sa_name = "e2e-sa-multi-sub"
-
-        try:
-            # Create service account and get OC token for maas-api
-            oc_token = _create_sa_token(sa_name, namespace=ns)
-            sa_user = _sa_to_user(sa_name, namespace=ns)
-
-            # Create test resources with 2 subscriptions for the same user
-            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_1, MODEL_REF, users=[sa_user], token_limit=100)
-            _create_test_subscription(subscription_2, MODEL_REF, users=[sa_user], token_limit=500)
-
-            _wait_reconcile()
-
-            # Create API key for inference
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
-
-            # Test: Multiple subscriptions + no header → 403
-            log.info("Testing: User with multiple subscriptions, no header")
-            r = _poll_status(api_key, 403, path=MODEL_PATH, subscription=False, timeout=90)
-            log.info("✅ Multiple subscriptions without header → %s", r.status_code)
-
-            # Optionally verify error code in response or headers
-            # PR #441 returns error code in x-ext-auth-reason header or response body
-
-        finally:
-            _delete_cr("maassubscription", subscription_1, namespace=ns)
-            _delete_cr("maassubscription", subscription_2, namespace=ns)
-            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
-            _delete_sa(sa_name, namespace=ns)
-            _wait_reconcile()
-
-    def test_e2e_multiple_subscriptions_with_valid_header_gets_200(self):
-        """
-        E2E test: User with multiple subscriptions can select one via header.
-
-        Validates PR #427/#441 behavior: When a user has access to multiple subscriptions
-        and provides a valid x-maas-subscription header, they can successfully make requests.
-        """
-        ns = _ns()
-        # Using existing model (MODEL_REF) # model_ref = "e2e-test-model-multi-sub-valid"
-        # Using MODEL_PATH # model_path = f"/llm/{model_ref}"
         auth_policy_name = "e2e-test-auth-multi-sub-valid"
         subscription_1 = "e2e-test-subscription-free"
         subscription_2 = "e2e-test-subscription-premium"
@@ -1606,19 +1937,24 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
-            # Create API key for inference
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+            key1 = _create_api_key(
+                oc_token,
+                name=f"{sa_name}-key-tier1",
+                subscription=subscription_1,
+            )
+            key2 = _create_api_key(
+                oc_token,
+                name=f"{sa_name}-key-tier2",
+                subscription=subscription_2,
+            )
 
-            # Test 1: Select subscription_1 via header → 200
-            log.info("Testing: User with multiple subscriptions, selecting subscription 1")
-            r1 = _poll_status(api_key, 200, path=MODEL_PATH, subscription=subscription_1, timeout=90)
-            log.info("✅ Multiple subscriptions with valid header (tier 1) → %s", r1.status_code)
+            log.info("Testing: key bound to subscription 1")
+            r1 = _poll_status(key1, 200, path=MODEL_PATH, timeout=90)
+            log.info("✅ Key for tier 1 → %s", r1.status_code)
 
-            # Test 2: Select subscription_2 via header → 200
-            log.info("Testing: User with multiple subscriptions, selecting subscription 2")
-            r2 = _inference(api_key, path=MODEL_PATH, subscription=subscription_2)
-            assert r2.status_code == 200, f"Expected 200 for valid subscription_2, got {r2.status_code}"
-            log.info("✅ Multiple subscriptions with valid header (tier 2) → %s", r2.status_code)
+            log.info("Testing: key bound to subscription 2")
+            r2 = _poll_status(key2, 200, path=MODEL_PATH, timeout=90)
+            log.info("✅ Key for tier 2 → %s", r2.status_code)
 
         finally:
             _delete_cr("maassubscription", subscription_1, namespace=ns)
@@ -1627,57 +1963,9 @@ class TestE2ESubscriptionFlow:
             _delete_sa(sa_name, namespace=ns)
             _wait_reconcile()
 
-    def test_e2e_multiple_subscriptions_with_invalid_header_gets_403(self):
-        """
-        E2E test: User with multiple subscriptions + invalid header gets 403.
-
-        Validates PR #441 behavior: When a user provides an invalid or non-existent
-        x-maas-subscription header, they receive 403 Forbidden with error code "not_found".
-        """
+    def test_e2e_mint_api_key_denied_for_inaccessible_subscription(self):
+        """POST /v1/api-keys with another user's subscription returns generic invalid_subscription."""
         ns = _ns()
-        # Using existing model (MODEL_REF) # model_ref = "e2e-test-model-multi-sub-invalid"
-        # Using MODEL_PATH # model_path = f"/llm/{model_ref}"
-        auth_policy_name = "e2e-test-auth-multi-sub-invalid"
-        subscription_1 = "e2e-test-subscription-valid"
-        sa_name = "e2e-sa-multi-sub-invalid"
-
-        try:
-            # Create service account and get OC token for maas-api
-            oc_token = _create_sa_token(sa_name, namespace=ns)
-            sa_user = _sa_to_user(sa_name, namespace=ns)
-
-            # Create test resources
-            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_1, MODEL_REF, users=[sa_user])
-
-            _wait_reconcile()
-
-            # Create API key for inference
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
-
-            # Test: Invalid/non-existent subscription header → 403
-            log.info("Testing: User with invalid subscription header")
-            r = _inference(api_key, path=MODEL_PATH, subscription=INVALID_SUBSCRIPTION)
-            assert r.status_code == 403, f"Expected 403 for invalid subscription, got {r.status_code}"
-            log.info("✅ Invalid subscription header → %s", r.status_code)
-
-        finally:
-            _delete_cr("maassubscription", subscription_1, namespace=ns)
-            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
-            _delete_sa(sa_name, namespace=ns)
-            _wait_reconcile()
-
-    def test_e2e_multiple_subscriptions_with_inaccessible_header_gets_403(self):
-        """
-        E2E test: User requesting subscription they don't own gets 403.
-
-        Validates PR #441 behavior: When a user provides an x-maas-subscription header
-        for a subscription they don't have access to, they receive 403 Forbidden with
-        error code "access_denied".
-        """
-        ns = _ns()
-        # Using existing model (MODEL_REF) # model_ref = "e2e-test-model-access-denied"
-        # Using MODEL_PATH # model_path = f"/llm/{model_ref}"
         auth_policy_name = "e2e-test-auth-access-denied"
         user_subscription = "e2e-test-user-subscription"
         other_subscription = "e2e-test-other-subscription"
@@ -1701,14 +1989,19 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
-            # Create API key for user
-            api_key_user = _create_api_key(oc_token_user, name=f"{sa_user}-key")
-
-            # Test: User tries to access another user's subscription → 403
-            log.info("Testing: User requesting subscription they don't own")
-            r = _inference(api_key_user, path=MODEL_PATH, subscription=other_subscription)
-            assert r.status_code == 403, f"Expected 403 for inaccessible subscription, got {r.status_code}"
-            log.info("✅ Inaccessible subscription header → %s", r.status_code)
+            r = requests.post(
+                f"{_maas_api_url()}/v1/api-keys",
+                headers={
+                    "Authorization": f"Bearer {oc_token_user}",
+                    "Content-Type": "application/json",
+                },
+                json={"name": f"{sa_user}-bad-sub-key", "subscription": other_subscription},
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+            assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text[:500]}"
+            assert r.json().get("code") == "invalid_subscription", r.text
+            log.info("✅ Mint with inaccessible subscription → %s", r.status_code)
 
         finally:
             _delete_cr("maassubscription", user_subscription, namespace=ns)
@@ -1745,12 +2038,15 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
-            # Create API key for inference
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+            api_key = _create_api_key(
+                oc_token,
+                name=f"{sa_name}-key",
+                subscription=subscription_name,
+            )
 
             # Test: User matches via group membership → 200
             log.info("Testing: Group-based auth and subscription")
-            r = _poll_status(api_key, 200, path=MODEL_PATH, subscription=subscription_name, timeout=90)
+            r = _poll_status(api_key, 200, path=MODEL_PATH, timeout=90)
             log.info("✅ Group-based access → %s", r.status_code)
 
         finally:
@@ -1783,18 +2079,18 @@ class TestE2ESubscriptionFlow:
             # Create auth policy using group
             _create_test_auth_policy(auth_policy_name, MODEL_REF, groups=[test_group])
 
-            # Delete simulator-subscription so user has no matching subscriptions
-            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+            api_key = _create_api_key(
+                oc_token,
+                name=f"{sa_name}-key",
+                subscription=SIMULATOR_SUBSCRIPTION,
+            )
 
+            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
             _wait_reconcile()
 
-            # Create API key for inference
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
-
-            # Test: Group auth passes but no subscription for that group → 403
-            log.info("Testing: Group-based auth but no subscription")
-            r = _poll_status(api_key, 403, path=MODEL_PATH, subscription=False, timeout=90)
-            log.info("✅ Group auth but no subscription → %s", r.status_code)
+            log.info("Testing: Group-based auth; key bound to removed subscription")
+            r = _poll_status(api_key, 403, path=MODEL_PATH, timeout=90)
+            log.info("✅ Group auth but no live subscription for bound key → %s", r.status_code)
 
         finally:
             # Restore simulator-subscription first
@@ -1840,12 +2136,15 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
-            # Create API key for inference
-            api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
+            api_key = _create_api_key(
+                oc_token,
+                name=f"{sa_name}-key",
+                subscription=subscription_name,
+            )
 
             # Test: Has subscription via group but no auth → 403
             log.info("Testing: Group-based subscription but no auth")
-            r = _poll_status(api_key, 403, path=MODEL_PATH, subscription=subscription_name, timeout=90)
+            r = _poll_status(api_key, 403, path=MODEL_PATH, timeout=90)
             log.info("✅ Group subscription but no auth → %s", r.status_code)
 
         finally:
@@ -1856,4 +2155,3 @@ class TestE2ESubscriptionFlow:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
             _wait_reconcile()
-

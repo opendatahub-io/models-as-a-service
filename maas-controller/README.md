@@ -35,8 +35,8 @@ Models with no MaaSAuthPolicy or MaaSSubscription are denied at the gateway leve
 ### CRDs and what they generate
 
 As MaaS API and controller are conventionally deployed in the operator namespace (e.g., `opendatahub`), MaaS CRs need to be separated so that they can be managed with lower cluster privileges. Therefore,
-- **MaasModelRef** is located in the same namespace as the **HTTPRoute** and **LLMInderenceService** it refers to; and
-- **MaaSAuthPolicy** and **MaaSSubscription** are located in a dedicated subscription namespace (default: `models-as-a-service`). Set `--maas-subscription-namespace` or the `MAAS_SUBSCRIPTION_NAMESPACE` env var in `maas-controller` deployment to use another namespace. MaaS controller will only watch and reconcile those CRs this configured namespace.
+- **MaaSModelRef** is located in the same namespace as the **HTTPRoute** and **LLMInferenceService** it refers to; and
+- **MaaSAuthPolicy** and **MaaSSubscription** are located in a dedicated subscription namespace (default: `models-as-a-service`). Set `--maas-subscription-namespace` or the `MAAS_SUBSCRIPTION_NAMESPACE` env var in `maas-controller` deployment to use another namespace. MaaS controller will only watch and reconcile those CRs in this configured namespace.
 
 | You create | Controller generates | Per | Targets |
 | ---------- | -------------------- | --- | ------- |
@@ -66,12 +66,12 @@ spec:
     kind: LLMInferenceService
     name: my-llmisvc
 ---
-# MaaSAuthPolicy in opendatahub namespace references model in llm namespace
+# MaaSAuthPolicy in models-as-a-service namespace references model in llm namespace
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSAuthPolicy
 metadata:
   name: my-policy
-  namespace: opendatahub
+  namespace: models-as-a-service
 spec:
   modelRefs:
     - name: my-model
@@ -81,7 +81,7 @@ spec:
       - name: my-group
 ```
 
-The controller creates a Kuadrant **AuthPolicy** in the `llm` namespace (where the model and HTTPRoute exist), not in `opendatahub` (where the MaaSAuthPolicy lives).
+The controller creates a Kuadrant **AuthPolicy** in the `llm` namespace (where the model and HTTPRoute exist), not in `models-as-a-service` (where the MaaSAuthPolicy lives).
 
 **Same model name, different namespaces:**
 
@@ -99,7 +99,7 @@ spec:
 
 This creates two separate AuthPolicies: one in `team-a`, one in `team-b`.
 
-**Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModelRef** CRs (in the API's namespace). Each MaaSModelRef's `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModelRef objects is the source of truth for "which models are available" in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
+**Model list API:** When the MaaS controller is installed, the MaaS API **GET /v1/models** endpoint lists models by reading **MaaSModelRef** CRs cluster-wide (all namespaces). Each MaaSModelRef's `metadata.name` becomes the model `id`, and `status.endpoint` / `status.phase` supply the URL and readiness. So the set of MaaSModelRef objects is the source of truth for "which models are available" in MaaS. See [docs/content/configuration-and-management/model-listing-flow.md](../docs/content/configuration-and-management/model-listing-flow.md) in the repo for the full flow.
 
 ### Model kinds and the provider pattern
 
@@ -182,12 +182,16 @@ deny-unsubscribed (0):        matches "NOT in premium-user AND NOT in free-user"
 
 ## Authentication
 
-Until API token minting is in place, the controller uses **OpenShift tokens directly** for inference:
+Create API keys with `POST /v1/api-keys` on the maas-api (authenticate with your OpenShift token). Each key is bound to one MaaSSubscription at mint time: set `"subscription": "<name>"` in the JSON body, or omit it and the platform selects the **highest-priority** accessible subscription (`MaaSSubscription.spec.priority`).
 
 ```bash
-export TOKEN=$(oc whoami -t)
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
+MAAS_API="https://<gateway-host>/maas-api"
+API_KEY=$(curl -sSk -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
+  -X POST -d '{"name":"demo","subscription":"<maas-subscription-name>"}' \
+  "${MAAS_API}/v1/api-keys" | jq -r .key)
+
+curl -sSk "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}],"max_tokens":10}'
 ```
@@ -256,8 +260,8 @@ kubectl get crd | grep maas.opendatahub.io
 Install both **regular** and **premium** simulator models and their MaaS policies/subscriptions (from the repository root):
 
 ```bash
+# Create model namespace (models-as-a-service namespace is auto-created by controller)
 kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
-kubectl create namespace models-as-a-service --dry-run=client -o yaml | kubectl apply -f -
 kustomize build docs/samples/maas-system | kubectl apply -f -
 ```
 
@@ -266,13 +270,13 @@ This creates:
 ### Regular tier
 
 - `LLMInferenceService/facebook-opt-125m-simulated` in `llm` namespace
-- `MaaSModelRef/facebook-opt-125m-simulated` in `opendatahub`
+- `MaaSModelRef/facebook-opt-125m-simulated` in `llm`
 - `MaaSAuthPolicy/simulator-access` (group: `free-user`) and `MaaSSubscription/simulator-subscription` (100 tokens/min) in `models-as-a-service`
 
 ### Premium tier
 
 - `LLMInferenceService/premium-simulated-simulated-premium` in `llm` namespace
-- `MaaSModelRef/premium-simulated-simulated-premium` in `opendatahub`
+- `MaaSModelRef/premium-simulated-simulated-premium` in `llm`
 - `MaaSAuthPolicy/premium-simulator-access` (group: `premium-user`) and `MaaSSubscription/premium-simulator-subscription` (1000 tokens/min) in `models-as-a-service`
 
 Replace `free-user` and `premium-user` in the example CRs with groups from your identity provider.
@@ -281,7 +285,7 @@ Then verify:
 
 ```bash
 # Check CRs
-kubectl get maasmodelref -n opendatahub
+kubectl get maasmodelref -n llm
 kubectl get maasauthpolicy,maassubscription -n models-as-a-service
 
 # Check generated Kuadrant policies
@@ -289,22 +293,29 @@ kubectl get authpolicy,tokenratelimitpolicy -n llm
 
 # Test inference (set GATEWAY_HOST and TOKEN once)
 GATEWAY_HOST="maas.$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
+MAAS_API="https://${GATEWAY_HOST}/maas-api"
 TOKEN=$(oc whoami -t)
 
-# Regular model: 401 without auth, 200 with auth (user must be in free-user)
+# Regular tier: log in as a user in free-user, then mint a key for simulator-subscription
+FREE_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -X POST -d '{"name":"readme-free","subscription":"simulator-subscription"}' \
+  "${MAAS_API}/v1/api-keys" | jq -r .key)
+
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "x-maas-subscription: simulator-subscription" \
+  -H "Authorization: Bearer $FREE_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 
-# Premium model: 401 without auth, 200 with auth (user must be in premium-user)
+# Premium tier: log in as a user in premium-user, mint a key for premium-simulator-subscription, then call the premium route
+PREMIUM_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -X POST -d '{"name":"readme-premium","subscription":"premium-simulator-subscription"}' \
+  "${MAAS_API}/v1/api-keys" | jq -r .key)
+
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "x-maas-subscription: premium-simulator-subscription" \
+  -H "Authorization: Bearer $PREMIUM_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 ```
 

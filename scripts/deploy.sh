@@ -88,6 +88,8 @@ DRY_RUN="${DRY_RUN:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
+OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-}"
+OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 KUSTOMIZE_FORCE_CONFLICTS="${KUSTOMIZE_FORCE_CONFLICTS:-false}"
@@ -172,6 +174,8 @@ ENVIRONMENT VARIABLES:
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
+  OPERATOR_STARTING_CSV     ODH Subscription startingCSV (default: opendatahub-operator.v3.4.0-ea.1; "-" to omit)
+  OPERATOR_INSTALL_PLAN_APPROVAL  ODH Subscription OLM approval (default: Manual — no auto-upgrades; first InstallPlan is auto-approved by the script)
   OPERATOR_TYPE             Operator type (rhoai/odh)
   EXTERNAL_OIDC            Enable external OIDC on maas-api (true/false)
   OIDC_ISSUER_URL          External OIDC issuer URL for maas-api AuthPolicy patching
@@ -610,6 +614,11 @@ deploy_via_kustomize() {
     kubectl create namespace "$NAMESPACE"
   fi
 
+  # Note: The subscription namespace (default: models-as-a-service) is automatically
+  # created by maas-controller when it starts (see maas-controller/cmd/manager/main.go).
+  # We only set the variable here for use in manifest patching below.
+  local subscription_namespace="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
 
@@ -620,7 +629,12 @@ deploy_via_kustomize() {
 
   log_info "Applying kustomize manifests..."
   # Patch the maas-api URL placeholder with actual namespace
-  kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$overlay" | sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g")
+  # Patch MAAS_SUBSCRIPTION_NAMESPACE env var with the configured subscription namespace
+  kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
+    kustomize build "$overlay" | \
+    sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g" | \
+    perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}'"$subscription_namespace"'"/smg'
+  )
 
   # Apply gateway policies separately so they stay in openshift-ingress (overlay
   # namespace would otherwise overwrite them to $NAMESPACE)
@@ -840,7 +854,9 @@ install_policy_engine() {
         "redhat-operators" \
         "stable" \
         "" \
-        "AllNamespaces"
+        "AllNamespaces" \
+        "" \
+        ""
 
       # Patch RHCL CSV to recognize OpenShift Gateway controller
       patch_kuadrant_csv_for_gateway "rh-connectivity-link" "rhcl-operator"
@@ -899,7 +915,8 @@ EOF
         "stable" \
         "" \
         "AllNamespaces" \
-        "$kuadrant_ns"  # source_namespace - must match CatalogSource namespace
+        "$kuadrant_ns" \
+        ""
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
       patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
@@ -982,7 +999,9 @@ install_primary_operator() {
         "$catalog_source" \
         "$channel" \
         "" \
-        "AllNamespaces"
+        "AllNamespaces" \
+        "" \
+        ""
 
       # Patch CSV with custom operator image if specified
       if [[ -n "$OPERATOR_IMAGE" ]]; then
@@ -992,18 +1011,24 @@ install_primary_operator() {
 
     odh)
       # Support custom catalog for ODH snapshot/development builds
-      # This allows testing with pre-release ODH versions (e.g., v3.3.0-snapshot)
+      # This allows testing with pre-release ODH versions (e.g., v3.4.0-ea snapshots)
       if [[ -n "$OPERATOR_CATALOG" ]]; then
         log_info "Using custom ODH catalog: $OPERATOR_CATALOG"
         create_custom_catalogsource "odh-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
         catalog_source="odh-custom-catalog"
-        # Custom catalogs typically use 'fast' channel
-        channel="${OPERATOR_CHANNEL:-fast}"
+        channel="${OPERATOR_CHANNEL:-fast-3}"
       else
         catalog_source="community-operators"
-        # Use 'fast-3' channel for released versions
         channel="${OPERATOR_CHANNEL:-fast-3}"
       fi
+
+      # Pin to ODH 3.4 EA1 unless overridden (omit with OPERATOR_STARTING_CSV=-)
+      local odh_starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.4.0-ea.1}"
+      [[ "$odh_starting_csv" == "-" ]] && odh_starting_csv=""
+
+      # Manual = no auto-upgrades; install_olm_operator auto-approves the first InstallPlan only
+      local odh_plan_approval="${OPERATOR_INSTALL_PLAN_APPROVAL:-Manual}"
+      [[ "$odh_plan_approval" == "-" ]] && odh_plan_approval=""
 
       log_info "Installing ODH operator..."
       install_olm_operator \
@@ -1011,8 +1036,10 @@ install_primary_operator() {
         "$NAMESPACE" \
         "$catalog_source" \
         "$channel" \
-        "" \
-        "AllNamespaces"
+        "$odh_starting_csv" \
+        "AllNamespaces" \
+        "openshift-marketplace" \
+        "$odh_plan_approval"
 
       # Patch CSV with custom operator image if specified
       if [[ -n "$OPERATOR_IMAGE" ]]; then

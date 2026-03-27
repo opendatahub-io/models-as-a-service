@@ -18,6 +18,7 @@ Environment Variables:
 - ADMIN_OC_TOKEN: Admin token for admin-specific tests (optional, tests skip if not set)
 - MODEL_NAME: Override model name for inference tests (optional)
 - INFERENCE_MODEL_NAME: Model name for inference request body (optional)
+- E2E_SIMULATOR_SUBSCRIPTION: Bound on the session ``api_key`` fixture at mint (default: simulator-subscription)
 
 Admin Tests:
 Admin tests (TestAPIKeyAuthorization, admin bulk revoke) require ADMIN_OC_TOKEN.
@@ -303,17 +304,10 @@ class TestAPIKeyExpiration:
     def max_expiration_days(self) -> int:
         """Get the configured max expiration days from environment.
         
-        This value must be explicitly provided by the test harness via the
-        API_KEY_MAX_EXPIRATION_DAYS environment variable so that it matches
-        the maas-api deployment configuration. If not set or invalid, these
-        tests are skipped to avoid flaky behavior from configuration mismatch.
+        Defaults to 90 days if API_KEY_MAX_EXPIRATION_DAYS is not set,
+        matching the maas-api default (constant.DefaultAPIKeyMaxExpirationDays).
         """
-        val = os.environ.get("API_KEY_MAX_EXPIRATION_DAYS")
-        if val is None:
-            pytest.skip(
-                "API_KEY_MAX_EXPIRATION_DAYS not set; skipping expiration policy tests "
-                "to avoid mismatch with maas-api configuration"
-            )
+        val = os.environ.get("API_KEY_MAX_EXPIRATION_DAYS", "90")
         try:
             return int(val)
         except ValueError:
@@ -457,18 +451,12 @@ class TestAPIKeyModelInference:
         inference_model_name: str,
     ):
         """Test 11: Valid API key can access model endpoint - verify 200 response.
-        
-        Note: Users with access to multiple subscriptions must specify which one
-        to use via X-MaaS-Subscription header.
+
+        Subscription is bound on the key at mint (see conftest ``api_key`` fixture).
         """
-        # Add subscription header - required when user matches multiple subscriptions
-        subscription_name = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
-        headers = api_key_headers.copy()
-        headers["X-MaaS-Subscription"] = subscription_name
-        
         r = requests.post(
             model_completions_url,
-            headers=headers,
+            headers=api_key_headers,
             json={
                 "model": inference_model_name,
                 "prompt": "Hello world",
@@ -546,10 +534,11 @@ class TestAPIKeyModelInference:
     ):
         """Test 14: Revoked API key should be rejected with 403."""
         # Create a new key
+        designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
         r_create = requests.post(
             api_keys_base_url,
             headers=headers,
-            json={"name": "test-revoke-inference"},
+            json={"name": "test-revoke-inference", "subscription": designated},
             timeout=30,
             verify=TLS_VERIFY,
         )
@@ -630,68 +619,3 @@ class TestAPIKeyModelInference:
             print(f"[inference] Chat completions returned {r.status_code}: {r.text[:200]}")
             # Don't fail - chat may not be supported
             pytest.skip(f"Chat completions returned {r.status_code}")
-
-    def test_api_key_with_explicit_subscription_header(
-        self,
-        model_completions_url: str,
-        api_key_headers: dict,
-        inference_model_name: str,
-    ):
-        """Test 16: API key with explicit x-maas-subscription header.
-        
-        When multiple subscriptions exist for the same model, the user can
-        specify which subscription to use via the x-maas-subscription header.
-        This works the same way for API keys as it does for OC tokens.
-        """
-        # Default subscription for free model
-        subscription_name = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
-        
-        # Add x-maas-subscription header to API key headers
-        headers_with_sub = api_key_headers.copy()
-        headers_with_sub["x-maas-subscription"] = subscription_name
-
-        r = requests.post(
-            model_completions_url,
-            headers=headers_with_sub,
-            json={
-                "model": inference_model_name,
-                "prompt": "Test subscription header",
-                "max_tokens": 5,
-            },
-            timeout=60,
-            verify=TLS_VERIFY,
-        )
-
-        assert r.status_code == 200, f"Expected 200 with explicit subscription, got {r.status_code}: {r.text}"
-        print("[inference] API key with x-maas-subscription header succeeded")
-
-    def test_api_key_with_invalid_subscription_header(
-        self,
-        model_completions_url: str,
-        api_key_headers: dict,
-        inference_model_name: str,
-    ):
-        """Test 17: API key with invalid x-maas-subscription header should fail.
-        
-        If the specified subscription doesn't exist or user isn't authorized,
-        the request should be rejected with 429 (rate limited) or 403 (forbidden).
-        """
-        # Add invalid subscription header
-        headers_with_invalid_sub = api_key_headers.copy()
-        headers_with_invalid_sub["x-maas-subscription"] = "nonexistent-subscription-xyz"
-
-        r = requests.post(
-            model_completions_url,
-            headers=headers_with_invalid_sub,
-            json={
-                "model": inference_model_name,
-                "prompt": "Test invalid subscription",
-                "max_tokens": 5,
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-
-        # Should get 429 (rate limited - no valid subscription) or 403 (forbidden)
-        assert r.status_code in (429, 403), f"Expected 429/403 for invalid subscription, got {r.status_code}: {r.text}"
-        print(f"[inference] API key with invalid subscription correctly rejected with {r.status_code}")

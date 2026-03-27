@@ -124,10 +124,11 @@ kubectl get tokenratelimitpolicy gateway-default-deny -n openshift-ingress
 
 **Important:** The maas-controller creates gateway-level default policies (`gateway-default-auth` and `gateway-default-deny`) that deny unconfigured models. These work alongside your existing tier-based policies during migration.
 
-```bash
-# Create subscription namespace if it doesn't exist
-kubectl create namespace models-as-a-service
-```
+**Note:** The maas-controller automatically creates the subscription namespace when it starts:
+- **Default behavior:** Creates the `models-as-a-service` namespace
+- **Custom namespace:** If you specify `--maas-subscription-namespace custom-ns`, only `custom-ns` is created (NOT both)
+
+The controller creates **only one** subscription namespace - either the default `models-as-a-service` or your custom namespace.
 
 ### Phase 2: Map Tiers to Subscriptions
 

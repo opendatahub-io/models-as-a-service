@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 // Handler handles subscription selection requests.
@@ -63,14 +64,16 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		"username", req.Username,
 		"groups", req.Groups,
 		"requestedSubscription", req.RequestedSubscription,
+		"requestedModel", req.RequestedModel,
 	)
 
-	response, err := h.selector.Select(req.Groups, req.Username, req.RequestedSubscription)
+	response, err := h.selector.Select(req.Groups, req.Username, req.RequestedSubscription, req.RequestedModel)
 	if err != nil {
 		var noSubErr *NoSubscriptionError
 		var notFoundErr *SubscriptionNotFoundError
 		var accessDeniedErr *AccessDeniedError
 		var multipleSubsErr *MultipleSubscriptionsError
+		var modelNotInSubErr *ModelNotInSubscriptionError
 
 		if errors.As(err, &noSubErr) {
 			h.logger.Debug("No subscription found for user",
@@ -119,6 +122,18 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 			return
 		}
 
+		if errors.As(err, &modelNotInSubErr) {
+			h.logger.Debug("Model not included in subscription",
+				"subscription", modelNotInSubErr.Subscription,
+				"model", modelNotInSubErr.Model,
+			)
+			c.JSON(http.StatusOK, SelectResponse{
+				Error:   "model_not_in_subscription",
+				Message: err.Error(),
+			})
+			return
+		}
+
 		// All other errors are internal server errors
 		h.logger.Error("Subscription selection failed",
 			"error", err.Error(),
@@ -137,4 +152,95 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		"organizationId", response.OrganizationID,
 	)
 	c.JSON(http.StatusOK, response)
+}
+
+// ListSubscriptions handles GET /v1/subscriptions.
+// Returns all subscriptions the authenticated user has access to.
+func (h *Handler) ListSubscriptions(c *gin.Context) {
+	userContextVal, exists := c.Get("user")
+	if !exists {
+		h.logger.Error("User context not found - ExtractUserInfo middleware not called")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": "Internal server error",
+				"type":    "server_error",
+			}})
+		return
+	}
+	userContext, ok := userContextVal.(*token.UserContext)
+	if !ok {
+		h.logger.Error("Invalid user context type")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": "Internal server error",
+				"type":    "server_error",
+			}})
+		return
+	}
+
+	accessible, err := h.selector.GetAllAccessible(userContext.Groups, userContext.Username)
+	if err != nil {
+		h.logger.Error("Failed to list subscriptions", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": "Failed to list subscriptions",
+				"type":    "server_error",
+			}})
+		return
+	}
+
+	subs := make([]SubscriptionInfo, len(accessible))
+	for i, sub := range accessible {
+		subs[i] = ResponseToSubscriptionInfo(sub)
+	}
+
+	c.JSON(http.StatusOK, subs)
+}
+
+// ListSubscriptionsForModel handles GET /v1/model/:model-id/subscriptions.
+// Returns subscriptions the user has access to that include the specified model.
+func (h *Handler) ListSubscriptionsForModel(c *gin.Context) {
+	userContextVal, exists := c.Get("user")
+	if !exists {
+		h.logger.Error("User context not found - ExtractUserInfo middleware not called")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": "Internal server error",
+				"type":    "server_error",
+			}})
+		return
+	}
+	userContext, ok := userContextVal.(*token.UserContext)
+	if !ok {
+		h.logger.Error("Invalid user context type")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": "Internal server error",
+				"type":    "server_error",
+			}})
+		return
+	}
+
+	modelID := c.Param("model-id")
+	if modelID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "model-id is required",
+				"type":    "invalid_request_error",
+			}})
+		return
+	}
+
+	subs, err := h.selector.ListAccessibleForModel(userContext.Username, userContext.Groups, modelID)
+	if err != nil {
+		h.logger.Error("Failed to list subscriptions for model", "error", err, "model", modelID)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": "Failed to list subscriptions",
+				"type":    "server_error",
+			}})
+		return
+	}
+
+	c.JSON(http.StatusOK, subs)
 }
