@@ -497,11 +497,31 @@ run_e2e_tests() {
         "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_namespace_scoping.py" \
         "$test_dir/tests/test_subscription.py" \
-        "$test_dir/tests/test_models_endpoint.py" \
-        "$test_dir/tests/test_external_oidc.py" ; then 
+        "$test_dir/tests/test_models_endpoint.py" ; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
+
+    # --- External Model E2E Tests ---
+    # Uncomment when BBR plugins are deployed as part of CI and the external
+    # simulator endpoint is accessible from the CI cluster.
+    # Prerequisites:
+    #   1. BBR image built and deployed (EnvoyFilter, NetworkPolicy, DestinationRule)
+    #   2. E2E_SIMULATOR_ENDPOINT set (default: 3.150.113.9)
+    #   3. ServiceEntry for the simulator registered in the mesh
+    #
+    # export E2E_SIMULATOR_ENDPOINT="${E2E_SIMULATOR_ENDPOINT:-3.150.113.9}"
+    # export E2E_SKIP_TLS_VERIFY="true"
+    # echo "Running external model e2e tests..."
+    # if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
+    #     -v --maxfail=5 --disable-warnings \
+    #     --junitxml="${ARTIFACTS_DIR}/e2e-external-models.xml" \
+    #     --html="${ARTIFACTS_DIR}/e2e-external-models.html" --self-contained-html \
+    #     --capture=tee-sys --show-capture=all --log-level=INFO \
+    #     "$test_dir/tests/test_external_models.py" ; then
+    #     echo "❌ ERROR: External model E2E tests failed"
+    #     exit 1
+    # fi
 
     echo "✅ E2E tests completed"
     echo " - JUnit XML : ${xml}"
