@@ -81,7 +81,7 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: prometheus
-                  query: 'count(count by (user) (rate(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) > 0))'
+                  query: 'count(count by (user) (rate(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) > 0)) or vector(0)'
                   seriesNameFormat: Users
     successRate:
       kind: Panel
@@ -105,7 +105,7 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: prometheus
-                  query: '(sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))) / ((sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) + sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))) > 0)'
+                  query: '((sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))) / ((sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) + (sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0))) > 0)) or vector(1)'
                   seriesNameFormat: Success Rate
     tokenConsumptionByUser:
       kind: Panel
@@ -227,7 +227,7 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: prometheus
-                  query: 'sum(rate(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000)'
+                  query: 'sum(rate(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0)'
                   seriesNameFormat: Errors
     totalRequests:
       kind: Panel
@@ -252,7 +252,7 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: prometheus
-                  query: 'sum(rate(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) + sum(rate(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000)'
+                  query: '(sum(rate(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0)) + (sum(rate(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0))'
                   seriesNameFormat: Requests
     totalTokens:
       kind: Panel
@@ -277,7 +277,7 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: prometheus
-                  query: 'sum(rate(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__rate_interval]) * $__interval_ms / 1000)'
+                  query: 'sum(rate(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0)'
                   seriesNameFormat: Tokens
   variables:
     - kind: ListVariable
