@@ -128,6 +128,9 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			return err
 		}
 	}
+	if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -343,10 +346,6 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 			}
 		}
 	}
-	if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
-		return err
-	}
-
 	return nil
 }
 
