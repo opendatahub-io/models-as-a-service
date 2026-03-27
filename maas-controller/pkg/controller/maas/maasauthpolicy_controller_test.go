@@ -632,7 +632,7 @@ func TestMaaSAuthPolicyReconciler_SubscriptionCacheKey(t *testing.T) {
 		},
 		{
 			name:   "includes groups",
-			substr: `auth.metadata.apiKeyValidation.groups.join(",")`,
+			substr: `auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",")`,
 			reason: "cache key must include groups to prevent collisions between users with different group memberships",
 		},
 		{
