@@ -24,7 +24,6 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -43,6 +42,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // MaaSSubscriptionReconciler reconciles a MaaSSubscription object
@@ -132,13 +133,13 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			return fmt.Errorf("failed to list subscriptions for model %s/%s: %w", modelRef.Namespace, modelRef.Name, err)
 		}
 
-		limitsMap := map[string]interface{}{}
+		limitsMap := map[string]any{}
 		var subNames []string
 
 		type subInfo struct {
 			sub   maasv1alpha1.MaaSSubscription
 			mRef  maasv1alpha1.ModelSubscriptionRef
-			rates []interface{}
+			rates []any
 		}
 		var subs []subInfo
 		for _, sub := range allSubs {
@@ -146,13 +147,13 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 				if mRef.Namespace != modelRef.Namespace || mRef.Name != modelRef.Name {
 					continue
 				}
-				var rates []interface{}
+				var rates []any
 				if len(mRef.TokenRateLimits) > 0 {
 					for _, trl := range mRef.TokenRateLimits {
-						rates = append(rates, map[string]interface{}{"limit": trl.Limit, "window": trl.Window})
+						rates = append(rates, map[string]any{"limit": trl.Limit, "window": trl.Window})
 					}
 				} else {
-					rates = append(rates, map[string]interface{}{"limit": int64(100), "window": "1m"})
+					rates = append(rates, map[string]any{"limit": int64(100), "window": "1m"})
 				}
 				subs = append(subs, subInfo{sub: sub, mRef: mRef, rates: rates})
 				break
@@ -179,15 +180,15 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 
 			// TRLP limit key must be safe for YAML (no slashes)
 			safeKey := strings.ReplaceAll(subRef, "/", "-")
-			limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, si.mRef.Name)] = map[string]interface{}{
+			limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, si.mRef.Name)] = map[string]any{
 				"rates": si.rates,
-				"when": []interface{}{
-					map[string]interface{}{
+				"when": []any{
+					map[string]any{
 						"predicate": fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, modelScopedRef),
 					},
 				},
-				"counters": []interface{}{
-					map[string]interface{}{"expression": "auth.identity.userid"},
+				"counters": []any{
+					map[string]any{"expression": "auth.identity.userid"},
 				},
 			}
 		}
@@ -211,8 +212,8 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 			"maas.opendatahub.io/subscriptions": strings.Join(subNames, ","),
 		})
 
-		spec := map[string]interface{}{
-			"targetRef": map[string]interface{}{
+		spec := map[string]any{
+			"targetRef": map[string]any{
 				"group": "gateway.networking.k8s.io",
 				"kind":  "HTTPRoute",
 				"name":  httpRouteName,

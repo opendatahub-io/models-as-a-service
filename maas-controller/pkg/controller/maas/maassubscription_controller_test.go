@@ -22,7 +22,6 @@ import (
 	"strings"
 	"testing"
 
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,6 +31,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // newPreexistingTRLP builds a Kuadrant TokenRateLimitPolicy as an unstructured object
@@ -251,10 +252,8 @@ func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition(t *testing.T)
 			if mustContainPeer != "" && !strings.Contains(cond.Message, mustContainPeer) {
 				t.Fatalf("%s: message should mention peer %q, got %q", subName, mustContainPeer, cond.Message)
 			}
-		} else {
-			if cond.Status != metav1.ConditionFalse {
-				t.Fatalf("%s: SpecPriorityDuplicate.Status = %s, want False", subName, cond.Status)
-			}
+		} else if cond.Status != metav1.ConditionFalse {
+			t.Fatalf("%s: SpecPriorityDuplicate.Status = %s, want False", subName, cond.Status)
 		}
 	}
 
@@ -522,7 +521,7 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 	}
 
 	// Verify it has a single, simple predicate
-	limitMap, ok := limitEntry.(map[string]interface{})
+	limitMap, ok := limitEntry.(map[string]any)
 	if !ok {
 		t.Fatalf("limitEntry is not map[string]interface{}: %T", limitEntry)
 	}
@@ -535,7 +534,7 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		t.Errorf("expected 1 when predicate, got %d", len(whenSlice))
 	}
 
-	predMap, ok := whenSlice[0].(map[string]interface{})
+	predMap, ok := whenSlice[0].(map[string]any)
 	if !ok {
 		t.Fatalf("whenSlice[0] is not map[string]interface{}: %T", whenSlice[0])
 	}
@@ -612,7 +611,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 	// Verify sub-a limit entry (now includes namespace in key)
 	subAKey := namespace + "-sub-a-" + modelName + "-tokens"
 	if limitA, ok := limitsMap[subAKey]; ok {
-		limitAMap, ok := limitA.(map[string]interface{})
+		limitAMap, ok := limitA.(map[string]any)
 		if !ok {
 			t.Fatalf("sub-a limitEntry is not map[string]interface{}: %T", limitA)
 		}
@@ -623,7 +622,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		if len(whenSlice) != 1 {
 			t.Errorf("sub-a: expected 1 when predicate, got %d", len(whenSlice))
 		}
-		predMap, ok := whenSlice[0].(map[string]interface{})
+		predMap, ok := whenSlice[0].(map[string]any)
 		if !ok {
 			t.Fatalf("sub-a whenSlice[0] is not map[string]interface{}: %T", whenSlice[0])
 		}
@@ -647,7 +646,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 	// Verify sub-b limit entry (now includes namespace in key)
 	subBKey := namespace + "-sub-b-" + modelName + "-tokens"
 	if limitB, ok := limitsMap[subBKey]; ok {
-		limitBMap, ok := limitB.(map[string]interface{})
+		limitBMap, ok := limitB.(map[string]any)
 		if !ok {
 			t.Fatalf("sub-b limitEntry is not map[string]interface{}: %T", limitB)
 		}
@@ -658,7 +657,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		if len(whenSlice) != 1 {
 			t.Errorf("sub-b: expected 1 when predicate, got %d", len(whenSlice))
 		}
-		predMap, ok := whenSlice[0].(map[string]interface{})
+		predMap, ok := whenSlice[0].(map[string]any)
 		if !ok {
 			t.Fatalf("sub-b whenSlice[0] is not map[string]interface{}: %T", whenSlice[0])
 		}
@@ -687,9 +686,8 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 	}
 }
 
-
 // Helper to get map keys
-func getKeys(m map[string]interface{}) []string {
+func getKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
