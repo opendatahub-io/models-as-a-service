@@ -434,6 +434,10 @@ main() {
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
   log_info "  External OIDC: $EXTERNAL_OIDC"
+  if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+    log_warn "  --external-oidc is ignored in operator mode. Configure external OIDC via"
+    log_warn "  the ModelsAsService CR: spec.externalOIDC.issuerUrl / clientId instead."
+  fi
   if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
     log_info "  MaaS API image: $MAAS_API_IMAGE"
   fi
