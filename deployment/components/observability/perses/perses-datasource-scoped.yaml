@@ -1,0 +1,33 @@
+# Tenant datasource using Thanos port 9092 (namespace-scoped metrics).
+# ?namespace= is embedded in the URL for prom-label-proxy.
+# RBAC: perses-rbac-scoped.yaml grants the 'create' verb needed for POST queries.
+---
+apiVersion: perses.dev/v1alpha1
+kind: PersesDatasource
+metadata:
+  name: prometheus
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  config:
+    display:
+      name: "Prometheus (Thanos Querier)"
+    default: true
+    plugin:
+      kind: "PrometheusDatasource"
+      spec:
+        scrapeInterval: "30s"
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9092?namespace=TENANT_NAMESPACE
+            secret: "prometheus-secret"
+  client:
+    tls:
+      enable: true
+      insecureSkipVerify: false
+      caCert:
+        type: configmap
+        name: thanos-querier-serving-ca
+        certPath: service-ca.crt

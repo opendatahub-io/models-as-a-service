@@ -510,6 +510,64 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 	})
 }
 
+// TestMaaSModelRefReconciler_DuplicateReconciliation verifies that reconciling the same
+// MaaSModelRef twice does not produce a redundant status update when nothing has changed.
+func TestMaaSModelRefReconciler_DuplicateReconciliation(t *testing.T) {
+	const testKind = "_test_dup_recon_kind"
+
+	backendHandlerFactories[testKind] = func(_ *MaaSModelRefReconciler) BackendHandler {
+		return &fakeHandler{endpoint: "https://model.example.com", ready: true}
+	}
+	defer delete(backendHandlerFactories, testKind)
+
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "dup-model", Namespace: "default"},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{Kind: testKind, Name: "backend"},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(model).
+		WithStatusSubresource(model).
+		Build()
+
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "dup-model", Namespace: "default"}}
+
+	// First reconcile: writes status (Ready phase).
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile #1: %v", err)
+	}
+
+	got := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
+		t.Fatalf("Get after reconcile #1: %v", err)
+	}
+	if got.Status.Phase != "Ready" {
+		t.Fatalf("Phase after reconcile #1 = %q, want Ready", got.Status.Phase)
+	}
+	rvAfterFirst := got.ResourceVersion
+
+	// Second reconcile: nothing changed, status write should be skipped.
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile #2: %v", err)
+	}
+
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
+		t.Fatalf("Get after reconcile #2: %v", err)
+	}
+	rvAfterSecond := got.ResourceVersion
+
+	if rvAfterFirst != rvAfterSecond {
+		t.Errorf("redundant status update: ResourceVersion changed from %s to %s; "+
+			"second reconcile should skip the status write when nothing changed",
+			rvAfterFirst, rvAfterSecond)
+	}
+}
+
 // newPreexistingGeneratedPolicy builds an unstructured Kuadrant policy with the labels
 // that deleteGeneratedPoliciesByLabel selects on. The name and GVK are caller-supplied
 // so the same helper covers both AuthPolicy and TokenRateLimitPolicy.

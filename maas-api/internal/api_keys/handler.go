@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -80,124 +79,6 @@ func (h *Handler) isAuthorizedForKey(user *token.UserContext, keyOwner string) b
 	return h.isAdmin(user)
 }
 
-// parsePaginationParams extracts and validates pagination query parameters.
-func (h *Handler) parsePaginationParams(c *gin.Context) (PaginationParams, error) {
-	const (
-		defaultLimit = 50
-		maxLimit     = 100
-	)
-
-	params := PaginationParams{
-		Limit:  defaultLimit,
-		Offset: 0,
-	}
-
-	// Parse limit
-	if limitStr := c.Query("limit"); limitStr != "" {
-		limit, err := strconv.Atoi(limitStr)
-		if err != nil {
-			return params, errors.New("invalid limit parameter: must be a number")
-		}
-		if limit < 1 {
-			return params, errors.New("invalid limit parameter: must be at least 1")
-		}
-		// Silently cap at maximum (user-friendly)
-		if limit > maxLimit {
-			limit = maxLimit
-		}
-		params.Limit = limit
-	}
-
-	// Parse offset
-	if offsetStr := c.Query("offset"); offsetStr != "" {
-		offset, err := strconv.Atoi(offsetStr)
-		if err != nil {
-			return params, errors.New("invalid offset parameter: must be a number")
-		}
-		if offset < 0 {
-			return params, errors.New("invalid offset parameter: must be non-negative")
-		}
-		params.Offset = offset
-	}
-
-	return params, nil
-}
-
-func (h *Handler) ListAPIKeys(c *gin.Context) {
-	user := h.getUserContext(c)
-	if user == nil {
-		return
-	}
-
-	// Check if user is admin
-	isAdmin := h.isAdmin(user)
-
-	// Parse filter parameters
-	filterUsername := c.Query("username")
-	filterStatus := c.Query("status")
-
-	// Determine target username for filtering
-	var targetUsername string
-	if isAdmin {
-		// Admin behavior: default to ALL users (empty string), or filter if provided
-		targetUsername = filterUsername // Empty string = all users
-	} else {
-		// Regular user behavior: always filter to own keys only
-		if filterUsername != "" && filterUsername != user.Username {
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": "non-admin users can only view their own API keys",
-			})
-			return
-		}
-		targetUsername = user.Username // Always their own username
-	}
-
-	// Parse status filters
-	var statusFilters []string
-	if filterStatus != "" {
-		statusFilters = strings.Split(filterStatus, ",")
-		// Validate each status using allowlist
-		for _, status := range statusFilters {
-			trimmed := strings.TrimSpace(status)
-			if !ValidStatuses[trimmed] {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": fmt.Sprintf("invalid status '%s': must be active, revoked, or expired", status),
-				})
-				return
-			}
-		}
-	}
-
-	// Parse pagination parameters
-	params, err := h.parsePaginationParams(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Get paginated results with filters
-	result, err := h.service.List(c.Request.Context(), targetUsername, params, statusFilters)
-	if err != nil {
-		h.logger.Error("Failed to list API keys",
-			"error", err,
-			"username", targetUsername,
-			"limit", params.Limit,
-			"offset", params.Offset,
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list api keys"})
-		return
-	}
-
-	// Build response
-	response := ListAPIKeysResponse{
-		Object:  "list",
-		Data:    result.Keys,
-		HasMore: result.HasMore,
-	}
-
-	c.JSON(http.StatusOK, response)
-}
-
 func (h *Handler) GetAPIKey(c *gin.Context) {
 	tokenID := c.Param("id")
 	if tokenID == "" {
@@ -241,17 +122,17 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 }
 
 // CreateAPIKeyRequest is the request body for creating an API key.
-// Keys can be permanent (no expiresIn) or expiring (with expiresIn).
+// If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS.
 // Users can only create keys for themselves - the key inherits the user's groups.
 type CreateAPIKeyRequest struct {
 	Name        string          `binding:"required"           json:"name"`
 	Description string          `json:"description,omitempty"`
-	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"` // Optional - nil means permanent
+	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"` // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS
 }
 
 // CreateAPIKey handles POST /v1/api-keys
 // Creates a new API key (sk-oai-* format) per Feature Refinement.
-// Keys can be permanent (no expiresIn) or expiring (with expiresIn).
+// If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS.
 // Per "Keys Shown Only Once": key is returned ONCE at creation and never again.
 // Users can only create keys for themselves - the key inherits the user's groups.
 func (h *Handler) CreateAPIKey(c *gin.Context) {

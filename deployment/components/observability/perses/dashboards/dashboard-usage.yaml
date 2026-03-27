@@ -1,0 +1,340 @@
+# Perses Dashboard: Usage Dashboard
+# Token consumption overview with per-user breakdown table.
+# Matches the "Usage" tab from the RHOAI 3.4 prototype mock.
+#
+# Hybrid approach:
+#   All stat panels use rate([$__rate_interval]) → responsive to native time picker.
+#   Count panels (Tokens, Requests, Errors, Active Users) use calculation:sum.
+#   Success Rate uses increase([$__range]) with calculation:last and a > 0 denominator
+#   guard to avoid division by zero.
+#   Table uses increase([$range]) with a $range dropdown for meaningful per-user totals
+#   (Perses has no $__range variable, so the dropdown is needed for the table only).
+apiVersion: perses.dev/v1alpha1
+kind: PersesDashboard
+metadata:
+  name: usage-dashboard
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  display:
+    name: "Usage Dashboard"
+    description: "Token consumption overview and per-user usage breakdown"
+  duration: 168h
+
+  variables:
+    - kind: ListVariable
+      spec:
+        name: range
+        display:
+          name: "Table Range"
+        allowMultiple: false
+        allowAllValue: false
+        defaultValue: "24h"
+        plugin:
+          kind: StaticListVariable
+          spec:
+            values:
+              - "6h"
+              - "12h"
+              - "24h"
+              - "3d"
+              - "7d"
+              - "14d"
+    - kind: ListVariable
+      spec:
+        name: user
+        display:
+          name: "User"
+        allowMultiple: true
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: user
+            matchers:
+              - authorized_hits{user!=""}
+    - kind: ListVariable
+      spec:
+        name: subscription
+        display:
+          name: "Subscription"
+        allowMultiple: true
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: subscription
+            matchers:
+              - authorized_hits{subscription!=""}
+    - kind: ListVariable
+      spec:
+        name: model
+        display:
+          name: "Model"
+        allowMultiple: true
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: PrometheusLabelValuesVariable
+          spec:
+            labelName: model
+            matchers:
+              - authorized_hits{model!=""}
+
+  panels:
+    totalTokens:
+      kind: Panel
+      spec:
+        display:
+          name: "Total Tokens"
+          description: "Total tokens consumed over the selected time window."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: sum
+            format:
+              unit: decimal
+              shortValues: true
+              decimalPlaces: 0
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Tokens"
+                  query: sum(rate(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0)
+
+    totalRequests:
+      kind: Panel
+      spec:
+        display:
+          name: "Total Requests"
+          description: "Total API requests (authorized + rate-limited) over the selected time window."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: sum
+            format:
+              unit: decimal
+              shortValues: true
+              decimalPlaces: 0
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Requests"
+                  query: (sum(rate(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0)) + (sum(rate(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0))
+
+    totalErrors:
+      kind: Panel
+      spec:
+        display:
+          name: "Total Errors"
+          description: "Total rate-limited requests over the selected time window."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: sum
+            format:
+              unit: decimal
+              shortValues: true
+              decimalPlaces: 0
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Errors"
+                  query: sum(rate(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0)
+
+    successRate:
+      kind: Panel
+      spec:
+        display:
+          description: Percentage of authorized vs total requests over the selected time window.
+          name: Success Rate
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last
+            format:
+              decimalPlaces: 1
+              unit: percent-decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: '((sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))) / ((sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) + (sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0))) > 0)) or vector(1)'
+                  seriesNameFormat: Success Rate
+
+    activeUsers:
+      kind: Panel
+      spec:
+        display:
+          name: "Active Users"
+          description: "Distinct users with API activity over the selected time window."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: max
+            format:
+              unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Users"
+                  query: count(count by (user) (rate(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) > 0)) or vector(0)
+
+    tokenConsumptionByUser:
+      kind: Panel
+      spec:
+        display:
+          name: "Token Consumption by User"
+          description: "Per-user totals over the Range dropdown window."
+        plugin:
+          kind: Table
+          spec:
+            density: "compact"
+            pagination: true
+            transforms:
+              - kind: "MergeSeries"
+                spec: {}
+            columnSettings:
+              - name: "timestamp"
+                hide: true
+              - name: "user"
+                header: "User"
+                align: "left"
+                enableSorting: true
+              - name: "subscription"
+                header: "Subscription"
+                align: "left"
+                enableSorting: true
+              - name: "model"
+                header: "Model"
+                align: "left"
+                enableSorting: true
+              - name: "value #1"
+                header: "Tokens"
+                align: "right"
+                enableSorting: true
+                sort: "desc"
+                format:
+                  unit: decimal
+                  shortValues: true
+              - name: "value #2"
+                header: "Requests"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+                  decimalPlaces: 0
+              - name: "value #3"
+                header: "Rate Limited"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+                  decimalPlaces: 0
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: round(sum by (user, subscription, model) (increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$range])))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    round(
+                      sum by (user, subscription, model) (
+                        sum by (user, subscription, limitador_namespace) (increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$range]))
+                        * on(user, subscription, limitador_namespace) group_left(model)
+                        (0 * max by (user, subscription, limitador_namespace, model) (max_over_time(authorized_hits{model=~"$model"}[$range])) + 1)
+                      )
+                      or
+                      0 * sum by (user, subscription, model) (increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$range]))
+                    )
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    round(
+                      sum by (user, subscription, model) (
+                        sum by (user, subscription, limitador_namespace) (increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$range]))
+                        * on(user, subscription, limitador_namespace) group_left(model)
+                        (0 * max by (user, subscription, limitador_namespace, model) (max_over_time(authorized_hits{model=~"$model"}[$range])) + 1)
+                      )
+                      or
+                      0 * sum by (user, subscription, model) (increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$range]))
+                    )
+
+  layouts:
+    - kind: Grid
+      spec:
+        display:
+          title: "Overview"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 5
+            height: 5
+            content:
+              "$ref": "#/spec/panels/totalTokens"
+          - x: 5
+            "y": 0
+            width: 5
+            height: 5
+            content:
+              "$ref": "#/spec/panels/totalRequests"
+          - x: 10
+            "y": 0
+            width: 5
+            height: 5
+            content:
+              "$ref": "#/spec/panels/totalErrors"
+          - x: 15
+            "y": 0
+            width: 5
+            height: 5
+            content:
+              "$ref": "#/spec/panels/successRate"
+          - x: 20
+            "y": 0
+            width: 4
+            height: 5
+            content:
+              "$ref": "#/spec/panels/activeUsers"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "Token Consumption by User"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 12
+            content:
+              "$ref": "#/spec/panels/tokenConsumptionByUser"

@@ -1,0 +1,13 @@
+# MaaSModelRef for the second distinct-tier simulator.
+# Used by e2e tests to validate multiple distinct models in a subscription.
+# LLMIS from docs/samples/models/e2e-distinct-2-simulated (name: e2e-distinct-2-simulated in namespace llm).
+# Serves model ID: test/e2e-distinct-model-2 (different from all other test models)
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: e2e-distinct-2-simulated
+  namespace: llm
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: e2e-distinct-2-simulated

@@ -89,22 +89,9 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			model := &maasv1alpha1.MaaSModelRef{
-				ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
-				Spec: maasv1alpha1.MaaSModelSpec{
-					ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
-				},
-			}
-			route := &gatewayapiv1.HTTPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: namespace},
-			}
-			maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: maasPolicyName, Namespace: namespace},
-				Spec: maasv1alpha1.MaaSAuthPolicySpec{
-					ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: namespace}},
-					Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
-				},
-			}
+			model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+			route := newHTTPRoute(httpRouteName, namespace)
+			maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
 			// Pre-populate the store with a generated AuthPolicy whose spec contains a
 			// sentinel targetRef. After reconciliation we check whether it changed.
 			existingAP := newPreexistingAuthPolicy(authPolicyName, namespace, modelName, tc.annotations)
@@ -116,7 +103,7 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 				Build()
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -142,6 +129,69 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 				t.Errorf("spec.targetRef.name = %q: expected sentinel %q (managed=false opt-out)", targetRefName, "sentinel-route")
 			}
 		})
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_DuplicateReconciliation verifies that reconciling
+// multiple auth policies for the same model does not produce redundant AuthPolicy updates.
+//
+// When N auth policies reference the same model, each reconciliation builds the same
+// aggregated AuthPolicy. The controller must skip the Update call when the content is
+// identical to what already exists, otherwise each Update triggers a watch event that
+// cascades into O(N²) reconciliations.
+func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	policyA := newMaaSAuthPolicy("policy-a", namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+	policyB := newMaaSAuthPolicy("policy-b", namespace, "team-b", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, policyA, policyB).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	ctx := context.Background()
+
+	// Reconcile policy-a: creates the aggregated AuthPolicy (covering both policy-a and policy-b).
+	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-a", Namespace: namespace}}
+	if _, err := r.Reconcile(ctx, reqA); err != nil {
+		t.Fatalf("Reconcile policy-a: %v", err)
+	}
+
+	// Capture AuthPolicy ResourceVersion after first reconciliation.
+	ap := &unstructured.Unstructured{}
+	ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, ap); err != nil {
+		t.Fatalf("Get AuthPolicy after policy-a reconcile: %v", err)
+	}
+	rvAfterA := ap.GetResourceVersion()
+
+	// Reconcile policy-b: both policies are still present, so the aggregated AuthPolicy
+	// content is identical. The controller should detect this and skip the Update.
+	reqB := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-b", Namespace: namespace}}
+	if _, err := r.Reconcile(ctx, reqB); err != nil {
+		t.Fatalf("Reconcile policy-b: %v", err)
+	}
+
+	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, ap); err != nil {
+		t.Fatalf("Get AuthPolicy after policy-b reconcile: %v", err)
+	}
+	rvAfterB := ap.GetResourceVersion()
+
+	if rvAfterA != rvAfterB {
+		t.Errorf("redundant AuthPolicy update: ResourceVersion changed from %s to %s; "+
+			"reconciling policy-b should not update the AuthPolicy when content is identical to policy-a's reconciliation",
+			rvAfterA, rvAfterB)
 	}
 }
 
@@ -183,17 +233,8 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 			existingAP := newPreexistingAuthPolicy(authPolicyName, namespace, modelName, tc.annotations)
 
 			// Create MaaSAuthPolicy with finalizer so handleDeletion processes it.
-			maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:       maasPolicyName,
-					Namespace:  namespace,
-					Finalizers: []string{maasAuthPolicyFinalizer},
-				},
-				Spec: maasv1alpha1.MaaSAuthPolicySpec{
-					ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: namespace}},
-					Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
-				},
-			}
+			maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+			maasPolicy.Finalizers = []string{maasAuthPolicyFinalizer}
 
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
@@ -207,7 +248,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 				t.Fatalf("Delete MaaSAuthPolicy: %v", err)
 			}
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -285,7 +326,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 
 	// Reconcile both policies to create the aggregated AuthPolicy
 	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: policy1Name, Namespace: policyNS}}

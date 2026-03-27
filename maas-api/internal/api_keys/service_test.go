@@ -256,32 +256,6 @@ func TestRevokeAPIKey(t *testing.T) {
 	assert.Equal(t, api_keys.StatusRevoked, meta.Status)
 }
 
-func TestServiceList(t *testing.T) {
-	ctx := context.Background()
-	svc, store := createTestService(t)
-
-	// Create multiple keys for user
-	username := "charlie"
-	for i := 1; i <= 3; i++ {
-		keyID := "list-test-key-" + string(rune('0'+i))
-		_, hash := createTestAPIKey(t)
-		err := store.AddKey(ctx, username, keyID, hash, "Key "+string(rune('0'+i)), "", nil, nil)
-		require.NoError(t, err)
-	}
-
-	// List via service layer
-	params := api_keys.PaginationParams{
-		Limit:  10,
-		Offset: 0,
-	}
-	result, err := svc.List(ctx, username, params, []string{api_keys.TokenStatusActive})
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	assert.Len(t, result.Keys, 3, "Should return all 3 keys")
-	assert.False(t, result.HasMore, "Should not have more results")
-}
-
 // ============================================================
 // MAX EXPIRATION VALIDATION TESTS
 // ============================================================
@@ -344,11 +318,12 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		}
 		svc := api_keys.NewServiceWithLogger(store, cfg, logger.Development())
 
-		// Request permanent key (nil expiration) - should succeed (max limit only applies to expiring keys)
+		// No expiration requested - should default to APIKeyMaxExpirationDays (30 days)
 		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", nil)
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
+		require.NotNil(t, result.ExpiresAt, "should default to max expiration when not provided")
 	})
 }
 

@@ -1,0 +1,15 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: qwen3-subscription
+  namespace: opendatahub
+spec:
+  owner:
+    groups:
+      - name: system:authenticated
+    users: []
+  modelRefs:
+    - name: qwen3
+      tokenRateLimits:
+        - limit: 100
+          window: 1m

@@ -1,21 +1,24 @@
 # Understanding Token Management
 
-This guide explains the token-based authentication system used to access models in the tier-based access control system. 
-It covers how token issuance works, the underlying service account architecture, and token lifecycle management.
+This guide explains the authentication and credential management used to access models in the MaaS Platform.
 
-!!! note
-    **Prerequisites**: This document assumes you have already configured tiers, RBAC, and rate limits. 
-    See [Configuring Subscription Tiers](tier-configuration.md) for setup instructions.
+!!! tip "API keys (current)"
+    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. When users have multiple subscriptions, include the `X-MaaS-Subscription` header. See [Quota and Access Configuration](quota-and-access-configuration.md).
+
+!!! note "Prerequisites"
+    This document assumes you have configured subscriptions (MaaSAuthPolicy, MaaSSubscription).
+    See [Quota and Access Configuration](quota-and-access-configuration.md) for setup.
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#overview)
-1. [How Token Issuance Works](#how-token-issuance-works)
+1. [How API Key Creation Works](#how-api-key-creation-works)
+1. [How API Key Validation Works](#how-api-key-validation-works)
 1. [Model Discovery](#model-discovery)
 1. [Practical Usage](#practical-usage)
-1. [Token Lifecycle Management](#token-lifecycle-management)
+1. [API Key Lifecycle Management](#api-key-lifecycle-management)
 1. [Frequently Asked Questions (FAQ)](#frequently-asked-questions-faq)
 1. [Related Documentation](#related-documentation)
 
@@ -23,77 +26,100 @@ It covers how token issuance works, the underlying service account architecture,
 
 ## Overview
 
-The platform uses a secure, token-based authentication system. Instead of using your primary OpenShift credentials to 
-access models directly, you first exchange them for a temporary, specialized access token. This approach provides several key benefits:
+The platform uses a secure, API key–based authentication system. You authenticate with your OpenShift credentials to create long-lived API keys, which are stored as SHA-256 hashes in a PostgreSQL database. This approach provides several key benefits:
 
-- **Enhanced Security**: Tokens are short-lived, reducing the risk of compromised credentials. They are also narrowly scoped for model access only.
-- **Tier-Based Access Control**: The token you receive is automatically associated with your subscription tier (e.g., free, premium), ensuring you get the correct permissions and rate limits.
-- **Auditability**: Every request made with a token is tied to a specific identity and can be audited.
-- **Kubernetes-Native Integration**: The system leverages standard, Kubernetes authentication and authorization mechanisms.
+- **Long-Lived Credentials**: API keys remain valid until you revoke them or they expire (configurable), unlike short-lived Kubernetes tokens.
+- **Subscription-Based Access Control**: Keys inherit your group membership at creation time; the gateway uses these groups for subscription lookup and rate limits.
+- **Auditability**: Every request is tied to a specific key and identity; `last_used_at` tracks usage.
+- **Show-Once Security**: The plaintext key is returned only at creation; only the hash is stored.
 
 The process is simple:
 
 ```text
-You authenticate with OpenShift → Request a token from the API → Use that token to call models
+Authenticate with OpenShift → Create an API key via POST /v1/api-keys → Use the key with Authorization: Bearer for model access
 ```
 
 ---
 
-## How Token Issuance Works
+## How API Key Creation Works
 
-When you request a token, you are essentially trading your long-term OpenShift identity for a short-term, 
-purpose-built identity in the form of a Kubernetes Service Account.
+When you create an API key, you trade your OpenShift identity for a long-lived credential that can be used for programmatic access.
 
 ### Key Concepts
 
-- **Tier Namespace**: The platform maintains a separate Kubernetes namespace for each subscription tier (e.g., `...-tier-free`, `...-tier-premium`). These namespaces isolate users based on their access level. 
-- **Service Account (SA)**: When you request a token for the first time, the system creates a Service Account that represents you inside your designated tier namespace. This SA inherits all the permissions assigned to that tier.
-- **Access Token**: The token you receive is a standard JSON Web Token (JWT) that authenticates you as that specific Service Account. When you present this token to the gateway, the system knows your identity, your tier, and what permissions you have.
-- **Token Audience**: The intended recipient of your token. This is validated during authentication and must match the gateway's configuration.
-- **Token Expiration**: The time after which the token expires. Tokens are short-lived to reduce the risk of compromised credentials.
+- **Subscription**: Your access is determined by MaaSAuthPolicy and MaaSSubscription, which map groups to models and rate limits.
+- **User Groups**: At creation time, your current group membership is stored with the key. These groups are used for subscription-based authorization when the key is validated.
+- **API Key**: A cryptographically secure string with `sk-oai-*` prefix. The plaintext is shown once; only the SHA-256 hash is stored in PostgreSQL.
+- **Expiration**: Keys have a configurable TTL via `expiresIn` (e.g., `30d`, `90d`, `1h`). If omitted, the key defaults to the configured maximum (e.g., 90 days).
 
-### Token Issuance Flow
+### API Key Creation Flow
 
-This diagram illustrates the process of obtaining a token.
+This diagram illustrates the process of creating an API key.
 
 ```mermaid
 sequenceDiagram
     participant User as OpenShift User
-    participant MaaS as maas-api
-    participant K8s as Kubernetes API
-    participant TierNS as Tier Namespace<br/>(e.g., *-tier-premium)
     participant Gateway
+    participant AuthPolicy as AuthPolicy (Authorino)
+    participant MaaS as maas-api
+    participant DB as PostgreSQL
+
+    Note over User,MaaS: API Key Creation
+    User->>Gateway: 1. POST /v1/api-keys (Bearer OpenShift token)
+    Gateway->>AuthPolicy: Route request
+    AuthPolicy->>AuthPolicy: Validate OpenShift token (TokenReview)
+    AuthPolicy->>MaaS: 2. Forward request + user context (username, groups)
+    MaaS->>MaaS: Generate sk-oai-* key, hash with SHA-256
+    MaaS->>DB: 3. Store hash + metadata (username, groups, name, expiresAt)
+    DB-->>MaaS: Stored
+    MaaS-->>User: 4. Return plaintext key ONCE (never stored)
+
+    Note over User,DB: Key is ready for model access
+```
+
+---
+
+## How API Key Validation Works
+
+When you use an API key for inference, the gateway validates it via the MaaS API before allowing the request.
+
+### Validation Flow
+
+```mermaid
+sequenceDiagram
+    participant User as Client
+    participant Gateway
+    participant AuthPolicy as MaaSAuthPolicy (Authorino)
+    participant MaaS as maas-api
+    participant DB as PostgreSQL
     participant Model as Model Backend
 
-    Note over User,MaaS: Token Issuance
-    User->>MaaS: 1. Authenticate with OpenShift token
-    MaaS->>K8s: Validate token (TokenReview)
-    K8s-->>MaaS: username, groups
-    Note right of MaaS: Determine tier from<br/>tier-to-group-mapping
-    MaaS->>K8s: Ensure tier namespace exists
-    K8s->>TierNS: Create if needed
-    MaaS->>TierNS: Create/get Service Account for user
-    TierNS-->>MaaS: SA ready
-    MaaS->>K8s: Request SA token (TokenRequest)
-    K8s-->>MaaS: Issued token
-    MaaS-->>User: Return issued token
-
-    Note over User,Model: Model Access
-    User->>Gateway: 3. Request with issued token
-    Gateway->>K8s: Validate token (TokenReview)
-    Note right of K8s: Token from SA in<br/>tier namespace
-    K8s-->>Gateway: Valid, with groups
-    Note right of Gateway: Tier lookup,<br/>SAR check,<br/>Rate limits
-    Gateway->>Model: 4. Authorized request
+    Note over User,MaaS: Inference Request
+    User->>Gateway: 1. Request with Authorization: Bearer sk-oai-*
+    Gateway->>AuthPolicy: Route to MaaSAuthPolicy
+    AuthPolicy->>MaaS: 2. POST /internal/v1/api-keys/validate (key)
+    MaaS->>MaaS: Hash key, lookup by hash
+    MaaS->>DB: 3. SELECT by key_hash
+    DB-->>MaaS: username, groups, status
+    MaaS->>MaaS: Check status (active/revoked/expired)
+    MaaS-->>AuthPolicy: 4. valid: true, userId, groups
+    AuthPolicy->>AuthPolicy: Subscription lookup, rate limits
+    AuthPolicy->>Model: 5. Authorized request (identity headers)
     Model-->>Gateway: Response
     Gateway-->>User: Response
 ```
+
+The validation endpoint (`/internal/v1/api-keys/validate`) is called by Authorino on every request that bears an `sk-oai-*` token. It:
+
+1. Hashes the incoming key and looks it up in the database
+2. Returns `valid: true` with `userId` and `groups` if the key is active and not expired
+3. Returns `valid: false` with a reason if the key is invalid, revoked, or expired
 
 ---
 
 ## Model Discovery
 
-The `/v1/models` endpoint allows you to discover which models you're authorized to access. This endpoint works with any valid authentication token — you don't need to create an API key first.
+The `/v1/models` endpoint allows you to discover which models you're authorized to access. This endpoint works with any valid authentication token — you can use your OpenShift token or an API key.
 
 ### How It Works
 
@@ -109,118 +135,115 @@ flowchart LR
 This means you can:
 
 1. **Authenticate with OpenShift or OIDC** — use your existing identity and the same token you would use for inference.
-2. **Call `/v1/models` immediately** — see only the models you can access, without creating an API key first.
-
-!!! info "Future: Token minting"
-    Once MaaS API token minting is in place, the implementation may be revisited (e.g. minting a short-lived token for gateway auth when the client's token has a different audience). For now, the Authorization header is always passed through as-is.
+2. **Use an API key** — use your `sk-oai-*` key in the Authorization header.
+3. **Call `/v1/models` immediately** — see only the models you can access, without creating an API key first (if using OpenShift token).
 
 ---
 
 ## Practical Usage
 
-For step-by-step instructions on obtaining and using tokens to access models, including practical examples and troubleshooting, see the [Self-Service Model Access Guide](../user-guide/self-service-model-access.md).
+For step-by-step instructions on obtaining and using API keys to access models, including practical examples and troubleshooting, see the [Self-Service Model Access Guide](../user-guide/self-service-model-access.md).
 
 That guide provides:
 
 - Complete walkthrough for getting your OpenShift token
-- How to request an access token from the API
-- Examples of making inference requests with your token
+- How to create an API key via `POST /v1/api-keys`
+- Examples of making inference requests with your API key
 - Troubleshooting common authentication issues
 
 ---
 
-## Token Lifecycle Management
+## API Key Lifecycle Management
 
-Access tokens are ephemeral and must be managed accordingly.
+API keys are long-lived by default but support expiration and revocation.
 
-### Token Expiration
+### Key Expiration
 
-Tokens have a finite lifetime for security purposes:
+Keys have a configurable TTL:
 
-- **Default lifetime**: 4 hours (configurable when requesting)
-- **Maximum lifetime**: Determined by your Kubernetes cluster configuration
+- **Default**: Omit `expiresIn` in the create request; the key uses the configured maximum (e.g., 90 days).
+- **Custom TTL**: Set `expiresIn` when creating (e.g., `"90d"`, `"30d"`, `"1h"`). The response includes `expiresAt` (RFC3339).
 
-When a token expires, any API request using it will fail with an `HTTP 401 Unauthorized error`. 
-To continue, you must request a new token using the process described above.
+When a key expires, validation returns `valid: false` with reason `"key revoked or expired"`. Create a new key to continue.
 
-**Tips:**
+### Key Revocation
 
-- For interactive use, request tokens with a lifetime that covers your session (e.g., 4h).
-- For automated scripts or applications, implement logic to refresh the token proactively before it expires.
+**Revoke a single key:** Send a `DELETE` request to `/v1/api-keys/:id`.
 
-### Token Revocation
-
-You can invalidate all active tokens associated with your user account. This is a key security feature if you believe a token has been exposed.
-
-To revoke all your tokens, send a `DELETE` request to the `/v1/tokens` endpoint.
-
-```shell
-curl -sSk -X DELETE "${MAAS_API_URL}/v1/tokens" \
+```bash
+curl -sSk -X DELETE "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   -H "Authorization: Bearer $(oc whoami -t)"
 ```
-This action immediately deletes your underlying Service Account, which invalidates all tokens that have ever been issued for it. 
-The Service Account will be automatically recreated the next time you request a token.
+
+**Bulk revoke all keys for a user:** Send a `POST` request to `/v1/api-keys/bulk-revoke`.
+
+```bash
+curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice"}'
+```
+
+Revocation updates the key status to `revoked` in the database. The next validation request will reject the key. Authorino may cache validation results briefly; revocation is effective as soon as the cache expires.
 
 !!! warning "Important"
-    **For Platform Administrators**: Admins can manually revoke a user's tokens by finding and deleting their Service Account 
-    in the appropriate tier namespace (e.g., `<instance-name>-tier-premium`). This is an effective way to immediately cut 
-    off access for a specific user in response to a security event.
+    **For Platform Administrators**: Admins can revoke any user's keys via `DELETE /v1/api-keys/:id` (if they own or have admin access) or `POST /v1/api-keys/bulk-revoke` with the target username. This is an effective way to immediately cut off access for a specific user in response to a security event.
 
 ---
 
 ## Frequently Asked Questions (FAQ)
 
-**Q: My tier is wrong or shows as "free". How do I fix it?**
+**Q: My subscription access is wrong. How do I fix it?**
 
-A: Your tier is determined by your group membership in OpenShift. Contact your platform administrator to ensure you 
-are in the correct user group, which should be mapped to your desired tier in the [tier mapping configuration](tier-configuration.md).
-
----
-
-**Q: How long should my tokens be valid for?**
-
-A: It's a balance of security and convenience. For interactive command-line use, 1-8 hours is common. For applications, request shorter-lived tokens (e.g., 15-60 minutes) and refresh them automatically.
+A: Your access is determined by your group membership in OpenShift at the time the API key was created. Those groups are stored with the key and used for subscription lookup. If your groups have changed, create a new API key to pick up the new membership.
 
 ---
 
-**Q: Can I have multiple active tokens at once?**
+**Q: How long should my API keys be valid for?**
 
-A: Yes. Each call to the `/v1/tokens` endpoint issues a new, independent token. All of them will be valid until they expire or are revoked.
-
----
-
-**Q: What happens if the `maas-api` service is down?**
-
-A: You will not be able to issue *new* tokens. However, any existing, non-expired tokens will continue to work for calling models, as the gateway validates them directly with the Kubernetes API.
+A: For interactive use or long-running integrations, keys with long TTL (e.g., 90d) or the default maximum are common. For higher security, use shorter TTLs (e.g., 30d) and rotate keys periodically.
 
 ---
 
-**Q: Can I use one token to access multiple different models?**
+**Q: Can I have multiple active API keys at once?**
 
-A: Yes. Your token grants you access based on your tier's RBAC permissions. If your tier is authorized to use multiple models, a single token will work for all of them.
+A: Yes. Each call to `POST /v1/api-keys` creates a new, independent key. You can list and manage them via `POST /v1/api-keys/search` (with optional filters and pagination) or `GET /v1/api-keys/:id` for a specific key.
+
+---
+
+**Q: What happens if the maas-api service is down?**
+
+A: You will not be able to create or validate API keys. Inference requests that use API keys will fail until the service is back. OpenShift token–based requests may still work if the gateway is configured for both auth methods.
+
+---
+
+**Q: Can I use one API key to access multiple different models?**
+
+A: Yes. Your API key inherits your group membership at creation time. If your subscription is authorized to use multiple models, a single key works for all of them.
 
 ---
 
 **Q: What's the difference between my OpenShift token and an API key?**
 
-A: Your **OpenShift token** is your identity token from authentication (e.g. OpenShift or OIDC). An **API key** (issued via `/v1/tokens`) is a service account token with the correct audience and permissions for accessing models. For **GET /v1/models**, the API passes your Authorization header as-is to each model endpoint to determine which models to include; you can use your OpenShift token or an API key. For inference, use a token that your gateway accepts (e.g. OpenShift token or API key as configured).
+A: Your **OpenShift token** is your identity token from authentication (e.g., OpenShift or OIDC). An **API key** is a long-lived credential created via `POST /v1/api-keys` and stored as a hash in PostgreSQL. For **GET /v1/models**, the API passes your Authorization header as-is to each model endpoint; you can use either. For inference, use a token your gateway accepts (OpenShift token or API key as configured).
 
 ---
 
 **Q: Do I need an API key to list available models?**
 
-A: No. Call **GET /v1/models** with your OpenShift/OIDC token (or any token your gateway accepts) in the Authorization header. The API uses that same header to probe each model endpoint and returns only models you can access.
+A: No. Call **GET /v1/models** with your OpenShift/OIDC token (or an API key) in the Authorization header. The API uses that same header to probe each model endpoint and returns only models you can access.
 
 ---
 
-**Q: What is "token audience" and why does it matter?**
+**Q: Where is my API key stored?**
 
-A: Token audience identifies the intended recipient of a token. Some gateways expect tokens with a specific audience. For **GET /v1/models**, the API does not modify or exchange your token; it forwards your Authorization header as-is. Once token minting is in place, audience handling may be revisited.
+A: Only the SHA-256 hash of your key is stored in PostgreSQL. The plaintext key is returned once at creation and is never stored. If you lose it, you must create a new key.
 
 ---
 
 ## Related Documentation
 
-- **[Configuring Subscription Tiers](tier-configuration.md)**: For operators - tier setup, RBAC, and rate limiting configuration
+- **[Quota and Access Configuration](quota-and-access-configuration.md)**: For operators - subscription setup, access control, and rate limiting
+- **[Self-Service Model Access](../user-guide/self-service-model-access.md)**: Step-by-step guide for creating and using API keys
 
 ---

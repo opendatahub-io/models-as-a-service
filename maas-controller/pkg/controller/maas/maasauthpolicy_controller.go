@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-logr/logr"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,9 +33,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -103,15 +106,17 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
+	statusSnapshot := policy.Status.DeepCopy()
+
 	refs, err := r.reconcileModelAuthPolicies(ctx, log, policy)
 	if err != nil {
 		log.Error(err, "failed to reconcile model AuthPolicies")
-		r.updateStatus(ctx, policy, "Failed", fmt.Sprintf("Failed to reconcile: %v", err))
+		r.updateStatus(ctx, policy, "Failed", fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
 	}
 
 	r.updateAuthPolicyRefStatus(ctx, log, policy, refs)
-	r.updateStatus(ctx, policy, "Active", "Successfully reconciled")
+	r.updateStatus(ctx, policy, "Active", "Successfully reconciled", statusSnapshot)
 	return ctrl.Result{}, nil
 }
 
@@ -172,7 +177,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 
 		// Construct API URLs using configured namespace
 		apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
-		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/v1/subscriptions/select", r.MaaSAPINamespace)
+		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", r.MaaSAPINamespace)
 
 		rule := map[string]interface{}{
 			"metadata": map[string]interface{}{
@@ -248,12 +253,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			},
 		}
 
-		// Check for subscription selection errors and deny if present
-		authRules["subscription-error-check"] = map[string]interface{}{
+		// Fail-close: require successful subscription selection (name must be present)
+		authRules["subscription-valid"] = map[string]interface{}{
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]interface{}{
-				"rego": `allow { not object.get(input.auth.metadata["subscription-info"], "error", false) }`,
+				"rego": `allow { object.get(input.auth.metadata["subscription-info"], "name", "") != "" }`,
 			},
 		}
 
@@ -306,6 +311,16 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 						"metrics":  false,
 						"priority": int64(0),
 					},
+				// Overwrite client-sent X-MaaS-Subscription with the server-resolved
+				// subscription name. Istio Telemetry reads this header to tag
+				// REQUEST_DURATION with a subscription label for latency metrics.
+					"X-MaaS-Subscription": map[string]interface{}{
+						"plain": map[string]interface{}{
+							"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
 				},
 				"filters": map[string]interface{}{
 					"identity": map[string]interface{}{
@@ -319,7 +334,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 								"keyId": map[string]interface{}{
 									"selector": "auth.metadata.apiKeyValidation.keyId",
 								},
-								// Subscription metadata from /v1/subscriptions/select endpoint
+								// Subscription metadata from /internal/v1/subscriptions/select endpoint
 								"selected_subscription": map[string]interface{}{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
 								},
@@ -413,6 +428,10 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			if !isManaged(existing) {
 				log.Info("AuthPolicy opted out, skipping", "name", authPolicyName)
 			} else {
+				// Snapshot the existing object before modifications so we can detect
+				// no-op updates.
+				snapshot := existing.DeepCopy()
+
 				mergedAnnotations := existing.GetAnnotations()
 				if mergedAnnotations == nil {
 					mergedAnnotations = make(map[string]string)
@@ -433,10 +452,15 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 				if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
 					return nil, fmt.Errorf("failed to update spec: %w", err)
 				}
-				if err := r.Update(ctx, existing); err != nil {
-					return nil, fmt.Errorf("failed to update AuthPolicy for model %s/%s: %w", ref.Namespace, ref.Name, err)
+
+				if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
+					log.Info("AuthPolicy unchanged, skipping update", "name", authPolicyName, "model", ref.Namespace+"/"+ref.Name)
+				} else {
+					if err := r.Update(ctx, existing); err != nil {
+						return nil, fmt.Errorf("failed to update AuthPolicy for model %s/%s: %w", ref.Namespace, ref.Name, err)
+					}
+					log.Info("AuthPolicy updated", "name", authPolicyName, "model", ref.Namespace+"/"+ref.Name, "policies", policyNames)
 				}
-				log.Info("AuthPolicy updated", "name", authPolicyName, "model", ref.Namespace+"/"+ref.Name, "policies", policyNames)
 			}
 		}
 	}
@@ -445,8 +469,6 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 
 // deleteModelAuthPolicy deletes the aggregated AuthPolicy for a model in the given namespace.
 func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
-	// Check if there are any remaining (non-deleted) MaaSAuthPolicies that reference this model.
-	// If yes, don't delete the aggregated AuthPolicy - they will rebuild it.
 	// Always delete the aggregated AuthPolicy so remaining MaaSAuthPolicies rebuild it
 	// without the subjects from the deleted policy. If we skip deletion, the aggregated
 	// AuthPolicy will contain stale subjects from the deleted MaaSAuthPolicy.
@@ -538,26 +560,28 @@ func getAuthPolicyConditionState(ap *unstructured.Unstructured) (accepted, enfor
 	return accepted, enforced
 }
 
-func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, phase, message string) {
+func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, phase, message string, statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus) {
 	policy.Status.Phase = phase
-	condition := metav1.Condition{
-		Type: "Ready", Status: metav1.ConditionTrue, Reason: "Reconciled", Message: message, LastTransitionTime: metav1.Now(),
-	}
+
+	status := metav1.ConditionTrue
+	reason := "Reconciled"
 	if phase == "Failed" {
-		condition.Status = metav1.ConditionFalse
-		condition.Reason = "ReconcileFailed"
+		status = metav1.ConditionFalse
+		reason = "ReconcileFailed"
 	}
-	found := false
-	for i, c := range policy.Status.Conditions {
-		if c.Type == condition.Type {
-			policy.Status.Conditions[i] = condition
-			found = true
-			break
-		}
+
+	apimeta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: policy.GetGeneration(),
+	})
+
+	if equality.Semantic.DeepEqual(*statusSnapshot, policy.Status) {
+		return
 	}
-	if !found {
-		policy.Status.Conditions = append(policy.Status.Conditions, condition)
-	}
+
 	if err := r.Status().Update(ctx, policy); err != nil {
 		log := logr.FromContextOrDiscard(ctx)
 		log.Error(err, "failed to update MaaSAuthPolicy status", "name", policy.Name)
@@ -570,7 +594,10 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaaSAuthPolicy{}).
+		For(&maasv1alpha1.MaaSAuthPolicy{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		))).
 		// Watch HTTPRoutes so we re-reconcile when KServe creates/updates a route
 		// (fixes race condition where MaaSAuthPolicy is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(

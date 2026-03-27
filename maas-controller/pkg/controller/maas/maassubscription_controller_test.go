@@ -89,29 +89,12 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			model := &maasv1alpha1.MaaSModelRef{
-				ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
-				Spec: maasv1alpha1.MaaSModelSpec{
-					ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
-				},
-			}
-			route := &gatewayapiv1.HTTPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: namespace},
-			}
+			model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+			route := newHTTPRoute(httpRouteName, namespace)
 			// The subscription must have at least one owner group so that the membership
-			// check is non-empty and the controller writes a limits entry into the TRLP spec.
-			maasSub := &maasv1alpha1.MaaSSubscription{
-				ObjectMeta: metav1.ObjectMeta{Name: maasSubName, Namespace: namespace},
-				Spec: maasv1alpha1.MaaSSubscriptionSpec{
-					Owner: maasv1alpha1.OwnerSpec{
-						Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
-					},
-					ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
-						{Name: modelName, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
-					},
-				},
-			}
-			// Pre-populate the store with a generated TRLP whose spec contains a
+			// check is non-empty and the controller writes a limits entry into the TokenRateLimitPolicy spec.
+			maasSub := newMaaSSubscription(maasSubName, namespace, "team-a", modelName, 100)
+			// Pre-populate the store with a generated TokenRateLimitPolicy whose spec contains a
 			// sentinel targetRef. After reconciliation we check whether it changed.
 			existingTRLP := newPreexistingTRLP(trlpName, namespace, modelName, tc.annotations)
 
@@ -149,6 +132,69 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 				t.Errorf("spec.targetRef.name = %q: expected sentinel %q (managed=false opt-out)", targetRefName, "sentinel-route")
 			}
 		})
+	}
+}
+
+// TestMaaSSubscriptionReconciler_DuplicateReconciliation verifies that reconciling
+// multiple subscriptions for the same model does not produce redundant TokenRateLimitPolicy updates.
+//
+// When N subscriptions reference the same model, each reconciliation builds the same
+// aggregated TokenRateLimitPolicy. The controller must skip the Update call when the
+// content is identical to what already exists, otherwise each Update triggers a watch
+// event that cascades into O(N²) reconciliations.
+func TestMaaSSubscriptionReconciler_DuplicateReconciliation(t *testing.T) {
+	const (
+		modelName     = "llm"
+		namespace     = "default"
+		httpRouteName = "maas-model-" + modelName
+		trlpName      = "maas-trlp-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	subA := newMaaSSubscription("sub-a", namespace, "team-a", modelName, 100)
+	subB := newMaaSSubscription("sub-b", namespace, "team-b", modelName, 200)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, subA, subB).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+
+	// Reconcile sub-a: creates the aggregated TokenRateLimitPolicy (covering both sub-a and sub-b).
+	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}
+	if _, err := r.Reconcile(ctx, reqA); err != nil {
+		t.Fatalf("Reconcile sub-a: %v", err)
+	}
+
+	// Capture TokenRateLimitPolicy ResourceVersion after first reconciliation.
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: trlpName, Namespace: namespace}, trlp); err != nil {
+		t.Fatalf("Get TokenRateLimitPolicy after sub-a reconcile: %v", err)
+	}
+	rvAfterA := trlp.GetResourceVersion()
+
+	// Reconcile sub-b: both subscriptions are still present, so the aggregated TokenRateLimitPolicy
+	// content is identical. The controller should detect this and skip the Update.
+	reqB := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-b", Namespace: namespace}}
+	if _, err := r.Reconcile(ctx, reqB); err != nil {
+		t.Fatalf("Reconcile sub-b: %v", err)
+	}
+
+	if err := c.Get(ctx, types.NamespacedName{Name: trlpName, Namespace: namespace}, trlp); err != nil {
+		t.Fatalf("Get TokenRateLimitPolicy after sub-b reconcile: %v", err)
+	}
+	rvAfterB := trlp.GetResourceVersion()
+
+	if rvAfterA != rvAfterB {
+		t.Errorf("redundant TokenRateLimitPolicy update: ResourceVersion changed from %s to %s; "+
+			"reconciling sub-b should not update the TokenRateLimitPolicy when content is identical to sub-a's reconciliation",
+			rvAfterA, rvAfterB)
 	}
 }
 
@@ -190,21 +236,8 @@ func TestMaaSSubscriptionReconciler_DeleteAnnotation(t *testing.T) {
 			existingTRLP := newPreexistingTRLP(trlpName, namespace, modelName, tc.annotations)
 
 			// Create MaaSSubscription with finalizer so handleDeletion processes it.
-			maasSub := &maasv1alpha1.MaaSSubscription{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:       maasSubName,
-					Namespace:  namespace,
-					Finalizers: []string{maasSubscriptionFinalizer},
-				},
-				Spec: maasv1alpha1.MaaSSubscriptionSpec{
-					Owner: maasv1alpha1.OwnerSpec{
-						Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
-					},
-					ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
-						{Name: modelName, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
-					},
-				},
-			}
+			maasSub := newMaaSSubscription(maasSubName, namespace, "team-a", modelName, 100)
+			maasSub.Finalizers = []string{maasSubscriptionFinalizer}
 
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).

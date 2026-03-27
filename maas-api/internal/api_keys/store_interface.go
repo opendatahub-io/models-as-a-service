@@ -29,12 +29,6 @@ type MetadataStore interface {
 	// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 	AddKey(ctx context.Context, username string, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time) error
 
-	// List returns a paginated list of API keys with optional filtering.
-	// Pagination is mandatory - no unbounded queries allowed.
-	// username can be empty (admin viewing all users) or specific username.
-	// statuses can filter by status (active, revoked, expired) - empty means all statuses.
-	List(ctx context.Context, username string, params PaginationParams, statuses []string) (*PaginatedResult, error)
-
 	// Search returns API keys matching the search criteria
 	// Supports filtering, sorting, and pagination
 	Search(

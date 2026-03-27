@@ -7,7 +7,17 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
+
+// deletionTimestampSet returns true when an object's DeletionTimestamp transitions
+// from nil to non-nil, indicating the object is being deleted. Use with
+// predicate.Funcs{UpdateFunc: deletionTimestampSet} alongside
+// GenerationChangedPredicate so that finalizer-based deletion handlers run.
+func deletionTimestampSet(e event.UpdateEvent) bool {
+	return e.ObjectOld.GetDeletionTimestamp().IsZero() &&
+		!e.ObjectNew.GetDeletionTimestamp().IsZero()
+}
 
 // validateCELValue checks that a string is safe to interpolate into a CEL expression.
 // Rejects values containing characters that could break or inject into CEL string literals.

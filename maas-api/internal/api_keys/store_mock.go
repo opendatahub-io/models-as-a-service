@@ -3,7 +3,6 @@ package api_keys
 import (
 	"context"
 	"errors"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -70,82 +69,6 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, 
 	}
 
 	return nil
-}
-
-// List returns a paginated list of API keys with optional filtering.
-// Pagination is mandatory - no unbounded queries allowed.
-// username can be empty (all users) or specific username.
-// statuses can filter by status - empty means all statuses.
-func (m *MockStore) List(ctx context.Context, username string, params PaginationParams, statuses []string) (*PaginatedResult, error) {
-	// Validate params (same as PostgresStore)
-	if params.Limit < 1 || params.Limit > 100 {
-		return nil, errors.New("limit must be between 1 and 100")
-	}
-	if params.Offset < 0 {
-		return nil, errors.New("offset must be non-negative")
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	// Get all keys matching filters
-	allKeys := make([]ApiKey, 0)
-	now := time.Now().UTC()
-
-	for _, k := range m.keys {
-		// Filter by username (empty = all users)
-		if username != "" && k.username != username {
-			continue
-		}
-
-		meta := k.metadata
-		meta.Username = k.username // Set username field
-
-		// Auto-expire logic
-		if meta.Status == StatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
-			meta.Status = StatusExpired
-		}
-
-		// Filter by status
-		if len(statuses) > 0 && !slices.Contains(statuses, string(meta.Status)) {
-			continue
-		}
-
-		if !k.expiresAt.IsZero() {
-			meta.ExpirationDate = k.expiresAt.Format(time.RFC3339)
-		}
-		if k.lastUsedAt != nil {
-			meta.LastUsedAt = k.lastUsedAt.Format(time.RFC3339)
-		}
-		allKeys = append(allKeys, meta)
-	}
-
-	// Apply pagination
-	start := params.Offset
-	end := start + params.Limit + 1 // Fetch limit+1 for hasMore check
-
-	if start >= len(allKeys) {
-		return &PaginatedResult{
-			Keys:    []ApiKey{},
-			HasMore: false,
-		}, nil
-	}
-
-	if end > len(allKeys) {
-		end = len(allKeys)
-	}
-
-	pagedKeys := allKeys[start:end]
-	hasMore := len(pagedKeys) > params.Limit
-
-	if hasMore {
-		pagedKeys = pagedKeys[:params.Limit]
-	}
-
-	return &PaginatedResult{
-		Keys:    pagedKeys,
-		HasMore: hasMore,
-	}, nil
 }
 
 // filterKeys applies username and status filters to API keys.
