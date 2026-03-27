@@ -5,6 +5,9 @@ kind: MaaSModelRef
 metadata:
   name: e2e-unconfigured-facebook-opt-125m-simulated
   namespace: llm
+  annotations:
+    openshift.io/display-name: "Unconfigured OPT 125M (E2E)"
+    openshift.io/description: "MaaSModelRef with no auth policy or subscription — used to validate default-deny"
 spec:
   modelRef:
     kind: LLMInferenceService

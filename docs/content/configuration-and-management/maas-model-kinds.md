@@ -84,7 +84,7 @@ To support a new backend type (a new **kind** in `spec.modelRef`):
      - **Option B:** Extend the API's access-validation logic to branch on **kind** and use a kind-specific probe (different URL path or client), while keeping the same contract: include a model only if the probe with the user's token succeeds.
 
 3. **Enrichment (optional)**
-   - Extra metadata (e.g. display name) can be set by the controller in status or annotations and mapped into the model response. For a new kind, add a small branch in the MaaSModelRef → API model conversion if needed.
+   - The API reads standard annotations from MaaSModelRef (`openshift.io/display-name`, `openshift.io/description`, `opendatahub.io/genai-use-case`, `opendatahub.io/context-window`) and returns them in the `modelDetails` field of the GET /v1/models response. See [CRD annotations](crd-annotations.md) for the full list. For a new kind, add a small branch in the MaaSModelRef → API model conversion if needed.
 
 4. **RBAC**
    - If the new kind’s reconciler or the API needs to read another resource, add the corresponding **list/watch** (and optionally **get**) permissions to the maas-api ClusterRole and/or the controller’s RBAC.

@@ -25,7 +25,9 @@ When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service
 
 3. **Access validation**: The API probes each model’s `/v1/models` endpoint with the **exact Authorization header** the client sent (passed through as-is). Only models that return **2xx**, **3xx** or **405** are included in the response. This ensures the list only shows models the client is authorized to use.
 
-4. The filtered list is returned to the client.
+4. For each model, the API reads **annotations** from the MaaSModelRef to populate `modelDetails` in the response (display name, description, use case, context window). See [CRD annotations](crd-annotations.md) for the full list.
+
+5. The filtered list is returned to the client.
 
 ```mermaid
 sequenceDiagram
@@ -172,7 +174,12 @@ To have models appear via the **MaaSModelRef** flow:
         kind: MaaSModelRef
         metadata:
           name: my-model-name   # This becomes the model "id" in GET /v1/models
-          namespace: llm        # Same namespace as the LLMInferenceService
+          namespace: llm          # Same namespace as the LLMInferenceService
+          annotations:
+            openshift.io/display-name: "My Model"                  # optional: human-readable name
+            openshift.io/description: "A general-purpose LLM"      # optional: description
+            opendatahub.io/genai-use-case: "chat"                  # optional: use case
+            opendatahub.io/context-window: "4096"                  # optional: context window
         spec:
           modelRef:
             kind: LLMInferenceService
