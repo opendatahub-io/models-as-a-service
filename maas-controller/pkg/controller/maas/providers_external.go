@@ -21,12 +21,13 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // routeConditionProgrammed is the "Programmed" condition type for route parent status.
@@ -104,7 +105,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 
 	// Verify the gateway has accepted and programmed the route via status conditions
 	if gatewayFound {
-		for _, parent := range route.Status.RouteStatus.Parents {
+		for _, parent := range route.Status.Parents {
 			pName := string(parent.ParentRef.Name)
 			pNS := routeNS
 			if parent.ParentRef.Namespace != nil {

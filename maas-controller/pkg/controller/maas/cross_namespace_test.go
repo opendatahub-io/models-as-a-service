@@ -20,7 +20,6 @@ import (
 	"context"
 	"testing"
 
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -30,6 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // TestMaaSAuthPolicyReconciler_CrossNamespace verifies that MaaSAuthPolicy
@@ -411,13 +412,13 @@ func TestMaaSSubscriptionReconciler_CrossNamespace(t *testing.T) {
 //   - After fix: Unique keys (namespace-name-model) → proper isolation
 func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 	const (
-		modelName       = "llm"
-		modelNamespace  = "models"
-		httpRouteName   = "maas-model-" + modelName
-		trlpName        = "maas-trlp-" + modelName
+		modelName        = "llm"
+		modelNamespace   = "models"
+		httpRouteName    = "maas-model-" + modelName
+		trlpName         = "maas-trlp-" + modelName
 		subscriptionName = "gold" // SAME name in both namespaces
-		namespaceA      = "tenant-a"
-		namespaceB      = "tenant-b"
+		namespaceA       = "tenant-a"
+		namespaceB       = "tenant-b"
 	)
 
 	// Model and HTTPRoute (shared by both subscriptions)
@@ -520,11 +521,20 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 	// Verify predicate includes namespace to prevent cross-tenant matching
 	// Format: auth.identity.selected_subscription_key == "{namespace}/{name}@{modelNamespace}/{modelName}"
 	if hasA {
-		limitAMap := limitA.(map[string]interface{})
+		limitAMap, ok := limitA.(map[string]any)
+		if !ok {
+			t.Fatal("limitA is not map[string]any")
+		}
 		whenSlice, _, _ := unstructured.NestedSlice(limitAMap, "when")
 		if len(whenSlice) > 0 {
-			predMap := whenSlice[0].(map[string]interface{})
-			pred := predMap["predicate"].(string)
+			predMap, ok := whenSlice[0].(map[string]any)
+			if !ok {
+				t.Fatal("whenSlice[0] is not map[string]any")
+			}
+			pred, ok := predMap["predicate"].(string)
+			if !ok {
+				t.Fatal("predicate is not string")
+			}
 			expectedPredA := `auth.identity.selected_subscription_key == "` + namespaceA + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `"`
 			if pred != expectedPredA {
 				t.Errorf("Tenant-a predicate = %q, want %q", pred, expectedPredA)
@@ -537,11 +547,20 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 	}
 
 	if hasB {
-		limitBMap := limitB.(map[string]interface{})
+		limitBMap, ok := limitB.(map[string]any)
+		if !ok {
+			t.Fatal("limitB is not map[string]any")
+		}
 		whenSlice, _, _ := unstructured.NestedSlice(limitBMap, "when")
 		if len(whenSlice) > 0 {
-			predMap := whenSlice[0].(map[string]interface{})
-			pred := predMap["predicate"].(string)
+			predMap, ok := whenSlice[0].(map[string]any)
+			if !ok {
+				t.Fatal("whenSlice[0] is not map[string]any")
+			}
+			pred, ok := predMap["predicate"].(string)
+			if !ok {
+				t.Fatal("predicate is not string")
+			}
 			expectedPredB := `auth.identity.selected_subscription_key == "` + namespaceB + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `"`
 			if pred != expectedPredB {
 				t.Errorf("Tenant-b predicate = %q, want %q", pred, expectedPredB)
@@ -560,7 +579,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 }
 
 // Helper function for test
-func getMapKeys(m map[string]interface{}) []string {
+func getMapKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
