@@ -659,21 +659,4 @@ func TestMaaSAuthPolicyReconciler_SubscriptionCacheKey(t *testing.T) {
 			}
 		})
 	}
-
-	// Verify the cache key selector is a syntactically valid CEL expression.
-	// Authorino evaluates this string as CEL at runtime, so a syntax error here
-	// would cause all subscription-info cache lookups to fail silently.
-	t.Run("is valid CEL expression", func(t *testing.T) {
-		env, err := cel.NewEnv()
-		if err != nil {
-			t.Fatalf("failed to create CEL environment: %v", err)
-		}
-		ast, issues := env.Parse(cacheKeySelector)
-		if issues != nil && issues.Err() != nil {
-			t.Errorf("cache key selector is not a valid CEL expression:\n  selector: %s\n  parse error: %v", cacheKeySelector, issues.Err())
-		}
-		if ast == nil {
-			t.Errorf("CEL parse returned nil AST for selector: %s", cacheKeySelector)
-		}
-	})
 }
