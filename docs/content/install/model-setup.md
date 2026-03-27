@@ -14,11 +14,80 @@ Our sample models are packaged as Kustomize overlays that deploy:
 For more detail on each resource, see [Access and Quota Overview](../configuration-and-management/subscription-overview.md).
 
 !!! tip "Create llm namespace (optional)"
-    Models deploy to the `llm` namespace. If it does not exist, create it first (idempotent—safe to run even if it already exists):
+    Our example models deploy to the `llm` namespace. If it does not exist, create it before deploying the samples below (idempotent—safe to run even if it already exists):
 
     ```bash
     kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
     ```
+
+## Understanding the Deployment Flow
+
+Deploying a model through MaaS follows a specific order. Each resource depends on the previous one. The following walkthrough deploys the **simulator model** step by step so you can see what each resource does.
+
+Set the project root (run from the repository root):
+
+```bash
+PROJECT_DIR=$(git rev-parse --show-toplevel)
+```
+
+### Step 1: Deploy the LLMInferenceService (Model)
+
+The LLMInferenceService is the actual inference workload. It must exist first and use the `maas-default-gateway` gateway reference so traffic flows through MaaS for authentication and rate limiting.
+
+```bash
+kustomize build ${PROJECT_DIR}/docs/samples/maas-system/free/llm/ | kubectl apply -f -
+```
+
+This deploys the simulator workload (a lightweight mock that generates responses without a real LLM). The resource is named `facebook-opt-125m-simulated` in the `llm` namespace. Verify it is ready:
+
+```bash
+kubectl get llminferenceservice -n llm
+kubectl get pods -n llm
+```
+
+### Step 2: Deploy the MaaSModelRef
+
+The MaaSModelRef registers the model with MaaS so it appears in the catalog and the `/v1/models` API. It references the LLMInferenceService by name. The maas-controller watches MaaSModelRefs and populates `status.endpoint` and `status.phase` from the underlying LLMInferenceService.
+
+```bash
+kubectl apply -f ${PROJECT_DIR}/docs/samples/maas-system/free/maas/maas-model.yaml
+```
+
+After a short moment, the controller reconciles. Verify status is populated:
+
+```bash
+kubectl get maasmodelref -n llm facebook-opt-125m-simulated -o jsonpath='{.status.phase}' && echo
+kubectl get maasmodelref -n llm facebook-opt-125m-simulated -o jsonpath='{.status.endpoint}' && echo
+```
+
+**Expected output:** `status.phase` should be `Ready` and `status.endpoint` should be a non-empty URL. If either is missing, wait briefly and retry—the controller may still be reconciling (see [Verify Model Deployment](#verify-model-deployment) below).
+
+### Step 3: Deploy the MaaSSubscription
+
+The MaaSSubscription defines token rate limits (quotas) for groups. It references the MaaSModelRef by name and namespace. This controls how many tokens each group can consume per model.
+
+Create the `models-as-a-service` namespace if it does not exist, then apply:
+
+```bash
+kubectl create namespace models-as-a-service --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f ${PROJECT_DIR}/docs/samples/maas-system/free/maas/maas-subscription.yaml
+```
+
+This sample grants `system:authenticated` (all authenticated users) a limit of 100 tokens per minute for the simulator model.
+
+### Step 4: Deploy the MaaSAuthPolicy
+
+The MaaSAuthPolicy defines who can access the model. It references the MaaSModelRef by name and namespace. Without this, requests to the model are denied even if the user has a subscription.
+
+```bash
+kubectl apply -f ${PROJECT_DIR}/docs/samples/maas-system/free/maas/maas-auth-policy.yaml
+```
+
+This sample grants access to `system:authenticated`. The maas-controller creates per-model AuthPolicies and TokenRateLimitPolicies that enforce this.
+
+---
+
+You have now deployed the full simulator stack manually. The sections below deploy all required objects (Model, ModelRef, Subscription, AuthPolicy) together using a single Kustomize command for each sample.
 
 ## Deploy Sample Models
 

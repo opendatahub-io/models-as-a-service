@@ -26,7 +26,6 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -43,6 +42,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // MaaSAuthPolicyReconciler reconciles a MaaSAuthPolicy object
@@ -193,15 +194,15 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
 		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", r.MaaSAPINamespace)
 
-		rule := map[string]interface{}{
-			"metadata": map[string]interface{}{
+		rule := map[string]any{
+			"metadata": map[string]any{
 				// API Key Validation - validates the API key and returns user identity + groups
-				"apiKeyValidation": map[string]interface{}{
-					"http": map[string]interface{}{
+				"apiKeyValidation": map[string]any{
+					"http": map[string]any{
 						"url":         apiKeyValidationURL,
 						"contentType": "application/json",
 						"method":      "POST",
-						"body": map[string]interface{}{
+						"body": map[string]any{
 							"expression": `{"key": request.headers.authorization.replace("Bearer ", "")}`,
 						},
 					},
@@ -212,12 +213,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 				// For API keys: uses subscription bound to the key at mint time
 				// For K8s tokens: uses X-MaaS-Subscription header if provided, otherwise finds all accessible
 				// Priority 1 ensures this runs after apiKeyValidation (priority 0).
-				"subscription-info": map[string]interface{}{
-					"http": map[string]interface{}{
+				"subscription-info": map[string]any{
+					"http": map[string]any{
 						"url":         subscriptionSelectorURL,
 						"contentType": "application/json",
 						"method":      "POST",
-						"body": map[string]interface{}{
+						"body": map[string]any{
 							"expression": fmt.Sprintf(`{
   "groups": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups,
   "username": auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username,
@@ -230,8 +231,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 					// Each model has its own cache entry since subscription validation is model-specific.
 					// Key format: "username|groups-hash|requested-subscription|model-namespace/model-name"
 					// Groups are joined with commas to create a stable string representation.
-					"cache": map[string]interface{}{
-						"key": map[string]interface{}{
+					"cache": map[string]any{
+						"key": map[string]any{
+							//nolint:lll // CEL expression must be on single line
 							"selector": fmt.Sprintf(`(auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username) + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join(",") + "|" + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")) + "|%s/%s"`, ref.Namespace, ref.Name),
 						},
 						"ttl": int64(60),
@@ -240,15 +242,15 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 					"priority": int64(1),
 				},
 			},
-			"authentication": map[string]interface{}{
+			"authentication": map[string]any{
 				// API Keys - plain authentication, actual validation in metadata layer
 				// Only processes tokens with sk-oai- prefix (OpenAI-compatible API keys)
-				"api-keys": map[string]interface{}{
-					"plain": map[string]interface{}{
+				"api-keys": map[string]any{
+					"plain": map[string]any{
 						"selector": "request.headers.authorization",
 					},
-					"when": []interface{}{
-						map[string]interface{}{
+					"when": []any{
+						map[string]any{
 							"selector": "request.headers.authorization",
 							"operator": "matches",
 							"value":    "^Bearer sk-oai-.*",
@@ -262,17 +264,17 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 				// Inferencing endpoints require API keys for billing/tracking
 				// The api-keys authentication (priority 0) runs first and will consume API key requests,
 				// so we don't need to explicitly exclude them here
-				"kubernetes-tokens": map[string]interface{}{
-					"kubernetesTokenReview": map[string]interface{}{
-						"audiences": []interface{}{r.clusterAudience()},
+				"kubernetes-tokens": map[string]any{
+					"kubernetesTokenReview": map[string]any{
+						"audiences": []any{r.clusterAudience()},
 					},
-					"when": []interface{}{
-						map[string]interface{}{
+					"when": []any{
+						map[string]any{
 							"selector": "request.url_path",
 							"operator": "matches",
 							"value":    ".*/v1/models$",
 						},
-						map[string]interface{}{
+						map[string]any{
 							"selector": "request.headers.authorization",
 							"operator": "neq",
 							"value":    "",
@@ -285,15 +287,15 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		}
 
 		// Build authorization rules
-		authRules := make(map[string]interface{})
+		authRules := make(map[string]any)
 
 		// Validate authentication: API key must be valid, OR K8s token must be authenticated
 		// For API keys: check apiKeyValidation.valid == true (boolean)
 		// For K8s tokens: check that identity.username exists (TokenReview succeeded)
-		authRules["auth-valid"] = map[string]interface{}{
+		authRules["auth-valid"] = map[string]any{
 			"metrics":  false,
 			"priority": int64(0),
-			"opa": map[string]interface{}{
+			"opa": map[string]any{
 				"rego": `# API key authentication: validate the key
 allow {
   object.get(input.auth.metadata, "apiKeyValidation", {})
@@ -308,10 +310,10 @@ allow {
 		}
 
 		// Fail-close: require successful subscription selection (name must be present)
-		authRules["subscription-valid"] = map[string]interface{}{
+		authRules["subscription-valid"] = map[string]any{
 			"metrics":  false,
 			"priority": int64(0),
-			"opa": map[string]interface{}{
+			"opa": map[string]any{
 				"rego": `allow { object.get(input.auth.metadata["subscription-info"], "name", "") != "" }`,
 			},
 		}
@@ -319,12 +321,18 @@ allow {
 		// Build aggregated authorization rule from ALL auth policies' subjects
 		// Uses OPA to check membership for both API keys and K8s tokens
 		if len(allowedGroups) > 0 || len(allowedUsers) > 0 {
-			groupsJSON, _ := json.Marshal(allowedGroups)
-			usersJSON, _ := json.Marshal(allowedUsers)
-			authRules["require-group-membership"] = map[string]interface{}{
+			groupsJSON, err := json.Marshal(allowedGroups)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal allowed groups: %w", err)
+			}
+			usersJSON, err := json.Marshal(allowedUsers)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal allowed users: %w", err)
+			}
+			authRules["require-group-membership"] = map[string]any{
 				"metrics":  false,
 				"priority": int64(0),
-				"opa": map[string]interface{}{
+				"opa": map[string]any{
 					"rego": fmt.Sprintf(`
 # Allowed groups and users from all MaaSAuthPolicies
 allowed_groups := %s
@@ -367,28 +375,28 @@ allow {
 		// Also inject subscription metadata from subscription-info for Limitador metrics.
 		// For API keys: username/groups come from apiKeyValidation metadata
 		// For K8s tokens: username/groups come from auth.identity
-		rule["response"] = map[string]interface{}{
-			"success": map[string]interface{}{
-				"headers": map[string]interface{}{
+		rule["response"] = map[string]any{
+			"success": map[string]any{
+				"headers": map[string]any{
 					// Username from API key validation or K8s token identity
-					"X-MaaS-Username": map[string]interface{}{
-						"plain": map[string]interface{}{
+					"X-MaaS-Username": map[string]any{
+						"plain": map[string]any{
 							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.username : auth.identity.user.username`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
 					},
 					// Groups - construct JSON array string from API key validation or K8s identity
-					"X-MaaS-Group": map[string]interface{}{
-						"plain": map[string]interface{}{
+					"X-MaaS-Group": map[string]any{
+						"plain": map[string]any{
 							"expression": `'["' + (auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups).join('","') + '"]'`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
 					},
 					// Key ID for tracking (only for API keys)
-					"X-MaaS-Key-Id": map[string]interface{}{
-						"plain": map[string]interface{}{
+					"X-MaaS-Key-Id": map[string]any{
+						"plain": map[string]any{
 							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.keyId : ""`,
 						},
 						"metrics":  false,
@@ -396,51 +404,52 @@ allow {
 					},
 					// Subscription bound to API key (only for API keys)
 					// For K8s tokens, this header is not injected (empty string)
-					"X-MaaS-Subscription": map[string]interface{}{
-						"plain": map[string]interface{}{
+					"X-MaaS-Subscription": map[string]any{
+						"plain": map[string]any{
 							"expression": `auth.metadata.apiKeyValidation.valid == true ? auth.metadata.apiKeyValidation.subscription : ""`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
 					},
 				},
-				"filters": map[string]interface{}{
-					"identity": map[string]interface{}{
-						"json": map[string]interface{}{
-							"properties": map[string]interface{}{
-								"groups":     map[string]interface{}{"expression": "auth.metadata.apiKeyValidation.groups"},
-								"groups_str": map[string]interface{}{"expression": `auth.metadata.apiKeyValidation.groups.join(",")`},
-								"userid": map[string]interface{}{
+				"filters": map[string]any{
+					"identity": map[string]any{
+						"json": map[string]any{
+							"properties": map[string]any{
+								"groups":     map[string]any{"expression": "auth.metadata.apiKeyValidation.groups"},
+								"groups_str": map[string]any{"expression": `auth.metadata.apiKeyValidation.groups.join(",")`},
+								"userid": map[string]any{
 									"selector": "auth.metadata.apiKeyValidation.username",
 								},
-								"keyId": map[string]interface{}{
+								"keyId": map[string]any{
 									"selector": "auth.metadata.apiKeyValidation.keyId",
 								},
 								// Subscription metadata from /internal/v1/subscriptions/select endpoint
-								"selected_subscription": map[string]interface{}{
+								"selected_subscription": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
 								},
 								// Model-scoped subscription key for TRLP isolation: namespace/name@modelNamespace/modelName
-								"selected_subscription_key": map[string]interface{}{
+								"selected_subscription_key": map[string]any{
+									//nolint:lll // CEL expression must be on single line
 									"expression": fmt.Sprintf(
 										`has(auth.metadata["subscription-info"].namespace) && has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].namespace + "/" + auth.metadata["subscription-info"].name + "@%s/%s" : ""`,
 										ref.Namespace, ref.Name,
 									),
 								},
-								"organizationId": map[string]interface{}{
+								"organizationId": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].organizationId) ? auth.metadata["subscription-info"].organizationId : ""`,
 								},
-								"costCenter": map[string]interface{}{
+								"costCenter": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].costCenter) ? auth.metadata["subscription-info"].costCenter : ""`,
 								},
-								"subscription_labels": map[string]interface{}{
+								"subscription_labels": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].labels) ? auth.metadata["subscription-info"].labels : {}`,
 								},
 								// Error information (for debugging - only populated when selection fails)
-								"subscription_error": map[string]interface{}{
+								"subscription_error": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ""`,
 								},
-								"subscription_error_message": map[string]interface{}{
+								"subscription_error_message": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : ""`,
 								},
 							},
@@ -450,22 +459,22 @@ allow {
 				},
 			},
 			// Custom denial responses that include subscription error details
-			"unauthenticated": map[string]interface{}{
+			"unauthenticated": map[string]any{
 				"code": int64(401),
-				"message": map[string]interface{}{
+				"message": map[string]any{
 					"value": "Authentication required",
 				},
 			},
-			"unauthorized": map[string]interface{}{
+			"unauthorized": map[string]any{
 				"code": int64(403),
-				"body": map[string]interface{}{
+				"body": map[string]any{
 					"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied"`,
 				},
-				"headers": map[string]interface{}{
-					"x-ext-auth-reason": map[string]interface{}{
+				"headers": map[string]any{
+					"x-ext-auth-reason": map[string]any{
 						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
 					},
-					"content-type": map[string]interface{}{
+					"content-type": map[string]any{
 						"value": "text/plain",
 					},
 				},
@@ -490,8 +499,8 @@ allow {
 
 		refs = append(refs, authPolicyRef{Name: authPolicyName, Namespace: httpRouteNS, Model: ref.Name, ModelNamespace: ref.Namespace})
 
-		spec := map[string]interface{}{
-			"targetRef": map[string]interface{}{
+		spec := map[string]any{
+			"targetRef": map[string]any{
 				"group": "gateway.networking.k8s.io",
 				"kind":  "HTTPRoute",
 				"name":  httpRouteName,
@@ -685,7 +694,7 @@ func getAuthPolicyConditionState(ap *unstructured.Unstructured) (accepted, enfor
 		return accepted, enforced
 	}
 	for _, c := range conditions {
-		cond, ok := c.(map[string]interface{})
+		cond, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -840,6 +849,7 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 	}
 	return requests
 }
+
 // deduplicateAndSort removes duplicates from a string slice and sorts it.
 // This ensures stable output across reconciles, preventing spurious updates
 // caused by non-deterministic Kubernetes List order.
