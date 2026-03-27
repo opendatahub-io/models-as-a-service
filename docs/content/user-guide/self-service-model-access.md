@@ -27,6 +27,9 @@ OC_TOKEN=$(oc whoami -t)
 
 Use your OpenShift token to create an API key via the maas-api `/v1/api-keys` endpoint. You can create permanent keys (omit `expiresIn`) or expiring keys.
 
+- Optional `subscription`: MaaSSubscription resource name to bind to this key. If you omit it, the platform picks your **highest-priority** accessible subscription (`spec.priority`).
+- The response includes `subscription`: the bound name (same flow whether you set it explicitly or not).
+
 ```bash
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 MAAS_API_URL="https://maas.${CLUSTER_DOMAIN}"
@@ -35,13 +38,17 @@ API_KEY_RESPONSE=$(curl -sSk \
   -H "Authorization: Bearer ${OC_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST \
-  -d '{"name": "my-api-key", "description": "Key for model access", "expiresIn": "90d"}' \
+  -d '{"name": "my-api-key", "description": "Key for model access", "expiresIn": "90d", "subscription": "simulator-subscription"}' \
   "${MAAS_API_URL}/maas-api/v1/api-keys")
 
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
+SUBSCRIPTION=$(echo $API_KEY_RESPONSE | jq -r .subscription)
 
-echo $API_KEY
+echo "Key prefix: ${API_KEY:0:16}..."
+echo "Bound subscription: ${SUBSCRIPTION}"
 ```
+
+Replace `simulator-subscription` with your MaaSSubscription metadata name, or remove the `subscription` field to bind the **highest-priority** subscription you can access.
 
 !!! warning "API key shown only once"
     The plaintext API key is returned **only at creation time**. We do not store the API key, so there is no way to retrieve it again. Store it securely when it is displayed. If you run into errors, see [Troubleshooting](../install/troubleshooting.md).
@@ -50,6 +57,7 @@ echo $API_KEY
 
 - **Permanent keys**: Omit `expiresIn` in the request body
 - **Expiring keys**: Set `expiresIn` (e.g., `"90d"`, `"1h"`, `"30d"`)
+- **Subscription**: Fixed at creation; mint a new key to change it
 - **Revocation**: Revoke via `DELETE /v1/api-keys/{id}` if compromised
 
 ## Discovering Models
@@ -101,6 +109,8 @@ echo $MODEL_INFO | jq .
 ```
 
 ## Making Inference Requests
+
+Use **only** your API key in `Authorization: Bearer`. The subscription is fixed when the key was created.
 
 ### Basic Chat Completion
 

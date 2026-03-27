@@ -3,6 +3,9 @@ kind: MaaSModelRef
 metadata:
   name: facebook-opt-125m-simulated
   namespace: llm
+  annotations:
+    openshift.io/display-name: "Facebook OPT 125M (Simulated)"
+    openshift.io/description: "A simulated OPT-125M model for free-tier testing"
 spec:
   modelRef:
     kind: LLMInferenceService

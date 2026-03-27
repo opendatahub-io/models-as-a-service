@@ -22,15 +22,20 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // ErrKindNotImplemented indicates the model kind is recognized but not implemented (e.g. ExternalModel stub).
 var ErrKindNotImplemented = errors.New("model kind not implemented")
+
+// ErrHTTPRouteNotFound indicates the HTTPRoute for a model does not exist yet (normal during startup).
+// Controller should set status to Pending and requeue to retry.
+var ErrHTTPRouteNotFound = errors.New("HTTPRoute not found yet")
 
 // RouteResolver returns the HTTPRoute name and namespace for a MaaSModelRef.
 // Used by findHTTPRouteForModel and by AuthPolicy/Subscription controllers to attach policies.
@@ -132,7 +137,7 @@ func getHTTPRoute(ctx context.Context, c client.Reader, name, ns string) (*gatew
 	err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, route)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("HTTPRoute %s/%s not found for model", ns, name)
+			return nil, fmt.Errorf("%w: HTTPRoute %s/%s", ErrHTTPRouteNotFound, ns, name)
 		}
 		return nil, fmt.Errorf("failed to get HTTPRoute %s/%s: %w", ns, name, err)
 	}

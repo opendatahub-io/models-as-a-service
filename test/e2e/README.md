@@ -76,6 +76,7 @@ pytest tests/test_api_keys.py -v \
 - `MAAS_API_BASE_URL` - MaaS API URL (auto-discovered from `oc get route maas-api`)
 - `TOKEN` - User token (auto-obtained via `oc whoami -t`)
 - `ADMIN_OC_TOKEN` - Optional admin token for authorization tests (if not set, admin tests are skipped)
+- `API_KEY_MAX_EXPIRATION_DAYS` - Max expiration policy for expiration tests (default: 90, matching maas-api default)
 
 **Test Coverage:**
 - ✅ Create, search, revoke API keys
@@ -126,8 +127,8 @@ pytest tests/test_models_endpoint.py::TestModelsEndpoint::test_multi_subscriptio
 
 **What's Being Validated:**
 The `/v1/models` endpoint implements subscription-aware model filtering:
-- Users with a single subscription don't need to specify `x-maas-subscription` header
-- Users with multiple subscriptions must use `x-maas-subscription` header to select
+- With a **user token**, a single matching subscription can be auto-selected; with multiple subscriptions, the tests expect `X-MaaS-Subscription` when the platform cannot disambiguate.
+- With an **API key**, the subscription is fixed at mint time—listing does not rely on sending `X-MaaS-Subscription` for that case.
 - Returns proper error responses (403/401) with `permission_error`/`authentication_error` types
 - Models are correctly filtered to only show those from the specified subscription
 - Response structure matches OpenAPI schema: `{"object": "list", "data": [...]}`

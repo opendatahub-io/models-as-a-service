@@ -2,7 +2,7 @@
 
 This document describes how the **GET /v1/models** endpoint discovers and returns the list of available models.
 
-The list is **based on MaaSModelRef** custom resources: the API returns models that are registered as MaaSModelRefs in its configured namespace.
+The list is **based on MaaSModelRef** custom resources: the API considers MaaSModelRef objects cluster-wide (all namespaces), then filters by access.
 
 ## Overview
 
@@ -17,15 +17,17 @@ Each entry includes an `id`, **`url`** (the model’s endpoint), a `ready` flag,
 
 ## MaaSModelRef flow
 
-When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed and the API is configured with a MaaSModelRef lister and namespace, the flow is:
+When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed and the API is configured with a MaaSModelRef lister, the flow is:
 
-1. The MaaS API lists all **MaaSModelRef** custom resources in its configured namespace (e.g. `opendatahub`). It reads them from an **in-memory cache** in the maas-api component (maintained by a Kubernetes informer), so it does not call the Kubernetes API on every request.
+1. The MaaS API discovers **MaaSModelRef** custom resources **cluster-wide** (all namespaces) without calling the Kubernetes API on every request.
 
 2. For each MaaSModelRef, it reads **id** (`metadata.name`), **url** (`status.endpoint`), **ready** (`status.phase == "Ready"`), and related metadata. The controller has populated `status.endpoint` and `status.phase` from the underlying LLMInferenceService (for llmisvc) or HTTPRoute/Gateway.
 
 3. **Access validation**: The API probes each model’s `/v1/models` endpoint with the **exact Authorization header** the client sent (passed through as-is). Only models that return **2xx**, **3xx** or **405** are included in the response. This ensures the list only shows models the client is authorized to use.
 
-4. The filtered list is returned to the client.
+4. For each model, the API reads **annotations** from the MaaSModelRef to populate `modelDetails` in the response (display name, description, use case, context window). See [CRD annotations](crd-annotations.md) for the full list.
+
+5. The filtered list is returned to the client.
 
 ```mermaid
 sequenceDiagram
@@ -53,42 +55,56 @@ sequenceDiagram
 
 - **Consistent with gateway**: The same model names and routes are used for inference; the list matches what the gateway will accept for that client.
 
-If the API is not configured with a MaaSModelRef lister and namespace, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.
+If the API is not configured with a MaaSModelRef lister, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.
 
 ## Subscription Filtering and Aggregation
 
-The `/v1/models` endpoint supports filtering and aggregating models across subscriptions using request headers.
+The `/v1/models` endpoint automatically filters models based on your authentication method and optional headers.
 
-### Request Headers
+### Authentication-Based Behavior
 
-- **`X-MaaS-Subscription`** (optional): Filter models to a specific subscription by name
-- **`X-MaaS-Return-All-Models`** (optional): When set to `"true"`, returns models from all subscriptions the user has access to
+#### API Key Authentication (Bearer sk-oai-*)
+When using an API key, the subscription is automatically determined from the key:
+- Returns **only** models from the subscription bound to the API key at mint time
 
-!!! warning "Conflicting headers"
-    You cannot specify both `X-MaaS-Subscription` and `X-MaaS-Return-All-Models` headers in the same request. This returns `400 Bad Request`.
-
-### Behavior Modes
-
-#### Default (no header)
-Returns models from a single subscription:
-- If the user has access to only one subscription, models from that subscription are returned
-- If the user has access to multiple subscriptions, returns `403 Forbidden` with message: "user has access to multiple subscriptions, must specify subscription using X-MaaS-Subscription header"
-
-#### Single Subscription (`X-MaaS-Subscription: <name>`)
-Returns only models accessible via the specified subscription:
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
+# API key bound to "premium-subscription"
+curl -H "Authorization: Bearer sk-oai-abc123..." \
+     https://maas.example.com/maas-api/v1/models
+
+# Returns models from "premium-subscription" only
+```
+
+#### User Token Authentication (OpenShift/OIDC tokens)
+When using a user token, you have flexible options:
+
+**Default (no X-MaaS-Subscription header)**:
+- Returns **all** models from all subscriptions you have access to
+- Models are deduplicated and subscription metadata is attached
+
+```bash
+# User with access to "basic" and "premium" subscriptions
+curl -H "Authorization: Bearer $(oc whoami -t)" \
+     https://maas.example.com/maas-api/v1/models
+
+# Returns models from both subscriptions with subscription metadata
+```
+
+**With X-MaaS-Subscription header** (optional):
+- Returns only models from the specified subscription
+- Behaves like an API key request - allows you to scope your query to a specific subscription
+
+```bash
+# Filter to only "premium" subscription models
+curl -H "Authorization: Bearer $(oc whoami -t)" \
      -H "X-MaaS-Subscription: premium-subscription" \
      https://maas.example.com/maas-api/v1/models
+
+# Returns only "premium-subscription" models
 ```
 
-#### All Subscriptions (`X-MaaS-Return-All-Models: true`)
-Returns models from all subscriptions the user has access to, with subscription metadata attached. If the user has access to zero subscriptions, returns HTTP 200 with an empty data array (not an error), allowing clients to handle this deterministically:
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-     -H "X-MaaS-Return-All-Models: true" \
-     https://maas.example.com/maas-api/v1/models
-```
+!!! tip "User token filtering"
+    The `X-MaaS-Subscription` header allows user token requests to filter results to a specific subscription. This is useful when you have access to many subscriptions but only want to see models from one.
 
 ### Subscription Metadata
 
@@ -124,16 +140,22 @@ All models in the response include a `subscriptions` array with metadata for eac
 
 ### Deduplication Behavior
 
-When `X-MaaS-Return-All-Models: true` is used, models are deduplicated by `(id, url)` key:
+Models are deduplicated by `(id, url, ownedBy)` key:
 
-- **Same id + same URL**: Single entry with subscriptions aggregated into the `subscriptions` array
-- **Same id + different URLs**: Separate entries (different model endpoints)
+- **Same id + same URL + same MaaSModelRef (ownedBy)**: Single entry with subscriptions aggregated into the `subscriptions` array
+- **Different id, URL, or MaaSModelRef**: Separate entries
 
-**Example:**
-- Model `gpt-3.5` at URL `https://example.com/gpt-3.5` is accessible via subscriptions A and B
+**User token authentication** (multiple subscriptions):
+- Model `gpt-3.5` from MaaSModelRef `namespace-a/model-a` at URL `https://example.com/gpt-3.5` is accessible via subscriptions A and B
   - Result: One entry with `subscriptions: [{name: "A"}, {name: "B"}]`
-- Model `gpt-3.5` at URL `https://example.com/gpt-3.5-premium` is only in subscription B
-  - Result: Separate entry with `subscriptions: [{name: "B"}]`
+- Model `gpt-3.5` from MaaSModelRef `namespace-b/model-b` at the same URL is only in subscription B
+  - Result: Separate entry with `subscriptions: [{name: "B"}]` (different MaaSModelRef)
+- Model `gpt-3.5` at URL `https://example.com/gpt-3.5-premium` from `namespace-a/model-a` is only in subscription B
+  - Result: Separate entry with `subscriptions: [{name: "B"}]` (different URL)
+
+**API key authentication** (single subscription):
+- Deduplication handles edge cases where multiple MaaSModelRef resources point to the same model endpoint
+- Each unique MaaSModelRef resource appears as a separate entry
 
 !!! tip "Subscription metadata fields"
     The `displayName` and `description` fields are read from the MaaSSubscription CRD's `spec.displayName` and `spec.description` fields. If these fields are not set in the CRD, they will be empty strings in the response.
@@ -152,14 +174,18 @@ To have models appear via the **MaaSModelRef** flow:
         kind: MaaSModelRef
         metadata:
           name: my-model-name   # This becomes the model "id" in GET /v1/models
-          namespace: opendatahub
+          namespace: llm          # Same namespace as the LLMInferenceService
+          annotations:
+            openshift.io/display-name: "My Model"                  # optional: human-readable name
+            openshift.io/description: "A general-purpose LLM"      # optional: description
+            opendatahub.io/genai-use-case: "chat"                  # optional: use case
+            opendatahub.io/context-window: "4096"                  # optional: context window
         spec:
           modelRef:
             kind: LLMInferenceService
             name: my-llm-isvc-name
-            namespace: llm
 
-4. The controller reconciles the MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API (in the same namespace) will then include this model in GET /v1/models when it lists MaaSModelRef CRs.
+4. The controller reconciles the MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API will then include this model in GET /v1/models when it lists MaaSModelRef CRs.
 
 You can use the [maas-system samples](https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/maas-system) as a template; the install script deploys LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly.
 

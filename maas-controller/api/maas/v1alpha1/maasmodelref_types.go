@@ -31,13 +31,29 @@ type MaaSModelSpec struct {
 	EndpointOverride string `json:"endpointOverride,omitempty"`
 }
 
-// ModelReference references a model endpoint in the same namespace
+// CredentialReference references a Kubernetes Secret with provider API credentials.
+// The Secret must be in the same namespace as the ExternalModel.
+type CredentialReference struct {
+	// Name is the name of the Secret
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+}
+
+// ModelReference references a model endpoint in the same namespace.
+// For kind=ExternalModel, the Name field references an ExternalModel CR in the same namespace.
 type ModelReference struct {
-	// Kind determines which fields are available
+	// Kind determines which backend handles this model reference.
+	// LLMInferenceService: references a KServe LLMInferenceService.
+	// ExternalModel: references an ExternalModel CR containing provider config.
 	// +kubebuilder:validation:Enum=LLMInferenceService;ExternalModel
 	Kind string `json:"kind"`
 
-	// Name is the name of the model resource
+	// Name is the name of the model resource.
+	// For LLMInferenceService, this is the InferenceService name.
+	// For ExternalModel, this is the ExternalModel CR name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 }
 

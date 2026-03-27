@@ -16,9 +16,8 @@ Bundled samples that deploy LLMInferenceService + MaaSModelRef + MaaSAuthPolicy 
 To deploy to default namespaces:
 
 ```bash
-# Create default namespaces if needed
+# Create model namespace (models-as-a-service namespace is auto-created by controller)
 kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
-kubectl create namespace models-as-a-service --dry-run=client -o yaml | kubectl apply -f -
 
 # Deploy all (LLMIS + MaaS CRs) at once
 kustomize build docs/samples/maas-system/ | kubectl apply -f -
@@ -26,10 +25,9 @@ kustomize build docs/samples/maas-system/ | kubectl apply -f -
 # Or deploy a specific sample
 kustomize build docs/samples/maas-system/facebook-opt-125m-cpu/ | kubectl apply -f -
 kustomize build docs/samples/maas-system/qwen3/ | kubectl apply -f -
-```
 
 # Verify
-kubectl get maasmodelref -n opendatahub
+kubectl get maasmodelref -n llm
 kubectl get maasauthpolicy,maassubscription -n models-as-a-service
 kubectl get llminferenceservice -n llm
 ```
@@ -37,15 +35,15 @@ kubectl get llminferenceservice -n llm
 To deploy MaaS CRs to another namespace:
 
 ```bash
-# Create llm and customized namespace if needed
+# Create model namespace (custom subscription namespace is auto-created by controller)
 kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
-kubectl create namespace my-namespace --dry-run=client -o yaml | kubectl apply -f -
 
+# Note: Configure controller with --maas-subscription-namespace=my-namespace to auto-create custom namespace
 # Deploy all (LLMIS + MaaS CRs) at once
 kustomize build docs/samples/maas-system | sed "s/namespace: models-as-a-service/namespace: my-namespace/g" | kubectl apply -f -
 
 # Verify
-kubectl get maasmodelref -n opendatahub
+kubectl get maasmodelref -n llm
 kubectl get maasauthpolicy,maassubscription -n my-namespace
 kubectl get llminferenceservice -n llm
 ```

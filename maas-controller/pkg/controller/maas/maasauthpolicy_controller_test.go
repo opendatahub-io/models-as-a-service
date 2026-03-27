@@ -20,7 +20,6 @@ import (
 	"context"
 	"testing"
 
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -29,6 +28,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // newPreexistingAuthPolicy builds a Kuadrant AuthPolicy as an unstructured object
@@ -270,6 +271,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 		})
 	}
 }
+
 // TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion verifies that when multiple
 // MaaSAuthPolicies reference the same model, deleting one does not delete the aggregated
 // AuthPolicy, but deleting the last one does.
@@ -382,4 +384,3 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		t.Errorf("AuthPolicy should be deleted after deleting last parent policy, but got error: %v", err)
 	}
 }
-
