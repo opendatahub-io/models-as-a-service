@@ -141,3 +141,13 @@ replacements:
     options:
       delimiter: "."
       index: 1
+  - select:
+      kind: ClusterRoleBinding
+      name: maas-controller-rolebinding
+    fieldPaths:
+    - subjects.0.namespace
+  - select:
+      kind: RoleBinding
+      name: maas-controller-leader-election-rolebinding
+    fieldPaths:
+    - subjects.0.namespace
