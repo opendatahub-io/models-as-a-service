@@ -4,7 +4,9 @@ MaaS uses **MaaSModelRef** to identify model servers that live on the cluster. E
 
 By using a single unified object (MaaSModelRef) for all model types, MaaS can handle different kinds of model servers—each with its own backend and lifecycle—through one consistent interface. The controller uses a **provider paradigm** to distinguish between types: each model type (for example, LLMInferenceService, external APIs) has a provider that knows how to reconcile and resolve that type.
 
-**Supported LLMs:** Most model families should work; an official validated list is in progress. **Supported inference services:** vLLM through LLMInferenceService (KServe) is the initial supported release for on-cluster models; additional backends are planned for future releases.
+**Supported LLMs:** Most model families should work; an official validated list is in progress.
+
+**Supported inference services:** vLLM through LLMInferenceService (KServe) is the initial supported release for on-cluster models; additional backends are planned for future releases.
 
 ## The Model Reference
 
