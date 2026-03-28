@@ -31,22 +31,21 @@ func validateCELValue(value, fieldName string) error {
 
 // findAllSubscriptionsForModel returns all MaaSSubscriptions that reference the given model,
 // excluding subscriptions that are being deleted.
+// Uses the field index for efficient lookup instead of cluster-wide scans.
 func findAllSubscriptionsForModel(ctx context.Context, c client.Reader, modelNamespace, modelName string) ([]maasv1alpha1.MaaSSubscription, error) {
 	var allSubs maasv1alpha1.MaaSSubscriptionList
-	if err := c.List(ctx, &allSubs); err != nil {
-		return nil, fmt.Errorf("failed to list MaaSSubscriptions: %w", err)
+	// Use field index to query subscriptions by model reference
+	modelKey := modelNamespace + "/" + modelName
+	if err := c.List(ctx, &allSubs, client.MatchingFields{"spec.modelRef": modelKey}); err != nil {
+		return nil, fmt.Errorf("failed to list MaaSSubscriptions for model %s: %w", modelKey, err)
 	}
+	// Filter out subscriptions that are being deleted
 	var result []maasv1alpha1.MaaSSubscription
 	for _, s := range allSubs.Items {
 		if !s.GetDeletionTimestamp().IsZero() {
 			continue
 		}
-		for _, ref := range s.Spec.ModelRefs {
-			if ref.Namespace == modelNamespace && ref.Name == modelName {
-				result = append(result, s)
-				break
-			}
-		}
+		result = append(result, s)
 	}
 	return result, nil
 }
