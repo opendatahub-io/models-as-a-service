@@ -617,6 +617,34 @@ setup_test_tokens() {
         fi
     fi
     
+    # Grant odh-admins RBAC so SAR-based admin check passes.
+    # maas-api IsAdmin does a SubjectAccessReview: "can user create maasauthpolicies?"
+    # The ODH operator will provide this via opendatahub-operator#3301; until then, create it here.
+    oc apply -f - <<RBAC_EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-admin
+rules:
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maasauthpolicies", "maassubscriptions"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: odh-admins-maas-admin
+  namespace: $MAAS_SUBSCRIPTION_NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: maas-admin
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: odh-admins
+RBAC_EOF
+
     # 3. Fallback for regular user: always use a separate SA to ensure distinct users
     # This is required for IDOR tests that verify users cannot access each other's keys
     # Regular user stays in default namespace (system:serviceaccounts:default) - NOT in adminGroups

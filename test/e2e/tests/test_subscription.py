@@ -1050,7 +1050,7 @@ class TestSubscriptionEnforcement:
 
             # Wait for TRLP to be created AND enforced by Kuadrant/Limitador.
             # Without this, requests bypass token rate limiting entirely.
-            _wait_for_token_rate_limit_policy(model_ref, timeout=90)
+            _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)
 
             # 3. API key must be minted for this subscription
             oc_token = _get_cluster_token()

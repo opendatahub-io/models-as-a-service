@@ -126,6 +126,35 @@ setup_admin_token() {
     return 0
   fi
 
+  # Grant odh-admins RBAC so SAR-based admin check passes.
+  # maas-api IsAdmin does a SubjectAccessReview: "can user create maasauthpolicies?"
+  # The ODH operator will provide this via opendatahub-operator#3301; until then, create it here.
+  local maas_sub_ns="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+  oc apply -f - <<RBAC_EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-admin
+rules:
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maasauthpolicies", "maassubscriptions"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: odh-admins-maas-admin
+  namespace: $maas_sub_ns
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: maas-admin
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: odh-admins
+RBAC_EOF
+
   # Use current user's token
   ADMIN_OC_TOKEN="$(oc whoami -t 2>/dev/null || true)"
   if [[ -n "${ADMIN_OC_TOKEN}" ]]; then
