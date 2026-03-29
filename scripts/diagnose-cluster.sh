@@ -113,10 +113,6 @@ echo ""
 operator_type=$(detect_operator_type)
 policy_engine=$(detect_policy_engine)
 dsc_name=$(detect_dsc 2>/dev/null)
-dsc_namespace=""
-if [[ -n "$dsc_name" ]]; then
-  dsc_namespace=$(detect_dsc 2>&1 >/dev/null)
-fi
 
 # Determine target namespace
 if [[ -n "$operator_type" ]]; then
@@ -242,11 +238,7 @@ elif [[ "$dsc_validated" == "false" ]]; then
   echo ""
   echo "Action required:"
   echo "  1. Edit the DataScienceCluster:"
-  if [[ -n "$dsc_namespace" ]]; then
-    echo "     kubectl edit datasciencecluster $dsc_name -n $dsc_namespace"
-  else
-    echo "     kubectl edit datasciencecluster $dsc_name"
-  fi
+  echo "     kubectl edit datasciencecluster $dsc_name"
   echo ""
   echo "  2. Fix the configuration mismatches shown above"
   echo ""
