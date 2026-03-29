@@ -44,6 +44,23 @@ All endpoints except `/health` require authentication via the `Authorization: Be
 | DELETE | `/v1/api-keys/{id}` | Revoke a specific API key. |
 | POST | `/v1/api-keys/bulk-revoke` | Revoke all active API keys for a user. Admins can revoke any user's keys. |
 
+### Subscriptions
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/subscriptions` | List subscriptions accessible to the authenticated user. |
+| GET | `/v1/model/{model-id}/subscriptions` | List subscriptions that provide access to a specific model. |
+
+### Internal Endpoints (Cluster-Only)
+
+These endpoints are registered under `/internal/v1/` and are **not exposed** on the external Service or Route. They are called by internal components (Authorino, CronJob) and protected by NetworkPolicy.
+
+| Method | Path | Called By | Description |
+|--------|------|-----------|-------------|
+| POST | `/internal/v1/api-keys/validate` | Authorino | Validate an API key (hash lookup, status/expiry check). Returns user identity and subscription for the gateway. |
+| POST | `/internal/v1/api-keys/cleanup` | CronJob `maas-api-key-cleanup` | Delete expired ephemeral keys (30-minute grace period). Returns `{"deletedCount": N, "message": "..."}`. |
+| POST | `/internal/v1/subscriptions/select` | Authorino | Select the appropriate subscription for a request based on user groups and optional explicit selection. |
+
 ---
 
 ## Base URL

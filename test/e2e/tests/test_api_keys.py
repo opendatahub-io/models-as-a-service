@@ -619,3 +619,253 @@ class TestAPIKeyModelInference:
             print(f"[inference] Chat completions returned {r.status_code}: {r.text[:200]}")
             # Don't fail - chat may not be supported
             pytest.skip(f"Chat completions returned {r.status_code}")
+
+
+class TestEphemeralKeyCleanup:
+    """Tests for ephemeral API key cleanup (CronJob + internal endpoint).
+
+    Validates that:
+    - Ephemeral keys can be created with short expiration
+    - The cleanup CronJob exists and is correctly configured
+    - Triggering cleanup does not delete active (non-expired) ephemeral keys
+    - Cleanup returns a well-formed response with deletedCount
+
+    The cleanup endpoint (POST /internal/v1/api-keys/cleanup) is cluster-internal
+    and not exposed on the public Route. These tests trigger it via the CronJob
+    mechanism (kubectl create job --from=cronjob/maas-api-key-cleanup) or via
+    oc exec into the maas-api pod.
+
+    Environment Variables:
+    - DEPLOYMENT_NAMESPACE: Namespace where maas-api is deployed (default: opendatahub)
+    """
+
+    @pytest.fixture
+    def deployment_namespace(self) -> str:
+        return os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+
+    def test_cronjob_exists_and_configured(self, deployment_namespace: str):
+        """Verify the maas-api-key-cleanup CronJob exists with expected configuration."""
+        import subprocess as sp
+
+        result = sp.run(
+            ["oc", "get", "cronjob", "maas-api-key-cleanup",
+             "-n", deployment_namespace, "-o", "json"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip(
+                f"CronJob maas-api-key-cleanup not found in {deployment_namespace}: "
+                f"{result.stderr.strip()}"
+            )
+
+        import json as _json
+        cj = _json.loads(result.stdout)
+        spec = cj["spec"]
+
+        # Verify schedule (every 15 minutes)
+        assert spec["schedule"] == "*/15 * * * *", \
+            f"Expected schedule '*/15 * * * *', got '{spec['schedule']}'"
+
+        # Verify concurrency policy
+        assert spec["concurrencyPolicy"] == "Forbid", \
+            "CronJob should use Forbid concurrency policy"
+
+        # Verify the curl command targets the internal cleanup endpoint
+        containers = spec["jobTemplate"]["spec"]["template"]["spec"]["containers"]
+        assert len(containers) >= 1
+        container_spec = containers[0]
+        # Command is in the 'command' field (shell script via /bin/sh -c)
+        cmd_parts = container_spec.get("command", [])
+        cmd_str = " ".join(cmd_parts)
+        assert "/internal/v1/api-keys/cleanup" in cmd_str, \
+            f"CronJob command should target cleanup endpoint, got: {cmd_str}"
+
+        # Verify security context (non-root, read-only fs)
+        sec_ctx = container_spec.get("securityContext", {})
+        assert sec_ctx.get("runAsNonRoot", False) is True, \
+            "Cleanup container should run as non-root"
+        assert sec_ctx.get("readOnlyRootFilesystem", False) is True, \
+            "Cleanup container should have read-only root filesystem"
+
+        print(f"[cleanup] CronJob validated: schedule={spec['schedule']}, "
+              f"concurrency={spec['concurrencyPolicy']}")
+
+    def test_cleanup_networkpolicy_exists(self, deployment_namespace: str):
+        """Verify the cleanup NetworkPolicy exists and restricts cleanup pod access."""
+        import subprocess as sp
+
+        result = sp.run(
+            ["oc", "get", "networkpolicy", "maas-api-cleanup-restrict",
+             "-n", deployment_namespace, "-o", "json"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip(
+                f"NetworkPolicy maas-api-cleanup-restrict not found in "
+                f"{deployment_namespace}: {result.stderr.strip()}"
+            )
+
+        import json as _json
+        np = _json.loads(result.stdout)
+        spec = np["spec"]
+
+        # Verify it targets cleanup pods
+        selector = spec.get("podSelector", {}).get("matchLabels", {})
+        assert selector.get("app") == "maas-api-cleanup", \
+            f"NetworkPolicy should target app=maas-api-cleanup, got: {selector}"
+
+        # Verify policy types include both Egress and Ingress
+        policy_types = spec.get("policyTypes", [])
+        assert "Egress" in policy_types, "NetworkPolicy should control egress"
+        assert "Ingress" in policy_types, "NetworkPolicy should control ingress"
+
+        # Verify ingress is blocked (empty list)
+        assert spec.get("ingress") == [] or spec.get("ingress") is None, \
+            "Cleanup pods should have no inbound traffic"
+
+        print("[cleanup] NetworkPolicy validated: cleanup pods restricted to maas-api egress only")
+
+    def test_create_ephemeral_key(self, api_keys_base_url: str, headers: dict):
+        """Create an ephemeral key and verify it appears in search with includeEphemeral."""
+        # Create ephemeral key with short expiration (30 minutes)
+        r = requests.post(
+            api_keys_base_url,
+            headers=headers,
+            json={
+                "name": "e2e-ephemeral-cleanup-test",
+                "ephemeral": True,
+                "expiresIn": "30m",
+            },
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r.status_code in (200, 201), \
+            f"Expected 200/201 creating ephemeral key, got {r.status_code}: {r.text}"
+        data = r.json()
+        assert data.get("ephemeral") is True, "Key should be marked as ephemeral"
+        key_id = data["id"]
+        print(f"[cleanup] Created ephemeral key: id={key_id}, expiresAt={data.get('expiresAt')}")
+
+        # Verify ephemeral key appears in search with includeEphemeral filter
+        r_search = requests.post(
+            f"{api_keys_base_url}/search",
+            headers=headers,
+            json={
+                "filters": {"status": ["active"], "includeEphemeral": True},
+                "pagination": {"limit": 50, "offset": 0},
+            },
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_search.status_code == 200
+        items = r_search.json().get("items") or r_search.json().get("data") or []
+        found_ids = [item["id"] for item in items]
+        assert key_id in found_ids, \
+            f"Ephemeral key {key_id} should appear in search with includeEphemeral=true"
+
+        # Verify ephemeral key is excluded from default search (without includeEphemeral)
+        r_default = requests.post(
+            f"{api_keys_base_url}/search",
+            headers=headers,
+            json={
+                "filters": {"status": ["active"]},
+                "pagination": {"limit": 50, "offset": 0},
+            },
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_default.status_code == 200
+        default_items = r_default.json().get("items") or r_default.json().get("data") or []
+        default_ids = [item["id"] for item in default_items]
+        assert key_id not in default_ids, \
+            "Ephemeral key should be excluded from default search (includeEphemeral defaults to false)"
+
+        print(f"[cleanup] Ephemeral key visibility verified: visible with filter, hidden by default")
+
+    def test_trigger_cleanup_preserves_active_keys(
+        self, api_keys_base_url: str, headers: dict, deployment_namespace: str,
+    ):
+        """Trigger cleanup and verify active ephemeral keys are NOT deleted.
+
+        Creates an ephemeral key, triggers cleanup via oc exec into maas-api pod,
+        and asserts the active key survives cleanup (only expired keys beyond the
+        30-minute grace period are deleted).
+        """
+        import subprocess as sp
+
+        # Create an ephemeral key with 1 hour expiration (won't expire during test)
+        r = requests.post(
+            api_keys_base_url,
+            headers=headers,
+            json={
+                "name": "e2e-cleanup-survival-test",
+                "ephemeral": True,
+                "expiresIn": "1h",
+            },
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r.status_code in (200, 201), \
+            f"Expected 200/201, got {r.status_code}: {r.text}"
+        key_id = r.json()["id"]
+        print(f"[cleanup] Created ephemeral key for survival test: id={key_id}")
+
+        # Trigger cleanup via oc exec into maas-api pod
+        # This calls the internal endpoint directly, same as the CronJob does
+        get_pod = sp.run(
+            ["oc", "get", "pods", "-n", deployment_namespace,
+             "-l", "app.kubernetes.io/name=maas-api",
+             "-o", "jsonpath={.items[0].metadata.name}"],
+            capture_output=True, text=True,
+        )
+        if get_pod.returncode != 0 or not get_pod.stdout.strip():
+            pytest.skip(
+                f"Cannot find maas-api pod in {deployment_namespace}: "
+                f"{get_pod.stderr.strip()}"
+            )
+
+        pod_name = get_pod.stdout.strip()
+        print(f"[cleanup] Triggering cleanup via oc exec into {pod_name}")
+
+        cleanup_result = sp.run(
+            ["oc", "exec", pod_name, "-n", deployment_namespace, "--",
+             "curl", "-sf", "-X", "POST",
+             "http://localhost:8080/internal/v1/api-keys/cleanup"],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if cleanup_result.returncode != 0:
+            # curl may not be available in the maas-api container; try wget
+            cleanup_result = sp.run(
+                ["oc", "exec", pod_name, "-n", deployment_namespace, "--",
+                 "wget", "-q", "-O-", "--post-data=",
+                 "http://localhost:8080/internal/v1/api-keys/cleanup"],
+                capture_output=True, text=True, timeout=30,
+            )
+
+        if cleanup_result.returncode != 0:
+            pytest.skip(
+                f"Cannot exec into maas-api pod to trigger cleanup "
+                f"(neither curl nor wget available): {cleanup_result.stderr.strip()}"
+            )
+
+        import json as _json
+        cleanup_resp = _json.loads(cleanup_result.stdout)
+        deleted_count = cleanup_resp.get("deletedCount", -1)
+        assert deleted_count >= 0, \
+            f"Cleanup response should have non-negative deletedCount, got: {cleanup_resp}"
+        print(f"[cleanup] Cleanup completed: deletedCount={deleted_count}, "
+              f"message={cleanup_resp.get('message')}")
+
+        # Verify our active ephemeral key survived cleanup
+        r_get = requests.get(
+            f"{api_keys_base_url}/{key_id}",
+            headers=headers,
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_get.status_code == 200, \
+            f"Active ephemeral key {key_id} should survive cleanup, got {r_get.status_code}"
+        assert r_get.json().get("status") == "active", \
+            f"Key should still be active after cleanup, got: {r_get.json().get('status')}"
+        print(f"[cleanup] Active ephemeral key {key_id} survived cleanup (correct behavior)")
