@@ -1,0 +1,42 @@
+spec:
+  rules:
+    authentication:
+      oidc-identities:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
+        jwt:
+          issuerUrl: __OIDC_ISSUER_URL__
+        priority: 1
+      openshift-identities:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
+        priority: 2
+    authorization:
+      oidc-client-bound:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
+        patternMatching:
+          patterns:
+            - selector: auth.identity.azp
+              operator: eq
+              value: __OIDC_CLIENT_ID__
+        priority: 1
+    response:
+      success:
+        headers:
+          X-MaaS-Username-OC:
+            plain:
+              selector: null
+              expression: >-
+                has(auth.identity.preferred_username) ?
+                auth.identity.preferred_username :
+                (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)
+          X-MaaS-Group-OC:
+            plain:
+              selector: null
+              expression: >-
+                has(auth.identity.groups) ?
+                (size(auth.identity.groups) > 0 ?
+                '["system:authenticated","' + auth.identity.groups.join('","') + '"]' :
+                '["system:authenticated"]') :
+                '["' + auth.identity.user.groups.join('","') + '"]'

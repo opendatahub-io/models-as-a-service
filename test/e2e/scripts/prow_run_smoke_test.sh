@@ -39,6 +39,12 @@
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
+#   EXTERNAL_OIDC - Enable external OIDC e2e coverage with an externally provisioned IdP (default: false)
+#   OIDC_ISSUER_URL - Required when EXTERNAL_OIDC=true; issuer URL used by deploy.sh
+#   OIDC_TOKEN_URL - Required when EXTERNAL_OIDC=true; token endpoint used by pytest
+#   OIDC_CLIENT_ID - Required when EXTERNAL_OIDC=true; client ID used to request tokens
+#   OIDC_USERNAME - Required when EXTERNAL_OIDC=true; test user for OIDC token requests
+#   OIDC_PASSWORD - Required when EXTERNAL_OIDC=true; password for the OIDC test user
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
@@ -67,6 +73,7 @@ SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}  # Skip platform and model deployment 
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
+EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
@@ -91,6 +98,25 @@ print_header() {
     echo "$1"
     echo "----------------------------------------"
     echo ""
+}
+
+require_external_oidc_config() {
+    local required_vars=(OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD)
+    local missing=()
+    local var_name
+
+    for var_name in "${required_vars[@]}"; do
+        if [[ -z "${!var_name:-}" ]]; then
+            missing+=("$var_name")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "❌ ERROR: EXTERNAL_OIDC=true requires an externally provisioned OIDC provider"
+        echo "   Missing required variables: ${missing[*]}"
+        echo "   This branch no longer installs Keycloak automatically."
+        exit 1
+    fi
 }
 
 check_prerequisites() {
@@ -146,6 +172,13 @@ deploy_maas_platform() {
         exit 1
     fi
 
+    if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        echo "Using externally provisioned OIDC configuration for external OIDC tests..."
+        require_external_oidc_config
+        export OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD
+        echo "Using OIDC issuer: ${OIDC_ISSUER_URL}"
+    fi
+
     # 3. Deploy MaaS via operator (Kuadrant, gateway, maas-api, maas-controller, policies)
     # Note: ODH/catalog already installed by install-odh.sh; deploy.sh will skip duplicate installs
     local deploy_cmd=(
@@ -160,6 +193,9 @@ deploy_maas_platform() {
     fi
     if [[ "$INSECURE_HTTP" == "true" ]]; then
         deploy_cmd+=(--disable-tls-backend)
+    fi
+    if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        deploy_cmd+=(--external-oidc)
     fi
 
     if ! "${deploy_cmd[@]}"; then
@@ -359,6 +395,14 @@ setup_vars_for_tests() {
         exit 1
     fi
     export HOST="maas.${CLUSTER_DOMAIN}"
+    export EXTERNAL_OIDC
+
+    if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        require_external_oidc_config
+        export OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD
+        echo "OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}"
+        echo "OIDC_TOKEN_URL: ${OIDC_TOKEN_URL}"
+    fi
 
     if [ "$INSECURE_HTTP" = "true" ]; then
         export MAAS_API_BASE_URL="http://${HOST}/maas-api"
@@ -453,7 +497,8 @@ run_e2e_tests() {
         "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_namespace_scoping.py" \
         "$test_dir/tests/test_subscription.py" \
-        "$test_dir/tests/test_models_endpoint.py" ; then 
+        "$test_dir/tests/test_models_endpoint.py" \
+        "$test_dir/tests/test_external_oidc.py" ; then 
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
@@ -501,6 +546,34 @@ setup_test_user() {
 # maas-api AdminChecker checks user.Groups against Auth CR spec.adminGroups.
 # SA in namespace X has groups: system:serviceaccounts, system:serviceaccounts:X.
 # We use a dedicated admin namespace (maas-admin) so the regular user (in default) is NOT admin.
+# Grant the minimal RBAC needed for the SAR-based admin check.
+# SARAdminChecker verifies: can this user "create maasauthpolicies" in the subscription namespace?
+# This creates a namespace-scoped Role + RoleBinding instead of cluster-admin.
+_grant_maas_admin_rbac() {
+    local user="$1"
+    local ns="${MAAS_SUBSCRIPTION_NAMESPACE}"
+    local role_name="maas-admin-e2e"
+
+    oc apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ${role_name}
+  namespace: ${ns}
+rules:
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maasauthpolicies"]
+  verbs: ["create"]
+EOF
+
+    local safe_name
+    safe_name=$(echo "$user" | tr ':/' '-' | cut -c1-50)
+    oc create rolebinding "${role_name}-${safe_name}" \
+        --role="$role_name" \
+        --user="$user" \
+        -n "$ns" 2>/dev/null || true
+}
+
 _patch_auth_cr_for_sa_admin() {
     local admin_namespace="${1:-$E2E_ADMIN_SA_NAMESPACE}"
     local admin_group="system:serviceaccounts:${admin_namespace}"
@@ -576,6 +649,11 @@ setup_test_tokens() {
                 
                 # Add to odh-admins group (using main session which is system:admin)
                 oc adm groups add-users odh-admins "$admin_user" 2>/dev/null || true
+
+                # Grant minimal RBAC so SAR-based admin check passes.
+                # maas-api SARAdminChecker verifies the user can "create maasauthpolicies";
+                # the odh-admins group alone doesn't provide this RBAC in e2e clusters.
+                _grant_maas_admin_rbac "$admin_user"
                 
                 # Extract token using temp kubeconfig (doesn't affect main session)
                 if KUBECONFIG="$temp_kubeconfig" oc login "$api_server" -u "$admin_user" -p "$admin_pass" --insecure-skip-tls-verify=true &>/dev/null; then
@@ -606,10 +684,12 @@ setup_test_tokens() {
         ADMIN_OC_TOKEN=$(oc whoami -t 2>/dev/null || true)
         if [[ -n "$ADMIN_OC_TOKEN" ]]; then
             oc adm groups add-users odh-admins "$current_user" 2>/dev/null || true
+            _grant_maas_admin_rbac "$current_user"
             echo "✅ Admin token for $current_user (added to odh-admins)"
         else
             echo "⚠️  No htpasswd token available - using SA token (admin tests may fail)"
-            setup_test_user "tester-admin-user" "cluster-admin" "$E2E_ADMIN_SA_NAMESPACE"
+            setup_test_user "tester-admin-user" "view" "$E2E_ADMIN_SA_NAMESPACE"
+            _grant_maas_admin_rbac "system:serviceaccount:${E2E_ADMIN_SA_NAMESPACE}:tester-admin-user"
             # maas-api AdminChecker uses Auth CR adminGroups; SA in maas-admin has system:serviceaccounts:maas-admin
             # Patch Auth CR so only tester-admin-user is admin (regular user stays in default → not admin)
             _patch_auth_cr_for_sa_admin "$E2E_ADMIN_SA_NAMESPACE"
@@ -617,6 +697,34 @@ setup_test_tokens() {
         fi
     fi
     
+    # Grant odh-admins RBAC so SAR-based admin check passes.
+    # maas-api IsAdmin does a SubjectAccessReview: "can user create maasauthpolicies?"
+    # The ODH operator will provide this via opendatahub-operator#3301; until then, create it here.
+    oc apply -f - <<RBAC_EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-admin
+rules:
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maasauthpolicies", "maassubscriptions"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: odh-admins-maas-admin
+  namespace: $MAAS_SUBSCRIPTION_NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: maas-admin
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: odh-admins
+RBAC_EOF
+
     # 3. Fallback for regular user: always use a separate SA to ensure distinct users
     # This is required for IDOR tests that verify users cannot access each other's keys
     # Regular user stays in default namespace (system:serviceaccounts:default) - NOT in adminGroups

@@ -453,6 +453,32 @@ func (m *MockStore) UpdateLastUsed(ctx context.Context, keyID string) error {
 	return nil
 }
 
+// DeleteExpiredEphemeral removes expired ephemeral keys from the mock store.
+// Mirrors PostgresStore: only deletes keys expired for at least 30 minutes.
+func (m *MockStore) DeleteExpiredEphemeral(ctx context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now().UTC()
+	graceThreshold := now.Add(-30 * time.Minute)
+	var count int64
+
+	for id, k := range m.keys {
+		if !k.ephemeral {
+			continue
+		}
+		if k.expiresAt.IsZero() {
+			continue // skip keys without expiration
+		}
+		if (k.metadata.Status == StatusExpired || k.expiresAt.Before(now)) && k.expiresAt.Before(graceThreshold) {
+			delete(m.keys, id)
+			count++
+		}
+	}
+
+	return count, nil
+}
+
 func (m *MockStore) Close() error {
 	return nil
 }

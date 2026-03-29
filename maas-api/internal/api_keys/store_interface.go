@@ -69,5 +69,10 @@ type MetadataStore interface {
 	// Called after successful validation to track key usage.
 	UpdateLastUsed(ctx context.Context, keyID string) error
 
+	// DeleteExpiredEphemeral removes expired ephemeral API keys from storage.
+	// Deletes keys where ephemeral=TRUE AND (status='expired' OR expires_at < NOW()).
+	// Returns the count of deleted keys.
+	DeleteExpiredEphemeral(ctx context.Context) (int64, error)
+
 	Close() error
 }

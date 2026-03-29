@@ -64,7 +64,7 @@ make deploy-dev
 
 This will:
 
-- Deploy MaaS API component with Service Account Token provider in debug mode
+- Deploy MaaS API component in debug mode
 
 #### Patch Kuadrant deployment
 
@@ -148,36 +148,7 @@ kustomize build ${PROJECT_DIR}/docs/samples/models/simulator | kubectl apply --s
 
 #### Getting a token
 
-MaaS API supports two types of tokens:
-
-1.  **Ephemeral Tokens** - Stateless tokens that provide better security posture as they can be easily refreshed by the caller using OpenShift Identity. These tokens can live as long as API keys (up to the configured expiration), making them suitable for both temporary and long-term access scenarios.
-2.  **API Keys** - Named, long-lived tokens for applications (stored in PostgreSQL database). Suitable for services or applications that need persistent access with metadata tracking.
-
-##### Ephemeral Tokens
-
-To get a short-lived ephemeral token:
-
-```shell
-HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
-
-TOKEN_RESPONSE=$(curl -sSk \
-  -H "Authorization: Bearer $(oc whoami -t)" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{
-    "expiration": "4h"
-  }' \
-  "${HOST}/maas-api/v1/tokens")
-
-echo $TOKEN_RESPONSE | jq -r .
-
-echo $TOKEN_RESPONSE | jq -r .token | cut -d. -f2 | jq -Rr '@base64d | fromjson'
-
-TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token)
-```
-
-> [!NOTE]
-> ServiceAccount-based tokens have been removed. All authentication now uses API keys (`sk-oai-*` format) with hash-based storage.
+MaaS API uses **API Keys** — named, long-lived tokens for applications (stored in PostgreSQL database). Suitable for services or applications that need persistent access with metadata tracking.
 
 ##### API Keys
 

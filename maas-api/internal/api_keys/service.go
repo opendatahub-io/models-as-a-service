@@ -286,3 +286,14 @@ func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string) (int, 
 	}
 	return s.store.InvalidateAll(ctx, username)
 }
+
+// CleanupExpiredEphemeral deletes expired ephemeral keys from storage.
+// Called by the internal cleanup endpoint (CronJob).
+func (s *Service) CleanupExpiredEphemeral(ctx context.Context) (int64, error) {
+	count, err := s.store.DeleteExpiredEphemeral(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup failed: %w", err)
+	}
+	s.logger.Info("Ephemeral key cleanup completed", "deletedCount", count)
+	return count, nil
+}
