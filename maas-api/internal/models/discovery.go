@@ -32,7 +32,6 @@ const maxModelsResponseBytes int64 = 4 << 20 // 4 MiB
 
 // HTTP client and concurrency for access-validation probes.
 const (
-	httpClientTimeout       = 5 * time.Second
 	httpMaxIdleConns        = 100
 	httpIdleConnTimeout     = 90 * time.Second
 	maxDiscoveryConcurrency = 10
@@ -67,7 +66,9 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int) (*Manager, er
 		logger:             log,
 		accessCheckTimeout: timeout,
 		httpClient: &http.Client{
-			Timeout: httpClientTimeout,
+			// No per-client Timeout — each request inherits the accessCheckTimeout
+			// deadline via its context. This ensures that configuring a longer
+			// ACCESS_CHECK_TIMEOUT_SECONDS actually allows slower backends to respond.
 			Transport: &http.Transport{
 				TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // cluster-internal only
 				MaxIdleConns:        httpMaxIdleConns,
