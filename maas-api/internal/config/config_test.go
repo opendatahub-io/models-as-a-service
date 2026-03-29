@@ -120,6 +120,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:           "postgresql://localhost/test",
 				Secure:                    false,
 				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
 				MaaSSubscriptionNamespace: "models-as-a-service",
 			},
 		},
@@ -129,6 +130,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:           "postgresql://localhost/test",
 				TLS:                       TLSConfig{SelfSigned: true, MinVersion: TLSVersion(tls.VersionTLS12)},
 				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
 				MaaSSubscriptionNamespace: "models-as-a-service",
 			},
 		},
@@ -138,6 +140,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:           "postgresql://localhost/test",
 				TLS:                       TLSConfig{Cert: "/cert.pem", Key: "/key.pem", MinVersion: TLSVersion(tls.VersionTLS12)},
 				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
 				MaaSSubscriptionNamespace: "models-as-a-service",
 			},
 		},
@@ -146,6 +149,7 @@ func TestValidate(t *testing.T) {
 			cfg: Config{
 				DBConnectionURL:           "postgresql://localhost/test",
 				APIKeyMaxExpirationDays:   1,
+				AccessCheckTimeoutSeconds: 15,
 				MaaSSubscriptionNamespace: "models-as-a-service",
 			},
 		},
@@ -154,6 +158,7 @@ func TestValidate(t *testing.T) {
 			cfg: Config{
 				DBConnectionURL:           "postgresql://localhost/test",
 				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
 				MaaSSubscriptionNamespace: "models-as-a-service",
 			},
 		},
@@ -162,6 +167,7 @@ func TestValidate(t *testing.T) {
 			cfg: Config{
 				DBConnectionURL:           "postgresql://localhost/test",
 				APIKeyMaxExpirationDays:   365,
+				AccessCheckTimeoutSeconds: 15,
 				MaaSSubscriptionNamespace: "models-as-a-service",
 			},
 		},

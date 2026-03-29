@@ -37,27 +37,35 @@ const (
 	httpIdleConnTimeout     = 90 * time.Second
 	maxDiscoveryConcurrency = 10
 
-	// accessCheckTimeout bounds the total duration of FilterModelsByAccess.
+	// defaultAccessCheckTimeout bounds the total duration of FilterModelsByAccess.
 	// This limits the staleness window between when access is checked and when
 	// the response reaches the client. Models whose probes don't complete within
 	// this window are excluded (fail-closed).
-	accessCheckTimeout = 15 * time.Second
+	defaultAccessCheckTimeout = 15 * time.Second
 )
 
 // Manager runs access validation (probe model endpoints) for models listed from MaaSModelRef.
 type Manager struct {
-	logger     *logger.Logger
-	httpClient *http.Client
+	logger             *logger.Logger
+	httpClient         *http.Client
+	accessCheckTimeout time.Duration
 }
 
 // NewManager creates a Manager for filtering models by access. The client uses InsecureSkipVerify
 // for cluster-internal probes; auth is enforced by the gateway/model server.
-func NewManager(log *logger.Logger) (*Manager, error) {
+// accessCheckTimeoutSeconds controls the total duration bound for access validation;
+// if <= 0, the default of 15 seconds is used.
+func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int) (*Manager, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
+	timeout := defaultAccessCheckTimeout
+	if accessCheckTimeoutSeconds > 0 {
+		timeout = time.Duration(accessCheckTimeoutSeconds) * time.Second
+	}
 	return &Manager{
-		logger: log,
+		logger:             log,
+		accessCheckTimeout: timeout,
 		httpClient: &http.Client{
 			Timeout: httpClientTimeout,
 			Transport: &http.Transport{
@@ -88,7 +96,7 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 	}
 
 	// Bound the total access-check duration to limit the staleness window.
-	ctx, cancel := context.WithTimeout(ctx, accessCheckTimeout)
+	ctx, cancel := context.WithTimeout(ctx, m.accessCheckTimeout)
 	defer cancel()
 
 	m.logger.Debug("FilterModelsByAccess: validating access for models", "count", len(models), "subscriptionHeaderProvided", subscriptionHeader != "")
@@ -228,7 +236,7 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, s
 		return lastResult != authRetry, nil
 	}); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
-			m.logger.Debug("Access validation failed: context deadline exceeded", "service", meta.ServiceName, "endpoint", meta.Endpoint, "timeout", accessCheckTimeout)
+			m.logger.Debug("Access validation failed: context deadline exceeded", "service", meta.ServiceName, "endpoint", meta.Endpoint, "timeout", m.accessCheckTimeout)
 		} else {
 			m.logger.Debug("Access validation failed: model fetch backoff exhausted", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
 		}
