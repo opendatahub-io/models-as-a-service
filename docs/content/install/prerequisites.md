@@ -12,6 +12,7 @@ Red Hat OpenShift AI (RHOAI). MaaS is installed by enabling it in the DataScienc
 |--------------|-----|-------------------------------|-------------|
 | v0.0.2       | 4.19.9+ | v1.3+ / v1.2+             | v1.2+       |
 | v0.1.0       | 4.19.9+ | v1.3+ / v1.2+             | v1.2+       |
+| v0.2.0+      | 4.19.9+ | v1.4.2+ / v1.3+           | v1.2+       |
 
 !!! note "Other Kubernetes flavors"
     Other Kubernetes flavors (e.g., upstream Kubernetes, other distributions) are currently being validated.
@@ -34,8 +35,7 @@ MaaS requires Open Data Hub version 3.0 or later, with the Model Serving compone
 enabled (KServe) and properly configured for deploying models with `LLMInferenceService`
 resources.
 
-A specific requirement for MaaS is to set up ODH's Model Serving with Kuadrant v1.3+, even
-though ODH can work with earlier Kuadrant versions.
+A specific requirement for MaaS v0.2.0+ is to set up ODH's Model Serving with Kuadrant v1.4.2 or later.
 
 ## Requirements for Red Hat OpenShift AI
 
@@ -43,5 +43,4 @@ MaaS requires Red Hat OpenShift AI (RHOAI) version 3.0 or later, with the Model 
 component enabled (KServe) and properly configured for deploying models with
 `LLMInferenceService` resources.
 
-A specific requirement for MaaS is to set up RHOAI Model Serving with Red Hat Connectivity
-Link (RHCL) v1.2+, even though RHOAI can work with earlier RHCL versions.
+A specific requirement for MaaS v0.2.0+ is to set up RHOAI Model Serving with Red Hat Connectivity Link (RHCL) v1.3 or later.
