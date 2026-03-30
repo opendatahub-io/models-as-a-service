@@ -1063,8 +1063,9 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 }
 
 // TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream verifies that identity headers
-// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Key-Id, X-MaaS-Subscription) are NOT injected
-// into requests forwarded to upstream model workloads (defense-in-depth).
+// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Key-Id) are NOT injected into requests forwarded
+// to upstream model workloads (defense-in-depth). Exception: X-MaaS-Subscription IS injected
+// for Istio Telemetry (per-subscription latency tracking).
 // All identity information remains available to TRLP and telemetry via filters.identity.
 func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 	const (
@@ -1105,21 +1106,27 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
 	}
 
-	// Test 1: Verify response.success.headers does NOT exist (identity headers not forwarded upstream)
+	// Test 1: Verify identity headers (except X-MaaS-Subscription) are not forwarded upstream
 	t.Run("identity headers not forwarded to upstream", func(t *testing.T) {
 		headers, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "headers")
 		if err != nil {
 			t.Fatalf("Error checking headers: %v", err)
 		}
 
-		// Headers should either not exist or be empty
-		if found && len(headers) > 0 {
-			// Check that identity headers specifically are not present
-			forbiddenHeaders := []string{"X-MaaS-Username", "X-MaaS-Group", "X-MaaS-Key-Id", "X-MaaS-Subscription"}
-			for _, header := range forbiddenHeaders {
-				if _, exists := headers[header]; exists {
-					t.Errorf("Identity header %q should NOT be forwarded to upstream workloads (defense-in-depth)", header)
-				}
+		if !found {
+			t.Fatalf("response.success.headers should exist (X-MaaS-Subscription for Istio)")
+		}
+
+		// Verify X-MaaS-Subscription IS present (required for Istio Telemetry)
+		if _, exists := headers["X-MaaS-Subscription"]; !exists {
+			t.Errorf("X-MaaS-Subscription header should be present for Istio Telemetry")
+		}
+
+		// Verify identity headers are NOT present (defense-in-depth)
+		forbiddenHeaders := []string{"X-MaaS-Username", "X-MaaS-Group", "X-MaaS-Key-Id"}
+		for _, header := range forbiddenHeaders {
+			if _, exists := headers[header]; exists {
+				t.Errorf("Identity header %q should NOT be forwarded to upstream workloads (defense-in-depth)", header)
 			}
 		}
 	})
