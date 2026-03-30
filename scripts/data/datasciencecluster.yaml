@@ -11,5 +11,3 @@ spec:
       managementState: Managed
       modelsAsAService:
         managementState: Managed
-    dashboard:
-      managementState: Removed
