@@ -1097,58 +1097,77 @@ install_optional_operators() {
 
   local data_dir="${SCRIPT_DIR}/data"
 
-  # Apply both subscriptions in parallel (they're independent)
-  log_info "Applying cert-manager and LeaderWorkerSet subscriptions..."
-  kubectl apply -f "${data_dir}/cert-manager-subscription.yaml" &
-  local cert_manager_pid=$!
-  kubectl apply -f "${data_dir}/lws-subscription.yaml" &
-  local lws_pid=$!
+  # Pre-flight: verify operator packages are available in the catalog
+  log_info "Checking operator package availability..."
+  local cert_manager_available=true
+  local lws_available=true
 
-  # Wait for both apply commands to complete and capture individual exit codes
-  local cert_manager_apply_rc=0
-  local lws_apply_rc=0
-  wait $cert_manager_pid || cert_manager_apply_rc=$?
-  wait $lws_pid || lws_apply_rc=$?
-
-  if [[ $cert_manager_apply_rc -ne 0 ]]; then
-    log_error "Failed to apply cert-manager subscription (exit code: $cert_manager_apply_rc)"
-    return 1
-  fi
-  if [[ $lws_apply_rc -ne 0 ]]; then
-    log_error "Failed to apply LWS subscription (exit code: $lws_apply_rc)"
-    return 1
+  if ! check_package_available "openshift-cert-manager-operator" "redhat-operators" "openshift-marketplace"; then
+    log_warn "cert-manager operator not available in catalog — skipping"
+    cert_manager_available=false
   fi
 
-  # Wait for both subscriptions to be installed (can run in parallel too)
+  if ! check_package_available "leader-worker-set" "redhat-operators" "openshift-marketplace"; then
+    log_warn "LeaderWorkerSet operator not available in catalog — skipping"
+    lws_available=false
+  fi
+
+  if [[ "$cert_manager_available" == "false" && "$lws_available" == "false" ]]; then
+    log_warn "No optional operators available — continuing without them"
+    return 0
+  fi
+
+  # Apply available subscriptions
+  if [[ "$cert_manager_available" == "true" ]]; then
+    log_info "Applying cert-manager subscription..."
+    kubectl apply -f "${data_dir}/cert-manager-subscription.yaml"
+  fi
+  if [[ "$lws_available" == "true" ]]; then
+    log_info "Applying LeaderWorkerSet subscription..."
+    kubectl apply -f "${data_dir}/lws-subscription.yaml"
+  fi
+
+  # Wait for subscriptions to be installed (in parallel where possible)
   log_info "Waiting for operators to be installed..."
-  waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
-  local cert_wait_pid=$!
-  waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
-  local lws_wait_pid=$!
+  local cert_wait_pid="" lws_wait_pid=""
+  if [[ "$cert_manager_available" == "true" ]]; then
+    waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
+    cert_wait_pid=$!
+  fi
+  if [[ "$lws_available" == "true" ]]; then
+    waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
+    lws_wait_pid=$!
+  fi
 
-  # Wait for both to complete and capture individual exit codes
+  # Wait for completions and capture exit codes
   local cert_wait_rc=0
   local lws_wait_rc=0
-  wait $cert_wait_pid || cert_wait_rc=$?
-  wait $lws_wait_pid || lws_wait_rc=$?
+  if [[ -n "$cert_wait_pid" ]]; then
+    wait $cert_wait_pid || cert_wait_rc=$?
+  fi
+  if [[ -n "$lws_wait_pid" ]]; then
+    wait $lws_wait_pid || lws_wait_rc=$?
+  fi
 
+  # Report results (non-fatal for optional operators)
   if [[ $cert_wait_rc -ne 0 ]]; then
-    log_error "cert-manager operator installation failed"
-    return 1
+    log_warn "cert-manager operator installation failed — continuing without it"
   fi
   if [[ $lws_wait_rc -ne 0 ]]; then
-    log_error "LWS operator installation failed"
-    return 1
+    log_warn "LWS operator installation failed — continuing without it"
   fi
 
-  # Create LeaderWorkerSetOperator CR to activate the LWS controller-manager.
+  # Create LeaderWorkerSetOperator CR to activate the LWS controller-manager
+  # (only if LWS was successfully installed).
   # The operator subscription alone only installs the operator pod; the CR is
   # required to actually deploy the LWS API (controller-manager pods).
   # See: https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/ai_workloads/leader-worker-set-operator
-  log_info "Activating LeaderWorkerSet API..."
-  kubectl apply -f "${data_dir}/lws-operator-cr.yaml"
+  if [[ "$lws_available" == "true" && $lws_wait_rc -eq 0 ]]; then
+    log_info "Activating LeaderWorkerSet API..."
+    kubectl apply -f "${data_dir}/lws-operator-cr.yaml"
+  fi
 
-  log_info "Optional operators installed"
+  log_info "Optional operators step complete"
 }
 
 

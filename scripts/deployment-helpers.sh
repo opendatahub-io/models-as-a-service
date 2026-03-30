@@ -181,18 +181,95 @@ waitsubscriptioninstalled() {
 
   echo "  * Waiting for Subscription $ns/$name to start setup..."
   # Use fully qualified resource name to avoid conflicts with Knative subscriptions
-  kubectl wait subscription.operators.coreos.com --timeout=300s -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'
+  if ! kubectl wait subscription.operators.coreos.com --timeout=300s -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'; then
+    echo "    * ERROR: Subscription $ns/$name did not receive a CSV assignment within 300s."
+    echo "    * Diagnostics:"
+    local sub_source sub_source_ns pkg_name
+    sub_source=$(kubectl get subscription.operators.coreos.com -n "$ns" "$name" -o jsonpath='{.spec.source}' 2>/dev/null || echo "unknown")
+    sub_source_ns=$(kubectl get subscription.operators.coreos.com -n "$ns" "$name" -o jsonpath='{.spec.sourceNamespace}' 2>/dev/null || echo "unknown")
+    pkg_name=$(kubectl get subscription.operators.coreos.com -n "$ns" "$name" -o jsonpath='{.spec.name}' 2>/dev/null || echo "")
+    echo "    * CatalogSource: $sub_source_ns/$sub_source"
+    echo "    * Catalog status: $(kubectl get catalogsource "$sub_source" -n "$sub_source_ns" -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null || echo 'not found')"
+    if [[ -n "$pkg_name" ]]; then
+      if kubectl get packagemanifest "$pkg_name" --no-headers 2>/dev/null | head -1; then
+        echo "    * Package '$pkg_name' exists in catalog but subscription did not resolve"
+      else
+        echo "    * Package '$pkg_name' NOT FOUND in any catalog — operator may not be available for this cluster"
+      fi
+    fi
+    return 1
+  fi
+
   local csv
   csv=$(kubectl get subscription.operators.coreos.com -n "$ns" "$name" -o jsonpath='{.status.currentCSV}')
 
-  # Because, sometimes, the CSV is not there immediately.
+  # Wait for CSV resource to appear (with timeout to prevent infinite hang)
+  local csv_wait=0
   while ! kubectl get -n "$ns" csv "$csv" > /dev/null 2>&1; do
     sleep 1
+    csv_wait=$((csv_wait + 1))
+    if [[ $csv_wait -ge 60 ]]; then
+      echo "    * ERROR: CSV $csv was not created within 60s after subscription was assigned."
+      return 1
+    fi
   done
 
   echo "  * Waiting for Subscription setup to finish setup. CSV = $csv ..."
   if ! kubectl wait -n "$ns" --for=jsonpath="{.status.phase}"=Succeeded csv "$csv" --timeout=300s; then
-    echo "    * ERROR: Timeout while waiting for Subscription to finish installation."
+    echo "    * ERROR: Timeout while waiting for CSV $csv to reach Succeeded phase."
+    echo "    * CSV phase: $(kubectl get csv "$csv" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || echo 'unknown')"
+    echo "    * CSV message: $(kubectl get csv "$csv" -n "$ns" -o jsonpath='{.status.message}' 2>/dev/null || echo 'none')"
+    echo "    * Pods in $ns:"
+    kubectl get pods -n "$ns" --no-headers 2>/dev/null || true
+    return 1
+  fi
+}
+
+# check_package_available
+#   Checks if an OLM operator package is available in the catalog.
+#   Waits briefly for the catalog to be ready if needed.
+#
+#   Args:
+#     $1 - Package name (e.g. "leader-worker-set")
+#     $2 - CatalogSource name (e.g. "redhat-operators")
+#     $3 - CatalogSource namespace (default: openshift-marketplace)
+#
+#   Returns:
+#     0 - Package is available
+#     1 - Package not found or catalog not ready
+check_package_available() {
+  local package_name=${1?package name is required}
+  local catalog_source=${2?catalog source is required}
+  local source_namespace=${3:-openshift-marketplace}
+
+  # Check if the CatalogSource is ready (wait up to 60s)
+  local catalog_state
+  local waited=0
+  while [[ $waited -lt 60 ]]; do
+    catalog_state=$(kubectl get catalogsource "$catalog_source" -n "$source_namespace" -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null || echo "")
+    if [[ "$catalog_state" == "READY" ]]; then
+      break
+    fi
+    if [[ $waited -eq 0 ]]; then
+      echo "  * Waiting for CatalogSource $source_namespace/$catalog_source to be ready (currently: ${catalog_state:-not found})..."
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+
+  if [[ "$catalog_state" != "READY" ]]; then
+    echo "  * CatalogSource $source_namespace/$catalog_source is not ready (state: ${catalog_state:-not found})"
+    echo "  * Check: kubectl get catalogsource -n $source_namespace"
+    return 1
+  fi
+
+  # Check if the package exists
+  if kubectl get packagemanifest "$package_name" --no-headers --request-timeout=15s &>/dev/null; then
+    return 0
+  else
+    echo "  * Package '$package_name' not found in any catalog"
+    echo "  * This operator may not be available for this OpenShift version"
+    echo "  * Check: kubectl get packagemanifest | grep $package_name"
     return 1
   fi
 }
