@@ -1,7 +1,7 @@
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
 metadata:
-  name: usage-dashboard
+  name: dashboard-3-maas-usage-admin
   namespace: opendatahub
 spec:
   display:
