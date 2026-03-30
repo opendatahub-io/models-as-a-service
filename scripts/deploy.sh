@@ -82,6 +82,7 @@ DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
 OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
 NAMESPACE="${DEPLOYMENT_NAMESPACE:-}"  # Auto-determined based on operator type
+NAMESPACE_EXPLICIT="${DEPLOYMENT_NAMESPACE:+true}"  # Track if user explicitly set namespace
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 ENABLE_KEYCLOAK="${ENABLE_KEYCLOAK:-false}"
 VERBOSE="${VERBOSE:-false}"
@@ -260,6 +261,7 @@ parse_arguments() {
       --namespace)
         require_flag_value "$1" "${2:-}"
         NAMESPACE="$2"
+        NAMESPACE_EXPLICIT=true
         shift 2
         ;;
       --verbose)
@@ -381,7 +383,7 @@ validate_configuration() {
   # Auto-determine policy engine based on operator type
   # - ODH uses community Kuadrant (v1.3.1 from upstream catalog has AuthPolicy v1)
   # - RHOAI uses RHCL (Red Hat Connectivity Link - downstream)
-  if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+  if [[ -z "$POLICY_ENGINE" && "$DEPLOYMENT_MODE" == "operator" ]]; then
     case "$OPERATOR_TYPE" in
       odh)
         POLICY_ENGINE="kuadrant"
@@ -393,9 +395,13 @@ validate_configuration() {
         ;;
     esac
   else
-    # Kustomize mode: default to kuadrant (community)
-    POLICY_ENGINE="kuadrant"
-    log_debug "Using auto-determined policy engine for kustomize mode: $POLICY_ENGINE"
+    # Kustomize mode: use specified engine or default to kuadrant (community)
+    if [[ -z "$POLICY_ENGINE" ]]; then
+      POLICY_ENGINE="kuadrant"
+      log_debug "Using default policy engine for kustomize mode: $POLICY_ENGINE"
+    else
+      log_debug "Using specified policy engine for kustomize mode: $POLICY_ENGINE"
+    fi
   fi
 
   # Determine namespace based on deployment mode
@@ -633,8 +639,9 @@ deploy_via_kustomize() {
         ;;
     esac
 
-    # Validate user-specified namespace matches operator type
-    if [[ -n "$NAMESPACE" && "$NAMESPACE" != "$auto_namespace" ]]; then
+    # Validate namespace: fail if user explicitly set a conflicting value,
+    # otherwise auto-correct to match the detected operator
+    if [[ "$NAMESPACE_EXPLICIT" == "true" && "$NAMESPACE" != "$auto_namespace" ]]; then
       log_error ""
       log_error "╔═══════════════════════════════════════════════════════════╗"
       log_error "║ ✗ DEPLOYMENT FAILED: Namespace Mismatch                  ║"
@@ -661,10 +668,11 @@ deploy_via_kustomize() {
       exit 1
     fi
 
-    # Auto-set namespace if not specified
-    if [[ -z "$NAMESPACE" ]]; then
-      NAMESPACE="$auto_namespace"
+    # Auto-set namespace from detected operator
+    if [[ "$NAMESPACE" != "$auto_namespace" ]]; then
+      log_info "  Auto-correcting namespace: $NAMESPACE → $auto_namespace (detected $detected_operator_type)"
     fi
+    NAMESPACE="$auto_namespace"
   else
     # No operator detected - use default or user-specified namespace
     if [[ -z "$NAMESPACE" ]]; then
@@ -685,29 +693,47 @@ deploy_via_kustomize() {
   if [[ -n "$detected_dsc" ]]; then
     local dsc_validation_errors
     if ! dsc_validation_errors=$(validate_dsc_for_maas "$detected_dsc" 2>&1); then
-      log_error ""
-      log_error "╔═══════════════════════════════════════════════════════════╗"
-      log_error "║ ✗ DEPLOYMENT FAILED: Invalid DataScienceCluster          ║"
-      log_error "╚═══════════════════════════════════════════════════════════╝"
-      log_error ""
-      log_error "Component: DataScienceCluster Validation"
-      log_error "Problem: Existing DSC '$detected_dsc' does not meet MaaS requirements"
-      log_error ""
-      log_error "Configuration mismatches:"
-      while IFS= read -r line; do
-        log_error "  • $line"
+      log_warn ""
+      log_warn "┌─────────────────────────────────────────────────────────┐"
+      log_warn "│ ⚠ DataScienceCluster '$detected_dsc' needs changes for MaaS"
+      log_warn "└─────────────────────────────────────────────────────────┘"
+      log_warn ""
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        log_warn "  • $line"
       done <<< "$dsc_validation_errors"
-      log_error ""
-      log_error "To fix:"
-      log_error "  1. Edit the DataScienceCluster:"
-      log_error "     kubectl edit datasciencecluster $detected_dsc"
-      log_error ""
-      log_error "  2. Set the required fields as shown above"
-      log_error ""
-      log_error "  3. Re-run the deployment script:"
-      log_error "     ./scripts/deploy.sh --deployment-mode kustomize"
-      log_error ""
-      exit 1
+      log_warn ""
+
+      # Prompt user if running interactively, otherwise fail
+      if [[ -t 0 && "$DRY_RUN" != "true" ]]; then
+        printf "  Apply these patches automatically? [y/N] "
+        read -r answer
+        if [[ "$answer" =~ ^[Yy]$ ]]; then
+          log_info "  → Patching DataScienceCluster '$detected_dsc'..."
+          if patch_dsc_for_maas "$detected_dsc"; then
+            log_info "  ✓ DataScienceCluster patched and validated"
+          else
+            log_error "  ✗ Failed to patch DataScienceCluster"
+            exit 1
+          fi
+        else
+          log_error ""
+          log_error "Deployment cancelled. Fix the DSC manually:"
+          log_error "  kubectl edit datasciencecluster $detected_dsc"
+          exit 1
+        fi
+      else
+        # Non-interactive: fail with instructions
+        log_error ""
+        log_error "╔═══════════════════════════════════════════════════════════╗"
+        log_error "║ ✗ DEPLOYMENT FAILED: Invalid DataScienceCluster          ║"
+        log_error "╚═══════════════════════════════════════════════════════════╝"
+        log_error ""
+        log_error "To fix, either:"
+        log_error "  • Run this script interactively to auto-patch"
+        log_error "  • Or manually: kubectl edit datasciencecluster $detected_dsc"
+        log_error ""
+        exit 1
+      fi
     fi
   fi
 

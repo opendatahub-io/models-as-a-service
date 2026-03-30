@@ -1565,6 +1565,56 @@ validate_dsc_for_maas() {
   return 0
 }
 
+# patch_dsc_for_maas
+#   Patches a DataScienceCluster to meet MaaS requirements.
+#   Only patches fields that actually differ from expected values.
+#
+#   Args:
+#     $1 - DSC name to patch
+#
+#   Returns:
+#     0 - Patch applied and re-validation passed
+#     1 - Patch failed or re-validation failed
+patch_dsc_for_maas() {
+  local dsc_name=$1
+
+  if [[ -z "$dsc_name" ]]; then
+    >&2 echo "Error: DSC name not provided"
+    return 1
+  fi
+
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local dsc_manifest="${script_dir}/data/datasciencecluster.yaml"
+
+  if [[ ! -f "$dsc_manifest" ]]; then
+    >&2 echo "Error: DSC manifest not found at $dsc_manifest"
+    return 1
+  fi
+
+  # Build a merge patch from the reference manifest's spec.components
+  local patch
+  patch=$(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq '{spec: {components: .spec.components}}' 2>/dev/null)
+
+  if [[ -z "$patch" ]]; then
+    >&2 echo "Error: Failed to build patch from reference manifest"
+    return 1
+  fi
+
+  if ! kubectl patch datasciencecluster "$dsc_name" --type=merge -p "$patch" 2>&1; then
+    >&2 echo "Error: kubectl patch failed"
+    return 1
+  fi
+
+  # Re-validate
+  if ! validate_dsc_for_maas "$dsc_name" 2>/dev/null; then
+    >&2 echo "Error: DSC still invalid after patching"
+    return 1
+  fi
+
+  return 0
+}
+
 # detect_postgresql
 #   Detects PostgreSQL deployment status in a namespace.
 #   The setup-database.sh script creates a Deployment named "postgres".
