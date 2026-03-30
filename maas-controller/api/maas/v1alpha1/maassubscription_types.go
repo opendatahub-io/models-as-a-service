@@ -64,12 +64,8 @@ type ModelSubscriptionRef struct {
 	Namespace string `json:"namespace"`
 
 	// TokenRateLimits defines token-based rate limits for this model
-	// +optional
-	TokenRateLimits []TokenRateLimit `json:"tokenRateLimits,omitempty"`
-
-	// TokenRateLimitRef references an existing TokenRateLimit resource
-	// +optional
-	TokenRateLimitRef *string `json:"tokenRateLimitRef,omitempty"`
+	// +kubebuilder:validation:MinItems=1
+	TokenRateLimits []TokenRateLimit `json:"tokenRateLimits"`
 
 	// BillingRate defines the cost per token
 	// +optional
