@@ -2195,7 +2195,13 @@ configure_tls_backend() {
   # (piping to while-read would check while's exit status, not the script's)
   local tls_output
   local tls_rc=0
-  tls_output=$(AUTHORINO_NAMESPACE="$authorino_namespace" "$tls_script" 2>&1) || tls_rc=$?
+  # In kustomize mode, skip Authorino listener TLS — the Kuadrant operator's EnvoyFilter
+  # connects with plain gRPC and the ODH Model Controller (which adds TLS) doesn't run.
+  local skip_listener_tls="false"
+  if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
+    skip_listener_tls="true"
+  fi
+  tls_output=$(AUTHORINO_NAMESPACE="$authorino_namespace" SKIP_LISTENER_TLS="$skip_listener_tls" "$tls_script" 2>&1) || tls_rc=$?
   
   # Log each line of output
   while read -r line; do log_debug "$line"; done <<< "$tls_output"
