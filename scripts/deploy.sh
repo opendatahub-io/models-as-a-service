@@ -876,6 +876,15 @@ deploy_via_kustomize() {
     log_info "  ✓ Policy engine already installed and healthy"
     log_info "  ✓ CSV Gateway controller patch applied"
     log_info "  ✓ Kuadrant CR ready"
+    # Gateway might still need to be created (e.g., deleted between runs)
+    if [[ "$gateway_action" != "SKIP" ]]; then
+      log_info "  → Creating gateway..."
+      setup_gateway_api
+      setup_maas_gateway
+      log_info "  Waiting for Gateway to be Programmed..."
+      kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=120s 2>/dev/null || \
+        log_warn "  Gateway not yet Programmed after 120s"
+    fi
     log_info ""
   elif [[ "$policy_action" == "VERIFY" ]]; then
     log_info "  → Verifying policy engine configuration..."
@@ -1811,7 +1820,7 @@ setup_maas_gateway() {
   # Create the Gateway resource using the kustomize manifest
   # This includes both HTTP and HTTPS listeners, required annotations and labels
   log_info "Creating maas-default-gateway resource (allowing routes from all namespaces)..."
-  
+
   local maas_networking_dir="${SCRIPT_DIR}/../deployment/base/networking/maas"
   if [[ -d "$maas_networking_dir" ]]; then
     # Use local kustomize manifest with envsubst for variable substitution
