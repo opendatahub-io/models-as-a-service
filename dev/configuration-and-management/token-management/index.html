@@ -1456,6 +1456,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#interim-oidc-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interim OIDC Flow
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1726,34 +1737,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../model-access-behavior/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Model Access Behavior
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../maas-model-kinds/" class="md-nav__link">
         
   
@@ -1855,6 +1838,34 @@
     
   
     Controller Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../crd-annotations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CRD Annotations
   
 
     
@@ -2550,6 +2561,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#interim-oidc-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interim OIDC Flow
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2748,7 +2770,7 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
 </ol>
 <hr />
 <h2 id="model-discovery">Model Discovery</h2>
-<p>The <code>/v1/models</code> endpoint allows you to discover which models you're authorized to access. This endpoint works with any valid authentication token — you can use your OpenShift token or an API key.</p>
+<p>The <code>/v1/models</code> endpoint allows you to discover which models you're authorized to access. The API forwards the same <code>Authorization</code> header you send to each model route, so the result depends on what those model routes accept.</p>
 <h3 id="how-it-works">How It Works</h3>
 <p>When you call <strong>GET /v1/models</strong> with an <strong>Authorization</strong> header, the API passes that header <strong>as-is</strong> to each model's <code>/v1/models</code> endpoint to validate access. Only models that return 2xx or 405 are included in the list. No token exchange or modification is performed; the same header you send is used for the probe.</p>
 <pre class="mermaid"><code>flowchart LR
@@ -2757,14 +2779,22 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
     C --&gt; D[Return only models\nthat allow access]</code></pre>
 <p>This means you can:</p>
 <ol>
-<li><strong>Authenticate with OpenShift or OIDC</strong> — use your existing identity token for <code>GET /v1/models</code> (optional <code>X-MaaS-Subscription</code> when you have multiple subscriptions).</li>
-<li><strong>Use an API key</strong> — use your <code>sk-oai-*</code> key in the Authorization header for listing and for inference.</li>
-<li><strong>Call <code>/v1/models</code> immediately</strong> — see only the models you can access, without creating an API key first (if using an OpenShift token).</li>
+<li><strong>Use an API key</strong> — this is the most portable option because the current model-route AuthPolicies already validate <code>sk-oai-*</code> keys.</li>
+<li><strong>Use an identity token directly</strong> — only when the model routes themselves accept that token type.</li>
+<li><strong>Create a key first for the interim OIDC flow</strong> — when OIDC is enabled only on the <code>maas-api</code> route, use your OIDC token to call <code>POST /v1/api-keys</code>, then call <code>/v1/models</code> with the minted API key.</li>
 </ol>
 <div class="admonition note">
 <p class="admonition-title">Inference vs listing</p>
-<p>Inference (calls to each model’s chat/completions URL) requires an API key in <code>Authorization: Bearer</code> only. Do not send <code>X-MaaS-Subscription</code> on inference—the subscription is the one bound at API key mint time. <code>GET /v1/models</code> accepts either an API key or an OpenShift token; with a user token, <code>X-MaaS-Subscription</code> remains supported for filtering.</p>
+<p>Inference (calls to each model's chat/completions URL) requires an API key in <code>Authorization: Bearer</code> only. Do not send <code>X-MaaS-Subscription</code> on inference—the subscription is the one bound at API key mint time. <code>GET /v1/models</code> accepts either an API key or an OpenShift token; with a user token, <code>X-MaaS-Subscription</code> remains supported for filtering.</p>
 </div>
+<h3 id="interim-oidc-flow">Interim OIDC Flow</h3>
+<p>When the <code>maas-api</code> AuthPolicy is configured for OIDC but model HTTPRoutes still use the existing API-key-only policy, the flow is:</p>
+<ol>
+<li>Authenticate to your IdP and obtain an OIDC access token.</li>
+<li>Call <code>POST /v1/api-keys</code> with that OIDC token.</li>
+<li>Use the returned <code>sk-oai-*</code> key for <code>GET /v1/models</code> and inference requests.</li>
+</ol>
+<p>This preserves compatibility with the current model-route policy while allowing non-OpenShift identities to onboard through <code>maas-api</code>.</p>
 <hr />
 <h2 id="practical-usage">Practical Usage</h2>
 <p>For step-by-step instructions on obtaining and using API keys to access models, including practical examples and troubleshooting, see the <a href="../../user-guide/self-service-model-access/">Self-Service Model Access Guide</a>.</p>
@@ -2821,11 +2851,11 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
 <p><strong>Q: Can I use one API key to access multiple different models?</strong></p>
 <p>A: Yes. Your API key is bound to a subscription at creation time. If that subscription provides access to multiple models, a single key works for all of them. To access models from a different subscription, create a new API key bound to that subscription.</p>
 <hr />
-<p><strong>Q: What's the difference between my OpenShift token and an API key?</strong></p>
-<p>A: Your <strong>OpenShift token</strong> is your identity token from authentication (e.g., OpenShift or OIDC). An <strong>API key</strong> is a long-lived credential created via <code>POST /v1/api-keys</code> and stored as a hash in PostgreSQL. For <strong>GET /v1/models</strong>, the API passes your Authorization header as-is to each model endpoint; you can use either. For inference, use API key.</p>
+<p><strong>Q: What's the difference between my OpenShift/OIDC token and an API key?</strong></p>
+<p>A: Your <strong>OpenShift/OIDC token</strong> is your identity token from authentication. An <strong>API key</strong> is a long-lived credential created via <code>POST /v1/api-keys</code> and stored as a hash in PostgreSQL. The API passes your <code>Authorization</code> header as-is to each model endpoint, so use whichever credential type the model route accepts. In the current interim OIDC rollout, use the OIDC token to mint an API key first, then use that key for <code>/v1/models</code> and inference.</p>
 <hr />
 <p><strong>Q: Do I need an API key to list available models?</strong></p>
-<p>A: No. Call <strong>GET /v1/models</strong> with your OpenShift/OIDC token (or an API key) in the Authorization header. The API uses that same header to probe each model endpoint and returns only models you can access.</p>
+<p>A: Not always. If the target model routes accept your OpenShift or OIDC token directly, call <strong>GET /v1/models</strong> with that token. If only the <code>maas-api</code> route is OIDC-enabled and the model routes still use API-key auth, mint an API key with <code>POST /v1/api-keys</code> first and then call <strong>GET /v1/models</strong> with the returned key.</p>
 <hr />
 <p><strong>Q: Where is my API key stored?</strong></p>
 <p>A: Only the SHA-256 hash of your key is stored in PostgreSQL. The plaintext key is returned once at creation and is never stored. If you lose it, you must create a new key.</p>
@@ -2858,7 +2888,7 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 20:23:34 UTC">March 25, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 29, 2026 14:34:45 UTC">March 29, 2026</span>
   </span>
 
     
