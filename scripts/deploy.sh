@@ -722,17 +722,15 @@ deploy_via_kustomize() {
           exit 1
         fi
       else
-        # Non-interactive: fail with instructions
-        log_error ""
-        log_error "╔═══════════════════════════════════════════════════════════╗"
-        log_error "║ ✗ DEPLOYMENT FAILED: Invalid DataScienceCluster          ║"
-        log_error "╚═══════════════════════════════════════════════════════════╝"
-        log_error ""
-        log_error "To fix, either:"
-        log_error "  • Run this script interactively to auto-patch"
-        log_error "  • Or manually: kubectl edit datasciencecluster $detected_dsc"
-        log_error ""
-        exit 1
+        # Non-interactive (CI): auto-patch without prompting
+        log_info "  → Auto-patching DataScienceCluster '$detected_dsc' (non-interactive mode)..."
+        if patch_dsc_for_maas "$detected_dsc"; then
+          log_info "  ✓ DataScienceCluster patched and validated"
+        else
+          log_error "  ✗ Failed to patch DataScienceCluster"
+          log_error "    Fix manually: kubectl edit datasciencecluster $detected_dsc"
+          exit 1
+        fi
       fi
     fi
   fi
