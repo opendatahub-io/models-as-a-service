@@ -1517,6 +1517,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#ephemeral-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ephemeral Keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ephemeral-key-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ephemeral Key Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2622,6 +2644,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#ephemeral-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ephemeral Keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ephemeral-key-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ephemeral Key Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2831,6 +2875,78 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
 <p class="admonition-title">Important</p>
 <p><strong>For Platform Administrators</strong>: Admins can revoke any user's keys via <code>DELETE /v1/api-keys/:id</code> (if they own or have admin access) or <code>POST /v1/api-keys/bulk-revoke</code> with the target username. This is an effective way to immediately cut off access for a specific user in response to a security event.</p>
 </div>
+<h3 id="ephemeral-keys">Ephemeral Keys</h3>
+<p>Ephemeral keys are short-lived credentials designed for temporary programmatic access (e.g., playground sessions). They differ from regular keys:</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Regular Key</th>
+<th>Ephemeral Key</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Default expiration</td>
+<td>Configured maximum (e.g., 90 days)</td>
+<td>1 hour</td>
+</tr>
+<tr>
+<td>Maximum expiration</td>
+<td>Configured maximum</td>
+<td>1 hour</td>
+</tr>
+<tr>
+<td>Name required</td>
+<td>Yes</td>
+<td>No (auto-generated if omitted)</td>
+</tr>
+<tr>
+<td>Visible in default search</td>
+<td>Yes</td>
+<td>No (<code>includeEphemeral: true</code> required)</td>
+</tr>
+</tbody>
+</table>
+<p>Create an ephemeral key:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MAAS_API_URL</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;ephemeral&quot;: true, &quot;expiresIn&quot;: &quot;30m&quot;}&#39;</span>
+</code></pre></div>
+<h3 id="ephemeral-key-cleanup">Ephemeral Key Cleanup</h3>
+<p>Expired ephemeral keys are automatically deleted from the database by a <strong>CronJob</strong> (<code>maas-api-key-cleanup</code>) that runs every 15 minutes. This prevents unbounded accumulation of expired short-lived credentials.</p>
+<p><strong>How it works:</strong></p>
+<ol>
+<li>The CronJob sends <code>POST /internal/v1/api-keys/cleanup</code> to the maas-api Service</li>
+<li>The endpoint deletes ephemeral keys that expired <strong>more than 30 minutes ago</strong> (grace period)</li>
+<li>Regular (non-ephemeral) keys are <strong>never</strong> deleted by cleanup — they remain until manually revoked</li>
+</ol>
+<p><strong>Grace period:</strong> A 30-minute grace period after expiration ensures that recently-expired keys are not deleted while in-flight requests may still reference them. Only keys expired for longer than 30 minutes are removed.</p>
+<p><strong>Security:</strong> The cleanup endpoint is cluster-internal only:</p>
+<ul>
+<li>It is registered under <code>/internal/v1/</code> and is <strong>not exposed</strong> on the external Service or Route</li>
+<li>A <code>NetworkPolicy</code> (<code>maas-api-cleanup-restrict</code>) restricts cleanup pods to communicate only with <code>maas-api:8080</code> and DNS</li>
+<li>No authentication is required on the endpoint itself — access control is enforced at the network layer</li>
+</ul>
+<div class="admonition tip">
+<p class="admonition-title">Troubleshooting cleanup</p>
+<p><strong>Check CronJob status:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oc<span class="w"> </span>get<span class="w"> </span>cronjob<span class="w"> </span>maas-api-key-cleanup<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>oc<span class="w"> </span>get<span class="w"> </span><span class="nb">jobs</span><span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>maas-api-cleanup<span class="w"> </span>--sort-by<span class="o">=</span>.metadata.creationTimestamp
+</code></pre></div></p>
+<p><strong>View cleanup logs:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Latest CronJob run</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>oc<span class="w"> </span>logs<span class="w"> </span>job/<span class="k">$(</span>oc<span class="w"> </span>get<span class="w"> </span><span class="nb">jobs</span><span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>maas-api-cleanup<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--sort-by<span class="o">=</span>.metadata.creationTimestamp<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[-1].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>-n<span class="w"> </span>&lt;namespace&gt;
+</code></pre></div></p>
+<p><strong>Manually trigger cleanup</strong> (from an allowed pod or via oc exec):
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>oc<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>deploy/maas-api<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>curl<span class="w"> </span>-sf<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8080/internal/v1/api-keys/cleanup
+</code></pre></div>
+Response: <code>{"deletedCount": N, "message": "Successfully deleted N expired ephemeral key(s)"}</code></p>
+</div>
 <hr />
 <h2 id="frequently-asked-questions-faq">Frequently Asked Questions (FAQ)</h2>
 <p><strong>Q: My subscription access is wrong. How do I fix it?</strong></p>
@@ -2888,7 +3004,7 @@ See <a href="../quota-and-access-configuration/">Quota and Access Configuration<
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 29, 2026 14:34:45 UTC">March 29, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 30, 2026 16:08:31 UTC">March 30, 2026</span>
   </span>
 
     

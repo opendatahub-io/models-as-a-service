@@ -2058,6 +2058,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#subscriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subscriptions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#internal-endpoints-cluster-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internal Endpoints (Cluster-Only)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2399,6 +2421,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#subscriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subscriptions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#internal-endpoints-cluster-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internal Endpoints (Cluster-Only)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2548,6 +2592,60 @@
 </tr>
 </tbody>
 </table>
+<h3 id="subscriptions">Subscriptions</h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/v1/subscriptions</code></td>
+<td>List subscriptions accessible to the authenticated user.</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/v1/model/{model-id}/subscriptions</code></td>
+<td>List subscriptions that provide access to a specific model.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="internal-endpoints-cluster-only">Internal Endpoints (Cluster-Only)</h3>
+<p>These endpoints are registered under <code>/internal/v1/</code> and are <strong>not exposed</strong> on the external Service or Route. They are called by internal components (Authorino, CronJob) and protected by NetworkPolicy.</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Called By</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>POST</td>
+<td><code>/internal/v1/api-keys/validate</code></td>
+<td>Authorino</td>
+<td>Validate an API key (hash lookup, status/expiry check). Returns user identity and subscription for the gateway.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/internal/v1/api-keys/cleanup</code></td>
+<td>CronJob <code>maas-api-key-cleanup</code></td>
+<td>Delete expired ephemeral keys (30-minute grace period). Returns <code>{"deletedCount": N, "message": "..."}</code>.</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/internal/v1/subscriptions/select</code></td>
+<td>Authorino</td>
+<td>Select the appropriate subscription for a request based on user groups and optional explicit selection.</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="base-url">Base URL</h2>
 <p>The MaaS API is typically exposed under a path prefix, for example:</p>
@@ -2585,7 +2683,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 18:05:47 UTC">March 25, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 30, 2026 16:08:31 UTC">March 30, 2026</span>
   </span>
 
     
