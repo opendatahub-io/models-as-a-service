@@ -35,6 +35,8 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--operator-type <odh|rhoai>` - Which operator to install (default: odh)
 - `--deployment-mode <operator|kustomize>` - Deployment method (default: operator)
 - `--namespace <namespace>` - Target namespace for deployment
+- `--external-oidc` - Enable external OIDC on the `maas-api` AuthPolicy (kustomize mode only; in operator mode, configure `spec.externalOIDC` on the `ModelsAsService` CR)
+- `--enable-keycloak` - Deploy a Keycloak instance for external OIDC testing
 - `--enable-tls-backend` - Enable TLS backend (default)
 - `--disable-tls-backend` - Disable TLS backend
 - `--verbose` - Enable debug logging
@@ -44,7 +46,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--channel <channel>` - Operator channel override (default: fast-3 for ODH, fast-3.x for RHOAI)
 
 **Requirements:**
-- OpenShift cluster (4.16+)
+- OpenShift cluster (4.19.9+)
 - `oc` CLI installed and logged in
 - `kubectl` installed
 - `jq` installed
@@ -144,6 +146,35 @@ Results:
 
 ✅ PASS: All critical checks passed! 🎉
 ```
+
+---
+
+### External OIDC
+
+External OIDC can be enabled in two ways:
+
+**Operator mode:** Edit the `ModelsAsService` CR to add `spec.externalOIDC` with
+`issuerUrl` and `clientId`. The operator patches the AuthPolicy automatically.
+
+**Kustomize mode:** Use `--external-oidc` with env vars:
+```bash
+OIDC_ISSUER_URL=https://idp.example.com/realms/my-realm \
+OIDC_CLIENT_ID=my-client \
+./scripts/deploy.sh --deployment-mode kustomize --external-oidc
+```
+
+For a development Keycloak instance, use `--enable-keycloak` or run
+`./scripts/setup-keycloak.sh` directly. See
+[Keycloak setup](../docs/samples/install/keycloak/README.md) for realm
+configuration and test users.
+
+**E2E testing** with `EXTERNAL_OIDC=true` requires these environment variables:
+
+- `OIDC_ISSUER_URL`
+- `OIDC_TOKEN_URL`
+- `OIDC_CLIENT_ID`
+- `OIDC_USERNAME`
+- `OIDC_PASSWORD`
 
 ---
 

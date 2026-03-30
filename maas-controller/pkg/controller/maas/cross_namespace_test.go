@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -358,6 +359,14 @@ func TestMaaSSubscriptionReconciler_CrossNamespace(t *testing.T) {
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(modelA, routeA, modelB, routeB, maasSub).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", func(obj client.Object) []string {
+			sub := obj.(*maasv1alpha1.MaaSSubscription)
+			var refs []string
+			for _, modelRef := range sub.Spec.ModelRefs {
+				refs = append(refs, modelRef.Namespace+"/"+modelRef.Name)
+			}
+			return refs
+		}).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
@@ -462,6 +471,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(model, route, subA, subB).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}

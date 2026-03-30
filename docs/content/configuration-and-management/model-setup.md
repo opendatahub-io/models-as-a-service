@@ -320,6 +320,5 @@ curl -sSk -H "Authorization: Bearer $TOKEN" \
 
 - [Access and Quota Overview](subscription-overview.md) - Configure policies and subscriptions
 - [Quota and Access Configuration](quota-and-access-configuration.md) - Detailed configuration
-- [Model Access Behavior](model-access-behavior.md) - Expected behaviors when modifying model access
 - [Architecture Overview](../architecture.md) - Understand the overall MaaS architecture
 - [KServe LLMInferenceService Documentation](https://kserve.github.io/website/) - Official KServe documentation
