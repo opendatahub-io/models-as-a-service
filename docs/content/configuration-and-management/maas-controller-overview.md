@@ -235,11 +235,13 @@ The Kuadrant AuthPolicy validates API keys via the MaaS API and validates user t
 
 **For model inference routes** (HTTPRoutes targeting model workloads):
 
-The controller-generated AuthPolicies do **not** inject identity-related HTTP headers (`X-MaaS-Username`, `X-MaaS-Group`, `X-MaaS-Key-Id`, `X-MaaS-Subscription`) into requests forwarded to upstream model pods. This is a defense-in-depth security measure to prevent accidental disclosure of user identity, group membership, and key identifiers in:
+The controller-generated AuthPolicies do **not** inject most identity-related HTTP headers (`X-MaaS-Username`, `X-MaaS-Group`, `X-MaaS-Key-Id`) into requests forwarded to upstream model pods. This is a defense-in-depth security measure to prevent accidental disclosure of user identity, group membership, and key identifiers in:
 
 - Model runtime logs
 - Upstream debug dumps
 - Misconfigured proxies or sidecars
+
+**Exception:** `X-MaaS-Subscription` **is** injected for Istio Telemetry to enable per-subscription latency tracking. Istio runs in the Envoy gateway and cannot access Authorino's `auth.identity` context—it can only read request headers. The injected subscription value is server-controlled (resolved by Authorino from validated subscriptions), not client-provided.
 
 All identity information remains available to **gateway-level features** through Authorino's `auth.identity` and `auth.metadata` contexts, which are consumed by:
 
