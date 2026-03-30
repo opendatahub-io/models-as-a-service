@@ -152,12 +152,14 @@ This section covers how `maas-api` is configured to use TLS certificates. These 
 
 The `maas-api` component accepts TLS configuration via environment variables:
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `TLS_CERT` | Path to TLS certificate file | `/etc/maas-api/tls/tls.crt` |
-| `TLS_KEY` | Path to TLS private key file | `/etc/maas-api/tls/tls.key` |
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `TLS_CERT` | Path to TLS certificate file | (none) | `/etc/maas-api/tls/tls.crt` |
+| `TLS_KEY` | Path to TLS private key file | (none) | `/etc/maas-api/tls/tls.key` |
+| `TLS_SELF_SIGNED` | Generate a self-signed certificate at startup | `false` | `true` |
+| `TLS_MIN_VERSION` | Minimum accepted TLS version (`1.2` or `1.3`) | `1.2` | `1.3` |
 
-When both variables are set, the API server listens on HTTPS (port 8443) instead of HTTP (port 8080).
+When `TLS_CERT` and `TLS_KEY` are both set, the API server listens on HTTPS (port 8443) instead of HTTP (port 8080). If `TLS_SELF_SIGNED` is set to `true`, a self-signed certificate is generated automatically and explicit cert/key paths are not required. When both cert/key files and `TLS_SELF_SIGNED` are provided, the cert/key files take precedence.
 
 ### Volume Mounts
 
