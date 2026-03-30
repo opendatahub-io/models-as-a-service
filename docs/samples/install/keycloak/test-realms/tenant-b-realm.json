@@ -1,0 +1,57 @@
+{
+  "realm": "tenant-b",
+  "enabled": true,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "verifyEmail": false,
+  "requiredActions": [],
+  "defaultDefaultClientScopes": ["profile", "email"],
+  "clients": [
+    {
+      "clientId": "test-client",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {"name": "Product-Security"},
+    {"name": "Project-Omega"}
+  ],
+  "users": [
+    {
+      "username": "charlie_sec_lead",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "groups": ["Product-Security", "Project-Omega"]
+    },
+    {
+      "username": "grace_dev",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "groups": ["Project-Omega"]
+    }
+  ]
+}

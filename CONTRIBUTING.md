@@ -57,7 +57,8 @@ This project follows a **Stream-Lake-Ocean** release model. Code flows from acti
 |------|--------|
 | `scripts/` | Deployment and install scripts (e.g. `deploy.sh`, `deployment-helpers.sh`, `install-dependencies.sh`) |
 | `deployment/` | Kustomize manifests (base, overlays, networking, components) |
-| `maas-api/` | Go API service (keys, tokens, tiers); see [maas-api/README.md](maas-api/README.md) |
+| `maas-api/` | Go API service (keys, tokens, subscriptions); see [maas-api/README.md](maas-api/README.md) |
+| `maas-controller/` | Kubernetes controller for MaaS CRDs; see [maas-controller/README.md](maas-controller/README.md) |
 | `docs/` | User and admin documentation (MkDocs); [online docs](https://opendatahub-io.github.io/models-as-a-service/) |
 | `test/` | E2E and billing/smoke tests |
 | `.github/workflows/` | CI (build, PR title validation, MaaS API lint/build) |

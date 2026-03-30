@@ -21,12 +21,14 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
 )
 
 // routeConditionProgrammed is the "Programmed" condition type for route parent status.
@@ -39,9 +41,9 @@ type externalModelHandler struct {
 	r *MaaSModelRefReconciler
 }
 
-// ReconcileRoute validates the user-supplied HTTPRoute for an external model and populates status.
-// Users supply the HTTPRoute (the controller does not create it). The HTTPRoute naming convention
-// is "maas-model-<model.Name>" in the model's namespace.
+// ReconcileRoute validates the HTTPRoute for an external model and populates status.
+// The ExternalModel reconciler creates the "maas-model-<model.Name>" HTTPRoute in the
+// model's namespace. This method validates that it exists and is accepted by the gateway.
 func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	// Fetch the referenced ExternalModel CR to get provider configuration
 	externalModel := &maasv1alpha1.ExternalModel{}
@@ -56,14 +58,14 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		return fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
 	}
 
-	routeName := fmt.Sprintf("maas-model-%s", model.Name)
+	routeName := externalmodel.ModelRouteName(model.Name)
 	routeNS := model.Namespace
 
 	route := &gatewayapiv1.HTTPRoute{}
 	key := client.ObjectKey{Name: routeName, Namespace: routeNS}
 	if err := h.r.Get(ctx, key, route); err != nil {
 		if apierrors.IsNotFound(err) {
-			log.Info("HTTPRoute not found for ExternalModel, waiting for user to create it",
+			log.Info("HTTPRoute not found for ExternalModel, waiting for ExternalModel reconciler to create it",
 				"routeName", routeName, "namespace", routeNS, "model", model.Name)
 			// Clear stale route status so the model stays NotReady without requeue hot-looping
 			model.Status.Endpoint = ""
@@ -104,7 +106,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 
 	// Verify the gateway has accepted and programmed the route via status conditions
 	if gatewayFound {
-		for _, parent := range route.Status.RouteStatus.Parents {
+		for _, parent := range route.Status.Parents {
 			pName := string(parent.ParentRef.Name)
 			pNS := routeNS
 			if parent.ParentRef.Namespace != nil {
@@ -216,7 +218,7 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 }
 
 // CleanupOnDelete is called when the MaaSModelRef is deleted.
-// ExternalModel: the HTTPRoute is user-supplied, so the controller does not delete it.
+// ExternalModel: the ExternalModel reconciler handles cleanup of all resources via finalizer.
 func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	return nil
 }
@@ -226,7 +228,7 @@ func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Log
 type externalModelRouteResolver struct{}
 
 func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error) {
-	routeName = fmt.Sprintf("maas-model-%s", model.Name)
+	routeName = externalmodel.ModelRouteName(model.Name)
 	routeNamespace = model.Namespace
 	return routeName, routeNamespace, nil
 }

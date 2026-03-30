@@ -9,6 +9,7 @@
 # - ODH operator namespace (odh-operator)
 # - OpenDataHub application namespace (opendatahub)
 # - MaaS subscription namespace (models-as-a-service)
+# - Keycloak identity provider (if deployed)
 # - ODH CRDs (optional)
 #
 # Usage: ./cleanup-odh.sh [--include-crds]
@@ -123,12 +124,31 @@ for policy_ns in kuadrant-system rh-connectivity-link; do
     "authorinos.operator.authorino.kuadrant.io" "kuadrants.kuadrant.io" "limitadors.limitador.kuadrant.io"
 done
 
-# 11. Delete llm namespace and model resources
-echo "11. Deleting LLM models and namespace..."
+# 11. Delete Keycloak identity provider (if installed)
+echo "11. Deleting Keycloak namespace (if installed)..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd ../.. && pwd)"
+if [[ -f "${SCRIPT_DIR}/scripts/cleanup-keycloak.sh" ]]; then
+    # Pass --delete-crds if --include-crds was specified for this script
+    if $INCLUDE_CRDS; then
+        "${SCRIPT_DIR}/scripts/cleanup-keycloak.sh" --force --delete-crds 2>/dev/null || true
+    else
+        "${SCRIPT_DIR}/scripts/cleanup-keycloak.sh" --force 2>/dev/null || true
+    fi
+else
+    # Fallback if cleanup script not found - direct cleanup
+    force_delete_namespace "keycloak-system" "keycloaks.k8s.keycloak.org"
+    if $INCLUDE_CRDS; then
+        kubectl delete crd keycloaks.k8s.keycloak.org --ignore-not-found 2>/dev/null || true
+        kubectl delete crd keycloakrealmimports.k8s.keycloak.org --ignore-not-found 2>/dev/null || true
+    fi
+fi
+
+# 12. Delete llm namespace and model resources
+echo "12. Deleting LLM models and namespace..."
 force_delete_namespace "llm" "llminferenceservice" "inferenceservice" "maasmodelrefs.maas.opendatahub.io"
 
-# 12. Delete gateway resources in openshift-ingress
-echo "12. Deleting gateway resources..."
+# 13. Delete gateway resources in openshift-ingress
+echo "13. Deleting gateway resources..."
 kubectl delete gateway maas-default-gateway -n openshift-ingress --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter -n openshift-ingress -l kuadrant.io/managed=true --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter kuadrant-auth-tls-fix -n openshift-ingress --ignore-not-found 2>/dev/null || true
@@ -136,20 +156,20 @@ kubectl delete authpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/n
 kubectl delete ratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete tokenratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 
-# 13. Delete MaaS RBAC (ClusterRoles, ClusterRoleBindings - can conflict with other managers)
-echo "13. Deleting MaaS RBAC..."
+# 14. Delete MaaS RBAC (ClusterRoles, ClusterRoleBindings - can conflict with other managers)
+echo "14. Deleting MaaS RBAC..."
 kubectl delete clusterrolebinding maas-api maas-controller-rolebinding --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-api maas-controller-role --ignore-not-found 2>/dev/null || true
 
-# 14. Optionally delete CRDs
+# 15. Optionally delete CRDs
 if $INCLUDE_CRDS; then
-    echo "14. Deleting ODH CRDs..."
+    echo "15. Deleting ODH CRDs..."
     kubectl delete crd datascienceclusters.datasciencecluster.opendatahub.io --ignore-not-found 2>/dev/null || true
     kubectl delete crd dscinitializations.dscinitialization.opendatahub.io --ignore-not-found 2>/dev/null || true
     kubectl delete crd datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io --ignore-not-found 2>/dev/null || true
     # Add more CRDs as needed
 else
-    echo "14. Skipping CRD deletion (use --include-crds to remove CRDs)"
+    echo "15. Skipping CRD deletion (use --include-crds to remove CRDs)"
 fi
 
 echo ""
@@ -158,4 +178,4 @@ echo ""
 echo "Verify cleanup with:"
 echo "  kubectl get subscription -A | grep -i odh"
 echo "  kubectl get csv -A | grep -i odh"
-echo "  kubectl get ns | grep -E 'odh|opendatahub|models-as-a-service|kuadrant|rh-connectivity-link|llm'"
+echo "  kubectl get ns | grep -E 'odh|opendatahub|models-as-a-service|kuadrant|rh-connectivity-link|keycloak-system|llm'"

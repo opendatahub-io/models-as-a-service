@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -1409,6 +1410,88 @@ func TestCreateEphemeralAPIKey(t *testing.T) {
 	})
 }
 
+// ============================================================
+// CLEANUP EXPIRED EPHEMERAL KEYS TESTS (POST /internal/v1/api-keys/cleanup)
+// ============================================================
+
+func TestCleanupExpiredEphemeralKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+
+	// Create regular active key (should NOT be deleted)
+	err := store.AddKey(ctx, "alice", "regular-key", "hash-1", "Regular Key", "", []string{"users"}, testSubscriptionName, nil, false)
+	require.NoError(t, err)
+
+	// Create active ephemeral key with future expiration (should NOT be deleted)
+	futureExpiry := time.Now().Add(30 * time.Minute)
+	err = store.AddKey(ctx, "alice", "active-ephemeral", "hash-2", "Active Ephemeral", "", []string{"users"}, testSubscriptionName, &futureExpiry, true)
+	require.NoError(t, err)
+
+	// Create expired ephemeral key (should be deleted)
+	pastExpiry := time.Now().Add(-1 * time.Hour)
+	err = store.AddKey(ctx, "alice", "expired-ephemeral", "hash-3", "Expired Ephemeral", "", []string{"users"}, testSubscriptionName, &pastExpiry, true)
+	require.NoError(t, err)
+
+	// Create another expired ephemeral key (should be deleted)
+	pastExpiry2 := time.Now().Add(-2 * time.Hour)
+	err = store.AddKey(ctx, "bob", "expired-ephemeral-2", "hash-4", "Expired Ephemeral 2", "", []string{"users"}, testSubscriptionName, &pastExpiry2, true)
+	require.NoError(t, err)
+
+	// Create expired ephemeral key within 30-minute grace period (should NOT be deleted)
+	recentExpiry := time.Now().Add(-10 * time.Minute)
+	err = store.AddKey(ctx, "alice", "recently-expired-ephemeral", "hash-5", "Recently Expired Ephemeral", "", []string{"users"}, testSubscriptionName, &recentExpiry, true)
+	require.NoError(t, err)
+
+	t.Run("DeletesExpiredEphemeralKeys", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/internal/v1/api-keys/cleanup", nil)
+
+		//nolint:contextcheck // Gin handlers receive *gin.Context which contains the context.
+		handler.CleanupExpiredEphemeralKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response CleanupResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), response.DeletedCount)
+		assert.Contains(t, response.Message, "2 expired ephemeral key(s)")
+
+		// Verify expired keys are gone
+		_, err = store.Get(ctx, "expired-ephemeral")
+		require.ErrorIs(t, err, ErrKeyNotFound)
+		_, err = store.Get(ctx, "expired-ephemeral-2")
+		require.ErrorIs(t, err, ErrKeyNotFound)
+
+		// Verify regular, active ephemeral, and recently-expired (within grace period) keys still exist
+		_, err = store.Get(ctx, "regular-key")
+		require.NoError(t, err)
+		_, err = store.Get(ctx, "active-ephemeral")
+		require.NoError(t, err)
+		_, err = store.Get(ctx, "recently-expired-ephemeral")
+		require.NoError(t, err)
+	})
+
+	t.Run("NoExpiredKeysReturnsZero", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/internal/v1/api-keys/cleanup", nil)
+
+		handler.CleanupExpiredEphemeralKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response CleanupResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), response.DeletedCount)
+	})
+}
+
 func TestSearchExcludesEphemeralByDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
@@ -1429,9 +1512,10 @@ func TestSearchExcludesEphemeralByDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create ephemeral keys
-	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-1", "hash-3", "Ephemeral Key 1", "", []string{"system:authenticated"}, testSubscriptionName, nil, true)
+	futureExpiry := time.Now().Add(1 * time.Hour)
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-1", "hash-3", "Ephemeral Key 1", "", []string{"system:authenticated"}, testSubscriptionName, &futureExpiry, true)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-2", "hash-4", "Ephemeral Key 2", "", []string{"system:authenticated"}, testSubscriptionName, nil, true)
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-2", "hash-4", "Ephemeral Key 2", "", []string{"system:authenticated"}, testSubscriptionName, &futureExpiry, true)
 	require.NoError(t, err)
 
 	t.Run("DefaultSearchExcludesEphemeral", func(t *testing.T) {

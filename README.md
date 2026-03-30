@@ -118,7 +118,7 @@ MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \
 #### Minimal Deployments
 
 ```bash
-# Deploy without TLS backend (HTTP tier lookup)
+# Deploy without TLS backend (HTTP for Authorino to maas-api)
 ./scripts/deploy.sh --disable-tls-backend
 ```
 

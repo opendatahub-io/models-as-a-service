@@ -592,6 +592,47 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 }
 
 // ============================================================
+// CLEANUP EXPIRED EPHEMERAL KEYS TESTS
+// ============================================================
+
+func TestCleanupExpiredEphemeral(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("DeletesExpiredEphemeralKeys", func(t *testing.T) {
+		svc, store := createTestService(t)
+
+		// Add active regular key
+		err := store.AddKey(ctx, "alice", "regular-1", "hash-1", "Regular", "", nil, "default-sub", nil, false)
+		require.NoError(t, err)
+
+		// Add expired ephemeral key
+		pastExpiry := time.Now().Add(-1 * time.Hour)
+		err = store.AddKey(ctx, "alice", "ephemeral-1", "hash-2", "Ephemeral", "", nil, "default-sub", &pastExpiry, true)
+		require.NoError(t, err)
+
+		count, err := svc.CleanupExpiredEphemeral(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), count)
+
+		// Ephemeral key should be gone
+		_, err = store.Get(ctx, "ephemeral-1")
+		require.ErrorIs(t, err, api_keys.ErrKeyNotFound)
+
+		// Regular key should still exist
+		_, err = store.Get(ctx, "regular-1")
+		require.NoError(t, err)
+	})
+
+	t.Run("ReturnsZeroWhenNoExpiredKeys", func(t *testing.T) {
+		svc, _ := createTestService(t)
+
+		count, err := svc.CleanupExpiredEphemeral(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), count)
+	})
+}
+
+// ============================================================
 // TEST HELPERS
 // ============================================================
 

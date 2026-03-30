@@ -23,6 +23,7 @@ import (
 	"os"
 	"time"
 
+	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,9 +43,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
 )
 
 var (
@@ -227,6 +228,17 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
+		os.Exit(1)
+	}
+
+	if err := (&externalmodel.Reconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		Log:              ctrl.Log.WithName("controllers").WithName("ExternalModel"),
+		GatewayName:      gatewayName,
+		GatewayNamespace: gatewayNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ExternalModel")
 		os.Exit(1)
 	}
 

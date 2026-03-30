@@ -7,9 +7,23 @@ This guide explains how to configure models so they appear in the MaaS platform 
 
 ## Supported model types
 
-MaaS is planning support for multiple model types through a **provider paradigm**: each MaaSModelRef references a model backend by `kind` (e.g., `LLMInferenceService`, `ExternalModel`). The controller uses provider-specific logic to reconcile and resolve each type.
+MaaS distinguishes between **supported LLMs** (the model weights/architectures) and **supported inference services** (the runtime backends).
 
-**LLMInferenceService** will be initially supported. The initial release focuses on using KServe for on-cluster models. This guide describes the configuration differences between the default LLMInferenceService and the MaaS-enabled one to help users understand the differences.
+### Supported LLMs
+
+Most LLM model families should work (e.g., Llama, Mistral, Qwen, GPT-style models). We are working on an official validated list. If you encounter issues with a specific model, please report them.
+
+### Supported inference services
+
+MaaS uses a **provider paradigm**: each MaaSModelRef references a model backend by `kind` (e.g., `LLMInferenceService`, `ExternalModel`). The controller uses provider-specific logic to reconcile and resolve each type. Supported inference runtimes include:
+
+| Inference service | Status |
+|-------------------|--------|
+| **vLLM** (via LLMInferenceService / KServe) | Initial supported release. This is the primary supported backend for on-cluster models. |
+| **KServe** (LLMInferenceService) | Runtime framework. vLLM workloads run through LLMInferenceService. |
+| **Additional backends** | Planned for future releases. |
+
+This guide describes the configuration differences between the default LLMInferenceService and the MaaS-enabled one to help users understand the differences.
 
 ## How the model list is built
 
@@ -306,6 +320,5 @@ curl -sSk -H "Authorization: Bearer $TOKEN" \
 
 - [Access and Quota Overview](subscription-overview.md) - Configure policies and subscriptions
 - [Quota and Access Configuration](quota-and-access-configuration.md) - Detailed configuration
-- [Model Access Behavior](model-access-behavior.md) - Expected behaviors when modifying model access
 - [Architecture Overview](../architecture.md) - Understand the overall MaaS architecture
 - [KServe LLMInferenceService Documentation](https://kserve.github.io/website/) - Official KServe documentation

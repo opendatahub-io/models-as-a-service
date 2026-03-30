@@ -75,9 +75,14 @@ nav:
       - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
       - Token Management: configuration-and-management/token-management.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
+      - Subscription Known Issues: configuration-and-management/subscription-known-issues.md
     - Models:
       - Model Setup (On Cluster): configuration-and-management/model-setup.md
       - Model Listing Flow: configuration-and-management/model-listing-flow.md
+      - MaaS Model Kinds: configuration-and-management/maas-model-kinds.md
+    - MaaS Controller:
+      - Controller Overview: configuration-and-management/maas-controller-overview.md
+      - CRD Annotations: configuration-and-management/crd-annotations.md
     - Advanced Administration:
       - Observability: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md

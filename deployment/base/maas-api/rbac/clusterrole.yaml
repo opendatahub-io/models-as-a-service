@@ -3,10 +3,6 @@ kind: ClusterRole
 metadata:
   name: maas-api
 rules:
-- apiGroups: [""]
-  resources: ["configmaps"]
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-
 # Database configuration secret
 - apiGroups: [""]
   resources: ["secrets"]
@@ -34,6 +30,7 @@ rules:
 - apiGroups: ["authorization.k8s.io"]
   resources: ["subjectaccessreviews"]
   verbs: ["create"]
+
 
 # MaaS CRs for the models endpoint and subscription selector (cached via informer)
 - apiGroups: ["maas.opendatahub.io"]

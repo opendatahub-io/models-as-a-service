@@ -148,5 +148,15 @@ The `prow_run_smoke_test.sh` script:
    - API key management (`test_api_keys.py`)
    - Subscription controller (`test_subscription.py`)
    - Models endpoint (`test_models_endpoint.py`)
-4. Runs deployment validation and token metadata verification
-5. Collects artifacts (HTML/XML reports, logs) to `ARTIFACT_DIR`
+   - External OIDC (`test_external_oidc.py`) when `EXTERNAL_OIDC=true`
+4. Requires externally provided OIDC settings when `EXTERNAL_OIDC=true`
+5. Runs deployment validation and token metadata verification
+6. Collects artifacts (HTML/XML reports, logs) to `ARTIFACT_DIR`
+
+When enabling external OIDC coverage, provide a pre-existing OIDC provider and export:
+
+- `OIDC_ISSUER_URL`
+- `OIDC_TOKEN_URL`
+- `OIDC_CLIENT_ID`
+- `OIDC_USERNAME`
+- `OIDC_PASSWORD`

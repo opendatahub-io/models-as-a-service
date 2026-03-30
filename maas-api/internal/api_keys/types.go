@@ -150,3 +150,13 @@ type BulkRevokeResponse struct {
 	RevokedCount int    `json:"revokedCount"`
 	Message      string `json:"message"`
 }
+
+// ============================================================
+// CLEANUP TYPES
+// ============================================================
+
+// CleanupResponse is the HTTP response for POST /internal/v1/api-keys/cleanup.
+type CleanupResponse struct {
+	DeletedCount int64  `json:"deletedCount"`
+	Message      string `json:"message"`
+}

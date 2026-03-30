@@ -19,10 +19,10 @@ Authorino TLS is configured by `scripts/setup-authorino-tls.sh` (run automatical
 Client :443 → Gateway (TLS termination) → DestinationRule → maas-api :8443
 ```
 
-**Internal (Authorino → maas-api for tier lookup):**
+**Internal (Authorino → maas-api for API key validation and metadata):**
 
 ```
-Authorino → maas-api :8443 → /v1/tiers/lookup
+Authorino → maas-api :8443 → /internal/v1/api-keys/validate
 ```
 
 ## Usage

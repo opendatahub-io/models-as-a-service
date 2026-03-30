@@ -324,7 +324,7 @@ func TestListingModels(t *testing.T) {
 	require.NoError(t, errMgr)
 
 	// Set up test fixtures
-	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
 	// Create a mock subscription selector that auto-selects for single subscription users
@@ -428,7 +428,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	modelMgr, errMgr := models.NewManager(testLogger)
 	require.NoError(t, errMgr)
 
-	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
 	// Create subscription lister with premium and free subscriptions
@@ -656,7 +656,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -709,7 +709,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 		router2, _ := fixtures.SetupTestServer(t, config)
 
-		_, cleanup2 := fixtures.StubTokenProviderAPIs(t, true)
+		_, cleanup2 := fixtures.StubTokenProviderAPIs(t)
 		defer cleanup2()
 
 		tokenHandler2 := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -838,7 +838,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -949,7 +949,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -1049,7 +1049,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -1148,7 +1148,7 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	_, cleanup := fixtures.StubTokenProviderAPIs(t, true)
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
