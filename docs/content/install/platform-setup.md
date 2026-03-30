@@ -388,8 +388,7 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
     Wait for the operator webhook to be ready:
 
     ```shell
-    
-    
+    kubectl wait --for=condition=Available --timeout=120s deployment/opendatahub-operator-controller-manager -n openshift-operators
     ```
 
 === "Red Hat OpenShift AI"
