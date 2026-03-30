@@ -456,12 +456,11 @@ allow {
 		rule["response"] = map[string]interface{}{
 			"success": map[string]interface{}{
 				"headers": map[string]interface{}{
-					// X-MaaS-Subscription required for Istio Telemetry metrics (per-subscription latency)
-					// Other identity headers (Username, Group, Key-Id) intentionally omitted to prevent
-					// disclosure in model workload logs. This is server-controlled (not client-provided).
+					// Subscription bound to API key (only for API keys)
+					// For K8s tokens, this header is not injected (empty string)
 					"X-MaaS-Subscription": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
+							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : ""`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
