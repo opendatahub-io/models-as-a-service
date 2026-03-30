@@ -81,7 +81,7 @@ spec:
                 operator: matches
                 value: "^Bearer sk-oai-.*"
             plain:
-              expression: '''["'' + auth.metadata.apiKeyValidation.groups.join(''","'') + ''"]'''
+              selector: auth.metadata.apiKeyValidation.groups.@tostr
             priority: 0
           # Groups: from OpenShift identity as JSON array (fallback for non-API-key tokens)
           # No 'when' clause - always tries to inject, but priority 1 means API key wins

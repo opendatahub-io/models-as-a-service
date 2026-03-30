@@ -149,6 +149,8 @@ func main() {
 	var maasAPINamespace string
 	var maasSubscriptionNamespace string
 	var clusterAudience string
+	var metadataCacheTTL int64
+	var authzCacheTTL int64
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -159,6 +161,8 @@ func main() {
 	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "opendatahub", "The namespace where maas-api service is deployed.")
 	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
 	flag.StringVar(&clusterAudience, "cluster-audience", "https://kubernetes.default.svc", "The OIDC audience of the cluster for TokenReview. HyperShift/ROSA clusters use a custom OIDC provider URL.")
+	flag.Int64Var(&metadataCacheTTL, "metadata-cache-ttl", 60, "TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info).")
+	flag.Int64Var(&authzCacheTTL, "authz-cache-ttl", 60, "TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership).")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -214,11 +218,13 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&maas.MaaSAuthPolicyReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		MaaSAPINamespace: maasAPINamespace,
-		GatewayName:      gatewayName,
-		ClusterAudience:  clusterAudience,
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		MaaSAPINamespace:  maasAPINamespace,
+		GatewayName:       gatewayName,
+		ClusterAudience:   clusterAudience,
+		MetadataCacheTTL:  metadataCacheTTL,
+		AuthzCacheTTL:     authzCacheTTL,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
 		os.Exit(1)
