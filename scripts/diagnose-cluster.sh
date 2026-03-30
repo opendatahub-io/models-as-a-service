@@ -236,15 +236,44 @@ elif [[ "$dsc_validated" == "false" ]]; then
   echo "DataScienceCluster exists but does not meet MaaS requirements."
   echo "Deployment will FAIL unless DSC is fixed."
   echo ""
-  echo "Action required:"
-  echo "  1. Edit the DataScienceCluster:"
-  echo "     kubectl edit datasciencecluster $dsc_name"
-  echo ""
-  echo "  2. Fix the configuration mismatches shown above"
-  echo ""
-  echo "  3. Re-run diagnostics to verify:"
-  echo "     ./scripts/diagnose-cluster.sh"
-  echo ""
+
+  # Offer to patch if running interactively
+  if [[ -t 0 ]]; then
+    printf "  Apply required patches to '%s' automatically? [y/N] " "$dsc_name"
+    read -r answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      echo ""
+      echo "  → Patching DataScienceCluster '$dsc_name'..."
+      if patch_dsc_for_maas "$dsc_name"; then
+        echo "  ✓ DataScienceCluster patched and validated"
+        dsc_validated="true"
+      else
+        echo "  ✗ Failed to patch DataScienceCluster"
+      fi
+      echo ""
+    else
+      echo ""
+      echo "Action required:"
+      echo "  1. Edit the DataScienceCluster:"
+      echo "     kubectl edit datasciencecluster $dsc_name"
+      echo ""
+      echo "  2. Fix the configuration mismatches shown above"
+      echo ""
+      echo "  3. Re-run diagnostics to verify:"
+      echo "     ./scripts/diagnose-cluster.sh"
+      echo ""
+    fi
+  else
+    echo "Action required:"
+    echo "  1. Edit the DataScienceCluster:"
+    echo "     kubectl edit datasciencecluster $dsc_name"
+    echo ""
+    echo "  2. Fix the configuration mismatches shown above"
+    echo ""
+    echo "  3. Re-run diagnostics to verify:"
+    echo "     ./scripts/diagnose-cluster.sh"
+    echo ""
+  fi
 
 elif [[ -n "$operator_type" && -n "$policy_engine" ]] \
      && [[ "$maas_api_status" != "missing" || "$maas_controller_status" != "missing" || "$postgres_status" != "missing" ]]; then

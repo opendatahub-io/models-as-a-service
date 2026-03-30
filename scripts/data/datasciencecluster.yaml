@@ -12,5 +12,3 @@ spec:
       rawDeploymentServiceConfig: Headed
       modelsAsService:
         managementState: Managed
-    dashboard:
-      managementState: Removed

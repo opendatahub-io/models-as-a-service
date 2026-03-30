@@ -4,7 +4,7 @@ metadata:
   name: maas-api-backend-tls
   namespace: openshift-ingress
 spec:
-  host: maas-api.maas-api.svc.cluster.local
+  host: maas-api.placehold.svc.cluster.local
   trafficPolicy:
     portLevelSettings:
     - port:
