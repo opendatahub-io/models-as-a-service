@@ -378,6 +378,17 @@ allow {
 		rule["response"] = map[string]any{
 			"success": map[string]any{
 				"headers": map[string]any{
+					// Strip Authorization header to prevent token exfiltration to model backends
+					// Both API keys and OpenShift tokens are validated by Authorino, but should
+					// not be forwarded to model services to prevent credential theft
+					"Authorization": map[string]any{
+						"plain": map[string]any{
+							"value": "",
+						},
+						"key":      "authorization",
+						"metrics":  false,
+						"priority": int64(0),
+					},
 					// Username from API key validation or K8s token identity
 					"X-MaaS-Username": map[string]any{
 						"plain": map[string]any{
