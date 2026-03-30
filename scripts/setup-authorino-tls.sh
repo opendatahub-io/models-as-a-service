@@ -36,20 +36,45 @@ kubectl annotate service authorino-authorino-authorization \
   service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert \
   --overwrite
 
-echo "🔧 Patching Authorino CR for TLS listener and CA bundle volume..."
-kubectl patch authorino authorino -n "$NAMESPACE" --type=merge --patch '
-{
-  "spec": {
-    "listener": {
-      "tls": {
-        "enabled": true,
-        "certSecretRef": {
-          "name": "authorino-server-cert"
+# Authorino listener TLS: In operator mode, the ODH Model Controller creates an EnvoyFilter
+# with a TLS transport_socket for the gateway-to-Authorino gRPC connection (triggered by the
+# gateway annotation security.opendatahub.io/authorino-tls-bootstrap: "true"). In kustomize
+# mode, this controller doesn't run, so we must NOT enable listener TLS — the Kuadrant
+# operator's EnvoyFilter connects to Authorino with plain gRPC and cannot be patched
+# (operator reconciles and reverts changes, and MERGE EnvoyFilters don't apply to
+# ADD-created clusters).
+#
+# We still configure CA bundles so Authorino can make outbound TLS calls to maas-api
+# for API key validation.
+if [[ "${SKIP_LISTENER_TLS:-false}" != "true" ]]; then
+  echo "🔧 Patching Authorino CR for TLS listener..."
+  kubectl patch authorino authorino -n "$NAMESPACE" --type=merge --patch '
+  {
+    "spec": {
+      "listener": {
+        "tls": {
+          "enabled": true,
+          "certSecretRef": {
+            "name": "authorino-server-cert"
+          }
         }
       }
     }
-  }
-}'
+  }'
+else
+  echo "⏭️  Skipping Authorino listener TLS (kustomize mode — gRPC stays plain)"
+  # Ensure listener TLS is disabled (may have been enabled by a previous operator-mode deploy)
+  kubectl patch authorino authorino -n "$NAMESPACE" --type=merge --patch '
+  {
+    "spec": {
+      "listener": {
+        "tls": {
+          "enabled": false
+        }
+      }
+    }
+  }'
+fi
 
 # Note: The Authorino CR doesn't support envVars, so we patch the deployment directly
 echo "🌍 Adding environment variables to Authorino deployment..."
