@@ -209,13 +209,15 @@ run_auth_debug_report() {
   _run "maas-controller MAAS_API_NAMESPACE" "echo '$env_display'"
   _append ""
 
-  _section "Kuadrant AuthPolicies"
+  _section "Kuadrant Policies"
   _run "AuthPolicies (all namespaces)" "kubectl get authpolicies -A -o wide 2>/dev/null || true"
+  _run "TokenRateLimitPolicies (all namespaces)" "kubectl get tokenratelimitpolicies -A -o wide 2>/dev/null || true"
   _append ""
 
   _section "MaaS CRs"
   _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
   _run "MaaSSubscriptions" "kubectl get maassubscriptions -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
+  _run "MaaSSubscription status details" "kubectl get maassubscriptions -n $MAAS_SUBSCRIPTION_NAMESPACE -o jsonpath='{range .items[*]}{.metadata.name}: {.status.phase} - {.status.conditions[?(@.type==\"Ready\")].message}{\"\\n\"}{end}' 2>/dev/null || true"
   _run "MaaSModelRefs (all namespaces)" "kubectl get maasmodelrefs -A -o wide 2>/dev/null || true"
   _append ""
 

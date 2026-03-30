@@ -127,8 +127,8 @@ pytest tests/test_models_endpoint.py::TestModelsEndpoint::test_multi_subscriptio
 
 **What's Being Validated:**
 The `/v1/models` endpoint implements subscription-aware model filtering:
-- Users with a single subscription don't need to specify `x-maas-subscription` header
-- Users with multiple subscriptions must use `x-maas-subscription` header to select
+- With a **user token**, a single matching subscription can be auto-selected; with multiple subscriptions, the tests expect `X-MaaS-Subscription` when the platform cannot disambiguate.
+- With an **API key**, the subscription is fixed at mint time—listing does not rely on sending `X-MaaS-Subscription` for that case.
 - Returns proper error responses (403/401) with `permission_error`/`authentication_error` types
 - Models are correctly filtered to only show those from the specified subscription
 - Response structure matches OpenAPI schema: `{"object": "list", "data": [...]}`
@@ -148,5 +148,15 @@ The `prow_run_smoke_test.sh` script:
    - API key management (`test_api_keys.py`)
    - Subscription controller (`test_subscription.py`)
    - Models endpoint (`test_models_endpoint.py`)
-4. Runs deployment validation and token metadata verification
-5. Collects artifacts (HTML/XML reports, logs) to `ARTIFACT_DIR`
+   - External OIDC (`test_external_oidc.py`) when `EXTERNAL_OIDC=true`
+4. Requires externally provided OIDC settings when `EXTERNAL_OIDC=true`
+5. Runs deployment validation and token metadata verification
+6. Collects artifacts (HTML/XML reports, logs) to `ARTIFACT_DIR`
+
+When enabling external OIDC coverage, provide a pre-existing OIDC provider and export:
+
+- `OIDC_ISSUER_URL`
+- `OIDC_TOKEN_URL`
+- `OIDC_CLIENT_ID`
+- `OIDC_USERNAME`
+- `OIDC_PASSWORD`

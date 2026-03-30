@@ -21,10 +21,11 @@ import (
 	"strings"
 	"testing"
 
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 func newExternalModel(name, ns, provider, endpoint string) *maasv1alpha1.MaaSModelRef {
@@ -32,10 +33,21 @@ func newExternalModel(name, ns, provider, endpoint string) *maasv1alpha1.MaaSMod
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: maasv1alpha1.MaaSModelSpec{
 			ModelRef: maasv1alpha1.ModelReference{
-				Kind:     "ExternalModel",
-				Name:     name,
-				Provider: provider,
-				Endpoint: endpoint,
+				Kind: "ExternalModel",
+				Name: name,
+			},
+		},
+	}
+}
+
+func newExternalModelCR(name, ns, provider, endpoint string) *maasv1alpha1.ExternalModel {
+	return &maasv1alpha1.ExternalModel{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: maasv1alpha1.ExternalModelSpec{
+			Provider: provider,
+			Endpoint: endpoint,
+			CredentialRef: maasv1alpha1.CredentialReference{
+				Name: name + "-api-key",
 			},
 		},
 	}
@@ -85,9 +97,10 @@ func newGatewayWithHostname(name, ns, hostname string) *gatewayapiv1.Gateway {
 
 func TestExternalModel_ReconcileRoute_Success(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
 	route := newHTTPRouteWithGateway("maas-model-gpt-4o", "default", "maas-default-gateway", "openshift-ingress")
 
-	r, _ := newTestReconciler(model, route)
+	r, _ := newTestReconciler(model, externalModelCR, route)
 	r.GatewayName = "maas-default-gateway"
 	r.GatewayNamespace = "openshift-ingress"
 	handler := &externalModelHandler{r: r}
@@ -108,11 +121,12 @@ func TestExternalModel_ReconcileRoute_Success(t *testing.T) {
 
 func TestExternalModel_ReconcileRoute_MissingHTTPRoute(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
 	// Pre-populate status to verify it gets cleared
 	model.Status.HTTPRouteName = "stale-route"
 	model.Status.Endpoint = "https://stale.example.com/gpt-4o"
 
-	r, _ := newTestReconciler(model)
+	r, _ := newTestReconciler(model, externalModelCR)
 	r.GatewayName = "maas-default-gateway"
 	r.GatewayNamespace = "openshift-ingress"
 	handler := &externalModelHandler{r: r}
@@ -130,8 +144,9 @@ func TestExternalModel_ReconcileRoute_MissingHTTPRoute(t *testing.T) {
 	}
 }
 
-func TestExternalModel_ReconcileRoute_MissingProvider(t *testing.T) {
-	model := newExternalModel("gpt-4o", "default", "", "api.openai.com")
+func TestExternalModel_ReconcileRoute_MissingExternalModel(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	// Don't create ExternalModel CR - it should fail
 
 	r, _ := newTestReconciler(model)
 	handler := &externalModelHandler{r: r}
@@ -139,18 +154,19 @@ func TestExternalModel_ReconcileRoute_MissingProvider(t *testing.T) {
 
 	err := handler.ReconcileRoute(context.Background(), log, model)
 	if err == nil {
-		t.Fatal("ReconcileRoute: expected error for missing provider")
+		t.Fatal("ReconcileRoute: expected error for missing ExternalModel CR")
 	}
-	if !strings.Contains(err.Error(), "provider") {
-		t.Errorf("ReconcileRoute: error = %q, want to contain 'provider'", err.Error())
+	if !strings.Contains(err.Error(), "ExternalModel") || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("ReconcileRoute: error = %q, want to contain 'ExternalModel' and 'not found'", err.Error())
 	}
 }
 
 func TestExternalModel_ReconcileRoute_WrongGateway(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
 	route := newHTTPRouteWithGateway("maas-model-gpt-4o", "default", "wrong-gateway", "wrong-ns")
 
-	r, _ := newTestReconciler(model, route)
+	r, _ := newTestReconciler(model, externalModelCR, route)
 	r.GatewayName = "maas-default-gateway"
 	r.GatewayNamespace = "openshift-ingress"
 	handler := &externalModelHandler{r: r}
@@ -271,17 +287,13 @@ func TestExternalModel_CleanupOnDelete(t *testing.T) {
 }
 
 func TestExternalModel_CredentialRef(t *testing.T) {
-	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
-	model.Spec.CredentialRef = &maasv1alpha1.CredentialReference{
-		Name:      "openai-api-key",
-		Namespace: "opendatahub",
+	externalModel := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
+	externalModel.Spec.CredentialRef = maasv1alpha1.CredentialReference{
+		Name: "openai-api-key",
 	}
 
-	if model.Spec.CredentialRef.Name != "openai-api-key" {
-		t.Errorf("CredentialRef.Name = %q, want %q", model.Spec.CredentialRef.Name, "openai-api-key")
-	}
-	if model.Spec.CredentialRef.Namespace != "opendatahub" {
-		t.Errorf("CredentialRef.Namespace = %q, want %q", model.Spec.CredentialRef.Namespace, "opendatahub")
+	if externalModel.Spec.CredentialRef.Name != "openai-api-key" {
+		t.Errorf("CredentialRef.Name = %q, want %q", externalModel.Spec.CredentialRef.Name, "openai-api-key")
 	}
 }
 

@@ -10,7 +10,6 @@ import (
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	kservelistersv1alpha1 "github.com/kserve/kserve/pkg/client/listers/serving/v1alpha1"
 	authv1 "k8s.io/api/authentication/v1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -19,7 +18,6 @@ import (
 	gatewaylisters "sigs.k8s.io/gateway-api/pkg/client/listers/apis/v1"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tier"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
@@ -41,10 +39,9 @@ type TokenReviewScenario struct {
 
 // TestServerConfig holds configuration for test server setup.
 type TestServerConfig struct {
-	WithTierConfig bool
-	Objects        []runtime.Object
-	TestNamespace  string
-	TestTenant     string
+	Objects       []runtime.Object
+	TestNamespace string
+	TestTenant    string
 }
 
 type TestClients struct {
@@ -84,11 +81,6 @@ func SetupTestServer(_ *testing.T, config TestServerConfig) (*gin.Engine, *TestC
 		}
 	}
 
-	if config.WithTierConfig {
-		configMap := CreateTierConfigMap(config.TestNamespace)
-		k8sObjects = append(k8sObjects, configMap)
-	}
-
 	k8sClient := k8sfake.NewClientset(k8sObjects...)
 	clients := &TestClients{
 		K8sClient:                 k8sClient,
@@ -100,15 +92,8 @@ func SetupTestServer(_ *testing.T, config TestServerConfig) (*gin.Engine, *TestC
 }
 
 // StubTokenProviderAPIs creates common test components for token tests.
-func StubTokenProviderAPIs(_ *testing.T, withTierConfig bool) (*k8sfake.Clientset, func()) {
-	var objects []runtime.Object
-
-	if withTierConfig {
-		configMap := CreateTierConfigMap(TestNamespace)
-		objects = append(objects, configMap)
-	}
-
-	fakeClient := k8sfake.NewClientset(objects...)
+func StubTokenProviderAPIs(_ *testing.T) (*k8sfake.Clientset, func()) {
+	fakeClient := k8sfake.NewClientset()
 
 	// Stub ServiceAccount token creation for tests
 	StubServiceAccountTokenCreation(fakeClient)
@@ -136,30 +121,6 @@ func SetupTestRouter() (*gin.Engine, func() error) {
 	}
 
 	return router, cleanup
-}
-
-// SetupTierTestRouter creates a test router for tier endpoints.
-func SetupTierTestRouter(mapper *tier.Mapper) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-
-	handler := tier.NewHandler(mapper)
-	router.POST("/tiers/lookup", handler.TierLookup)
-
-	return router
-}
-
-// CreateTestMapper creates a tier mapper for testing.
-func CreateTestMapper(withConfigMap bool) *tier.Mapper {
-	testLogger := logger.Development()
-
-	var configMaps []*corev1.ConfigMap
-
-	if withConfigMap {
-		configMaps = append(configMaps, CreateTierConfigMap(TestNamespace))
-	}
-
-	return tier.NewMapper(testLogger, NewConfigMapLister(configMaps...), TestTenant, TestNamespace)
 }
 
 // StubServiceAccountTokenCreation sets up ServiceAccount token creation mocking for tests.

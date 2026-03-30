@@ -64,7 +64,7 @@ make deploy-dev
 
 This will:
 
-- Deploy MaaS API component with Service Account Token provider in debug mode
+- Deploy MaaS API component in debug mode
 
 #### Patch Kuadrant deployment
 
@@ -148,36 +148,7 @@ kustomize build ${PROJECT_DIR}/docs/samples/models/simulator | kubectl apply --s
 
 #### Getting a token
 
-MaaS API supports two types of tokens:
-
-1.  **Ephemeral Tokens** - Stateless tokens that provide better security posture as they can be easily refreshed by the caller using OpenShift Identity. These tokens can live as long as API keys (up to the configured expiration), making them suitable for both temporary and long-term access scenarios.
-2.  **API Keys** - Named, long-lived tokens for applications (stored in PostgreSQL database). Suitable for services or applications that need persistent access with metadata tracking.
-
-##### Ephemeral Tokens
-
-To get a short-lived ephemeral token:
-
-```shell
-HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
-
-TOKEN_RESPONSE=$(curl -sSk \
-  -H "Authorization: Bearer $(oc whoami -t)" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{
-    "expiration": "4h"
-  }' \
-  "${HOST}/maas-api/v1/tokens")
-
-echo $TOKEN_RESPONSE | jq -r .
-
-echo $TOKEN_RESPONSE | jq -r .token | cut -d. -f2 | jq -Rr '@base64d | fromjson'
-
-TOKEN=$(echo $TOKEN_RESPONSE | jq -r .token)
-```
-
-> [!NOTE]
-> ServiceAccount-based tokens have been removed. All authentication now uses API keys (`sk-oai-*` format) with hash-based storage.
+MaaS API uses **API Keys** — named, long-lived tokens for applications (stored in PostgreSQL database). Suitable for services or applications that need persistent access with metadata tracking.
 
 ##### API Keys
 
@@ -193,7 +164,8 @@ API_KEY_RESPONSE=$(curl -sSk \
   -X POST \
   -d '{
     "name": "my-api-key",
-    "description": "Production API key for my application"
+    "description": "Production API key for my application",
+    "subscription": "simulator-subscription"
   }' \
   "${HOST}/maas-api/v1/api-keys")
 
@@ -208,13 +180,17 @@ API_KEY_RESPONSE=$(curl -sSk \
   -d '{
     "name": "my-short-lived-key",
     "description": "30-day test key",
-    "expiresIn": "30d"
+    "expiresIn": "30d",
+    "subscription": "simulator-subscription"
   }' \
   "${HOST}/maas-api/v1/api-keys")
 
 echo $API_KEY_RESPONSE | jq -r .
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 ```
+
+> [!NOTE]
+> Replace `simulator-subscription` with your `MaaSSubscription` metadata name. To rely on **auto-selection** instead, remove the `subscription` field; maas-api then picks the accessible subscription with the highest `spec.priority`.
 
 > [!IMPORTANT]
 > The plaintext API key is shown ONLY ONCE at creation time. Store it securely - it cannot be retrieved again.
@@ -306,21 +282,25 @@ For production deployments, see the [Database Prerequisites](../docs/content/ins
 
 #### Listing models with subscription filtering
 
-The `/v1/models` endpoint supports subscription filtering and aggregation:
+The `/v1/models` endpoint supports subscription filtering and aggregation. Use an **OpenShift token** or an **API key** in `Authorization: Bearer`. With a **user token**, optional `X-MaaS-Subscription` filters to one subscription when you have access to several. With an **API key**, the subscription is fixed at key mint time—no client `X-MaaS-Subscription` is needed for listing.
 
     HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
 
     # List models from all accessible subscriptions
     curl ${HOST}/v1/models \
         -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $TOKEN" \
-        -H "X-MaaS-Return-All-Models: true" | jq .
+        -H "Authorization: Bearer $TOKEN" | jq .
 
     # List models from a specific subscription
     curl ${HOST}/v1/models \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $TOKEN" \
         -H "X-MaaS-Subscription: my-subscription" | jq .
+
+    # List models from the subscription bound to an API key
+    curl ${HOST}/v1/models \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $API_KEY" | jq .
 
 **Subscription Aggregation**: When the same model (same ID and URL) is accessible via multiple subscriptions, it appears once in the response with an array of all subscriptions providing access:
 
@@ -340,14 +320,20 @@ The `/v1/models` endpoint supports subscription filtering and aggregation:
 
 #### Calling the model and hitting the rate limit
 
-Using model discovery:
+Inference requires an API key (mint with `POST /v1/api-keys` using your OpenShift token). Send **only** `Authorization: Bearer <api-key>`; subscription is taken from the key at mint time.
+
+Using model discovery (maas-api URL matches the [validation guide](../docs/content/install/validation.md); model `url` values come from the list response):
 
 ```shell
-HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
+CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+MAAS_API="https://maas.${CLUSTER_DOMAIN}/maas-api"
+API_KEY=$(curl -sSk -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
+  -X POST -d '{"name":"rate-limit-demo","subscription":"simulator-subscription"}' \
+  "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-MODELS=$(curl ${HOST}/v1/models  \
+MODELS=$(curl -sSk "${MAAS_API}/v1/models"  \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $TOKEN" | jq . -r)
+    -H "Authorization: Bearer ${API_KEY}" | jq . -r)
 
 echo $MODELS | jq .
 MODEL_URL=$(echo $MODELS | jq -r '.data[0].url')
@@ -356,7 +342,7 @@ MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id')
 for i in {1..16}
 do
 curl -sSk -o /dev/null -w "%{http_code}\n" \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: Bearer ${API_KEY}" \
   -d "{
         \"model\": \"${MODEL_NAME}\",
         \"prompt\": \"Not really understood prompt\",

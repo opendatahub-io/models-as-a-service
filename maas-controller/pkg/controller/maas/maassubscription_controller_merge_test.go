@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,6 +51,7 @@ func TestMaaSSubscriptionReconciler_TRLPMergeStrategy(t *testing.T) {
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(model, route, maasSub).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
@@ -128,6 +130,7 @@ func TestMaaSSubscriptionReconciler_TRLPMergeStrategyMultipleModels(t *testing.T
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(modelRefA, modelRefB, httpRouteA, httpRouteB, subscriptionA, subscriptionB).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
