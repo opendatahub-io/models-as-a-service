@@ -360,6 +360,201 @@ func TestMaaSSubscriptionReconciler_DeleteAnnotation(t *testing.T) {
 		})
 	}
 }
+
+// TestMaaSSubscriptionReconciler_RemoveModelRef verifies that removing a modelRef from
+// a MaaSSubscription deletes the aggregated TokenRateLimitPolicy for the removed model
+// while keeping the TRLP for the remaining model intact.
+func TestMaaSSubscriptionReconciler_RemoveModelRef(t *testing.T) {
+	const (
+		modelA     = "model-a"
+		modelB     = "model-b"
+		namespace  = "default"
+		httpRouteA = "maas-model-" + modelA
+		httpRouteB = "maas-model-" + modelB
+		trlpA      = "maas-trlp-" + modelA
+		trlpB      = "maas-trlp-" + modelB
+		subName    = "sub-1"
+	)
+
+	modelRefA := newMaaSModelRef(modelA, namespace, "ExternalModel", modelA)
+	modelRefB := newMaaSModelRef(modelB, namespace, "ExternalModel", modelB)
+	routeA := newHTTPRoute(httpRouteA, namespace)
+	routeB := newHTTPRoute(httpRouteB, namespace)
+
+	sub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: subName, Namespace: namespace},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			Owner: maasv1alpha1.OwnerSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+				{Name: modelA, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+				{Name: modelB, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 200, Window: "1m"}}},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(modelRefA, modelRefB, routeA, routeB, sub).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Initial reconcile: %v", err)
+	}
+
+	// Both TRLPs should exist
+	for _, name := range []string{trlpA, trlpB} {
+		trlp := &unstructured.Unstructured{}
+		trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, trlp); err != nil {
+			t.Fatalf("TRLP %q not found after initial reconcile: %v", name, err)
+		}
+	}
+
+	// Remove model B from the subscription
+	freshSub := &maasv1alpha1.MaaSSubscription{}
+	if err := c.Get(ctx, types.NamespacedName{Name: subName, Namespace: namespace}, freshSub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+	freshSub.Spec.ModelRefs = []maasv1alpha1.ModelSubscriptionRef{
+		{Name: modelA, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+	}
+	if err := c.Update(ctx, freshSub); err != nil {
+		t.Fatalf("Update MaaSSubscription: %v", err)
+	}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile after removing modelRef: %v", err)
+	}
+
+	// TRLP for model A should still exist
+	trlpObjA := &unstructured.Unstructured{}
+	trlpObjA.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: trlpA, Namespace: namespace}, trlpObjA); err != nil {
+		t.Errorf("TRLP for model A should still exist: %v", err)
+	}
+
+	// TRLP for model B should be DELETED
+	trlpObjB := &unstructured.Unstructured{}
+	trlpObjB.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	err := c.Get(ctx, types.NamespacedName{Name: trlpB, Namespace: namespace}, trlpObjB)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("TRLP for model B should be deleted after removing modelRef, but got: %v", err)
+	}
+}
+
+// TestMaaSSubscriptionReconciler_RemoveModelRef_Aggregation verifies that when one
+// subscription drops a model that another subscription still references, the aggregated
+// TRLP is deleted (forcing a rebuild by the remaining subscription).
+func TestMaaSSubscriptionReconciler_RemoveModelRef_Aggregation(t *testing.T) {
+	const (
+		modelA     = "model-a"
+		modelB     = "model-b"
+		namespace  = "default"
+		httpRouteA = "maas-model-" + modelA
+		httpRouteB = "maas-model-" + modelB
+		trlpB      = "maas-trlp-" + modelB
+	)
+
+	modelRefA := newMaaSModelRef(modelA, namespace, "ExternalModel", modelA)
+	modelRefB := newMaaSModelRef(modelB, namespace, "ExternalModel", modelB)
+	routeA := newHTTPRoute(httpRouteA, namespace)
+	routeB := newHTTPRoute(httpRouteB, namespace)
+
+	// sub1 references [A, B], sub2 references [B]
+	sub1 := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: "sub1", Namespace: namespace},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			Owner: maasv1alpha1.OwnerSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-1"}}},
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+				{Name: modelA, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+				{Name: modelB, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+			},
+		},
+	}
+	sub2 := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: "sub2", Namespace: namespace},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			Owner: maasv1alpha1.OwnerSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-2"}}},
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+				{Name: modelB, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 200, Window: "1m"}}},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(modelRefA, modelRefB, routeA, routeB, sub1, sub2).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+
+	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub1", Namespace: namespace}}
+	req2 := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub2", Namespace: namespace}}
+	if _, err := r.Reconcile(ctx, req1); err != nil {
+		t.Fatalf("Reconcile sub1: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, req2); err != nil {
+		t.Fatalf("Reconcile sub2: %v", err)
+	}
+
+	// TRLP for model B should exist with both subscriptions
+	trlpObj := &unstructured.Unstructured{}
+	trlpObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: trlpB, Namespace: namespace}, trlpObj); err != nil {
+		t.Fatalf("TRLP for model B not found: %v", err)
+	}
+
+	// Remove model B from sub1
+	freshSub1 := &maasv1alpha1.MaaSSubscription{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "sub1", Namespace: namespace}, freshSub1); err != nil {
+		t.Fatalf("Get sub1: %v", err)
+	}
+	freshSub1.Spec.ModelRefs = []maasv1alpha1.ModelSubscriptionRef{
+		{Name: modelA, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+	}
+	if err := c.Update(ctx, freshSub1); err != nil {
+		t.Fatalf("Update sub1: %v", err)
+	}
+
+	// Reconcile sub1 → should delete stale TRLP for model B
+	if _, err := r.Reconcile(ctx, req1); err != nil {
+		t.Fatalf("Reconcile sub1 after removing modelRef: %v", err)
+	}
+
+	trlpObj = &unstructured.Unstructured{}
+	trlpObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	err := c.Get(ctx, types.NamespacedName{Name: trlpB, Namespace: namespace}, trlpObj)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("TRLP for model B should be deleted after sub1 drops it, but got: %v", err)
+	}
+
+	// Reconcile sub2 → should recreate TRLP for model B with only sub2's limits
+	if _, err := r.Reconcile(ctx, req2); err != nil {
+		t.Fatalf("Reconcile sub2 after sub1 drop: %v", err)
+	}
+
+	trlpObj = &unstructured.Unstructured{}
+	trlpObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: trlpB, Namespace: namespace}, trlpObj); err != nil {
+		t.Errorf("TRLP for model B should be rebuilt by sub2: %v", err)
+	}
+
+	// Verify only sub2 is in the annotation
+	ann := trlpObj.GetAnnotations()["maas.opendatahub.io/subscriptions"]
+	if ann != "sub2" {
+		t.Errorf("TRLP annotation = %q, want %q (only sub2 should contribute)", ann, "sub2")
+	}
+}
+
 // TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion verifies that when multiple
 // MaaSSubscriptions reference the same model, deleting one does not delete the aggregated
 // TokenRateLimitPolicy, but deleting the last one does.

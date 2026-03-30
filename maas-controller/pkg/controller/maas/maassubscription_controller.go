@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -127,6 +128,9 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 		if err := r.reconcileTRLPForModel(ctx, log, modelRef.Namespace, modelRef.Name); err != nil {
 			return err
 		}
+	}
+	if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
+		return err
 	}
 	return nil
 }
@@ -346,6 +350,49 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	return nil
 }
 
+// cleanupStaleTRLPs deletes aggregated TokenRateLimitPolicies for models that this
+// subscription previously contributed to but no longer references in spec.modelRefs.
+// Generated TRLPs track contributing subscriptions in the
+// "maas.opendatahub.io/subscriptions" annotation.
+func (r *MaaSSubscriptionReconciler) cleanupStaleTRLPs(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) error {
+	currentModels := make(map[string]bool, len(subscription.Spec.ModelRefs))
+	for _, ref := range subscription.Spec.ModelRefs {
+		currentModels[ref.Namespace+"/"+ref.Name] = true
+	}
+
+	allManaged := &unstructured.UnstructuredList{}
+	allManaged.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"})
+	if err := r.List(ctx, allManaged, client.MatchingLabels{
+		"app.kubernetes.io/managed-by": "maas-controller",
+		"app.kubernetes.io/part-of":    "maas-subscription",
+	}); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to list managed TokenRateLimitPolicies for stale cleanup: %w", err)
+	}
+
+	for i := range allManaged.Items {
+		trlp := &allManaged.Items[i]
+		modelName := trlp.GetLabels()["maas.opendatahub.io/model"]
+		if modelName == "" {
+			continue
+		}
+		modelKey := trlp.GetNamespace() + "/" + modelName
+		if currentModels[modelKey] {
+			continue
+		}
+		if !slices.Contains(strings.Split(trlp.GetAnnotations()["maas.opendatahub.io/subscriptions"], ","), subscription.Name) {
+			continue
+		}
+		log.Info("Cleaning up stale TokenRateLimitPolicy for removed modelRef", "model", modelKey, "trlp", trlp.GetName())
+		if err := r.deleteModelTRLP(ctx, log, trlp.GetNamespace(), modelName); err != nil {
+			return fmt.Errorf("failed to clean up stale TokenRateLimitPolicy for removed model %s: %w", modelKey, err)
+		}
+	}
+	return nil
+}
+
 // deleteModelTRLP deletes the aggregated TokenRateLimitPolicy for a model in the given namespace.
 func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log logr.Logger, modelNamespace, modelName string) error {
 	// Always delete the aggregated TokenRateLimitPolicy so remaining MaaSSubscriptions rebuild it
@@ -400,7 +447,11 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 				return ctrl.Result{}, err
 			}
 		}
-
+		// Also clean up stale TRLPs from modelRefs that were removed
+		// before the CR was deleted (edge case: edit + delete before reconcile).
+		if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
+			return ctrl.Result{}, err
+		}
 		controllerutil.RemoveFinalizer(subscription, maasSubscriptionFinalizer)
 		if err := r.Update(ctx, subscription); err != nil {
 			return ctrl.Result{}, err

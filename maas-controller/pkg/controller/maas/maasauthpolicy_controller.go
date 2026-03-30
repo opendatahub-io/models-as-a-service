@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -561,7 +562,54 @@ allow {
 			}
 		}
 	}
+	if err := r.cleanupStaleAuthPolicies(ctx, log, policy); err != nil {
+		return nil, err
+	}
+
 	return refs, nil
+}
+
+// cleanupStaleAuthPolicies deletes aggregated AuthPolicies for models that this
+// policy previously contributed to but no longer references in spec.modelRefs.
+// Generated AuthPolicies track contributing policies in the
+// "maas.opendatahub.io/auth-policies" annotation (namespace-qualified: "ns/name").
+func (r *MaaSAuthPolicyReconciler) cleanupStaleAuthPolicies(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) error {
+	currentModels := make(map[string]bool, len(policy.Spec.ModelRefs))
+	for _, ref := range policy.Spec.ModelRefs {
+		currentModels[ref.Namespace+"/"+ref.Name] = true
+	}
+
+	allManaged := &unstructured.UnstructuredList{}
+	allManaged.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"})
+	if err := r.List(ctx, allManaged, client.MatchingLabels{
+		"app.kubernetes.io/managed-by": "maas-controller",
+		"app.kubernetes.io/part-of":    "maas-auth-policy",
+	}); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to list managed AuthPolicies for stale cleanup: %w", err)
+	}
+
+	for i := range allManaged.Items {
+		ap := &allManaged.Items[i]
+		modelName := ap.GetLabels()["maas.opendatahub.io/model"]
+		if modelName == "" {
+			continue
+		}
+		modelKey := ap.GetNamespace() + "/" + modelName
+		if currentModels[modelKey] {
+			continue
+		}
+		if !slices.Contains(strings.Split(ap.GetAnnotations()["maas.opendatahub.io/auth-policies"], ","), policy.Name) {
+			continue
+		}
+		log.Info("Cleaning up stale AuthPolicy for removed modelRef", "model", modelKey, "authPolicy", ap.GetName())
+		if err := r.deleteModelAuthPolicy(ctx, log, ap.GetNamespace(), modelName); err != nil {
+			return fmt.Errorf("failed to clean up stale AuthPolicy for removed model %s: %w", modelKey, err)
+		}
+	}
+	return nil
 }
 
 // deleteModelAuthPolicy deletes the aggregated AuthPolicy for a model in the given namespace.
@@ -604,6 +652,11 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 				log.Error(err, "failed to clean up AuthPolicy, will retry", "model", ref.Namespace+"/"+ref.Name)
 				return ctrl.Result{}, err
 			}
+		}
+		// Also clean up stale AuthPolicies from modelRefs that were removed
+		// before the CR was deleted (edge case: edit + delete before reconcile).
+		if err := r.cleanupStaleAuthPolicies(ctx, log, policy); err != nil {
+			return ctrl.Result{}, err
 		}
 		controllerutil.RemoveFinalizer(policy, maasAuthPolicyFinalizer)
 		if err := r.Update(ctx, policy); err != nil {
