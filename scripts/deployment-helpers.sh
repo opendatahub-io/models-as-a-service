@@ -1581,8 +1581,12 @@ detect_dsc() {
 #   else
 #     cat /tmp/errors
 #   fi
+#
+#   # With custom manifest (e.g. kustomize mode):
+#   validate_dsc_for_maas "default-dsc" "scripts/data/datasciencecluster-kustomize.yaml"
 validate_dsc_for_maas() {
   local dsc_name=$1
+  local custom_manifest=${2:-}
 
   if [[ -z "$dsc_name" ]]; then
     >&2 echo "Error: DSC name not provided"
@@ -1593,7 +1597,7 @@ validate_dsc_for_maas() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local data_dir="${script_dir}/data"
-  local dsc_manifest="${data_dir}/datasciencecluster.yaml"
+  local dsc_manifest="${custom_manifest:-${data_dir}/datasciencecluster.yaml}"
 
   if [[ ! -f "$dsc_manifest" ]]; then
     log_warn "DSC manifest not found at $dsc_manifest, skipping validation"
@@ -1648,12 +1652,14 @@ validate_dsc_for_maas() {
 #
 #   Args:
 #     $1 - DSC name to patch
+#     $2 - (optional) Path to reference manifest
 #
 #   Returns:
 #     0 - Patch applied and re-validation passed
 #     1 - Patch failed or re-validation failed
 patch_dsc_for_maas() {
   local dsc_name=$1
+  local custom_manifest=${2:-}
 
   if [[ -z "$dsc_name" ]]; then
     >&2 echo "Error: DSC name not provided"
@@ -1662,7 +1668,7 @@ patch_dsc_for_maas() {
 
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local dsc_manifest="${script_dir}/data/datasciencecluster.yaml"
+  local dsc_manifest="${custom_manifest:-${script_dir}/data/datasciencecluster.yaml}"
 
   if [[ ! -f "$dsc_manifest" ]]; then
     >&2 echo "Error: DSC manifest not found at $dsc_manifest"
@@ -1683,8 +1689,8 @@ patch_dsc_for_maas() {
     return 1
   fi
 
-  # Re-validate
-  if ! validate_dsc_for_maas "$dsc_name" 2>/dev/null; then
+  # Re-validate with the same manifest
+  if ! validate_dsc_for_maas "$dsc_name" "$dsc_manifest" 2>/dev/null; then
     >&2 echo "Error: DSC still invalid after patching"
     return 1
   fi

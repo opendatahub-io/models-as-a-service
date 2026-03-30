@@ -1,0 +1,19 @@
+---
+# DataScienceCluster requirements for kustomize deployment mode.
+# In kustomize mode, MaaS components are deployed directly via manifests,
+# NOT via the operator's modelsAsService controller. Enabling modelsAsService
+# in the DSC would cause server-side apply conflicts between the operator
+# and kustomize manifests.
+#
+# Only rawDeploymentServiceConfig is required: KServe must use "Headed"
+# services (with ClusterIP) so the Gateway/HTTPRoutes can route traffic
+# to model endpoints.
+apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    kserve:
+      managementState: Managed
+      rawDeploymentServiceConfig: Headed

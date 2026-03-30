@@ -690,9 +690,13 @@ deploy_via_kustomize() {
   fi
 
   # Validate DSC if it exists
+  # In kustomize mode, use a reduced manifest that does NOT enable modelsAsService.
+  # Enabling modelsAsService causes the operator to manage the same resources
+  # that kustomize deploys, resulting in server-side apply conflicts.
+  local dsc_manifest="${project_root}/scripts/data/datasciencecluster-kustomize.yaml"
   if [[ -n "$detected_dsc" ]]; then
     local dsc_validation_errors
-    if ! dsc_validation_errors=$(validate_dsc_for_maas "$detected_dsc" 2>&1); then
+    if ! dsc_validation_errors=$(validate_dsc_for_maas "$detected_dsc" "$dsc_manifest" 2>&1); then
       log_warn ""
       log_warn "┌─────────────────────────────────────────────────────────┐"
       log_warn "│ ⚠ DataScienceCluster '$detected_dsc' needs changes for MaaS"
@@ -709,7 +713,7 @@ deploy_via_kustomize() {
         read -r answer
         if [[ "$answer" =~ ^[Yy]$ ]]; then
           log_info "  → Patching DataScienceCluster '$detected_dsc'..."
-          if patch_dsc_for_maas "$detected_dsc"; then
+          if patch_dsc_for_maas "$detected_dsc" "$dsc_manifest"; then
             log_info "  ✓ DataScienceCluster patched and validated"
           else
             log_error "  ✗ Failed to patch DataScienceCluster"
@@ -724,7 +728,7 @@ deploy_via_kustomize() {
       else
         # Non-interactive (CI): auto-patch without prompting
         log_info "  → Auto-patching DataScienceCluster '$detected_dsc' (non-interactive mode)..."
-        if patch_dsc_for_maas "$detected_dsc"; then
+        if patch_dsc_for_maas "$detected_dsc" "$dsc_manifest"; then
           log_info "  ✓ DataScienceCluster patched and validated"
         else
           log_error "  ✗ Failed to patch DataScienceCluster"
