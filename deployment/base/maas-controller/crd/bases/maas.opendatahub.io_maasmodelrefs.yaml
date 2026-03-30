@@ -65,13 +65,21 @@ spec:
                 description: ModelRef references the actual model endpoint
                 properties:
                   kind:
-                    description: Kind determines which fields are available
+                    description: |-
+                      Kind determines which backend handles this model reference.
+                      LLMInferenceService: references a KServe LLMInferenceService.
+                      ExternalModel: references an ExternalModel CR containing provider config.
                     enum:
                     - LLMInferenceService
                     - ExternalModel
                     type: string
                   name:
-                    description: Name is the name of the model resource
+                    description: |-
+                      Name is the name of the model resource.
+                      For LLMInferenceService, this is the InferenceService name.
+                      For ExternalModel, this is the ExternalModel CR name.
+                    maxLength: 253
+                    minLength: 1
                     type: string
                 required:
                 - kind

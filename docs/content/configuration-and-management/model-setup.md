@@ -7,9 +7,23 @@ This guide explains how to configure models so they appear in the MaaS platform 
 
 ## Supported model types
 
-MaaS is planning support for multiple model types through a **provider paradigm**: each MaaSModelRef references a model backend by `kind` (e.g., `LLMInferenceService`, `ExternalModel`). The controller uses provider-specific logic to reconcile and resolve each type.
+MaaS distinguishes between **supported LLMs** (the model weights/architectures) and **supported inference services** (the runtime backends).
 
-**LLMInferenceService** will be initially supported. The initial release focuses on using KServe for on-cluster models. This guide describes the configuration differences between the default LLMInferenceService and the MaaS-enabled one to help users understand the differences.
+### Supported LLMs
+
+Most LLM model families should work (e.g., Llama, Mistral, Qwen, GPT-style models). We are working on an official validated list. If you encounter issues with a specific model, please report them.
+
+### Supported inference services
+
+MaaS uses a **provider paradigm**: each MaaSModelRef references a model backend by `kind` (e.g., `LLMInferenceService`, `ExternalModel`). The controller uses provider-specific logic to reconcile and resolve each type. Supported inference runtimes include:
+
+| Inference service | Status |
+|-------------------|--------|
+| **vLLM** (via LLMInferenceService / KServe) | Initial supported release. This is the primary supported backend for on-cluster models. |
+| **KServe** (LLMInferenceService) | Runtime framework. vLLM workloads run through LLMInferenceService. |
+| **Additional backends** | Planned for future releases. |
+
+This guide describes the configuration differences between the default LLMInferenceService and the MaaS-enabled one to help users understand the differences.
 
 ## How the model list is built
 
@@ -121,6 +135,77 @@ spec:
 - **Without this specification**, the LLMInferenceService uses the default KServe gateway and **is not subject to MaaS policies**
 
 ### Complete example
+
+Add the `alpha.maas.opendatahub.io/tiers` annotation to enable automatic RBAC setup for tier-based access:
+
+```yaml
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: my-production-model
+  namespace: llm
+  annotations:
+    alpha.maas.opendatahub.io/tiers: '[]'
+spec:
+  # ... rest of spec ...
+```
+
+**Annotation Values:**
+
+- **Empty list `[]`**: Grants access to **all tiers** (recommended for most models)
+- **List of tier names**: Grants access to specific tiers only
+  - Example: `'["premium","enterprise"]'` - only premium and enterprise tiers can access
+- **Missing annotation**: **No tiers** have access by default (model won't be accessible via MaaS)
+
+**Examples:**
+
+Allow all tiers:
+
+```yaml
+annotations:
+  alpha.maas.opendatahub.io/tiers: '[]'
+```
+
+Allow specific tiers:
+
+```yaml
+annotations:
+  alpha.maas.opendatahub.io/tiers: '["premium","enterprise"]'
+```
+
+### Step 3: Add Display Metadata (Optional)
+
+Add standard annotations to your **MaaSModelRef** to provide human-readable names and descriptions in the `GET /v1/models` API response:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: my-production-model
+  namespace: llm
+  annotations:
+    openshift.io/display-name: "My Production Model"
+    openshift.io/description: "A fine-tuned model for production workloads"
+    opendatahub.io/genai-use-case: "chat"
+    opendatahub.io/context-window: "8192"
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: my-production-model
+```
+
+These annotations are returned in the `modelDetails` field of the API response. All are optional. See [CRD annotations](crd-annotations.md) for the full list of supported annotations across all MaaS CRDs.
+
+### What the Annotation Does
+
+This annotation automatically creates the necessary RBAC resources (Roles and RoleBindings) that allow tier-specific service accounts to POST to your `LLMInferenceService`. The ODH Controller handles this automatically when the annotation is present.
+
+Behind the scenes, it creates:
+
+- **Role**: Grants `POST` permission on `llminferenceservices` resource
+- **RoleBinding**: Binds tier service account groups (e.g., `system:serviceaccounts:maas-default-gateway-tier-premium`) to the role
+
+### Complete Example
 
 Here's a complete example of an LLMInferenceService configured for MaaS:
 
@@ -235,6 +320,5 @@ curl -sSk -H "Authorization: Bearer $TOKEN" \
 
 - [Access and Quota Overview](subscription-overview.md) - Configure policies and subscriptions
 - [Quota and Access Configuration](quota-and-access-configuration.md) - Detailed configuration
-- [Model Access Behavior](model-access-behavior.md) - Expected behaviors when modifying model access
 - [Architecture Overview](../architecture.md) - Understand the overall MaaS architecture
 - [KServe LLMInferenceService Documentation](https://kserve.github.io/website/) - Official KServe documentation

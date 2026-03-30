@@ -32,7 +32,17 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
     ./scripts/setup-database.sh
     ```
 
-    Use `NAMESPACE=redhat-ods-applications` for RHOAI. The full `scripts/deploy.sh` script also creates PostgreSQL automatically when deploying MaaS.
+    **Setting the namespace:** The script defaults to `opendatahub`. Set the `NAMESPACE` environment variable if your MaaS deployment uses a different namespace:
+
+    ```bash
+    # RHOAI uses redhat-ods-applications
+    NAMESPACE=redhat-ods-applications ./scripts/setup-database.sh
+
+    # Custom namespace
+    NAMESPACE=my-maas-namespace ./scripts/setup-database.sh
+    ```
+
+    The full `scripts/deploy.sh` script also creates PostgreSQL automatically when deploying MaaS.
 
 !!! note "Restarting maas-api"
     If you add or update the Secret after the DataScienceCluster already has modelsAsService in managed state, restart the maas-api deployment to pick up the config:
@@ -54,6 +64,20 @@ The Gateway must exist before enabling modelsAsService in your DataScienceCluste
     ./scripts/setup-authorino-tls.sh
     ```
 
+    **Setting the namespace:** The script defaults to `kuadrant-system` (ODH with Kuadrant). Set `AUTHORINO_NAMESPACE` for RHOAI, which uses RHCL:
+
+    ```bash
+    AUTHORINO_NAMESPACE=rh-connectivity-link ./scripts/setup-authorino-tls.sh
+    ```
+
+!!! note "Required annotations"
+    The Gateway **must** include these annotations for MaaS to work correctly:
+
+    | Annotation | Purpose |
+    |------------|---------|
+    | `opendatahub.io/managed: "false"` | Read by **maas-controller**: allows it to manage AuthPolicies and related resources; prevents the ODH Model Controller from overwriting them. |
+    | `security.opendatahub.io/authorino-tls-bootstrap: "true"` | Used by the ODH platform (not maas-controller) to create the EnvoyFilter for Gateway → Authorino TLS when Authorino uses a TLS listener. Required when Authorino TLS is enabled (see [TLS Configuration](../configuration-and-management/tls-configuration.md)). |
+
 ```yaml
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 # Use default ingress cert for HTTPS, or set CERT_NAME to your TLS secret name
@@ -66,6 +90,9 @@ kind: Gateway
 metadata:
   name: maas-default-gateway
   namespace: openshift-ingress
+  annotations:
+    opendatahub.io/managed: "false"
+    security.opendatahub.io/authorino-tls-bootstrap: "true"
 spec:
   gatewayClassName: openshift-default
   listeners:

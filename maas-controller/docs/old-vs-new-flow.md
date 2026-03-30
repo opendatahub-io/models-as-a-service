@@ -98,7 +98,7 @@ Model Endpoint
 
 | Resource | Namespace | Created by | Purpose |
 |----------|-----------|------------|---------|
-| MaaSModelRef | opendatahub | User/admin | Registers a model with MaaS |
+| MaaSModelRef | Same as model (e.g. `llm`) | User/admin | Registers a model with MaaS |
 | MaaSAuthPolicy | models-as-a-service | User/admin | Defines who (groups) can access which models |
 | MaaSSubscription | models-as-a-service | User/admin | Defines per-model token rate limits for owner groups |
 | AuthPolicy (generated) | llm | maas-controller | Per-model auth, one per (MaaSAuthPolicy, model) pair |

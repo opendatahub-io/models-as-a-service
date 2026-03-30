@@ -22,7 +22,6 @@ import (
 
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // fakeHandler is a test-only BackendHandler that returns preconfigured values.
@@ -293,7 +294,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModelRef referencing this LLMInferenceService should have been enqueued")
 	}
 	for _, watchReq := range requests {
-		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: watchReq.NamespacedName}); err != nil {
+		if _, err := r.Reconcile(ctx, watchReq); err != nil {
 			t.Fatalf("Reconcile (triggered by LLMInferenceService watch): %v", err)
 		}
 	}
@@ -355,7 +356,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 		t.Fatal("mapLLMISvcToMaaSModels returned no requests; the MaaSModelRef referencing this LLMInferenceService should have been enqueued")
 	}
 	for _, watchReq := range requests {
-		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: watchReq.NamespacedName}); err != nil {
+		if _, err := r.Reconcile(ctx, watchReq); err != nil {
 			t.Fatalf("Reconcile (triggered by LLMInferenceService watch): %v", err)
 		}
 	}
@@ -508,6 +509,63 @@ func TestLlmisvcReadyChangedPredicate(t *testing.T) {
 			t.Error("expected Update to return true for non-LLMInferenceService objects")
 		}
 	})
+}
+
+// TestMaaSModelRefReconciler_HTTPRouteRaceCondition verifies that MaaSModelRef reliably
+// reaches Ready state when HTTPRoute is created after the MaaSModelRef (common during startup).
+func TestMaaSModelRefReconciler_HTTPRouteRaceCondition(t *testing.T) {
+	ctx := context.Background()
+	const (
+		modelName   = "test-model"
+		llmisvcName = "test-llmisvc"
+		ns          = "default"
+	)
+
+	// Start with MaaSModelRef and ready LLMInferenceService, but NO HTTPRoute
+	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionTrue)
+	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName)
+	r, c := newTestReconciler(model, llmisvc)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
+
+	// --- Phase 1: Reconcile without HTTPRoute -> should enter Pending ---
+
+	result, err := r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile (no HTTPRoute): %v", err)
+	}
+	if result.Requeue || result.RequeueAfter != 0 {
+		t.Errorf("expected no requeue when HTTPRoute not found (watch handles it), got: %v", result)
+	}
+
+	got := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
+		t.Fatalf("Get after first reconcile: %v", err)
+	}
+	if got.Status.Phase != "Pending" {
+		t.Errorf("Phase after first reconcile = %q, want Pending (HTTPRoute doesn't exist yet)", got.Status.Phase)
+	}
+	assertReadyCondition(t, got.Status.Conditions, metav1.ConditionFalse, "BackendNotReady")
+
+	// --- Phase 2: KServe creates HTTPRoute -> model should become Ready on re-reconcile ---
+
+	route := newLLMISvcRoute(llmisvcName, ns)
+	if err := c.Create(ctx, route); err != nil {
+		t.Fatalf("Create HTTPRoute: %v", err)
+	}
+
+	// Reconcile again (triggered by HTTPRoute watch)
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (with HTTPRoute): %v", err)
+	}
+
+	final := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, final); err != nil {
+		t.Fatalf("Get after HTTPRoute created: %v", err)
+	}
+	if final.Status.Phase != "Ready" {
+		t.Errorf("Phase after HTTPRoute created = %q, want Ready", final.Status.Phase)
+	}
+	assertReadyCondition(t, final.Status.Conditions, metav1.ConditionTrue, "Reconciled")
 }
 
 // TestMaaSModelRefReconciler_DuplicateReconciliation verifies that reconciling the same

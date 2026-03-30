@@ -8,7 +8,6 @@ resources:
   - ../rbac
   - ../networking
   - ../policies
-  - ../resources
 
 labels:
   - includeSelectors: true

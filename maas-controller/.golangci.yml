@@ -1,0 +1,147 @@
+version: "2"
+run:
+  timeout: 8m
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+linters:
+  default: all
+  disable:
+    - cyclop
+    - depguard
+    - dupl
+    - embeddedstructfieldcheck
+    - err113
+    - exhaustruct
+    - forbidigo
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - gocognit
+    - goconst
+    - godot
+    - godox
+    - gomoddirectives
+    - intrange
+    - maintidx
+    - mnd
+    - nestif
+    - nilnil
+    - nlreturn
+    - nonamedreturns
+    - paralleltest
+    - prealloc
+    - tagliatelle
+    - testpackage
+    - unparam
+    - unused
+    - varnamelen
+    - wrapcheck
+    - wsl
+    - wsl_v5
+    - funcorder
+    - godoclint
+    - noinlineerr
+    - testifylint
+  settings:
+    errcheck:
+      check-type-assertions: true
+    exhaustive:
+      check:
+        - switch
+      default-signifies-exhaustive: true
+    funlen:
+      lines: 100
+      statements: 100
+      ignore-comments: true
+    goconst:
+      ignore-string-values:
+        - "true"
+        - "false"
+    gocritic:
+      enabled-checks:
+        - deferInLoop
+        - unnecessaryDefer
+      disabled-checks:
+        - ifElseChain
+    gocyclo:
+      min-complexity: 40
+    importas:
+      alias:
+        - pkg: k8s.io/api/(\w{1,4})\w*/(v[\w\d]+)
+          alias: $1$2
+        - pkg: github.com/openshift/api/(\w{1,4})\w*/(v[\w\d]+)
+          alias: $1$2
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        - generic
+    lll:
+      line-length: 220
+    nolintlint:
+      require-specific: true
+      allow-no-explanation:
+        - funlen
+        - lll
+    perfsprint:
+      sprintf1: false
+      strconcat: false
+    revive:
+      rules:
+        - name: dot-imports
+          arguments:
+            - allowedPackages:
+                - github.com/onsi/ginkgo/v2
+                - github.com/onsi/gomega
+                - github.com/onsi/gomega/gstruct
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - dupl
+        path: _test\.go
+      - linters:
+          - containedctx
+        path: pkg/utils/test/testf/(.+)\.go
+      - linters:
+          - ireturn
+        path: _test\.go
+      - linters:
+          - ireturn
+        path: pkg/controller/maas/providers\.go
+      - linters:
+          - ireturn
+        path: pkg/controller/maas/maassubscription_controller\.go
+      - linters:
+          - modernize
+        text: "(omitzero|mapsloop|rangeint):"
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/opendatahub-io/models-as-a-service/maas-controller/)
+        - blank
+        - dot
+      custom-order: true
+  exclusions:
+    generated: lax
+    paths:
+      - api/maas/v1alpha1/zz_generated.deepcopy.go
+      - api/maas/v1alpha1/maasmodelref_types.go  # Contains CEL validation with single quotes
+      - third_party$
+      - builtin$
+      - examples$

@@ -80,11 +80,11 @@ LINT_FIX ?= false
 .PHONY: lint
 lint: $(GOLANGCI_LINT) ##	run golangci-lint (use LINT_FIX=true to fix lint issues)
 ifeq ($(LINT_FIX),true)
-	$(GOLANGCI_LINT) fmt
-	$(GOLANGCI_LINT) run --fix
+	"$(GOLANGCI_LINT)" fmt
+	"$(GOLANGCI_LINT)" run --fix
 else
-	$(GOLANGCI_LINT) fmt --diff
-	$(GOLANGCI_LINT) run
+	"$(GOLANGCI_LINT)" fmt --diff
+	"$(GOLANGCI_LINT)" run
 endif
 
 .PHONY: generate

@@ -40,12 +40,17 @@ var _ MetadataStore = (*MockStore)(nil)
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 // ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, expiresAt *time.Time, ephemeral bool) error {
+func (m *MockStore) AddKey(
+	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool,
+) error {
 	if keyID == "" {
 		return ErrEmptyJTI
 	}
 	if name == "" {
 		return ErrEmptyName
+	}
+	if subscription == "" {
+		return errors.New("subscription is required")
 	}
 
 	m.mu.Lock()
@@ -62,6 +67,7 @@ func (m *MockStore) AddKey(ctx context.Context, username, keyID, keyHash, name, 
 			ID:           keyID,
 			Name:         name,
 			Description:  description,
+			Subscription: subscription,
 			Groups:       userGroups,
 			Status:       StatusActive,
 			CreationDate: time.Now().UTC().Format(time.RFC3339),
@@ -445,6 +451,32 @@ func (m *MockStore) UpdateLastUsed(ctx context.Context, keyID string) error {
 	now := time.Now().UTC()
 	k.lastUsedAt = &now
 	return nil
+}
+
+// DeleteExpiredEphemeral removes expired ephemeral keys from the mock store.
+// Mirrors PostgresStore: only deletes keys expired for at least 30 minutes.
+func (m *MockStore) DeleteExpiredEphemeral(ctx context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now().UTC()
+	graceThreshold := now.Add(-30 * time.Minute)
+	var count int64
+
+	for id, k := range m.keys {
+		if !k.ephemeral {
+			continue
+		}
+		if k.expiresAt.IsZero() {
+			continue // skip keys without expiration
+		}
+		if (k.metadata.Status == StatusExpired || k.expiresAt.Before(now)) && k.expiresAt.Before(graceThreshold) {
+			delete(m.keys, id)
+			count++
+		}
+	}
+
+	return count, nil
 }
 
 func (m *MockStore) Close() error {

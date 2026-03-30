@@ -23,10 +23,11 @@ import (
 
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // llmisvcHandler implements BackendHandler for kind "llmisvc" (LLMInferenceService).
@@ -52,8 +53,8 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 		return fmt.Errorf("failed to list HTTPRoutes for LLMInferenceService %s: %w", model.Spec.ModelRef.Name, err)
 	}
 	if len(routeList.Items) == 0 {
-		log.Error(nil, "HTTPRoute not found for LLMInferenceService", "llmisvcName", model.Spec.ModelRef.Name, "namespace", routeNS)
-		return fmt.Errorf("HTTPRoute not found for LLMInferenceService %s in namespace %s", model.Spec.ModelRef.Name, routeNS)
+		log.V(1).Info("HTTPRoute not found for LLMInferenceService, will retry when created", "llmisvcName", model.Spec.ModelRef.Name, "namespace", routeNS)
+		return fmt.Errorf("%w: for LLMInferenceService %s in namespace %s", ErrHTTPRouteNotFound, model.Spec.ModelRef.Name, routeNS)
 	}
 	route := &routeList.Items[0]
 	routeName := route.Name
@@ -210,7 +211,7 @@ func (llmisvcRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Read
 		return "", "", fmt.Errorf("failed to list HTTPRoutes for LLMInferenceService %s: %w", model.Spec.ModelRef.Name, err)
 	}
 	if len(routeList.Items) == 0 {
-		return "", "", fmt.Errorf("HTTPRoute not found for LLMInferenceService %s in namespace %s", model.Spec.ModelRef.Name, llmisvcNS)
+		return "", "", fmt.Errorf("%w: for LLMInferenceService %s in namespace %s", ErrHTTPRouteNotFound, model.Spec.ModelRef.Name, llmisvcNS)
 	}
 	route := &routeList.Items[0]
 	return route.Name, route.Namespace, nil

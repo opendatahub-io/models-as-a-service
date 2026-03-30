@@ -68,9 +68,9 @@ graph TB
 
 **Flow summary:**
 
-1. User sends `POST /v1/api-keys` with Bearer `{oc-token}`.
+1. User sends `POST /v1/api-keys` with Bearer `{identity-token}`.
 2. Gateway routes the request to AuthPolicy (Authorino).
-3. AuthPolicy validates the OpenShift token via TokenReview.
+3. AuthPolicy validates the presented identity token via the configured auth method (`kubernetesTokenReview` for OpenShift, or OIDC JWT validation when enabled).
 4. Gateway forwards the authenticated request and user context to the Key Minting Service.
 
 ```mermaid
@@ -88,9 +88,9 @@ graph TB
         KMS[MaaS API]
     end
     
-    U -->|"1. POST /v1/api-keys<br/>Bearer {oc-token}"| G
+    U -->|"1. POST /v1/api-keys<br/>Bearer {identity-token}"| G
     G -->|"2. Route /maas-api"| AP
-    AP -->|"3. TokenReview<br/>validate OpenShift token"| G
+    AP -->|"3. Validate identity token<br/>TokenReview or OIDC JWT"| G
     G -->|"4. Forward + user context"| KMS
     
     style KMS fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
@@ -98,8 +98,8 @@ graph TB
     style AP fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
 ```
 
-!!! Tip "Future Plans"
-    Today, validation uses the **OpenShift token flow** (TokenReview). Future plans include optional integration with other OIDC providers (e.g., external IdPs, Keycloak).
+!!! Tip "OIDC Support"
+    The `maas-api` route can be configured to validate external OIDC tokens (for example Keycloak-issued JWTs) in addition to the existing OpenShift TokenReview flow. Model routes still use the current API-key policy, so the interim OIDC flow is: authenticate with OIDC at `maas-api`, mint an `sk-oai-*` key, then use that key for model discovery and inference.
 
 
 ### Key Minting Service (Default Implementation)
@@ -155,7 +155,7 @@ graph TB
 
 **Flow summary:**
 
-1. User sends inference request with API key and `X-MaaS-Subscription` header.
+1. User sends inference request with an API key.
 2. Gateway routes to MaaSAuthPolicy (Authorino).
 3. MaaSAuthPolicy validates the key via MaaS API and selects subscription; on failure returns 401/403.
 4. MaaSSubscription (Limitador) checks token rate limits; on exceed returns 429.
@@ -182,7 +182,7 @@ graph TB
         LLM[LLM]
     end
     
-    U -->|"1. Inference + API key<br/>X-MaaS-Subscription"| G
+    U -->|"1. Inference + API key"| G
     G -->|"2. Route"| MAP
     MAP -.->|"3. Validate key"| API
     MAP -->|"4. Auth OK"| MS
@@ -206,15 +206,15 @@ graph TB
 
 ### Auth & Validation Flow (Deep Dive)
 
-The MaaSAuthPolicy delegates to the MaaS API for key validation and subscription selection. The `X-MaaS-Subscription` header is **required** when a user has access to multiple subscriptions.
+The MaaSAuthPolicy delegates to the MaaS API for key validation and subscription selection. The subscription name comes from the PostgreSQL key record (set at key creation).
 
 **Flow summary:**
 
 1. Authorino calls MaaS API to validate the API key.
-2. MaaS API performs basic token validation (format, not revoked, not expired) and returns username + groups.
-3. Authorino calls MaaS API to check subscription (groups, username, `X-MaaS-Subscription` header required when user has multiple subscriptions).
-4. If user has multiple subscriptions and header is missing, or lacks access to requested subscription → return error (403).
-5. On success, returns selected subscription; Authorino caches the result (e.g., 60s TTL).
+2. MaaS API validates the key (format, not revoked, not expired) and returns username, groups, and subscription.
+3. Authorino calls MaaS API to check subscription (groups, username, requested subscription from the key).
+4. If the user lacks access to the requested subscription → error (403).
+5. On success, returns selected subscription; Authorino caches the result (e.g., 60s TTL). AuthPolicy may inject `X-MaaS-Subscription` **server-side** for downstream rate limiting and metrics. Clients do not send this header on inference; subscription comes from the API key record created at mint time.
 
 ```mermaid
 graph TB
@@ -236,7 +236,7 @@ graph TB
     DB -->|"metadata"| Validate
     
     A -->|"2. Check subscription"| SubSelect
-    SubSelect -.->|"3. Missing header + multiple subs → 403<br/>No access to requested sub → 403"| A
+    SubSelect -.->|"3. No access to requested sub → 403"| A
     SubSelect -->|"4. Selected subscription"| A
     
     linkStyle 4 stroke:#c62828,stroke-width:2px,stroke-dasharray:5,5
@@ -245,9 +245,6 @@ graph TB
     style SubSelect fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
     style DB fill:#336791,stroke:#333,stroke-width:2px,color:#fff
 ```
-
-!!! note "X-MaaS-Subscription header"
-    When a user belongs to multiple subscriptions, the `X-MaaS-Subscription` header is **required** to select which subscription to use. If omitted, the MaaS API returns an error and the request is denied with 403.
 
 ### Observability Flow
 
@@ -291,7 +288,7 @@ graph LR
 
 ### 1. API Key Creation Flow (MaaS API)
 
-Users create API keys by authenticating with their OpenShift token. The MaaS API generates a key, stores only the hash in PostgreSQL, and returns the plaintext once:
+Users create API keys by authenticating with an accepted identity token (OpenShift today, or OIDC when configured on the `maas-api` route). The MaaS API generates a key, stores only the hash in PostgreSQL, and returns the plaintext once:
 
 ```mermaid
 sequenceDiagram
@@ -301,15 +298,16 @@ sequenceDiagram
     participant MaaS as MaaS API
     participant DB as PostgreSQL
 
-    User->>Gateway: POST /maas-api/v1/api-keys<br/>Authorization: Bearer {openshift-token}
+    User->>Gateway: POST /maas-api/v1/api-keys<br/>Authorization: Bearer {identity-token}
     Gateway->>Authorino: Enforce MaaS API AuthPolicy
-    Authorino->>Authorino: TokenReview (validate OpenShift token)
+    Authorino->>Authorino: Validate token (TokenReview or OIDC JWT)
     Authorino->>Gateway: Authenticated
     Gateway->>MaaS: Forward request with user context
 
     Note over MaaS,DB: Create API Key
     MaaS->>MaaS: Generate sk-oai-* key, hash with SHA-256
-    MaaS->>DB: Store hash + metadata (user, groups, name)
+    MaaS->>MaaS: Resolve subscription (explicit or highest priority)
+    MaaS->>DB: Store hash + metadata (user, groups, subscription, name)
     DB-->>MaaS: Stored
 
     MaaS-->>User: { "key": "sk-oai-...", "id": "...", ... }<br/>Plaintext shown ONLY ONCE
@@ -328,16 +326,16 @@ sequenceDiagram
     participant Limitador
     participant LLMInferenceService
     
-    Client->>GatewayAPI: Inference + API Key + X-MaaS-Subscription
+    Client->>GatewayAPI: Inference + API Key
     GatewayAPI->>Authorino: Validate credentials
     
     alt API key (sk-oai-*)
         Authorino->>MaaS: POST /internal/v1/api-keys/validate
         MaaS->>MaaS: Lookup hash in PostgreSQL
-        MaaS-->>Authorino: { valid, userId, groups }
+        MaaS-->>Authorino: { valid, userId, groups, subscription }
     end
     
-    Authorino->>MaaS: POST /v1/subscriptions/select (subscription check)
+    Authorino->>MaaS: POST /internal/v1/subscriptions/select (subscription check)
     MaaS-->>Authorino: Selected subscription
     
     Authorino->>GatewayAPI: Auth success (cached)
