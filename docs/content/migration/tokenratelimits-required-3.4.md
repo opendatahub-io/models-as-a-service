@@ -92,7 +92,7 @@ spec:
 
 If any of your YAML manifests include `tokenRateLimitRef`, remove it:
 
-```bash
+```yaml
 # This will fail validation in 3.4+
 tokenRateLimitRef: "some-ref"  # ❌ REMOVE THIS
 ```
