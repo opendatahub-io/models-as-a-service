@@ -6,7 +6,7 @@ metadata:
 spec:
   display:
     description: Token consumption overview and per-user usage breakdown
-    name: Usage Dashboard
+    name: Usage
   duration: 168h
   layouts:
     - kind: Grid
