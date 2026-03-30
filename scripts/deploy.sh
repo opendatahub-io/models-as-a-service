@@ -1001,6 +1001,15 @@ deploy_via_kustomize() {
     log_info "  ✓ Policy engine already installed and healthy"
     log_info "  ✓ CSV Gateway controller patch applied"
     log_info "  ✓ Kuadrant CR ready"
+    # Gateway might still need to be created (e.g., deleted between runs)
+    if [[ "$gateway_action" != "SKIP" ]]; then
+      log_info "  → Creating gateway..."
+      setup_gateway_api
+      setup_maas_gateway
+      log_info "  Waiting for Gateway to be Programmed..."
+      kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=120s 2>/dev/null || \
+        log_warn "  Gateway not yet Programmed after 120s"
+    fi
     log_info ""
   elif [[ "$policy_action" == "VERIFY" ]]; then
     log_info "  → Verifying policy engine configuration..."
