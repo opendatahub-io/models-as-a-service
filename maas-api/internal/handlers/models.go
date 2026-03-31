@@ -187,7 +187,17 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	// Extract x-maas-subscription header.
 	// For API keys: Authorino injects this from auth.metadata.apiKeyValidation.subscription
 	// For user tokens: This header is not present (Authorino doesn't inject it)
-	requestedSubscription := strings.TrimSpace(c.GetHeader("x-maas-subscription"))
+	// Note: If client sends x-maas-subscription header, there may be multiple values.
+	// Authorino appends its value, so we take the last non-empty value.
+	requestedSubscription := ""
+	headerValues := c.Request.Header.Values("X-Maas-Subscription")
+	for i := len(headerValues) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(headerValues[i])
+		if trimmed != "" {
+			requestedSubscription = trimmed
+			break
+		}
+	}
 	isAPIKeyRequest := strings.HasPrefix(authHeader, "Bearer sk-oai-")
 
 	// Fail closed: API keys without a bound subscription must be rejected
