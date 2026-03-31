@@ -1373,3 +1373,29 @@ wait_authorino_ready() {
   echo "  WARNING: Auth request verification timed out, continuing anyway"
   return 0
 }
+
+# ==========================================
+# Database Secret Helpers
+# ==========================================
+
+# create_maas_db_config_secret <namespace> <connection_url>
+#   Creates the maas-db-config Secret containing DB_CONNECTION_URL.
+#   This secret is read by maas-api at startup to connect to PostgreSQL.
+#
+# Usage:
+#   create_maas_db_config_secret "opendatahub" "postgresql://user:pass@host:5432/db?sslmode=require"
+create_maas_db_config_secret() {
+  local namespace="$1"
+  local connection_url="$2"
+
+  kubectl apply -n "$namespace" -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: maas-db-config
+  labels:
+    app: maas-api
+stringData:
+  DB_CONNECTION_URL: "${connection_url}"
+EOF
+}
