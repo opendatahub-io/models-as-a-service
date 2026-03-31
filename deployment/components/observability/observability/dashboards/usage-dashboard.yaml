@@ -69,7 +69,7 @@ spec:
         plugin:
           kind: StatChart
           spec:
-            calculation: max
+            calculation: last
             format:
               unit: decimal
         queries:
@@ -94,7 +94,7 @@ spec:
           spec:
             calculation: last
             format:
-              decimalPlaces: 1
+              decimalPlaces: 0
               unit: percent-decimal
         queries:
           - kind: TimeSeriesQuery
@@ -213,7 +213,7 @@ spec:
         plugin:
           kind: StatChart
           spec:
-            calculation: sum
+            calculation: last
             format:
               decimalPlaces: 0
               shortValues: true
@@ -227,7 +227,7 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: prometheus
-                  query: 'sum(rate(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0)'
+                  query: 'sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0)'
                   seriesNameFormat: Errors
     totalRequests:
       kind: Panel
@@ -238,7 +238,7 @@ spec:
         plugin:
           kind: StatChart
           spec:
-            calculation: sum
+            calculation: last
             format:
               decimalPlaces: 0
               shortValues: true
@@ -252,7 +252,7 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: prometheus
-                  query: '(sum(rate(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0)) + (sum(rate(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0))'
+                  query: '(sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0)) + (sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0))'
                   seriesNameFormat: Requests
     totalTokens:
       kind: Panel
@@ -263,7 +263,7 @@ spec:
         plugin:
           kind: StatChart
           spec:
-            calculation: sum
+            calculation: last
             format:
               decimalPlaces: 0
               shortValues: true
@@ -277,7 +277,7 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: prometheus
-                  query: 'sum(rate(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__rate_interval]) * $__interval_ms / 1000) or vector(0)'
+                  query: 'sum(increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range])) or vector(0)'
                   seriesNameFormat: Tokens
   variables:
     - kind: ListVariable
