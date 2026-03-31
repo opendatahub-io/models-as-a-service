@@ -17,3 +17,5 @@ spec:
     kserve:
       managementState: Managed
       rawDeploymentServiceConfig: Headed
+      modelsAsService:
+        managementState: Removed

@@ -154,6 +154,41 @@ stringData:
   DB_CONNECTION_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
 EOF
 
+# Grant maas-api ServiceAccount access to the DB secret.
+# This uses a namespace-scoped Role+RoleBinding so it won't conflict with
+# operator-managed ClusterRoles (which may not include secrets access).
+echo "  Granting maas-api access to database secret..."
+kubectl apply -n "$NAMESPACE" -f - <<RBAC
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: maas-api-db-secret
+  namespace: $NAMESPACE
+  labels:
+    app: maas-api
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["maas-db-config"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: maas-api-db-secret
+  namespace: $NAMESPACE
+  labels:
+    app: maas-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: maas-api-db-secret
+subjects:
+- kind: ServiceAccount
+  name: maas-api
+  namespace: $NAMESPACE
+RBAC
+
 echo "  Waiting for PostgreSQL to be ready..."
 if ! kubectl wait -n "$NAMESPACE" --for=condition=available deployment/postgres --timeout=120s; then
   echo "❌ PostgreSQL deployment failed to become ready" >&2
