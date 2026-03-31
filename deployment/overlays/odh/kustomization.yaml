@@ -51,6 +51,32 @@ patches:
   target:
     kind: Deployment
     name: maas-api
+- patch: |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: maas-controller
+    spec:
+      template:
+        spec:
+          containers:
+          - name: manager
+            env:
+            - name: METADATA_CACHE_TTL
+              valueFrom:
+                configMapKeyRef:
+                  key: metadata-cache-ttl
+                  name: maas-parameters
+                  optional: true
+            - name: AUTHZ_CACHE_TTL
+              valueFrom:
+                configMapKeyRef:
+                  key: authz-cache-ttl
+                  name: maas-parameters
+                  optional: true
+  target:
+    kind: Deployment
+    name: maas-controller
 
 replacements:
 # Gateway policies must be in openshift-ingress to target maas-default-gateway

@@ -20,6 +20,7 @@ import (
 	"context"
 	"testing"
 
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -28,8 +29,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
-
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // newPreexistingAuthPolicy builds a Kuadrant AuthPolicy as an unstructured object
@@ -271,6 +270,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 		})
 	}
 }
+
 // TestMaaSAuthPolicyReconciler_RemoveModelRef verifies that removing a modelRef from
 // a MaaSAuthPolicy deletes the aggregated AuthPolicy for the removed model while
 // keeping the AuthPolicy for the remaining model intact.
@@ -557,3 +557,521 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		t.Errorf("AuthPolicy should be deleted after deleting last parent policy, but got error: %v", err)
 	}
 }
+
+// TestMaaSAuthPolicyReconciler_CachingConfiguration verifies that the controller
+// generates cache blocks on metadata and authorization evaluators with configurable TTLs.
+func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	tests := []struct {
+		name            string
+		metadataTTL     int64
+		authzTTL        int64
+		wantMetadataTTL int64
+		wantAuthzTTL    int64
+	}{
+		{
+			name:            "default TTLs (60s)",
+			metadataTTL:     60,
+			authzTTL:        60,
+			wantMetadataTTL: 60,
+			wantAuthzTTL:    60,
+		},
+		{
+			name:            "custom metadata TTL (300s)",
+			metadataTTL:     300,
+			authzTTL:        60,
+			wantMetadataTTL: 300,
+			wantAuthzTTL:    60,
+		},
+		{
+			name:            "custom authz TTL (30s)",
+			metadataTTL:     60,
+			authzTTL:        30,
+			wantMetadataTTL: 60,
+			wantAuthzTTL:    30,
+		},
+		{
+			name:            "both custom (5min metadata, 1min authz)",
+			metadataTTL:     300,
+			authzTTL:        60,
+			wantMetadataTTL: 300,
+			wantAuthzTTL:    60,
+		},
+		{
+			name:            "authz TTL capped at metadata TTL (authz=300, metadata=60)",
+			metadataTTL:     60,
+			authzTTL:        300,
+			wantMetadataTTL: 60,
+			wantAuthzTTL:    60, // Should be capped at metadata TTL
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+			route := newHTTPRoute(httpRouteName, namespace)
+			maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(model, route, maasPolicy).
+				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+				Build()
+
+			r := &MaaSAuthPolicyReconciler{
+				Client:           c,
+				Scheme:           scheme,
+				MaaSAPINamespace: "maas-system",
+				MetadataCacheTTL: tc.metadataTTL,
+				AuthzCacheTTL:    tc.authzTTL,
+			}
+
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+			if _, err := r.Reconcile(context.Background(), req); err != nil {
+				t.Fatalf("Reconcile: unexpected error: %v", err)
+			}
+
+			got := &unstructured.Unstructured{}
+			got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+			if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+				t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+			}
+
+			// Verify apiKeyValidation metadata has cache with correct TTL
+			apiKeyValTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "cache", "ttl")
+			if err != nil || !found {
+				t.Errorf("apiKeyValidation cache.ttl missing or invalid: found=%v err=%v", found, err)
+			} else if apiKeyValTTL != tc.wantMetadataTTL {
+				t.Errorf("apiKeyValidation cache.ttl = %d, want %d", apiKeyValTTL, tc.wantMetadataTTL)
+			}
+
+			// Verify apiKeyValidation has cache key
+			apiKeyValCacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector")
+			if err != nil || !found {
+				t.Errorf("apiKeyValidation cache.key.selector missing: found=%v err=%v", found, err)
+			} else if apiKeyValCacheKey == "" {
+				t.Errorf("apiKeyValidation cache.key.selector is empty")
+			}
+
+			// Verify subscription-info metadata has cache with correct TTL
+			subInfoTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "metadata", "subscription-info", "cache", "ttl")
+			if err != nil || !found {
+				t.Errorf("subscription-info cache.ttl missing or invalid: found=%v err=%v", found, err)
+			} else if subInfoTTL != tc.wantMetadataTTL {
+				t.Errorf("subscription-info cache.ttl = %d, want %d", subInfoTTL, tc.wantMetadataTTL)
+			}
+
+			// Verify auth-valid authorization has cache with correct TTL
+			authValidTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "authorization", "auth-valid", "cache", "ttl")
+			if err != nil || !found {
+				t.Errorf("auth-valid cache.ttl missing or invalid: found=%v err=%v", found, err)
+			} else if authValidTTL != tc.wantAuthzTTL {
+				t.Errorf("auth-valid cache.ttl = %d, want %d", authValidTTL, tc.wantAuthzTTL)
+			}
+
+			// Verify subscription-valid authorization has cache with correct TTL
+			subValidTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "authorization", "subscription-valid", "cache", "ttl")
+			if err != nil || !found {
+				t.Errorf("subscription-valid cache.ttl missing or invalid: found=%v err=%v", found, err)
+			} else if subValidTTL != tc.wantAuthzTTL {
+				t.Errorf("subscription-valid cache.ttl = %d, want %d", subValidTTL, tc.wantAuthzTTL)
+			}
+
+			// Verify require-group-membership authorization has cache with correct TTL
+			groupMembershipTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "authorization", "require-group-membership", "cache", "ttl")
+			if err != nil || !found {
+				t.Errorf("require-group-membership cache.ttl missing or invalid: found=%v err=%v", found, err)
+			} else if groupMembershipTTL != tc.wantAuthzTTL {
+				t.Errorf("require-group-membership cache.ttl = %d, want %d", groupMembershipTTL, tc.wantAuthzTTL)
+			}
+
+			// Verify cache keys are present and non-empty
+			authValidCacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "auth-valid", "cache", "key", "selector")
+			if err != nil || !found {
+				t.Errorf("auth-valid cache.key.selector missing: found=%v err=%v", found, err)
+			} else if authValidCacheKey == "" {
+				t.Errorf("auth-valid cache.key.selector is empty")
+			}
+
+			subValidCacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "subscription-valid", "cache", "key", "selector")
+			if err != nil || !found {
+				t.Errorf("subscription-valid cache.key.selector missing: found=%v err=%v", found, err)
+			} else if subValidCacheKey == "" {
+				t.Errorf("subscription-valid cache.key.selector is empty")
+			}
+
+			groupMembershipCacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "require-group-membership", "cache", "key", "selector")
+			if err != nil || !found {
+				t.Errorf("require-group-membership cache.key.selector missing: found=%v err=%v", found, err)
+			} else if groupMembershipCacheKey == "" {
+				t.Errorf("require-group-membership cache.key.selector is empty")
+			}
+		})
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_NegativeTTLRejection verifies that the controller
+// rejects negative cache TTL values at setup time.
+func TestMaaSAuthPolicyReconciler_NegativeTTLRejection(t *testing.T) {
+	tests := []struct {
+		name            string
+		metadataTTL     int64
+		authzTTL        int64
+		expectSetupFail bool
+	}{
+		{
+			name:            "positive TTLs allowed",
+			metadataTTL:     60,
+			authzTTL:        30,
+			expectSetupFail: false,
+		},
+		{
+			name:            "zero TTLs allowed",
+			metadataTTL:     0,
+			authzTTL:        0,
+			expectSetupFail: false,
+		},
+		{
+			name:            "negative metadata TTL rejected",
+			metadataTTL:     -10,
+			authzTTL:        60,
+			expectSetupFail: true,
+		},
+		{
+			name:            "negative authz TTL rejected",
+			metadataTTL:     60,
+			authzTTL:        -10,
+			expectSetupFail: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &MaaSAuthPolicyReconciler{
+				MetadataCacheTTL: tc.metadataTTL,
+				AuthzCacheTTL:    tc.authzTTL,
+			}
+
+			// Test the validation logic used by SetupWithManager
+			err := r.ValidateCacheTTLs()
+
+			if tc.expectSetupFail {
+				if err == nil {
+					t.Errorf("Expected validation to fail for negative TTLs, but got no error")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected validation to succeed, but got error: %v", err)
+				}
+
+				// Also verify authzCacheTTL() defensive clamp never returns negative
+				effectiveTTL := r.authzCacheTTL()
+				if effectiveTTL < 0 {
+					t.Errorf("authzCacheTTL() returned negative value %d, should be clamped to 0", effectiveTTL)
+				}
+			}
+		})
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_CacheKeyIsolation verifies that cache keys include
+// the necessary dimensions to prevent cross-principal or cross-model cache sharing.
+//
+// This is a security-critical test: incorrect cache keys could leak authentication
+// or authorization results between different users, API keys, or models.
+func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+	}
+
+	// Test 1: apiKeyValidation cache key must include API key material
+	t.Run("apiKeyValidation includes API key", func(t *testing.T) {
+		cacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector")
+		if err != nil || !found {
+			t.Fatalf("apiKeyValidation cache.key.selector missing: found=%v err=%v", found, err)
+		}
+
+		// Must include the API key from the request header
+		if !contains(cacheKey, "request.headers.authorization") {
+			t.Errorf("apiKeyValidation cache key must include API key from request headers, got: %s", cacheKey)
+		}
+
+		// Should extract the Bearer token
+		if !contains(cacheKey, `replace("Bearer ", "")`) {
+			t.Errorf("apiKeyValidation cache key should extract Bearer token, got: %s", cacheKey)
+		}
+	})
+
+	// Test 2: subscription-info cache key must include userId (for API keys) or username (for K8s tokens), groups, and model
+	t.Run("subscription-info includes username, groups, model", func(t *testing.T) {
+		cacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "metadata", "subscription-info", "cache", "key", "selector")
+		if err != nil || !found {
+			t.Fatalf("subscription-info cache.key.selector missing: found=%v err=%v", found, err)
+		}
+
+		// Must include userId for API keys (database UUID for collision resistance)
+		if !contains(cacheKey, "userId") {
+			t.Errorf("subscription-info cache key must include userId for API keys, got: %s", cacheKey)
+		}
+
+		// Must include username as fallback for K8s tokens
+		if !contains(cacheKey, "username") {
+			t.Errorf("subscription-info cache key must include username for K8s tokens, got: %s", cacheKey)
+		}
+
+		// Must include groups (from either API key or K8s token)
+		if !contains(cacheKey, "groups") {
+			t.Errorf("subscription-info cache key must include groups, got: %s", cacheKey)
+		}
+
+		// Must include model namespace and name to prevent cross-model sharing
+		if !contains(cacheKey, namespace) {
+			t.Errorf("subscription-info cache key must include model namespace %q, got: %s", namespace, cacheKey)
+		}
+		if !contains(cacheKey, modelName) {
+			t.Errorf("subscription-info cache key must include model name %q, got: %s", modelName, cacheKey)
+		}
+
+		// Groups should be joined to create stable string representation
+		if !contains(cacheKey, "join") {
+			t.Errorf("subscription-info cache key should join groups for stability, got: %s", cacheKey)
+		}
+	})
+
+	// Test 3: auth-valid cache key must distinguish API keys from K8s tokens
+	t.Run("auth-valid distinguishes API keys and K8s tokens", func(t *testing.T) {
+		cacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "auth-valid", "cache", "key", "selector")
+		if err != nil || !found {
+			t.Fatalf("auth-valid cache.key.selector missing: found=%v err=%v", found, err)
+		}
+
+		// Must distinguish between API key and K8s token authentication
+		if !contains(cacheKey, "api-key") && !contains(cacheKey, "k8s-token") {
+			t.Errorf("auth-valid cache key must distinguish auth types (api-key vs k8s-token), got: %s", cacheKey)
+		}
+
+		// Must include model to prevent cross-model sharing
+		if !contains(cacheKey, namespace) || !contains(cacheKey, modelName) {
+			t.Errorf("auth-valid cache key must include model namespace/name, got: %s", cacheKey)
+		}
+
+		// Must include identity (API key or username)
+		if !contains(cacheKey, "username") && !contains(cacheKey, "authorization") {
+			t.Errorf("auth-valid cache key must include identity, got: %s", cacheKey)
+		}
+	})
+
+	// Test 4: subscription-valid cache key must match subscription-info for coherence
+	t.Run("subscription-valid matches subscription-info key", func(t *testing.T) {
+		subValidKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "subscription-valid", "cache", "key", "selector")
+		if err != nil || !found {
+			t.Fatalf("subscription-valid cache.key.selector missing: found=%v err=%v", found, err)
+		}
+
+		subInfoKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "metadata", "subscription-info", "cache", "key", "selector")
+		if err != nil || !found {
+			t.Fatalf("subscription-info cache.key.selector missing: found=%v err=%v", found, err)
+		}
+
+		// subscription-valid should use the same key as subscription-info for cache coherence
+		if subValidKey != subInfoKey {
+			t.Errorf("subscription-valid cache key should match subscription-info for cache coherence\nsubscription-valid: %s\nsubscription-info:  %s", subValidKey, subInfoKey)
+		}
+
+		// Verify it includes all necessary dimensions
+		if !contains(subValidKey, "userId") {
+			t.Errorf("subscription-valid cache key must include userId for API keys, got: %s", subValidKey)
+		}
+		if !contains(subValidKey, "username") {
+			t.Errorf("subscription-valid cache key must include username for K8s tokens, got: %s", subValidKey)
+		}
+		if !contains(subValidKey, "groups") {
+			t.Errorf("subscription-valid cache key must include groups, got: %s", subValidKey)
+		}
+
+		if !contains(subValidKey, namespace) || !contains(subValidKey, modelName) {
+			t.Errorf("subscription-valid cache key must include model namespace/name, got: %s", subValidKey)
+		}
+	})
+
+	// Test 5: require-group-membership cache key must include username, groups, and model
+	t.Run("require-group-membership includes username, groups, model", func(t *testing.T) {
+		cacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "require-group-membership", "cache", "key", "selector")
+		if err != nil || !found {
+			t.Fatalf("require-group-membership cache.key.selector missing: found=%v err=%v", found, err)
+		}
+
+		// Must include username (authorization depends on user identity)
+		if !contains(cacheKey, "username") {
+			t.Errorf("require-group-membership cache key must include username, got: %s", cacheKey)
+		}
+
+		// Must include groups (authorization checks group membership)
+		if !contains(cacheKey, "groups") {
+			t.Errorf("require-group-membership cache key must include groups, got: %s", cacheKey)
+		}
+
+		// Must include model to prevent cross-model sharing
+		if !contains(cacheKey, namespace) || !contains(cacheKey, modelName) {
+			t.Errorf("require-group-membership cache key must include model namespace/name, got: %s", cacheKey)
+		}
+
+		// Groups should be joined for stable representation
+		if !contains(cacheKey, "join") {
+			t.Errorf("require-group-membership cache key should join groups, got: %s", cacheKey)
+		}
+	})
+}
+
+// TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation verifies that different models
+// generate different cache keys to prevent cross-model cache sharing.
+func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
+	const namespace = "default"
+
+	// Create two different models
+	model1Name := "llm-1"
+	model2Name := "llm-2"
+
+	model1 := newMaaSModelRef(model1Name, namespace, "ExternalModel", model1Name)
+	route1 := newHTTPRoute("maas-model-"+model1Name, namespace)
+	policy1 := newMaaSAuthPolicy("policy-1", namespace, "team-a", maasv1alpha1.ModelRef{Name: model1Name, Namespace: namespace})
+
+	model2 := newMaaSModelRef(model2Name, namespace, "ExternalModel", model2Name)
+	route2 := newHTTPRoute("maas-model-"+model2Name, namespace)
+	policy2 := newMaaSAuthPolicy("policy-2", namespace, "team-a", maasv1alpha1.ModelRef{Name: model2Name, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model1, route1, policy1, model2, route2, policy2).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	// Reconcile both policies
+	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-1", Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req1); err != nil {
+		t.Fatalf("Reconcile policy-1: %v", err)
+	}
+
+	req2 := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-2", Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req2); err != nil {
+		t.Fatalf("Reconcile policy-2: %v", err)
+	}
+
+	// Get both AuthPolicies
+	ap1 := &unstructured.Unstructured{}
+	ap1.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + model1Name, Namespace: namespace}, ap1); err != nil {
+		t.Fatalf("Get AuthPolicy for model-1: %v", err)
+	}
+
+	ap2 := &unstructured.Unstructured{}
+	ap2.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + model2Name, Namespace: namespace}, ap2); err != nil {
+		t.Fatalf("Get AuthPolicy for model-2: %v", err)
+	}
+
+	// Test that cache keys differ between models for each evaluator
+	evaluators := []struct {
+		name string
+		path []string
+	}{
+		{"subscription-info", []string{"spec", "rules", "metadata", "subscription-info", "cache", "key", "selector"}},
+		{"auth-valid", []string{"spec", "rules", "authorization", "auth-valid", "cache", "key", "selector"}},
+		{"subscription-valid", []string{"spec", "rules", "authorization", "subscription-valid", "cache", "key", "selector"}},
+		{"require-group-membership", []string{"spec", "rules", "authorization", "require-group-membership", "cache", "key", "selector"}},
+	}
+
+	for _, eval := range evaluators {
+		t.Run(eval.name+" isolates models", func(t *testing.T) {
+			key1, found, err := unstructured.NestedString(ap1.Object, eval.path...)
+			if err != nil || !found {
+				t.Fatalf("model-1 %s cache key missing: found=%v err=%v", eval.name, found, err)
+			}
+
+			key2, found, err := unstructured.NestedString(ap2.Object, eval.path...)
+			if err != nil || !found {
+				t.Fatalf("model-2 %s cache key missing: found=%v err=%v", eval.name, found, err)
+			}
+
+			// Keys must differ between models (they include model namespace/name)
+			if key1 == key2 {
+				t.Errorf("%s cache keys must differ between models, but both are: %s", eval.name, key1)
+			}
+
+			// Verify model-1 key contains model-1 name
+			if !contains(key1, model1Name) {
+				t.Errorf("model-1 %s cache key must contain model name %q, got: %s", eval.name, model1Name, key1)
+			}
+
+			// Verify model-2 key contains model-2 name
+			if !contains(key2, model2Name) {
+				t.Errorf("model-2 %s cache key must contain model name %q, got: %s", eval.name, model2Name, key2)
+			}
+		})
+	}
+}
+
+// contains is a helper to check if a string contains a substring (case-sensitive).
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
+}
+

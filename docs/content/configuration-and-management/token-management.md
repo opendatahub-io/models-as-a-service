@@ -206,6 +206,66 @@ Revocation updates the key status to `revoked` in the database. The next validat
 !!! warning "Important"
     **For Platform Administrators**: Admins can revoke any user's keys via `DELETE /v1/api-keys/:id` (if they own or have admin access) or `POST /v1/api-keys/bulk-revoke` with the target username. This is an effective way to immediately cut off access for a specific user in response to a security event.
 
+### Ephemeral Keys
+
+Ephemeral keys are short-lived credentials designed for temporary programmatic access (e.g., playground sessions). They differ from regular keys:
+
+| Property | Regular Key | Ephemeral Key |
+|----------|-------------|---------------|
+| Default expiration | Configured maximum (e.g., 90 days) | 1 hour |
+| Maximum expiration | Configured maximum | 1 hour |
+| Name required | Yes | No (auto-generated if omitted) |
+| Visible in default search | Yes | No (`includeEphemeral: true` required) |
+
+Create an ephemeral key:
+
+```bash
+curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"ephemeral": true, "expiresIn": "30m"}'
+```
+
+### Ephemeral Key Cleanup
+
+Expired ephemeral keys are automatically deleted from the database by a **CronJob** (`maas-api-key-cleanup`) that runs every 15 minutes. This prevents unbounded accumulation of expired short-lived credentials.
+
+**How it works:**
+
+1. The CronJob sends `POST /internal/v1/api-keys/cleanup` to the maas-api Service
+2. The endpoint deletes ephemeral keys that expired **more than 30 minutes ago** (grace period)
+3. Regular (non-ephemeral) keys are **never** deleted by cleanup — they remain until manually revoked
+
+**Grace period:** A 30-minute grace period after expiration ensures that recently-expired keys are not deleted while in-flight requests may still reference them. Only keys expired for longer than 30 minutes are removed.
+
+**Security:** The cleanup endpoint is cluster-internal only:
+
+- It is registered under `/internal/v1/` and is **not exposed** on the external Service or Route
+- A `NetworkPolicy` (`maas-api-cleanup-restrict`) restricts cleanup pods to communicate only with `maas-api:8080` and DNS
+- No authentication is required on the endpoint itself — access control is enforced at the network layer
+
+!!! tip "Troubleshooting cleanup"
+    **Check CronJob status:**
+    ```bash
+    oc get cronjob maas-api-key-cleanup -n <namespace>
+    oc get jobs -n <namespace> -l app=maas-api-cleanup --sort-by=.metadata.creationTimestamp
+    ```
+
+    **View cleanup logs:**
+    ```bash
+    # Latest CronJob run
+    oc logs job/$(oc get jobs -n <namespace> -l app=maas-api-cleanup \
+      --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}') \
+      -n <namespace>
+    ```
+
+    **Manually trigger cleanup** (from an allowed pod or via oc exec):
+    ```bash
+    oc exec deploy/maas-api -n <namespace> -- \
+      curl -sf -X POST http://localhost:8080/internal/v1/api-keys/cleanup
+    ```
+    Response: `{"deletedCount": N, "message": "Successfully deleted N expired ephemeral key(s)"}`
+
 ---
 
 ## Frequently Asked Questions (FAQ)
