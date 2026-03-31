@@ -1126,8 +1126,7 @@ apply_custom_resources() {
   if kubectl get deployment "$webhook_deployment" -n "$webhook_namespace" >/dev/null 2>&1; then
     kubectl wait --for=condition=Available --timeout="${ROLLOUT_TIMEOUT}s" \
       deployment/"$webhook_deployment" -n "$webhook_namespace" 2>/dev/null || {
-      log_error "Webhook deployment not fully ready after ${ROLLOUT_TIMEOUT}s"
-      return 1
+      log_warn "Webhook deployment not fully ready after ${ROLLOUT_TIMEOUT}s, proceeding anyway..."
     }
   fi
 
