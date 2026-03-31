@@ -11,7 +11,7 @@
 # OPTIONS:
 #   --operator-type <odh|rhoai>   Operator to install (default: odh)
 #                                 Policy engine is auto-selected:
-#                                   odh → kuadrant (community v1.3.1)
+#                                   odh → kuadrant (community v1.4.2)
 #                                   rhoai → rhcl (Red Hat Connectivity Link)
 #   --enable-tls-backend          Enable TLS for Authorino/MaaS API (default: on)
 #   --enable-keycloak             Deploy Keycloak for external OIDC (optional)
@@ -114,7 +114,7 @@ OPTIONS:
       Which operator to install (default: odh)
       Policy engine is auto-selected based on operator type:
       - rhoai → rhcl (Red Hat Connectivity Link)
-      - odh → kuadrant (community v1.3.1 with AuthPolicy v1)
+      - odh → kuadrant (community v1.4.2 with AuthPolicy v1)
       Only applies when --deployment-mode=operator
 
   --enable-tls-backend
@@ -372,13 +372,13 @@ validate_configuration() {
   fi
 
   # Auto-determine policy engine based on operator type
-  # - ODH uses community Kuadrant (v1.3.1 from upstream catalog has AuthPolicy v1)
+  # - ODH uses community Kuadrant (v1.4.2 from upstream catalog has AuthPolicy v1)
   # - RHOAI uses RHCL (Red Hat Connectivity Link - downstream)
   if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
     case "$OPERATOR_TYPE" in
       odh)
         POLICY_ENGINE="kuadrant"
-        log_debug "Auto-selected policy engine for ODH: kuadrant (community v1.3.1)"
+        log_debug "Auto-selected policy engine for ODH: kuadrant (community v1.4.2)"
         ;;
       rhoai)
         POLICY_ENGINE="rhcl"
@@ -866,14 +866,14 @@ install_policy_engine() {
       ;;
 
     kuadrant)
-      log_info "Installing Kuadrant v1.3.1 (upstream community)"
+      log_info "Installing Kuadrant v1.4.2 (upstream community)"
 
-      # Create custom catalog for upstream Kuadrant v1.3.1
-      # This version provides AuthPolicy v1 API required by ODH
+      # Create custom catalog for upstream Kuadrant v1.4.2
+      # This version provides AuthPolicy v1 API and Authorino v0.23.1
       local kuadrant_catalog="kuadrant-operator-catalog"
       local kuadrant_ns="kuadrant-system"
 
-      log_info "Creating Kuadrant v1.3.1 catalog source..."
+      log_info "Creating Kuadrant v1.4.2 catalog source..."
       kubectl create namespace "$kuadrant_ns" 2>/dev/null || true
 
       cat <<EOF | kubectl apply -f -
@@ -884,7 +884,7 @@ metadata:
   namespace: $kuadrant_ns
 spec:
   sourceType: grpc
-  image: quay.io/kuadrant/kuadrant-operator-catalog:v1.3.1
+  image: quay.io/kuadrant/kuadrant-operator-catalog:v1.4.2
   displayName: Kuadrant Operator Catalog
   publisher: Kuadrant
   updateStrategy:

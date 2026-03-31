@@ -456,6 +456,17 @@ allow {
 		rule["response"] = map[string]interface{}{
 			"success": map[string]interface{}{
 				"headers": map[string]interface{}{
+					// Strip Authorization header to prevent token exfiltration to model backends
+					// Both API keys and OpenShift tokens are validated by Authorino, but should
+					// not be forwarded to model services to prevent credential theft
+					"Authorization": map[string]interface{}{
+						"plain": map[string]interface{}{
+							"value": "",
+						},
+						"key":      "authorization",
+						"metrics":  false,
+						"priority": int64(0),
+					},
 					// Subscription bound to API key (only for API keys)
 					// For K8s tokens, this header is not injected (empty string)
 					"X-MaaS-Subscription": map[string]interface{}{

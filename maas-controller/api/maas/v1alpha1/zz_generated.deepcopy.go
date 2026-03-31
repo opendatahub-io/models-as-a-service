@@ -549,11 +549,6 @@ func (in *ModelSubscriptionRef) DeepCopyInto(out *ModelSubscriptionRef) {
 		*out = make([]TokenRateLimit, len(*in))
 		copy(*out, *in)
 	}
-	if in.TokenRateLimitRef != nil {
-		in, out := &in.TokenRateLimitRef, &out.TokenRateLimitRef
-		*out = new(string)
-		**out = **in
-	}
 	if in.BillingRate != nil {
 		in, out := &in.BillingRate, &out.BillingRate
 		*out = new(BillingRate)

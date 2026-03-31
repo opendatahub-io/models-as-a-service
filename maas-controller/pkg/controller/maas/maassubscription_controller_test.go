@@ -397,6 +397,7 @@ func TestMaaSSubscriptionReconciler_RemoveModelRef(t *testing.T) {
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(modelRefA, modelRefB, routeA, routeB, sub).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
@@ -492,6 +493,7 @@ func TestMaaSSubscriptionReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(modelRefA, modelRefB, routeA, routeB, sub1, sub2).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
@@ -717,6 +719,7 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(model, route, maasSub).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
@@ -810,6 +813,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(model, route, subA, subB).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}

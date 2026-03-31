@@ -76,10 +76,6 @@ spec:
                       maxLength: 63
                       minLength: 1
                       type: string
-                    tokenRateLimitRef:
-                      description: TokenRateLimitRef references an existing TokenRateLimit
-                        resource
-                      type: string
                     tokenRateLimits:
                       description: TokenRateLimits defines token-based rate limits
                         for this model
@@ -89,6 +85,7 @@ spec:
                           limit:
                             description: Limit is the maximum number of tokens allowed
                             format: int64
+                            minimum: 1
                             type: integer
                           window:
                             description: Window is the time window (e.g., "1m", "1h",
@@ -99,10 +96,12 @@ spec:
                         - limit
                         - window
                         type: object
+                      minItems: 1
                       type: array
                   required:
                   - name
                   - namespace
+                  - tokenRateLimits
                   type: object
                 minItems: 1
                 type: array

@@ -192,7 +192,7 @@ erDiagram
 
 - **MaaSModelRef**: `spec.modelRef.kind` = LLMInferenceService or ExternalModel; `spec.modelRef.name` = name of the referenced model resource.
 - **MaaSAuthPolicy**: `spec.modelRefs` (list of ModelRef objects with name and namespace), `spec.subjects` (groups, users).
-- **MaaSSubscription**: `spec.owner` (groups, users), `spec.modelRefs` (list of ModelSubscriptionRef objects with name, namespace, and either `tokenRateLimits` array or `tokenRateLimitRef` reference to define per-model rate limits).
+- **MaaSSubscription**: `spec.owner` (groups, users), `spec.modelRefs` (list of ModelSubscriptionRef objects with name, namespace, and required `tokenRateLimits` array to define per-model rate limits).
 
 ---
 
