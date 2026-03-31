@@ -64,12 +64,8 @@ type ModelSubscriptionRef struct {
 	Namespace string `json:"namespace"`
 
 	// TokenRateLimits defines token-based rate limits for this model
-	// +optional
-	TokenRateLimits []TokenRateLimit `json:"tokenRateLimits,omitempty"`
-
-	// TokenRateLimitRef references an existing TokenRateLimit resource
-	// +optional
-	TokenRateLimitRef *string `json:"tokenRateLimitRef,omitempty"`
+	// +kubebuilder:validation:MinItems=1
+	TokenRateLimits []TokenRateLimit `json:"tokenRateLimits"`
 
 	// BillingRate defines the cost per token
 	// +optional
@@ -79,6 +75,7 @@ type ModelSubscriptionRef struct {
 // TokenRateLimit defines a token rate limit
 type TokenRateLimit struct {
 	// Limit is the maximum number of tokens allowed
+	// +kubebuilder:validation:Minimum=1
 	Limit int64 `json:"limit"`
 
 	// Window is the time window (e.g., "1m", "1h", "24h")
