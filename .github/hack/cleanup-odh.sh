@@ -127,7 +127,26 @@ for policy_ns in kuadrant-system rh-connectivity-link; do
         kubectl delete kuadrant --all -n "$policy_ns" --ignore-not-found --timeout=60s 2>/dev/null || true
         kubectl delete limitador --all -n "$policy_ns" --ignore-not-found --timeout=60s 2>/dev/null || true
         kubectl delete authorino --all -n "$policy_ns" --ignore-not-found --timeout=60s 2>/dev/null || true
-        echo "   ✅ Workload CRs deleted from $policy_ns"
+
+        # Wait for CRs to be fully deleted (finalizers processed) before removing operators
+        # This prevents orphaned resources if we delete operators while finalizers are still running
+        echo "   Waiting for CR finalizers to complete in $policy_ns..."
+        timeout=60
+        deadline=$((SECONDS + timeout))
+        remaining=1
+        while [[ $SECONDS -lt $deadline ]]; do
+            # Count remaining CRs (wc -l counts all lines, subtract 1 for header if present)
+            count=$(kubectl get kuadrant,limitador,authorino -n "$policy_ns" --ignore-not-found 2>/dev/null | wc -l)
+            remaining=$((count > 0 ? count - 1 : 0))
+            if [[ $remaining -eq 0 ]]; then
+                echo "   ✅ All workload CRs deleted from $policy_ns"
+                break
+            fi
+            sleep 2
+        done
+        if [[ $remaining -gt 0 ]]; then
+            echo "   ⚠️  Warning: $remaining CR(s) still exist in $policy_ns after ${timeout}s (finalizers may be stuck)"
+        fi
     fi
 done
 
