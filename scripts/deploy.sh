@@ -633,14 +633,18 @@ deploy_via_kustomize() {
   set_maas_controller_image
   set_overlay_namespace "$overlay" "$NAMESPACE"
 
-  if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
-    log_info "Creating namespace: $NAMESPACE"
-    if ! kubectl create namespace "$NAMESPACE"; then
+  # Create namespace (idempotent - treat AlreadyExists as success to avoid TOCTOU races)
+  log_info "Ensuring namespace exists: $NAMESPACE"
+  if ! kubectl create namespace "$NAMESPACE" 2>/dev/null; then
+    # Create failed - check if it's because namespace already exists
+    if kubectl get namespace "$NAMESPACE" &>/dev/null; then
+      log_debug "Namespace $NAMESPACE already exists"
+    else
       log_error "Failed to create namespace $NAMESPACE"
       return 1
     fi
   else
-    log_debug "Namespace $NAMESPACE already exists"
+    log_info "Created namespace: $NAMESPACE"
   fi
 
   # Note: The subscription namespace (default: models-as-a-service) is automatically
@@ -1114,14 +1118,16 @@ apply_custom_resources() {
 
   # Wait for webhook deployment to exist and be ready (ensures service + endpoints are ready)
   wait_for_resource "deployment" "$webhook_deployment" "$webhook_namespace" "$ROLLOUT_TIMEOUT" || {
-    log_warn "Webhook deployment not found after ${ROLLOUT_TIMEOUT}s, proceeding anyway..."
+    log_error "Webhook deployment not found after ${ROLLOUT_TIMEOUT}s"
+    return 1
   }
 
   # Wait for deployment to be fully ready (replicas available)
   if kubectl get deployment "$webhook_deployment" -n "$webhook_namespace" >/dev/null 2>&1; then
     kubectl wait --for=condition=Available --timeout="${ROLLOUT_TIMEOUT}s" \
       deployment/"$webhook_deployment" -n "$webhook_namespace" 2>/dev/null || {
-      log_warn "Webhook deployment not fully ready after ${ROLLOUT_TIMEOUT}s, proceeding anyway..."
+      log_error "Webhook deployment not fully ready after ${ROLLOUT_TIMEOUT}s"
+      return 1
     }
   fi
 

@@ -126,6 +126,35 @@ readonly LLMIS_TIMEOUT="${LLMIS_TIMEOUT:-300}"                      # LLMInferen
 readonly MAASMODELREF_TIMEOUT="${MAASMODELREF_TIMEOUT:-300}"        # MaaSModelRef ready
 readonly AUTHPOLICY_TIMEOUT="${AUTHPOLICY_TIMEOUT:-180}"            # AuthPolicy enforced
 
+# Validate timeout values - must be positive integers
+_validate_timeout() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || [[ "$value" -le 0 ]]; then
+    echo "ERROR: Invalid timeout value for $name: '$value'" >&2
+    echo "       Timeout values must be positive integers (seconds)" >&2
+    echo "       Example: export $name=300" >&2
+    exit 1
+  fi
+}
+
+_validate_timeout "CUSTOM_RESOURCE_TIMEOUT" "$CUSTOM_RESOURCE_TIMEOUT"
+_validate_timeout "NAMESPACE_TIMEOUT" "$NAMESPACE_TIMEOUT"
+_validate_timeout "RESOURCE_TIMEOUT" "$RESOURCE_TIMEOUT"
+_validate_timeout "CRD_TIMEOUT" "$CRD_TIMEOUT"
+_validate_timeout "CSV_TIMEOUT" "$CSV_TIMEOUT"
+_validate_timeout "SUBSCRIPTION_TIMEOUT" "$SUBSCRIPTION_TIMEOUT"
+_validate_timeout "POD_TIMEOUT" "$POD_TIMEOUT"
+_validate_timeout "WEBHOOK_TIMEOUT" "$WEBHOOK_TIMEOUT"
+_validate_timeout "CUSTOM_CHECK_TIMEOUT" "$CUSTOM_CHECK_TIMEOUT"
+_validate_timeout "AUTHORINO_TIMEOUT" "$AUTHORINO_TIMEOUT"
+_validate_timeout "ROLLOUT_TIMEOUT" "$ROLLOUT_TIMEOUT"
+_validate_timeout "KUBECONFIG_WAIT_TIMEOUT" "$KUBECONFIG_WAIT_TIMEOUT"
+_validate_timeout "CATALOGSOURCE_TIMEOUT" "$CATALOGSOURCE_TIMEOUT"
+_validate_timeout "LLMIS_TIMEOUT" "$LLMIS_TIMEOUT"
+_validate_timeout "MAASMODELREF_TIMEOUT" "$MAASMODELREF_TIMEOUT"
+_validate_timeout "AUTHPOLICY_TIMEOUT" "$AUTHPOLICY_TIMEOUT"
+
 # Logging levels
 readonly LOG_LEVEL_DEBUG=0
 readonly LOG_LEVEL_INFO=1
@@ -479,7 +508,9 @@ wait_for_namespace() {
   local timeout=${1:-$NAMESPACE_TIMEOUT}
 
   if kubectl get namespace "$namespace" >/dev/null 2>&1; then
-    if ! kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s; then
+    local remaining=$timeout
+    if [ $remaining -lt 1 ]; then remaining=1; fi
+    if ! kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout="${remaining}s"; then
       echo "  ERROR: Namespace $namespace exists but failed to become Active"
       return 1
     fi
@@ -491,7 +522,9 @@ wait_for_namespace() {
   local interval=5
   while [ $elapsed -lt $timeout ]; do
     if kubectl get namespace "$namespace" >/dev/null 2>&1; then
-      if ! kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s; then
+      local remaining=$((timeout - elapsed))
+      if [ $remaining -lt 1 ]; then remaining=1; fi
+      if ! kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout="${remaining}s"; then
         echo "  ERROR: Namespace $namespace created but failed to become Active"
         return 1
       fi
@@ -1341,8 +1374,8 @@ wait_authorino_ready() {
   fi
 
   if [[ -z "$maas_url" ]]; then
-    echo "  WARNING: Could not determine gateway URL, skipping request verification"
-    return 0
+    echo "  ERROR: Could not determine gateway URL for auth verification"
+    return 1
   fi
 
   echo "  - Using gateway URL: $maas_url"
@@ -1394,6 +1427,6 @@ wait_authorino_ready() {
     elapsed=$((elapsed + 2))
   done
 
-  echo "  WARNING: Auth request verification timed out, continuing anyway"
-  return 0
+  echo "  ERROR: Auth request verification timed out after ${timeout}s"
+  return 1
 }
