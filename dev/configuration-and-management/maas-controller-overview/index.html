@@ -1742,6 +1742,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#91-identity-headers-and-defense-in-depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1. Identity Headers and Defense-in-Depth
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#10-summary" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2459,6 +2470,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#91-identity-headers-and-defense-in-depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1. Identity Headers and Defense-in-Depth
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#10-summary" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2699,6 +2721,26 @@
 <p>For <strong>model inference</strong> (requests to <code>…/llm/&lt;model&gt;/v1/chat/completions</code> and similar), use an <strong>API key</strong> created via <code>POST /v1/api-keys</code> only. Each key is bound to one MaaSSubscription at mint time.</p>
 <p>The Kuadrant AuthPolicy validates API keys via the MaaS API and validates user tokens via <code>Kubernetes TokenReview</code>, deriving user/groups for authorization and for TokenRateLimitPolicy (including <code>groups_str</code>).</p>
 <hr />
+<h2 id="91-identity-headers-and-defense-in-depth">9.1. Identity Headers and Defense-in-Depth</h2>
+<p><strong>For model inference routes</strong> (HTTPRoutes targeting model workloads):</p>
+<p>The controller-generated AuthPolicies do <strong>not</strong> inject most identity-related HTTP headers (<code>X-MaaS-Username</code>, <code>X-MaaS-Group</code>, <code>X-MaaS-Key-Id</code>) into requests forwarded to upstream model pods. This is a defense-in-depth security measure to prevent accidental disclosure of user identity, group membership, and key identifiers in:</p>
+<ul>
+<li>Model runtime logs</li>
+<li>Upstream debug dumps</li>
+<li>Misconfigured proxies or sidecars</li>
+</ul>
+<p><strong>Exception:</strong> <code>X-MaaS-Subscription</code> <strong>is</strong> injected for Istio Telemetry to enable per-subscription latency tracking. Istio runs in the Envoy gateway and cannot access Authorino's <code>auth.identity</code> context—it can only read request headers. The injected subscription value is server-controlled (resolved by Authorino from validated subscriptions), not client-provided.</p>
+<p>All identity information remains available to <strong>gateway-level features</strong> through Authorino's <code>auth.identity</code> and <code>auth.metadata</code> contexts, which are consumed by:</p>
+<ul>
+<li><strong>TokenRateLimitPolicy (TRLP)</strong>: Uses <code>selected_subscription_key</code>, <code>userid</code>, <code>groups</code>, and <code>subscription_info</code> from <code>filters.identity</code> (access <code>subscription_info.labels</code> for tier-based rate limiting)</li>
+<li><strong>Gateway telemetry/metrics</strong>: Accesses identity fields with <code>metrics: true</code> enabled on <code>filters.identity</code></li>
+<li><strong>Authorization policies</strong>: OPA/Rego rules evaluate <code>auth.identity</code> and <code>auth.metadata</code> directly</li>
+</ul>
+<p><strong>For maas-api routes</strong>:</p>
+<p>The static AuthPolicy for maas-api (<code>deployment/base/maas-api/policies/auth-policy.yaml</code>) still injects <code>X-MaaS-Username</code> and <code>X-MaaS-Group</code> headers, as maas-api's <code>ExtractUserInfo</code> middleware requires them. This is separate from model inference routes and follows a different security model (maas-api is a trusted internal service).</p>
+<p><strong>Security motivation:</strong></p>
+<p>Model workloads (vLLM, Llama.cpp, etc.) do not require strong identity claims in cleartext headers. By keeping identity at the gateway layer, we reduce the attack surface and limit the blast radius of potential log leaks or upstream vulnerabilities.</p>
+<hr />
 <h2 id="10-summary">10. Summary</h2>
 <table>
 <thead>
@@ -2753,7 +2795,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 31, 2026 12:12:47 UTC">March 31, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 31, 2026 18:33:48 UTC">March 31, 2026</span>
   </span>
 
     
