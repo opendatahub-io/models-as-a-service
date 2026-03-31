@@ -23,6 +23,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deployment-helpers.sh
 source "${SCRIPT_DIR}/deployment-helpers.sh"
 
+# Default: auto-detect deployment mode
+DEPLOYMENT_MODE=""
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -30,10 +33,24 @@ while [[ $# -gt 0 ]]; do
       CURRENT_LOG_LEVEL=$LOG_LEVEL_DEBUG
       shift
       ;;
+    --deployment-mode)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --deployment-mode requires a value (operator or kustomize)"
+        exit 1
+      fi
+      DEPLOYMENT_MODE="$2"
+      DEPLOYMENT_MODE_EXPLICIT=true
+      shift 2
+      ;;
     --help|-h)
-      echo "Usage: $0 [--verbose]"
+      echo "Usage: $0 [--verbose] [--deployment-mode <operator|kustomize>]"
       echo ""
       echo "Scans cluster for MaaS components and displays deployment state."
+      echo ""
+      echo "Options:"
+      echo "  --verbose                     Show detailed debug information"
+      echo "  --deployment-mode <mode>      Validate DSC for this mode (operator or kustomize)"
+      echo "                                Default: auto-detected from cluster state"
       exit 0
       ;;
     *)
@@ -135,11 +152,33 @@ maas_status=$(detect_maas_deployments "$target_namespace")
 maas_api_status=$(echo "$maas_status" | jq -r '.api' 2>/dev/null || echo "missing")
 maas_controller_status=$(echo "$maas_status" | jq -r '.controller' 2>/dev/null || echo "missing")
 
+# Resolve deployment mode for DSC validation
+# If not explicitly set, auto-detect: if MaaS components exist but modelsAsService is Removed,
+# it's likely kustomize mode. Otherwise assume operator mode.
+if [[ -z "$DEPLOYMENT_MODE" ]]; then
+  if [[ -n "$dsc_name" ]]; then
+    local_maas_state=$(kubectl get datasciencecluster "$dsc_name" -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
+    if [[ "$local_maas_state" == "Removed" ]] && [[ "$maas_api_status" != "missing" || "$maas_controller_status" != "missing" ]]; then
+      DEPLOYMENT_MODE="kustomize"
+    else
+      DEPLOYMENT_MODE="operator"
+    fi
+  else
+    DEPLOYMENT_MODE="kustomize"
+  fi
+fi
+
+# Select the right DSC manifest based on deployment mode
+dsc_manifest=""
+if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
+  dsc_manifest="${SCRIPT_DIR}/data/datasciencecluster-kustomize.yaml"
+fi
+
 # DSC validation (if exists)
 dsc_validated="N/A"
 dsc_validation_errors=""
 if [[ -n "$dsc_name" ]]; then
-  if validation_errors=$(validate_dsc_for_maas "$dsc_name" 2>&1); then
+  if validation_errors=$(validate_dsc_for_maas "$dsc_name" "$dsc_manifest" 2>&1); then
     dsc_validated="true"
   else
     dsc_validated="false"
@@ -184,6 +223,11 @@ csv_patch_display=$(format_status "$csv_gateway_patch")
 api_display=$(format_status "$maas_api_status")
 controller_display=$(format_status "$maas_controller_status")
 
+if [[ -n "${DEPLOYMENT_MODE_EXPLICIT:-}" ]]; then
+  printf "  %-32s → %s\n" "Deployment Mode" "$DEPLOYMENT_MODE"
+else
+  printf "  %-32s → %s (auto-detected)\n" "Deployment Mode" "$DEPLOYMENT_MODE"
+fi
 printf "  %-32s → %s\n" "Operator Type" "$operator_display"
 printf "  %-32s → %s\n" "Target Namespace" "$target_namespace"
 printf "  %-32s → %s\n" "Policy Engine" "$policy_engine_display"
@@ -244,7 +288,7 @@ elif [[ "$dsc_validated" == "false" ]]; then
     if [[ "$answer" =~ ^[Yy]$ ]]; then
       echo ""
       echo "  → Patching DataScienceCluster '$dsc_name'..."
-      if patch_dsc_for_maas "$dsc_name"; then
+      if patch_dsc_for_maas "$dsc_name" "$dsc_manifest"; then
         echo "  ✓ DataScienceCluster patched and validated"
         dsc_validated="true"
       else
