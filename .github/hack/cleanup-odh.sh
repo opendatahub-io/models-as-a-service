@@ -126,8 +126,8 @@ if kubectl get namespace kuadrant-system &>/dev/null; then
     kubectl delete subscription --all -n kuadrant-system --ignore-not-found --timeout=60s 2>/dev/null || true
     # Delete CSVs explicitly (includes dependent operators: authorino, limitador, dns-operator)
     kubectl delete csv -n kuadrant-system --all --ignore-not-found --timeout=60s 2>/dev/null || true
-    # Delete CatalogSource in marketplace
-    kubectl delete catalogsource kuadrant-operator-catalog -n openshift-marketplace --ignore-not-found 2>/dev/null || true
+    # Delete CatalogSource (created in kuadrant-system namespace, not marketplace)
+    kubectl delete catalogsource kuadrant-operator-catalog -n kuadrant-system --ignore-not-found 2>/dev/null || true
     echo "   ✅ Kuadrant OLM resources cleaned"
 fi
 # RHCL cleanup
@@ -135,7 +135,7 @@ if kubectl get namespace rh-connectivity-link &>/dev/null; then
     echo "   Cleaning up RHCL OLM resources..."
     kubectl delete subscription --all -n rh-connectivity-link --ignore-not-found --timeout=60s 2>/dev/null || true
     kubectl delete csv -n rh-connectivity-link --all --ignore-not-found --timeout=60s 2>/dev/null || true
-    kubectl delete catalogsource rhcl-operator-catalog -n openshift-marketplace --ignore-not-found 2>/dev/null || true
+    # Note: RHCL uses redhat-operators catalog (not a custom catalog), so no catalog deletion needed
     echo "   ✅ RHCL OLM resources cleaned"
 fi
 
