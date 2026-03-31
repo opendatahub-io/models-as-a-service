@@ -8,7 +8,8 @@ spec:
       namespace: openshift-ingress
   rules:
     # OpenAI-compatible /v1/models endpoint at top level
-    - matches:
+    - name: maas-v1-models
+      matches:
         - path:
             type: PathPrefix
             value: /v1/models
@@ -17,7 +18,8 @@ spec:
           port: 8080
           weight: 100
     # All other maas-api endpoints remain under /maas-api prefix
-    - matches:
+    - name: maas-api
+      matches:
         - path:
             type: PathPrefix
             value: /maas-api
