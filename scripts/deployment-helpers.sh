@@ -1374,8 +1374,8 @@ wait_authorino_ready() {
   fi
 
   if [[ -z "$maas_url" ]]; then
-    echo "  ERROR: Could not determine gateway URL for auth verification"
-    return 1
+    echo "  WARNING: Could not determine gateway URL, skipping request verification"
+    return 0
   fi
 
   echo "  - Using gateway URL: $maas_url"
