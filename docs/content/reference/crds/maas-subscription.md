@@ -24,8 +24,7 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 |-------|------|----------|-------------|
 | name | string | Yes | Name of the MaaSModelRef |
 | namespace | string | Yes | Namespace where the MaaSModelRef lives |
-| tokenRateLimits | []TokenRateLimit | No | Token-based rate limits for this model |
-| tokenRateLimitRef | string | No | Reference to an existing TokenRateLimit resource |
+| tokenRateLimits | []TokenRateLimit | Yes | Token-based rate limits for this model (at least one required) |
 | billingRate | BillingRate | No | Cost per token |
 
 ## TokenRateLimit

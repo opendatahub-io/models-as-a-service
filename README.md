@@ -80,6 +80,8 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 |----------|-------------|---------|
 | `MAAS_API_IMAGE` | Custom MaaS API container image (works in both operator and kustomize modes) | `quay.io/user/maas-api:pr-123` |
 | `MAAS_CONTROLLER_IMAGE` | Custom MaaS controller container image | `quay.io/user/maas-controller:pr-123` |
+| `METADATA_CACHE_TTL` | TTL in seconds for Authorino metadata HTTP caching | `60` (default), `300` |
+| `AUTHZ_CACHE_TTL` | TTL in seconds for Authorino OPA authorization caching | `60` (default), `30` |
 | `OPERATOR_CATALOG` | Custom operator catalog | `quay.io/opendatahub/catalog:pr-456` |
 | `OPERATOR_IMAGE` | Custom operator image | `quay.io/opendatahub/operator:pr-456` |
 | `OPERATOR_TYPE` | Operator type (rhoai/odh) | `odh` |
@@ -127,6 +129,7 @@ MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \
 
 - [Deployment Guide](docs/content/quickstart.md) - Complete deployment instructions
 - [MaaS API Documentation](maas-api/README.md) - Go API for key management
+- [Authorino Caching Configuration](docs/content/configuration-and-management/authorino-caching.md) - Cache tuning for metadata and authorization
 
 Online Documentation: [https://opendatahub-io.github.io/models-as-a-service/](https://opendatahub-io.github.io/models-as-a-service/)
 

@@ -72,7 +72,7 @@ spec:
             when:
               - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
             plain:
-              expression: '''["'' + auth.metadata.apiKeyValidation.groups.join(''","'') + ''"]'''
+              selector: auth.metadata.apiKeyValidation.groups.@tostr
             priority: 0
           # Groups: from OpenShift identity as JSON array (when OC token used)
           X-MaaS-Group-OC:
