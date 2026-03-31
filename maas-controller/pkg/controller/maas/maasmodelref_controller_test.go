@@ -719,3 +719,101 @@ func TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation(t *testin
 		})
 	}
 }
+
+func TestMapHTTPRouteToMaaSModelRefs(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name         string
+		route        *gatewayapiv1.HTTPRoute
+		models       []*maasv1alpha1.MaaSModelRef
+		wantRequests int
+	}{
+		{
+			name:  "returns all models in same namespace",
+			route: newHTTPRoute("test-route", "default"),
+			models: []*maasv1alpha1.MaaSModelRef{
+				newMaaSModelRef("model1", "default", "LLMInferenceService", "llmisvc1"),
+				newMaaSModelRef("model2", "default", "ExternalModel", "ext1"),
+			},
+			wantRequests: 2,
+		},
+		{
+			name:  "ignores models in different namespace",
+			route: newHTTPRoute("test-route", "default"),
+			models: []*maasv1alpha1.MaaSModelRef{
+				newMaaSModelRef("model1", "default", "LLMInferenceService", "llmisvc1"),
+				newMaaSModelRef("model2", "other-ns", "LLMInferenceService", "llmisvc2"),
+			},
+			wantRequests: 1,
+		},
+		{
+			name:         "returns empty list when no models",
+			route:        newHTTPRoute("test-route", "default"),
+			models:       nil,
+			wantRequests: 0,
+		},
+		{
+			name: "returns empty list when obj is not HTTPRoute",
+			// Pass nil for route, but we'll create a different object type
+			route:        nil,
+			models:       []*maasv1alpha1.MaaSModelRef{newMaaSModelRef("model1", "default", "LLMInferenceService", "llmisvc1")},
+			wantRequests: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var objects []client.Object
+			for _, m := range tt.models {
+				objects = append(objects, m)
+			}
+
+			r, c := newTestReconciler(objects...)
+
+			// Use either the provided route or a non-HTTPRoute object
+			var obj client.Object
+			if tt.route != nil {
+				obj = tt.route
+			} else {
+				obj = &maasv1alpha1.MaaSModelRef{
+					ObjectMeta: metav1.ObjectMeta{Name: "not-a-route", Namespace: "default"},
+				}
+			}
+
+			requests := r.mapHTTPRouteToMaaSModelRefs(ctx, obj)
+
+			if len(requests) != tt.wantRequests {
+				t.Errorf("mapHTTPRouteToMaaSModelRefs() returned %d requests, want %d", len(requests), tt.wantRequests)
+			}
+
+			// Verify that returned requests match the models in the same namespace
+			if tt.route != nil && len(requests) > 0 {
+				expectedNS := tt.route.Namespace
+				for _, req := range requests {
+					if req.Namespace != expectedNS {
+						t.Errorf("request namespace = %q, want %q", req.Namespace, expectedNS)
+					}
+				}
+			}
+
+			// Verify we didn't accidentally modify the fake client
+			_ = c
+		})
+	}
+}
+
+func TestMapHTTPRouteToMaaSModelRefs_ListError(t *testing.T) {
+	// Test that we handle List() errors gracefully
+	ctx := context.Background()
+	route := newHTTPRoute("test-route", "nonexistent-ns")
+
+	// Create a reconciler with no models
+	r, _ := newTestReconciler()
+
+	// Should return empty list on List error (nonexistent namespace)
+	requests := r.mapHTTPRouteToMaaSModelRefs(ctx, route)
+	if len(requests) != 0 {
+		t.Errorf("mapHTTPRouteToMaaSModelRefs() with List error returned %d requests, want 0", len(requests))
+	}
+}

@@ -22,12 +22,14 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/go-logr/logr"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -234,5 +236,103 @@ func TestFindHTTPRouteForModel_ExternalModel_Success(t *testing.T) {
 	}
 	if routeName != "maas-model-foo" || routeNS != "default" {
 		t.Errorf("findHTTPRouteForModel: got (%q, %q), want (\"maas-model-foo\", \"default\")", routeName, routeNS)
+	}
+}
+
+func TestLlmisvcHandler_CleanupOnDelete(t *testing.T) {
+	ctx := context.Background()
+	r, _ := newTestReconciler()
+	h := &llmisvcHandler{r: r}
+
+	model := newMaaSModelRef("test", "default", "LLMInferenceService", "test-llmisvc")
+
+	// CleanupOnDelete should always succeed and do nothing for llmisvc
+	// (HTTPRoutes are owned by KServe, not by the MaaSModelRef controller)
+	err := h.CleanupOnDelete(ctx, logr.Discard(), model)
+	if err != nil {
+		t.Errorf("CleanupOnDelete() error = %v, want nil", err)
+	}
+}
+
+func TestLlmisvcRouteResolver_HTTPRouteForModel(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name          string
+		model         *maasv1alpha1.MaaSModelRef
+		routes        []*gatewayapiv1.HTTPRoute
+		wantRouteName string
+		wantRouteNS   string
+		wantErr       bool
+	}{
+		{
+			name:  "HTTPRoute found",
+			model: newMaaSModelRef("model1", "default", "LLMInferenceService", "test-llmisvc"),
+			routes: []*gatewayapiv1.HTTPRoute{
+				newLLMISvcRoute("test-llmisvc", "default"),
+			},
+			wantRouteName: "test-llmisvc-route",
+			wantRouteNS:   "default",
+			wantErr:       false,
+		},
+		{
+			name:          "HTTPRoute not found",
+			model:         newMaaSModelRef("model1", "default", "LLMInferenceService", "test-llmisvc"),
+			routes:        nil,
+			wantRouteName: "",
+			wantRouteNS:   "",
+			wantErr:       true,
+		},
+		{
+			name:  "HTTPRoute with different labels not matched",
+			model: newMaaSModelRef("model1", "default", "LLMInferenceService", "test-llmisvc"),
+			routes: []*gatewayapiv1.HTTPRoute{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "other-route",
+						Namespace: "default",
+						Labels: map[string]string{
+							"app.kubernetes.io/name": "other-llmisvc",
+						},
+					},
+				},
+			},
+			wantRouteName: "",
+			wantRouteNS:   "",
+			wantErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var objects []client.Object
+			if tt.model != nil {
+				objects = append(objects, tt.model)
+			}
+			for _, route := range tt.routes {
+				objects = append(objects, route)
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(objects...).
+				Build()
+
+			resolver := llmisvcRouteResolver{}
+			routeName, routeNS, err := resolver.HTTPRouteForModel(ctx, c, tt.model)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("HTTPRouteForModel() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if routeName != tt.wantRouteName {
+				t.Errorf("HTTPRouteForModel() routeName = %v, want %v", routeName, tt.wantRouteName)
+			}
+
+			if routeNS != tt.wantRouteNS {
+				t.Errorf("HTTPRouteForModel() routeNS = %v, want %v", routeNS, tt.wantRouteNS)
+			}
+		})
 	}
 }
