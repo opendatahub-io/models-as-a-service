@@ -81,7 +81,7 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: prometheus
-                  query: 'count(count by (user) (rate(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__rate_interval]) > 0)) or vector(0)'
+                  query: 'count(count by (user) (increase(authorized_calls[$__range]) > 0)) or vector(0)'
                   seriesNameFormat: Users
     successRate:
       kind: Panel
