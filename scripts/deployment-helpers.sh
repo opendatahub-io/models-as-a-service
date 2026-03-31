@@ -1154,7 +1154,8 @@ EOF
   if ! kubectl wait catalogsource "$name" -n "$namespace" \
       --for=jsonpath='{.status.connectionState.lastObservedState}'=READY \
       --timeout="${CATALOGSOURCE_TIMEOUT}s" 2>/dev/null; then
-    local state=$(kubectl get catalogsource "$name" -n "$namespace" \
+    local state
+    state=$(kubectl get catalogsource "$name" -n "$namespace" \
       -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null)
     echo "  ERROR: CatalogSource not ready after ${CATALOGSOURCE_TIMEOUT}s (state: $state)"
     return 1
