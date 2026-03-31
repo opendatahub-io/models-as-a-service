@@ -1062,6 +1062,163 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	}
 }
 
+// TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream verifies that identity headers
+// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Key-Id) are NOT injected into requests forwarded
+// to upstream model workloads (defense-in-depth). Exception: X-MaaS-Subscription IS injected
+// for Istio Telemetry (per-subscription latency tracking).
+// All identity information remains available to TRLP and telemetry via filters.identity.
+func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+	}
+
+	// Test 1: Verify identity headers (except X-MaaS-Subscription) are not forwarded upstream
+	t.Run("identity headers not forwarded to upstream", func(t *testing.T) {
+		headers, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "headers")
+		if err != nil {
+			t.Fatalf("Error checking headers: %v", err)
+		}
+
+		if !found {
+			t.Fatalf("response.success.headers should exist (X-MaaS-Subscription for Istio)")
+		}
+
+		// Verify X-MaaS-Subscription IS present (required for Istio Telemetry)
+		if _, exists := headers["X-MaaS-Subscription"]; !exists {
+			t.Errorf("X-MaaS-Subscription header should be present for Istio Telemetry")
+		}
+
+		// Verify identity headers are NOT present (defense-in-depth)
+		forbiddenHeaders := []string{"X-MaaS-Username", "X-MaaS-Group", "X-MaaS-Key-Id"}
+		for _, header := range forbiddenHeaders {
+			if _, exists := headers[header]; exists {
+				t.Errorf("Identity header %q should NOT be forwarded to upstream workloads (defense-in-depth)", header)
+			}
+		}
+	})
+
+	// Test 2: Verify filters.identity exists and contains all necessary data for TRLP and telemetry
+	t.Run("identity data available for TRLP and telemetry", func(t *testing.T) {
+		identity, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "filters", "identity", "json", "properties")
+		if err != nil || !found {
+			t.Fatalf("filters.identity.json.properties missing: found=%v err=%v", found, err)
+		}
+
+		// Verify essential fields for TRLP
+		requiredFields := []string{
+			"userid",                      // User identification
+			"groups",                      // User groups
+			"selected_subscription_key",   // Model-scoped subscription key for TRLP
+			"selected_subscription",       // Subscription name
+			"subscription_info",           // Full subscription object (includes labels, organizationId, costCenter, etc.)
+		}
+
+		for _, field := range requiredFields {
+			if _, exists := identity[field]; !exists {
+				t.Errorf("filters.identity must include %q for TRLP/telemetry, but it's missing", field)
+			}
+		}
+
+		// Verify telemetry/observability fields
+		observabilityFields := []string{
+			"keyId", // API key tracking
+		}
+
+		for _, field := range observabilityFields {
+			if _, exists := identity[field]; !exists {
+				t.Errorf("filters.identity should include %q for observability, but it's missing", field)
+			}
+		}
+
+		// Verify subscription_info contains full object (not just individual fields)
+		// This object should contain: name, namespace, labels, organizationId, costCenter
+		// Consumers should access nested fields like:
+		//   - subscription_info.organizationId (for billing/cost attribution)
+		//   - subscription_info.costCenter (for chargeback)
+		//   - subscription_info.labels (for tier-based rate limiting)
+		subscriptionInfoField, exists := identity["subscription_info"]
+		if !exists {
+			t.Error("filters.identity must include 'subscription_info' field (full object from subscription-select)")
+		} else {
+			// Verify it's an expression that returns the full object
+			subscriptionInfoMap, ok := subscriptionInfoField.(map[string]interface{})
+			if !ok {
+				t.Errorf("subscription_info should be a map, got %T", subscriptionInfoField)
+			} else {
+				expr, hasExpr := subscriptionInfoMap["expression"]
+				if !hasExpr {
+					t.Error("subscription_info should have an 'expression' field")
+				} else {
+					exprStr, ok := expr.(string)
+					if !ok {
+						t.Errorf("subscription_info expression should be a string, got %T", expr)
+					} else {
+						// Verify it returns the full object, not just a sub-field
+						if !contains(exprStr, `auth.metadata["subscription-info"]`) {
+							t.Errorf("subscription_info expression should reference full subscription-info object, got: %s", exprStr)
+						}
+						// Verify it doesn't extract only labels (old behavior)
+						if contains(exprStr, ".labels") && !contains(exprStr, "?") {
+							t.Errorf("subscription_info expression should return full object, not just .labels, got: %s", exprStr)
+						}
+						// Note: We can't verify organizationId and costCenter exist at runtime here
+						// (they're optional fields that depend on MaaSSubscription configuration)
+						// but the full object is passed, so consumers can access them via:
+						// auth.identity.subscription_info.organizationId
+						// auth.identity.subscription_info.costCenter
+					}
+				}
+			}
+		}
+	})
+
+	// Test 3: Verify metrics are enabled on identity filter
+	t.Run("identity filter has metrics enabled", func(t *testing.T) {
+		metricsEnabled, found, err := unstructured.NestedBool(got.Object, "spec", "rules", "response", "success", "filters", "identity", "metrics")
+		if err != nil || !found {
+			t.Fatalf("filters.identity.metrics missing: found=%v err=%v", found, err)
+		}
+
+		if !metricsEnabled {
+			t.Error("filters.identity.metrics must be true for telemetry to access identity data")
+		}
+	})
+}
+
 // contains is a helper to check if a string contains a substring (case-sensitive).
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||

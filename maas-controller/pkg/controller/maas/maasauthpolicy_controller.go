@@ -448,32 +448,22 @@ allow {
 		// match against subscription groups (which may differ from auth policy groups).
 		// Also inject subscription metadata from subscription-info for Limitador metrics.
 		// For API keys: username/groups come from apiKeyValidation metadata
-		// For K8s tokens: username/groups come from auth.identity
+		// Identity headers intentionally removed for defense-in-depth:
+		// User identity, groups, and key IDs are not forwarded to upstream model workloads
+		// to prevent accidental disclosure in logs or dumps. All identity information remains
+		// available to TRLP and telemetry via auth.identity and filters.identity below.
+		// Exception: X-MaaS-Subscription is injected for Istio Telemetry (per-subscription latency tracking).
 		rule["response"] = map[string]interface{}{
 			"success": map[string]interface{}{
 				"headers": map[string]interface{}{
-					// Username from API key validation or K8s token identity
-					"X-MaaS-Username": map[string]interface{}{
+					// Strip Authorization header to prevent token exfiltration to model backends
+					// Both API keys and OpenShift tokens are validated by Authorino, but should
+					// not be forwarded to model services to prevent credential theft
+					"Authorization": map[string]interface{}{
 						"plain": map[string]interface{}{
-							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.username : auth.identity.user.username`,
+							"value": "",
 						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					// Groups - serialize to JSON array string from API key validation or K8s identity
-					// Using string() conversion of JSON-serialized groups for proper escaping
-					"X-MaaS-Group": map[string]interface{}{
-						"plain": map[string]interface{}{
-							"expression": `string(((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups))`,
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					// Key ID for tracking (only for API keys)
-					"X-MaaS-Key-Id": map[string]interface{}{
-						"plain": map[string]interface{}{
-							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyId : ""`,
-						},
+						"key":      "authorization",
 						"metrics":  false,
 						"priority": int64(0),
 					},
@@ -510,14 +500,11 @@ allow {
 										ref.Namespace, ref.Name,
 									),
 								},
-								"organizationId": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].organizationId) ? auth.metadata["subscription-info"].organizationId : ""`,
-								},
-								"costCenter": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].costCenter) ? auth.metadata["subscription-info"].costCenter : ""`,
-								},
-								"subscription_labels": map[string]interface{}{
-									"expression": `has(auth.metadata["subscription-info"].labels) ? auth.metadata["subscription-info"].labels : {}`,
+								// Full subscription-info object from subscription-select endpoint
+								// Contains: name, namespace, labels, organizationId, costCenter, error, message
+								// Consumers should access nested fields (e.g., subscription_info.organizationId)
+								"subscription_info": map[string]interface{}{
+									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"] : {}`,
 								},
 								// Error information (for debugging - only populated when selection fails)
 								"subscription_error": map[string]interface{}{

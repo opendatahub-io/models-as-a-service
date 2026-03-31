@@ -214,7 +214,7 @@ The MaaSAuthPolicy delegates to the MaaS API for key validation and subscription
 2. MaaS API validates the key (format, not revoked, not expired) and returns username, groups, and subscription.
 3. Authorino calls MaaS API to check subscription (groups, username, requested subscription from the key).
 4. If the user lacks access to the requested subscription → error (403).
-5. On success, returns selected subscription; Authorino caches the result (e.g., 60s TTL). AuthPolicy may inject `X-MaaS-Subscription` **server-side** for downstream rate limiting and metrics. Clients do not send this header on inference; subscription comes from the API key record created at mint time.
+5. On success, returns selected subscription; Authorino caches the result (e.g., 60s TTL). Identity information (username, groups, subscription, key ID) is made available to TokenRateLimitPolicy and observability through AuthPolicy's `filters.identity` mechanism, but is **not forwarded** as HTTP headers to upstream model workloads (defense-in-depth security). Clients do not send subscription headers on inference; subscription comes from the API key record created at mint time.
 
 ```mermaid
 graph TB
