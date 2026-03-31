@@ -11,7 +11,7 @@ metadata:
     pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
       == "main" && !files.all.all(x, x.matches('^docs/') || x.matches('\\.md$')
       || x.matches('^(.*/)?(\\.gitignore|OWNERS|PROJECT|LICENSE)$')
-      || x.matches('^\\.github/') || x.matches('^\\.tekton/'))
+      || x.matches('^\\.github/'))
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
