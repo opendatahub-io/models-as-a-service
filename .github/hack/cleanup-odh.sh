@@ -117,15 +117,37 @@ echo "9. Deleting models-as-a-service namespace..."
 force_delete_namespace "models-as-a-service" \
     "maasauthpolicies.maas.opendatahub.io" "maassubscriptions.maas.opendatahub.io"
 
-# 10. Delete policy engine namespaces (Kuadrant or RHCL)
+# 10. Delete policy engine OLM resources (before namespace deletion)
+echo "10. Cleaning up policy engine OLM resources..."
+# Kuadrant cleanup
+if kubectl get namespace kuadrant-system &>/dev/null; then
+    echo "   Cleaning up Kuadrant OLM resources..."
+    # Delete Subscriptions (triggers CSV cleanup by OLM)
+    kubectl delete subscription --all -n kuadrant-system --ignore-not-found --timeout=60s 2>/dev/null || true
+    # Delete CSVs explicitly (includes dependent operators: authorino, limitador, dns-operator)
+    kubectl delete csv -n kuadrant-system --all --ignore-not-found --timeout=60s 2>/dev/null || true
+    # Delete CatalogSource in marketplace
+    kubectl delete catalogsource kuadrant-operator-catalog -n openshift-marketplace --ignore-not-found 2>/dev/null || true
+    echo "   ✅ Kuadrant OLM resources cleaned"
+fi
+# RHCL cleanup
+if kubectl get namespace rh-connectivity-link &>/dev/null; then
+    echo "   Cleaning up RHCL OLM resources..."
+    kubectl delete subscription --all -n rh-connectivity-link --ignore-not-found --timeout=60s 2>/dev/null || true
+    kubectl delete csv -n rh-connectivity-link --all --ignore-not-found --timeout=60s 2>/dev/null || true
+    kubectl delete catalogsource rhcl-operator-catalog -n openshift-marketplace --ignore-not-found 2>/dev/null || true
+    echo "   ✅ RHCL OLM resources cleaned"
+fi
+
+# 11. Delete policy engine namespaces (Kuadrant or RHCL)
 for policy_ns in kuadrant-system rh-connectivity-link; do
-    echo "10. Deleting $policy_ns namespace (if installed)..."
+    echo "11. Deleting $policy_ns namespace (if installed)..."
     force_delete_namespace "$policy_ns" \
     "authorinos.operator.authorino.kuadrant.io" "kuadrants.kuadrant.io" "limitadors.limitador.kuadrant.io"
 done
 
-# 11. Delete Keycloak identity provider (if installed)
-echo "11. Deleting Keycloak namespace (if installed)..."
+# 12. Delete Keycloak identity provider (if installed)
+echo "12. Deleting Keycloak namespace (if installed)..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd ../.. && pwd)"
 if [[ -f "${SCRIPT_DIR}/scripts/cleanup-keycloak.sh" ]]; then
     # Pass --delete-crds if --include-crds was specified for this script
@@ -143,12 +165,12 @@ else
     fi
 fi
 
-# 12. Delete llm namespace and model resources
-echo "12. Deleting LLM models and namespace..."
+# 13. Delete llm namespace and model resources
+echo "13. Deleting LLM models and namespace..."
 force_delete_namespace "llm" "llminferenceservice" "inferenceservice" "maasmodelrefs.maas.opendatahub.io"
 
-# 13. Delete gateway resources in openshift-ingress
-echo "13. Deleting gateway resources..."
+# 14. Delete gateway resources in openshift-ingress
+echo "14. Deleting gateway resources..."
 kubectl delete gateway maas-default-gateway -n openshift-ingress --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter -n openshift-ingress -l kuadrant.io/managed=true --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter kuadrant-auth-tls-fix -n openshift-ingress --ignore-not-found 2>/dev/null || true
@@ -156,20 +178,20 @@ kubectl delete authpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/n
 kubectl delete ratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete tokenratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 
-# 14. Delete MaaS RBAC (ClusterRoles, ClusterRoleBindings - can conflict with other managers)
-echo "14. Deleting MaaS RBAC..."
+# 15. Delete MaaS RBAC (ClusterRoles, ClusterRoleBindings - can conflict with other managers)
+echo "15. Deleting MaaS RBAC..."
 kubectl delete clusterrolebinding maas-api maas-controller-rolebinding --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-api maas-controller-role --ignore-not-found 2>/dev/null || true
 
-# 15. Optionally delete CRDs
+# 16. Optionally delete CRDs
 if $INCLUDE_CRDS; then
-    echo "15. Deleting ODH CRDs..."
+    echo "16. Deleting ODH CRDs..."
     kubectl delete crd datascienceclusters.datasciencecluster.opendatahub.io --ignore-not-found 2>/dev/null || true
     kubectl delete crd dscinitializations.dscinitialization.opendatahub.io --ignore-not-found 2>/dev/null || true
     kubectl delete crd datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io --ignore-not-found 2>/dev/null || true
     # Add more CRDs as needed
 else
-    echo "15. Skipping CRD deletion (use --include-crds to remove CRDs)"
+    echo "16. Skipping CRD deletion (use --include-crds to remove CRDs)"
 fi
 
 echo ""
