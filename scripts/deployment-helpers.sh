@@ -964,7 +964,8 @@ wait_for_csv_with_min_version() {
   local end_time=$((SECONDS + timeout))
 
   while [ $SECONDS -lt $end_time ]; do
-    local csv_name=$(find_csv_with_min_version "$operator_prefix" "$min_version" "$namespace")
+    local csv_name
+    csv_name=$(find_csv_with_min_version "$operator_prefix" "$min_version" "$namespace")
 
     if [ -n "$csv_name" ]; then
       # Found a CSV with suitable version
