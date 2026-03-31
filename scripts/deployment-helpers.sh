@@ -107,8 +107,24 @@ get_cluster_audience() {
 # Constants and Configuration
 # ============================================================================
 
-# Timeout values (seconds) - used by deploy.sh and related scripts
-readonly CUSTOM_RESOURCE_TIMEOUT=600  # Used for DataScienceCluster wait
+# Timeout values (seconds) - can be overridden via environment variables
+# These provide sensible defaults but allow customization for slow/fast clusters
+readonly CUSTOM_RESOURCE_TIMEOUT="${CUSTOM_RESOURCE_TIMEOUT:-600}"  # DataScienceCluster wait
+readonly NAMESPACE_TIMEOUT="${NAMESPACE_TIMEOUT:-300}"              # Namespace creation/ready
+readonly RESOURCE_TIMEOUT="${RESOURCE_TIMEOUT:-300}"                # Generic resource wait
+readonly CRD_TIMEOUT="${CRD_TIMEOUT:-180}"                          # CRD establishment
+readonly CSV_TIMEOUT="${CSV_TIMEOUT:-180}"                          # CSV installation
+readonly SUBSCRIPTION_TIMEOUT="${SUBSCRIPTION_TIMEOUT:-300}"        # Subscription install
+readonly POD_TIMEOUT="${POD_TIMEOUT:-120}"                          # Pod ready wait
+readonly WEBHOOK_TIMEOUT="${WEBHOOK_TIMEOUT:-60}"                   # Webhook ready
+readonly CUSTOM_CHECK_TIMEOUT="${CUSTOM_CHECK_TIMEOUT:-120}"        # Generic check
+readonly AUTHORINO_TIMEOUT="${AUTHORINO_TIMEOUT:-120}"              # Authorino ready
+readonly ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-120}"                  # kubectl rollout status
+readonly KUBECONFIG_WAIT_TIMEOUT="${KUBECONFIG_WAIT_TIMEOUT:-60}"   # Kubeconfig operations
+readonly CATALOGSOURCE_TIMEOUT="${CATALOGSOURCE_TIMEOUT:-120}"      # CatalogSource ready
+readonly LLMIS_TIMEOUT="${LLMIS_TIMEOUT:-300}"                      # LLMInferenceService ready
+readonly MAASMODELREF_TIMEOUT="${MAASMODELREF_TIMEOUT:-300}"        # MaaSModelRef ready
+readonly AUTHPOLICY_TIMEOUT="${AUTHPOLICY_TIMEOUT:-180}"            # AuthPolicy enforced
 
 # Logging levels
 readonly LOG_LEVEL_DEBUG=0
@@ -181,7 +197,10 @@ waitsubscriptioninstalled() {
 
   echo "  * Waiting for Subscription $ns/$name to start setup..."
   # Use fully qualified resource name to avoid conflicts with Knative subscriptions
-  kubectl wait subscription.operators.coreos.com --timeout=300s -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'
+  if ! kubectl wait subscription.operators.coreos.com --timeout="${SUBSCRIPTION_TIMEOUT}s" -n "$ns" "$name" --for=jsonpath='{.status.currentCSV}'; then
+    echo "    * ERROR: Timeout waiting for Subscription $ns/$name to get currentCSV"
+    return 1
+  fi
   local csv
   csv=$(kubectl get subscription.operators.coreos.com -n "$ns" "$name" -o jsonpath='{.status.currentCSV}')
 
@@ -191,8 +210,8 @@ waitsubscriptioninstalled() {
   done
 
   echo "  * Waiting for Subscription setup to finish setup. CSV = $csv ..."
-  if ! kubectl wait -n "$ns" --for=jsonpath="{.status.phase}"=Succeeded csv "$csv" --timeout=300s; then
-    echo "    * ERROR: Timeout while waiting for Subscription to finish installation."
+  if ! kubectl wait -n "$ns" --for=jsonpath="{.status.phase}"=Succeeded csv "$csv" --timeout="${CSV_TIMEOUT}s"; then
+    echo "    * ERROR: Timeout while waiting for Subscription to finish installation (CSV=$csv, timeout=${CSV_TIMEOUT}s)"
     return 1
   fi
 }
@@ -424,12 +443,12 @@ spec:
 # Arguments:
 #   description - Description of what we're waiting for
 #   check_command - Command to execute (should return 0 on success)
-#   timeout - Timeout in seconds
-#   interval - Check interval in seconds
+#   timeout - Timeout in seconds (default: CUSTOM_CHECK_TIMEOUT)
+#   interval - Check interval in seconds (default: 5)
 wait_for_custom_check() {
   local description=${1?description is required}; shift
   local check_command=${1?check command is required}; shift
-  local timeout=${1:-120}; shift || true
+  local timeout=${1:-$CUSTOM_CHECK_TIMEOUT}; shift || true
   local interval=${1:-5}; shift || true
 
   log_info "Waiting for: $description (timeout: ${timeout}s)"
@@ -444,7 +463,7 @@ wait_for_custom_check() {
     elapsed=$((elapsed + interval))
   done
 
-  log_warn "$description - Timeout after ${timeout}s"
+  log_error "$description - Timeout after ${timeout}s"
   return 1
 }
 
@@ -457,26 +476,32 @@ wait_for_custom_check() {
 #   Returns 0 on success, 1 on timeout.
 wait_for_namespace() {
   local namespace=${1?namespace is required}; shift
-  local timeout=${1:-300}  # default 5 minutes
+  local timeout=${1:-$NAMESPACE_TIMEOUT}
 
   if kubectl get namespace "$namespace" >/dev/null 2>&1; then
-    kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s
-    return $?
+    if ! kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s; then
+      echo "  ERROR: Namespace $namespace exists but failed to become Active"
+      return 1
+    fi
+    return 0
   fi
 
-  echo "* Waiting for $namespace namespace to be created..."
+  echo "* Waiting for $namespace namespace to be created (timeout: ${timeout}s)..."
   local elapsed=0
   local interval=5
   while [ $elapsed -lt $timeout ]; do
     if kubectl get namespace "$namespace" >/dev/null 2>&1; then
-      kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s
-      return $?
+      if ! kubectl wait namespace/"$namespace" --for=jsonpath='{.status.phase}'=Active --timeout=60s; then
+        echo "  ERROR: Namespace $namespace created but failed to become Active"
+        return 1
+      fi
+      return 0
     fi
     sleep $interval
     elapsed=$((elapsed + interval))
   done
 
-  echo "  WARNING: $namespace namespace was not created within timeout."
+  echo "  ERROR: $namespace namespace was not created within ${timeout}s timeout"
   return 1
 }
 
@@ -487,9 +512,9 @@ wait_for_resource() {
   local kind=${1?kind is required}; shift
   local name=${1?name is required}; shift
   local namespace=${1?namespace is required}; shift
-  local timeout=${1:-300}  # default 5 minutes
+  local timeout=${1:-$RESOURCE_TIMEOUT}
 
-  echo "* Waiting for $kind/$name in $namespace..."
+  echo "* Waiting for $kind/$name in $namespace (timeout: ${timeout}s)..."
   local elapsed=0
   local interval=5
   while [ $elapsed -lt $timeout ]; do
@@ -501,7 +526,7 @@ wait_for_resource() {
     elapsed=$((elapsed + interval))
   done
 
-  echo "  WARNING: $kind/$name was not found within timeout."
+  echo "  ERROR: $kind/$name was not found within ${timeout}s timeout"
   return 1
 }
 
@@ -849,7 +874,7 @@ inject_maas_api_image_operator_mode() {
 # Helper function to wait for CRD to be established
 wait_for_crd() {
   local crd="$1"
-  local timeout="${2:-60}"  # timeout in seconds
+  local timeout="${2:-$CRD_TIMEOUT}"
   local interval=2
   local end_time=$((SECONDS + timeout))
 
@@ -932,15 +957,15 @@ wait_for_csv_with_min_version() {
   local operator_prefix="$1"
   local min_version="$2"
   local namespace="${3:-kuadrant-system}"
-  local timeout="${4:-180}"
-  
-  echo "⏳ Looking for ${operator_prefix} (minimum version: ${min_version})..."
-  
+  local timeout="${4:-$CSV_TIMEOUT}"
+
+  echo "⏳ Looking for ${operator_prefix} (minimum version: ${min_version}, timeout: ${timeout}s)..."
+
   local end_time=$((SECONDS + timeout))
-  
+
   while [ $SECONDS -lt $end_time ]; do
     local csv_name=$(find_csv_with_min_version "$operator_prefix" "$min_version" "$namespace")
-    
+
     if [ -n "$csv_name" ]; then
       # Found a CSV with suitable version
       local installed_version=$(extract_version_from_csv "$csv_name")
@@ -951,7 +976,7 @@ wait_for_csv_with_min_version() {
       wait_for_csv "$csv_name" "$namespace" "$remaining_time"
       return $?
     fi
-    
+
     # Check if any version exists (for progress feedback)
     local any_csv=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | head -n1 | awk '{print $1}' || echo "")
     if [ -n "$any_csv" ]; then
@@ -960,12 +985,12 @@ wait_for_csv_with_min_version() {
     else
       echo "   No CSV found for ${operator_prefix} yet, waiting for installation..."
     fi
-    
+
     sleep 10
   done
-  
+
   # Timeout reached
-  echo "❌ Timed out waiting for ${operator_prefix} with minimum version ${min_version}"
+  echo "❌ Timed out after ${timeout}s waiting for ${operator_prefix} with minimum version ${min_version}"
   return 1
 }
 
@@ -973,7 +998,7 @@ wait_for_csv_with_min_version() {
 wait_for_csv() {
   local csv_name="$1"
   local namespace="${2:-kuadrant-system}"
-  local timeout="${3:-180}"  # timeout in seconds
+  local timeout="${3:-$CSV_TIMEOUT}"
   local interval=5
   local end_time=$((SECONDS + timeout))
   local last_status_print=$SECONDS
@@ -1011,11 +1036,11 @@ wait_for_csv() {
 # Helper function to wait for pods in a namespace to be ready
 wait_for_pods() {
   local namespace="$1"
-  local timeout="${2:-120}"
-  
+  local timeout="${2:-$POD_TIMEOUT}"
+
   kubectl get namespace "$namespace" &>/dev/null || return 0
-  
-  echo "⏳ Waiting for pods in $namespace to be ready..."
+
+  echo "⏳ Waiting for pods in $namespace to be ready (timeout: ${timeout}s)..."
   local end=$((SECONDS + timeout))
   local not_ready
   while [ $SECONDS -lt $end ]; do
@@ -1023,17 +1048,17 @@ wait_for_pods() {
     [ "$not_ready" -eq 0 ] && return 0
     sleep 5
   done
-  echo "⚠️  Timeout waiting for pods in $namespace" >&2
+  echo "⚠️  Timeout after ${timeout}s waiting for pods in $namespace" >&2
   return 1
 }
 
 wait_for_validating_webhooks() {
     local namespace="$1"
-    local timeout="${2:-60}"
+    local timeout="${2:-$WEBHOOK_TIMEOUT}"
     local interval=2
     local end=$((SECONDS+timeout))
 
-    echo "⏳ Waiting for validating webhooks in namespace $namespace (timeout: $timeout sec)..."
+    echo "⏳ Waiting for validating webhooks in namespace $namespace (timeout: ${timeout}s)..."
 
     while [ $SECONDS -lt $end ]; do
         local not_ready=0
@@ -1070,7 +1095,7 @@ wait_for_validating_webhooks() {
         sleep $interval
     done
 
-    echo "❌ Timed out waiting for validating webhooks in $namespace"
+    echo "❌ Timed out after ${timeout}s waiting for validating webhooks in $namespace"
     return 1
 }
 
@@ -1124,14 +1149,13 @@ spec:
 EOF
 
   echo "  * Waiting for CatalogSource to be ready..."
-  local timeout=120
 
   if ! kubectl wait catalogsource "$name" -n "$namespace" \
       --for=jsonpath='{.status.connectionState.lastObservedState}'=READY \
-      --timeout="${timeout}s" 2>/dev/null; then
+      --timeout="${CATALOGSOURCE_TIMEOUT}s" 2>/dev/null; then
     local state=$(kubectl get catalogsource "$name" -n "$namespace" \
       -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null)
-    echo "  ERROR: CatalogSource may not be fully ready yet (state: $state)"
+    echo "  ERROR: CatalogSource not ready after ${CATALOGSOURCE_TIMEOUT}s (state: $state)"
     return 1
   fi
   echo "  * CatalogSource '$name' is ready"
@@ -1214,7 +1238,7 @@ wait_datasciencecluster_ready() {
 # wait_authorino_ready <namespace> [timeout]
 #   Waits for Authorino to be ready and accepting requests.
 #   Note: Request are required because authorino will report ready status but still give 500 errors.
-#   
+#
 #   This checks:
 #   1. Authorino CR status is Ready
 #   2. Auth service cluster is healthy in gateway's Envoy
@@ -1224,13 +1248,13 @@ wait_datasciencecluster_ready() {
 #   namespace - Authorino namespace (required)
 #               "kuadrant-system" for Kuadrant (upstream/ODH)
 #               "rh-connectivity-link" for RHCL (downstream/RHOAI)
-#   timeout   - Timeout in seconds (default: 120)
+#   timeout   - Timeout in seconds (default: AUTHORINO_TIMEOUT)
 #
 # Returns:
 #   0 on success, 1 on failure
 wait_authorino_ready() {
   local authorino_namespace="${1:?ERROR: namespace is required (kuadrant-system or rh-connectivity-link)}"
-  local timeout=${2:-120}
+  local timeout=${2:-$AUTHORINO_TIMEOUT}
   local interval=5
   local elapsed=0
 

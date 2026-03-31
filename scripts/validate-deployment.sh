@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Bash strict mode (without -e to continue validation even if some checks fail)
+# -u: treat unset variables as an error
+# -o pipefail: return value of a pipeline is the value of the last command to exit with a non-zero status
+set -uo pipefail
+
 # Source helper functions for JWT decoding
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/deployment-helpers.sh"
@@ -10,7 +15,8 @@ source "$SCRIPT_DIR/deployment-helpers.sh"
 # Usage: ./validate-deployment.sh [MODEL_NAME]
 #   MODEL_NAME: Optional. If provided, the script will validate using this specific model
 
-# Note: We don't use 'set -e' because we want to continue validation even if some checks fail
+# Note: We use 'set -uo pipefail' but NOT 'set -e' because we want to continue
+# validation even if some checks fail, while still catching undefined variables and pipe failures
 
 # Parse command line arguments
 REQUESTED_MODEL=""
@@ -50,9 +56,13 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  -n, --namespace NS        Namespace where MaaS API is deployed"
     echo "                            Default: opendatahub (or MAAS_API_NAMESPACE env var)"
     echo ""
-    echo "Environment (for non-admin users):"
+    echo "Environment Variables:"
     echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
     echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
+    echo "  MAAS_API_NAMESPACE        Namespace where MaaS API is deployed (default: opendatahub)"
+    echo ""
+    echo "Note: This script uses connection timeouts from curl (10s connect, 30s max)"
+    echo "      For cluster-level timeouts, see deployment-helpers.sh timeout constants"
     echo ""
     echo "Examples:"
     echo "  # Basic validation"
