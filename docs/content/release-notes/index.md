@@ -2,22 +2,11 @@
 
 ## v3.4.0
 
-### Breaking Changes
+### Major Changes
 
-#### MaaSSubscription: tokenRateLimits Now Required
+Version 3.4.0 introduces new CRDs and API resources that are not compatible with previous versions. All MaaS custom resources (`MaaSModelRef`, `MaaSAuthPolicy`, `MaaSSubscription`) are new in this release.
 
-**⚠️ BREAKING CHANGE**
-
-The `MaaSSubscription` CRD now requires inline `tokenRateLimits` on each model reference. The unused `tokenRateLimitRef` field has been removed.
-
-**Impact:**
-- All `MaaSSubscription` resources must include at least one `tokenRateLimits` entry per model
-- Manifests using `tokenRateLimitRef` will be rejected with "unknown field" error
-- Subscriptions without `tokenRateLimits` will fail validation with "Required value" error
-
-**Migration:** See [tokenRateLimits Migration Guide](../migration/tokenratelimits-required-3.4.md) for detailed upgrade instructions.
-
-**Rationale:** The controller has always used only inline `tokenRateLimits` - removing the unused `tokenRateLimitRef` field eliminates confusion and ensures UI/API consistency.
+**Migration:** See the overall migration plan for detailed upgrade instructions from previous versions.
 
 ---
 
