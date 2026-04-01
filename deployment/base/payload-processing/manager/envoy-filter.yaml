@@ -17,9 +17,9 @@ spec:
             filter:
               name: "envoy.filters.network.http_connection_manager"
               subFilter:
-                name: extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
+                name: envoy.filters.http.router
       patch:
-        operation: INSERT_AFTER
+        operation: INSERT_BEFORE
         value:
           name: envoy.filters.http.ext_proc.bbr
           typed_config:

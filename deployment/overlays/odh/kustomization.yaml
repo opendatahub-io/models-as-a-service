@@ -146,6 +146,29 @@ replacements:
       name: payload-processing
     fieldPaths:
     - spec.targetRefs.0.name
+# Replace gateway namespace in payload-processing DestinationRule host and EnvoyFilter cluster_name
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-namespace
+  targets:
+  - select:
+      kind: DestinationRule
+      name: payload-processing
+    fieldPaths:
+    - spec.host
+    options:
+      delimiter: "."
+      index: 1
+  - select:
+      kind: EnvoyFilter
+      name: payload-processing
+    fieldPaths:
+    - spec.configPatches.0.patch.value.typed_config.grpc_service.envoy_grpc.cluster_name
+    options:
+      delimiter: "."
+      index: 1
 # Replace gateway namespace in gateway policies
 - source:
     kind: ConfigMap
