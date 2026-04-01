@@ -22,7 +22,7 @@ Before creating the Gateway, ensure you have:
 kubectl get gatewayclass openshift-default
 ```
 
-```
+```text
 NAME                CONTROLLER                           ACCEPTED   AGE
 openshift-default   openshift.io/gateway-controller/v1   True       5m
 ```
@@ -187,7 +187,7 @@ kubectl wait --for=condition=Programmed gateway/maas-default-gateway \
 kubectl get gateway maas-default-gateway -n openshift-ingress
 ```
 
-```
+```text
 NAME                   CLASS               ADDRESS        PROGRAMMED   AGE
 maas-default-gateway   openshift-default   <ip-or-host>   True         30s
 ```
