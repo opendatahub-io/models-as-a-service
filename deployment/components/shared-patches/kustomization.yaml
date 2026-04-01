@@ -143,7 +143,6 @@ replacements:
 # To:   https://maas-api.<app-namespace>.svc.cluster.local:8443/internal/v1/api-keys/validate
 #
 # Without this replacement, API key validation fails with DNS resolution errors.
-# This is the key improvement over PR #545's sed-based approach.
 # -----------------------------------------------------------------------------
 - source:
     kind: ConfigMap
