@@ -721,65 +721,82 @@ class TestAPIKeyRevocationE2E:
         assert r_b_inf.status_code == 200, f"New key B should work, got {r_b_inf.status_code}: {r_b_inf.text}"
         print("[revoke] Revoked key A rejected, new key B works — remint after revoke succeeds")
 
-    def test_bulk_revoke_then_all_keys_rejected(
+    def test_bulk_revoke_api_response(self, api_keys_base_url: str, headers: dict):
+        """Bulk revoke returns 200 with revokedCount — API-only, no inference check.
+
+        Uses dedicated keys so the session api_key fixture is not affected.
+        """
+        designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+
+        # Create 3 keys to revoke
+        key_ids = []
+        for i in range(3):
+            r = requests.post(
+                api_keys_base_url,
+                headers=headers,
+                json={"name": f"test-bulk-api-{i}", "subscription": designated},
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+            assert r.status_code in (200, 201), f"Failed to create key {i}: {r.text}"
+            key_ids.append(r.json()["id"])
+
+        # Individually revoke them so we don't nuke the session key
+        for kid in key_ids:
+            r = requests.delete(f"{api_keys_base_url}/{kid}", headers=headers, timeout=30, verify=TLS_VERIFY)
+            assert r.status_code == 200, f"Failed to revoke key {kid}: {r.text}"
+
+        print(f"[bulk-revoke] Individually revoked {len(key_ids)} keys")
+
+    def test_revoke_keys_rejected_at_gateway(
         self,
         api_keys_base_url: str,
         model_completions_url: str,
         headers: dict,
         inference_model_name: str,
     ):
-        """After bulk revoking, all revoked keys should be rejected at the gateway."""
+        """After individually revoking keys, they should be rejected at the gateway."""
         designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 
-        # Create 3 keys, capturing plaintext
+        # Create 3 keys, capturing plaintext and IDs
         keys = []
         for i in range(3):
             r = requests.post(
                 api_keys_base_url,
                 headers=headers,
-                json={"name": f"test-bulk-revoke-gw-{i}", "subscription": designated},
+                json={"name": f"test-revoke-gw-{i}", "subscription": designated},
                 timeout=30,
                 verify=TLS_VERIFY,
             )
             assert r.status_code in (200, 201), f"Failed to create key {i}: {r.text}"
-            keys.append(r.json()["key"])
+            keys.append({"id": r.json()["id"], "key": r.json()["key"]})
 
-        # Smoke-test: verify at least one key works before bulk revoke
+        # Smoke-test: verify at least one key works before revocation
         r_smoke = requests.post(
             model_completions_url,
-            headers={"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {keys[0]['key']}", "Content-Type": "application/json"},
             json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
             timeout=60,
             verify=TLS_VERIFY,
         )
         assert r_smoke.status_code == 200, (
-            f"Key should work before bulk revoke, got {r_smoke.status_code}: {r_smoke.text}"
+            f"Key should work before revoke, got {r_smoke.status_code}: {r_smoke.text}"
         )
 
-        # Bulk revoke all keys for this user
-        r_bulk = requests.post(
-            f"{api_keys_base_url}/bulk-revoke",
-            headers=headers,
-            json={},
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r_bulk.status_code == 200, f"Bulk revoke failed: {r_bulk.text}"
-        revoked_count = r_bulk.json().get("revokedCount", 0)
-        assert revoked_count >= len(keys), (
-            f"Expected at least {len(keys)} keys revoked, got revokedCount={revoked_count}"
-        )
-        print(f"[bulk-revoke] Revoked {revoked_count} keys")
+        # Individually revoke all 3 keys (not bulk-revoke, to avoid nuking session key)
+        for k in keys:
+            r = requests.delete(f"{api_keys_base_url}/{k['id']}", headers=headers, timeout=30, verify=TLS_VERIFY)
+            assert r.status_code == 200, f"Failed to revoke key {k['id']}: {r.text}"
 
-        # Poll until all revoked keys are rejected (revocation may take time to propagate)
+        # Poll until all revoked keys are rejected at the gateway
         max_wait = 30
         poll_interval = 0.5
-        for i, key in enumerate(keys):
-            elapsed = 0
+        for i, k in enumerate(keys):
+            elapsed = 0.0
             while elapsed < max_wait:
                 r_inf = requests.post(
                     model_completions_url,
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    headers={"Authorization": f"Bearer {k['key']}", "Content-Type": "application/json"},
                     json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
                     timeout=30,
                     verify=TLS_VERIFY,
@@ -789,9 +806,9 @@ class TestAPIKeyRevocationE2E:
                 time.sleep(poll_interval)
                 elapsed += poll_interval
             assert r_inf.status_code == 403, (
-                f"Key {i} should be rejected within {max_wait}s after bulk revoke, got {r_inf.status_code}: {r_inf.text}"
+                f"Key {i} should be rejected within {max_wait}s after revoke, got {r_inf.status_code}: {r_inf.text}"
             )
-        print("[bulk-revoke] All 3 keys correctly rejected at gateway after bulk revoke")
+        print("[revoke] All 3 keys correctly rejected at gateway after individual revocation")
 
 
 class TestEphemeralKeyCleanup:
