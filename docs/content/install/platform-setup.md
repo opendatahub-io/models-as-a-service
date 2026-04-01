@@ -445,4 +445,4 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
 
 1. [Gateway Setup](gateway-setup.md) - Create the MaaS Gateway
 2. [Install MaaS Components](maas-setup.md) - Database and DataScienceCluster configuration
-3. [Deploy a Model](../configuration-and-management/model-setup.md) - Deploy your first model
+3. [Deploy a Model](model-setup.md) - Deploy your first model
