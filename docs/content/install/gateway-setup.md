@@ -83,7 +83,7 @@ Verify the secret exists:
 kubectl get secret "${CERT_NAME}" -n openshift-ingress
 ```
 
-??? note "Secret not found?"
+!!! note "Secret not found?"
     If the secret does not exist, list all secrets in the `openshift-ingress` namespace and
     look for a TLS secret:
 
@@ -97,7 +97,7 @@ kubectl get secret "${CERT_NAME}" -n openshift-ingress
     CERT_NAME="<your-secret-name>"
     ```
 
-??? note "Using a custom TLS certificate?"
+!!! note "Using a custom TLS certificate?"
     If you have your own TLS certificate, ensure the certificate's Subject Alternative Name
     (SAN) covers `maas.<cluster-domain>` (or uses a matching wildcard). Create the secret:
 
