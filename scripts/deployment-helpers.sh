@@ -233,9 +233,16 @@ waitsubscriptioninstalled() {
   local csv
   csv=$(kubectl get subscription.operators.coreos.com -n "$ns" "$name" -o jsonpath='{.status.currentCSV}')
 
-  # Because, sometimes, the CSV is not there immediately.
+  # Wait for CSV to exist (sometimes there's a delay between currentCSV being set and CSV appearing)
+  local csv_wait_elapsed=0
+  local csv_wait_timeout=60  # CSV should appear within 60s after currentCSV is set
   while ! kubectl get -n "$ns" csv "$csv" > /dev/null 2>&1; do
+    if [[ $csv_wait_elapsed -ge $csv_wait_timeout ]]; then
+      echo "    * ERROR: Timeout waiting for CSV $csv to appear in namespace $ns (waited ${csv_wait_timeout}s)"
+      return 1
+    fi
     sleep 1
+    csv_wait_elapsed=$((csv_wait_elapsed + 1))
   done
 
   echo "  * Waiting for Subscription setup to finish setup. CSV = $csv ..."
