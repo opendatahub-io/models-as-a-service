@@ -12,7 +12,9 @@ spec:
       # API key authentication (for sk-oai-* tokens)
       api-keys:
         when:
-          - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+          - selector: request.headers.authorization
+            operator: matches
+            value: "^Bearer sk-oai-.*"
         plain:
           selector: request.headers.authorization
         priority: 0
@@ -27,7 +29,9 @@ spec:
       # Validate API key via HTTP callback (only runs for API key auth)
       apiKeyValidation:
         when:
-          - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+          - selector: request.headers.authorization
+            operator: matches
+            value: "^Bearer sk-oai-.*"
         http:
           # Placeholder URL - gets patched via kustomize replacements (app-namespace param)
           # All overlays use shared-patches component for consistent replacements
@@ -41,7 +45,9 @@ spec:
       # Check API key is valid (only for API key auth)
       api-key-valid:
         when:
-          - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+          - selector: request.headers.authorization
+            operator: matches
+            value: "^Bearer sk-oai-.*"
         patternMatching:
           patterns:
             - selector: auth.metadata.apiKeyValidation.valid
@@ -54,14 +60,15 @@ spec:
           # Username: from API key validation (when API key used)
           X-MaaS-Username:
             when:
-              - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+              - selector: request.headers.authorization
+                operator: matches
+                value: "^Bearer sk-oai-.*"
             plain:
               selector: auth.metadata.apiKeyValidation.username
             priority: 0
-          # Username: from OpenShift identity (when OC token used)
+          # Username: from OpenShift identity (fallback for non-API-key tokens)
+          # No 'when' clause - always tries to inject, but priority 1 means API key wins
           X-MaaS-Username-OC:
-            when:
-              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
             plain:
               selector: auth.identity.user.username
             key: X-MaaS-Username
@@ -69,14 +76,15 @@ spec:
           # Groups: from API key validation as JSON array (when API key used)
           X-MaaS-Group:
             when:
-              - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
+              - selector: request.headers.authorization
+                operator: matches
+                value: "^Bearer sk-oai-.*"
             plain:
               selector: auth.metadata.apiKeyValidation.groups.@tostr
             priority: 0
-          # Groups: from OpenShift identity as JSON array (when OC token used)
+          # Groups: from OpenShift identity as JSON array (fallback for non-API-key tokens)
+          # No 'when' clause - always tries to inject, but priority 1 means API key wins
           X-MaaS-Group-OC:
-            when:
-              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
             plain:
               selector: auth.identity.user.groups.@tostr
             key: X-MaaS-Group
@@ -85,8 +93,12 @@ spec:
           # This header is used by /v1/models to determine which subscription's models to return
           X-MaaS-Subscription:
             when:
-              - predicate: request.headers.authorization.startsWith("Bearer sk-oai-")
-              - predicate: auth.metadata.apiKeyValidation.subscription != ""
+              - selector: request.headers.authorization
+                operator: matches
+                value: "^Bearer sk-oai-.*"
+              - selector: auth.metadata.apiKeyValidation.subscription
+                operator: neq
+                value: ""
             plain:
               selector: auth.metadata.apiKeyValidation.subscription
             priority: 0
