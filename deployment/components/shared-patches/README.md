@@ -101,7 +101,7 @@ maas-controller-image=quay.io/opendatahub/maas-controller:latest
 gateway-namespace=openshift-ingress
 gateway-name=maas-default-gateway
 app-namespace=opendatahub
-api-key-max-expiration-days=30
+api-key-max-expiration-days=90
 ```
 
 To change these values, edit `params.env` - all overlays will pick up the changes automatically.
@@ -149,25 +149,13 @@ kustomize build deployment/overlays/tls-backend | grep "image:" | grep maas-api
 # image: quay.io/opendatahub/maas-api:latest
 ```
 
-## Why Components vs Other Approaches
+## Design
 
-### Alternative 1: Duplicate Configuration
-❌ Violates DRY principle
-❌ Changes need to be made in 3 places
-❌ Easy to get out of sync
-
-### Alternative 2: Sed Patching in deploy.sh (PR #545)
-❌ Non-idiomatic (mixes shell scripting with declarative config)
-❌ Breaks GitOps tools (ArgoCD, Flux)
-❌ Can't validate with `kustomize build` alone
-❌ Hidden logic not visible in Git
-
-### Alternative 3: Components (This Approach)
-✅ Idiomatic Kustomize solution
-✅ Works with all GitOps tools
-✅ Single source of truth
-✅ Testable and validatable
-✅ Declarative and version controlled
+This component uses Kustomize's native composition features to share configuration across deployment overlays. Components provide:
+- Idiomatic Kustomize solution compatible with GitOps tools (ArgoCD, Flux)
+- Single source of truth for shared configuration
+- Declarative and version controlled
+- Testable with `kustomize build`
 
 ## Troubleshooting
 
