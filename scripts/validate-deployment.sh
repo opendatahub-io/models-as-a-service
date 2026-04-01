@@ -28,7 +28,7 @@ MAX_TOKENS=50  # Default max_tokens for requests
 MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"  # Default namespace for MaaS API (use --namespace to override)
 
 # Show help if requested
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "MaaS Platform Deployment Validation Script"
     echo ""
     echo "Usage: $0 [OPTIONS] [MODEL_NAME]"
