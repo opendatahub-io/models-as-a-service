@@ -425,6 +425,30 @@ func TestFindAnySubscriptionForModel(t *testing.T) {
 			},
 			wantNil: false,
 		},
+		{
+			name:           "multiple items returns non-nil",
+			modelNamespace: "default",
+			modelName:      "model1",
+			subscriptions: []*maasv1alpha1.MaaSSubscription{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "sub1", Namespace: "sub-ns"},
+					Spec: maasv1alpha1.MaaSSubscriptionSpec{
+						ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+							{Name: "model1", Namespace: "default"},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "sub2", Namespace: "sub-ns"},
+					Spec: maasv1alpha1.MaaSSubscriptionSpec{
+						ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+							{Name: "model1", Namespace: "default"},
+						},
+					},
+				},
+			},
+			wantNil: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -472,6 +496,30 @@ func TestFindAnyAuthPolicyForModel(t *testing.T) {
 			policies: []*maasv1alpha1.MaaSAuthPolicy{
 				{
 					ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: "auth-ns"},
+					Spec: maasv1alpha1.MaaSAuthPolicySpec{
+						ModelRefs: []maasv1alpha1.ModelRef{
+							{Name: "model1", Namespace: "default"},
+						},
+					},
+				},
+			},
+			wantNil: false,
+		},
+		{
+			name:           "multiple items returns non-nil",
+			modelNamespace: "default",
+			modelName:      "model1",
+			policies: []*maasv1alpha1.MaaSAuthPolicy{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: "auth-ns"},
+					Spec: maasv1alpha1.MaaSAuthPolicySpec{
+						ModelRefs: []maasv1alpha1.ModelRef{
+							{Name: "model1", Namespace: "default"},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "policy2", Namespace: "auth-ns"},
 					Spec: maasv1alpha1.MaaSAuthPolicySpec{
 						ModelRefs: []maasv1alpha1.ModelRef{
 							{Name: "model1", Namespace: "default"},
