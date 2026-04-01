@@ -66,6 +66,7 @@ nav:
       - Overview: install/prerequisites.md
       - Operator Setup: install/platform-setup.md
     - Installation:
+      - Gateway Setup: install/gateway-setup.md
       - Models-as-a-Service: install/maas-setup.md
       - Model Setup (On Cluster): install/model-setup.md
       - Validation: install/validation.md
