@@ -288,33 +288,23 @@ deploy_models() {
     echo "✅ Simulator models ready"
 
     # Wait for MaaSModelRefs to transition to Ready phase.
-    # The controller now properly handles the race condition where MaaSModelRef is created
-    # before KServe creates the HTTPRoute (sets Pending, then Ready when HTTPRoute watch triggers).
+    # Uses oc wait (server-side watch) instead of polling for faster response.
     echo "Waiting for MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s)..."
-    local deadline=$((SECONDS + MAASMODELREF_TIMEOUT))
-    local all_ready=false
-    local found_any=false
 
-    while [[ $SECONDS -lt $deadline ]]; do
-        all_ready=true
-        found_any=false
-        while IFS= read -r phase; do
-            found_any=true
-            if [[ "$phase" != "Ready" ]]; then
-                all_ready=false
-                break
-            fi
-        done < <(oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
-
-        if $found_any && $all_ready; then
-            echo "✅ MaaSModelRefs ready"
+    # oc wait --all returns immediately if no resources exist (vacuous truth),
+    # so first ensure at least one MaaSModelRef has been created.
+    local existence_deadline=$((SECONDS + 60))
+    while [[ $SECONDS -lt $existence_deadline ]]; do
+        local count
+        count=$(oc get maasmodelrefs -n "$MODEL_NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$count" -gt 0 ]]; then
             break
         fi
-
         sleep 5
     done
 
-    if ! $found_any || ! $all_ready; then
+    if ! oc wait maasmodelref --all -n "$MODEL_NAMESPACE" \
+        --for=jsonpath='{.status.phase}'=Ready --timeout="${MAASMODELREF_TIMEOUT}s"; then
         echo "❌ ERROR: MaaSModelRefs did not reach Ready state within ${MAASMODELREF_TIMEOUT}s"
         echo "Dumping MaaSModelRef status:"
         oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o yaml || true
@@ -322,6 +312,7 @@ deploy_models() {
         kubectl logs deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --tail=100 || true
         exit 1
     fi
+    echo "✅ MaaSModelRefs ready"
 
     wait_for_auth_policies_enforced
 }
@@ -337,27 +328,23 @@ wait_for_auth_policies_enforced() {
         return 0
     fi
 
-    local deadline=$((SECONDS + timeout))
-    while [[ $SECONDS -lt $deadline ]]; do
-        local all_enforced=true
-        local total=0
-        for ns in $namespaces; do
-            while IFS= read -r status; do
-                total=$((total + 1))
-                if [[ "$status" != "True" ]]; then
-                    all_enforced=false
-                fi
-            done < <(oc get authpolicies -n "$ns" -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Enforced")].status}{"\n"}{end}' 2>/dev/null)
-        done
-        if $all_enforced && [[ $total -gt 0 ]]; then
-            echo "✅ All AuthPolicies enforced ($total policies)"
-            return 0
+    # Use oc wait per namespace — server-side watch reacts immediately when
+    # the Enforced condition becomes True, instead of polling every 10s.
+    for ns in $namespaces; do
+        local count
+        count=$(oc get authpolicies -n "$ns" --no-headers 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$count" -gt 0 ]]; then
+            echo "  Waiting for $count AuthPolicy(ies) in $ns to be enforced..."
+            if ! oc wait authpolicy --all -n "$ns" \
+                --for=condition=Enforced --timeout="${timeout}s"; then
+                echo "⚠️  WARNING: AuthPolicies in $ns not all enforced after ${timeout}s"
+                oc get authpolicies -n "$ns" -o wide 2>/dev/null || true
+                return 1
+            fi
         fi
-        echo "  Waiting... ($total policies found, not all enforced yet)"
-        sleep 10
     done
-    echo "⚠️  WARNING: AuthPolicies not all enforced after ${timeout}s, tests may fail"
-    oc get authpolicies -A -o wide 2>/dev/null || true
+    echo "✅ All AuthPolicies enforced"
+    return 0
 }
 
 validate_deployment() {

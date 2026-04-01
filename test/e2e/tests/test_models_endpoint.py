@@ -242,9 +242,9 @@ class TestModelsEndpoint:
             # Create API key for inference
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
-            # Wait for Authorino to sync auth policies (can take 30+ seconds)
-            log.info("Waiting 30s for Authorino to sync auth policies...")
-            time.sleep(30)
+            # Wait for auth policy and subscription to be reconciled and enforced
+            _wait_for_maas_auth_policy_ready(auth_policy_name)
+            _wait_for_maas_subscription_ready(subscription_name)
 
             # DEBUG: Test model endpoint directly first
             log.info("DEBUG: Testing direct model endpoint access...")
