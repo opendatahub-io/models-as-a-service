@@ -646,7 +646,7 @@ else
         print_check "Rate limiting"
 
         # Log current user tier and attempt to fetch the configured rate limit from the cluster
-        if [ -n "$TIER" ]; then
+        if [ -n "${TIER:-}" ]; then
             print_info "Current user tier: $TIER"
             # Query the TokenRateLimitPolicy to show the configured limit for this tier
             TIER_LIMIT=$(kubectl get tokenratelimitpolicy -n openshift-ingress -o jsonpath="{.items[0].spec.limits.${TIER}-user-tokens.rates[0].limit}" 2>/dev/null || echo "")
@@ -692,7 +692,7 @@ else
         # Determine if the user tier has high rate limits (enterprise/premium users)
         # For high-tier users, all requests succeeding is expected and not a failure
         HIGH_TIER=false
-        if [ -n "$TIER" ]; then
+        if [ -n "${TIER:-}" ]; then
             case "$TIER" in
                 enterprise|premium)
                     HIGH_TIER=true
