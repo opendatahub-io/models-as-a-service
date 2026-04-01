@@ -40,6 +40,18 @@ from conftest import TLS_VERIFY
 log = logging.getLogger(__name__)
 
 
+@pytest.fixture
+def model_completions_url(model_v1: str) -> str:
+    """URL for completions endpoint."""
+    return f"{model_v1}/completions"
+
+
+@pytest.fixture
+def inference_model_name() -> str:
+    """Model name for inference requests. Override with INFERENCE_MODEL_NAME env var."""
+    return os.environ.get("INFERENCE_MODEL_NAME", "facebook/opt-125m")
+
+
 class TestAPIKeyCRUD:
     """Tests 1-3: Create, list, and revoke API keys."""
 
@@ -433,16 +445,6 @@ class TestAPIKeyExpiration:
 
 class TestAPIKeyModelInference:
     """Tests 11-15: Using API keys for model inference via gateway."""
-
-    @pytest.fixture
-    def model_completions_url(self, model_v1: str) -> str:
-        """URL for completions endpoint."""
-        return f"{model_v1}/completions"
-
-    @pytest.fixture
-    def inference_model_name(self) -> str:
-        """Model name for inference requests. Override with INFERENCE_MODEL_NAME env var."""
-        return os.environ.get("INFERENCE_MODEL_NAME", "facebook/opt-125m")
 
     def test_api_key_model_access_success(
         self,
