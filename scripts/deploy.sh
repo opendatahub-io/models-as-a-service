@@ -881,7 +881,7 @@ install_policy_engine() {
   case "$POLICY_ENGINE" in
     rhcl)
       log_info "Installing RHCL (Red Hat Connectivity Link - downstream)"
-      install_olm_operator \
+      if ! install_olm_operator \
         "rhcl-operator" \
         "rh-connectivity-link" \
         "redhat-operators" \
@@ -889,7 +889,10 @@ install_policy_engine() {
         "" \
         "AllNamespaces" \
         "" \
-        ""
+        ""; then
+        log_error "RHCL operator installation failed"
+        return 1
+      fi
 
       # Patch RHCL CSV to recognize OpenShift Gateway controller
       patch_kuadrant_csv_for_gateway "rh-connectivity-link" "rhcl-operator"
@@ -941,7 +944,7 @@ EOF
 
       # Install Kuadrant operator from the custom catalog
       # IMPORTANT: source_namespace must match where CatalogSource was created (kuadrant_ns)
-      install_olm_operator \
+      if ! install_olm_operator \
         "kuadrant-operator" \
         "$kuadrant_ns" \
         "$kuadrant_catalog" \
@@ -949,7 +952,10 @@ EOF
         "" \
         "AllNamespaces" \
         "$kuadrant_ns" \
-        ""
+        ""; then
+        log_error "Kuadrant operator installation failed"
+        return 1
+      fi
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
       patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
@@ -1026,7 +1032,7 @@ install_primary_operator() {
       log_info "Installing RHOAI v3 operator..."
       # RHOAI operator goes in redhat-ods-operator namespace (not redhat-ods-applications)
       local operator_namespace="redhat-ods-operator"
-      install_olm_operator \
+      if ! install_olm_operator \
         "rhods-operator" \
         "$operator_namespace" \
         "$catalog_source" \
@@ -1034,7 +1040,10 @@ install_primary_operator() {
         "" \
         "AllNamespaces" \
         "" \
-        ""
+        ""; then
+        log_error "RHOAI operator installation failed"
+        return 1
+      fi
 
       # Patch CSV with custom operator image if specified
       if [[ -n "$OPERATOR_IMAGE" ]]; then
@@ -1064,7 +1073,7 @@ install_primary_operator() {
       [[ "$odh_plan_approval" == "-" ]] && odh_plan_approval=""
 
       log_info "Installing ODH operator..."
-      install_olm_operator \
+      if ! install_olm_operator \
         "opendatahub-operator" \
         "$NAMESPACE" \
         "$catalog_source" \
@@ -1072,7 +1081,10 @@ install_primary_operator() {
         "$odh_starting_csv" \
         "AllNamespaces" \
         "openshift-marketplace" \
-        "$odh_plan_approval"
+        "$odh_plan_approval"; then
+        log_error "ODH operator installation failed"
+        return 1
+      fi
 
       # Patch CSV with custom operator image if specified
       if [[ -n "$OPERATOR_IMAGE" ]]; then
