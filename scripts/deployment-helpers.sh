@@ -1471,14 +1471,18 @@ create_maas_db_config_secret() {
   local namespace="$1"
   local connection_url="$2"
 
-  kubectl apply -n "$namespace" -f - <<EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: maas-db-config
-  labels:
-    app: maas-api
-stringData:
-  DB_CONNECTION_URL: "${connection_url}"
-EOF
+  if [[ -z "$namespace" ]]; then
+    log_error "create_maas_db_config_secret: namespace is required"
+    return 1
+  fi
+  if [[ -z "$connection_url" ]]; then
+    log_error "create_maas_db_config_secret: connection_url is required"
+    return 1
+  fi
+
+  kubectl create secret generic maas-db-config \
+    --from-literal=DB_CONNECTION_URL="$connection_url" \
+    --dry-run=client -o yaml | \
+    kubectl label --local -f - app=maas-api --dry-run=client -o yaml | \
+    kubectl apply -n "$namespace" -f -
 }
