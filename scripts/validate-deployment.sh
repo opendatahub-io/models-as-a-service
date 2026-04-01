@@ -204,13 +204,13 @@ print_success() {
 
 print_fail() {
     echo -e "${RED}❌ FAIL: $1${NC}"
-    if [ -n "$2" ]; then
+    if [ -n "${2:-}" ]; then
         echo -e "${RED}   Reason: $2${NC}"
     fi
-    if [ -n "$3" ]; then
+    if [ -n "${3:-}" ]; then
         echo -e "${YELLOW}   Suggestion: $3${NC}"
     fi
-    if [ -n "$4" ]; then
+    if [ -n "${4:-}" ]; then
         echo -e "${YELLOW}   Suggestion: $4${NC}"
     fi
     ((FAILED++))
@@ -218,10 +218,10 @@ print_fail() {
 
 print_warning() {
     echo -e "${YELLOW}⚠️  WARNING: $1${NC}"
-    if [ -n "$2" ]; then
+    if [ -n "${2:-}" ]; then
         echo -e "${YELLOW}   Note: $2${NC}"
     fi
-    if [ -n "$3" ]; then
+    if [ -n "${3:-}" ]; then
         echo -e "${YELLOW}   $3${NC}"
     fi
     ((WARNINGS++))
