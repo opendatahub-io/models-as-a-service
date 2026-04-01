@@ -64,9 +64,12 @@ $(BUILD_DIR):
 run: build ##	build and run manager locally
 	$(BUILD_DIR)/$(BINARY_NAME)
 
+TEST_FLAGS ?= -race -coverprofile=coverage.out
 .PHONY: test
-test: tidy ##	run tests
-	go test ./...
+test: tidy ##	run tests with coverage
+	go test $(TEST_FLAGS) ./...
+	@go tool cover -html=coverage.out -o coverage.html
+	@echo "Test coverage report generated: $(abspath coverage.html)"
 
 .PHONY: tidy
 tidy:

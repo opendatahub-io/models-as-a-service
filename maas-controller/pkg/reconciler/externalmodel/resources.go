@@ -54,12 +54,12 @@ func BuildServiceEntry(spec ExternalModelSpec, modelName, namespace string, labe
 	se.SetNamespace(namespace)
 	se.SetLabels(labels)
 
-	se.Object["spec"] = map[string]interface{}{
-		"hosts":      []interface{}{spec.Endpoint},
+	se.Object["spec"] = map[string]any{
+		"hosts":      []any{spec.Endpoint},
 		"location":   "MESH_EXTERNAL",
 		"resolution": "DNS",
-		"ports": []interface{}{
-			map[string]interface{}{
+		"ports": []any{
+			map[string]any{
 				"number":   int64(spec.Port),
 				"name":     portName,
 				"protocol": protocol,
@@ -81,16 +81,16 @@ func BuildDestinationRule(spec ExternalModelSpec, modelName, namespace string, l
 	dr.SetNamespace(namespace)
 	dr.SetLabels(labels)
 
-	tlsConfig := map[string]interface{}{
+	tlsConfig := map[string]any{
 		"mode": "SIMPLE",
 	}
 	if spec.TLSInsecureSkipVerify {
 		tlsConfig["insecureSkipVerify"] = true
 	}
 
-	dr.Object["spec"] = map[string]interface{}{
+	dr.Object["spec"] = map[string]any{
 		"host": spec.Endpoint,
-		"trafficPolicy": map[string]interface{}{
+		"trafficPolicy": map[string]any{
 			"tls": tlsConfig,
 		},
 	}

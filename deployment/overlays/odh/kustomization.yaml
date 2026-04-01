@@ -61,19 +61,29 @@ patches:
         spec:
           containers:
           - name: manager
+            args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --gateway-name=$(GATEWAY_NAME)
+            - --gateway-namespace=$(GATEWAY_NAMESPACE)
+            - --maas-api-namespace=$(MAAS_API_NAMESPACE)
+            - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
+            - --cluster-audience=$(CLUSTER_AUDIENCE)
+            - --metadata-cache-ttl=$(METADATA_CACHE_TTL)
+            - --authz-cache-ttl=$(AUTHZ_CACHE_TTL)
             env:
             - name: METADATA_CACHE_TTL
               valueFrom:
                 configMapKeyRef:
                   key: metadata-cache-ttl
                   name: maas-parameters
-                  optional: true
+                  optional: false
             - name: AUTHZ_CACHE_TTL
               valueFrom:
                 configMapKeyRef:
                   key: authz-cache-ttl
                   name: maas-parameters
-                  optional: true
+                  optional: false
   target:
     kind: Deployment
     name: maas-controller
