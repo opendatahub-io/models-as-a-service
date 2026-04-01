@@ -18,7 +18,7 @@ package maas
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -811,7 +811,7 @@ func TestMapHTTPRouteToMaaSModelRefs_ListError(t *testing.T) {
 		WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				if _, ok := list.(*maasv1alpha1.MaaSModelRefList); ok {
-					return fmt.Errorf("simulated API server error")
+					return errors.New("simulated API server error")
 				}
 				return cl.List(ctx, list, opts...)
 			},
