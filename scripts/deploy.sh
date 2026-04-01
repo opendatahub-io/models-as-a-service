@@ -1584,13 +1584,6 @@ configure_maas_api_authpolicy() {
   kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
     opendatahub.io/managed="false" --overwrite 2>/dev/null || true
 
-  local api_keys_patch="$project_root/scripts/data/maas-api-authpolicy-api-keys-patch.yaml"
-  log_info "  Patching AuthPolicy to ensure API key support..."
-  if ! patch_authpolicy_from_template "$authpolicy_name" "$api_keys_patch" "$NAMESPACE"; then
-    log_error "  Failed to patch AuthPolicy with API key configuration"
-    return 1
-  fi
-
   if [[ "$EXTERNAL_OIDC" != "true" ]]; then
     log_info "  External OIDC not enabled, leaving OpenShift auth as the only identity-token path"
     return 0

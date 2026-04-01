@@ -20,6 +20,8 @@ spec:
         priority: 0
       # OpenShift token authentication (fallback for non-API-key tokens)
       openshift-identities:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
         kubernetesTokenReview:
           audiences:
             - https://kubernetes.default.svc
@@ -67,8 +69,9 @@ spec:
               selector: auth.metadata.apiKeyValidation.username
             priority: 0
           # Username: from OpenShift identity (fallback for non-API-key tokens)
-          # No 'when' clause - always tries to inject, but priority 1 means API key wins
           X-MaaS-Username-OC:
+            when:
+              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
             plain:
               selector: auth.identity.user.username
             key: X-MaaS-Username
@@ -83,8 +86,9 @@ spec:
               selector: auth.metadata.apiKeyValidation.groups.@tostr
             priority: 0
           # Groups: from OpenShift identity as JSON array (fallback for non-API-key tokens)
-          # No 'when' clause - always tries to inject, but priority 1 means API key wins
           X-MaaS-Group-OC:
+            when:
+              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
             plain:
               selector: auth.identity.user.groups.@tostr
             key: X-MaaS-Group
