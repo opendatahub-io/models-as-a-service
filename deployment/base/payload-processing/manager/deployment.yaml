@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payload-processing
+  namespace: openshift-ingress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payload-processing
+  template:
+    metadata:
+      labels:
+        app: payload-processing
+    spec:
+      serviceAccountName: payload-processing
+      containers:
+        - name: bbr
+          image: quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--streaming"
+            - --v
+            - "3"
+            - --plugin
+            - "body-field-to-header:model-extractor:{\"field_name\":\"model\",\"header_name\":\"X-Gateway-Model-Name\"}"
+            - --plugin
+            - "model-provider-resolver:model-provider-resolver"
+            - --plugin
+            - "api-translation:api-translation"
+            - --plugin
+            - "apikey-injection:apikey-injection"
+            - --tracing=false
+          ports:
+            - containerPort: 9004
+            - containerPort: 9005
