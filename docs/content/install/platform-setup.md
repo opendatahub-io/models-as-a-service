@@ -123,7 +123,7 @@ Check that LWS deployments are ready:
     openshift-lws-operator   1/1     1            1           4m26s
     ```
 
-## Install Gateway API Controller
+## Install GatewayClass
 
 Initialize OpenShift's provided Gateway API implementation:
 
@@ -149,7 +149,11 @@ NAME                CONTROLLER                           ACCEPTED   AGE
 openshift-default   openshift.io/gateway-controller/v1   True       52s
 ```
 
-Now install the Gateway API controller for your platform:
+## Install Policy Engine
+
+Install the policy engine for authentication and rate limiting. This is independent of the
+Gateway itself — the Gateway is managed by OpenShift's built-in controller, while the policy
+engine (Kuadrant or RHCL) provides AuthPolicy and RateLimitPolicy resources that attach to it.
 
 === "Open Data Hub"
 
@@ -439,5 +443,6 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
 
 ## Next Steps
 
-1. [Install MaaS Components](maas-setup.md) - Database, Gateways, and Configure DataScienceCluster
-2. [Deploy a Model](../configuration-and-management/model-setup.md) - Deploy your first model
+1. [Gateway Setup](gateway-setup.md) - Create the MaaS Gateway
+2. [Install MaaS Components](maas-setup.md) - Database and DataScienceCluster configuration
+3. [Deploy a Model](../configuration-and-management/model-setup.md) - Deploy your first model
