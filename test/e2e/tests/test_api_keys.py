@@ -693,19 +693,21 @@ class TestAPIKeyRevocationE2E:
         # Poll until revoked key A is rejected (revocation may take time to propagate)
         max_wait = 30
         poll_interval = 0.5
-        elapsed = 0
-        while elapsed < max_wait:
+        deadline = time.monotonic() + max_wait
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             r_a_inf = requests.post(
                 model_completions_url,
                 headers={"Authorization": f"Bearer {key_a}", "Content-Type": "application/json"},
                 json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
-                timeout=30,
+                timeout=min(remaining, 10),
                 verify=TLS_VERIFY,
             )
             if r_a_inf.status_code == 403:
                 break
             time.sleep(poll_interval)
-            elapsed += poll_interval
         assert r_a_inf.status_code == 403, (
             f"Revoked key A should be rejected within {max_wait}s, got {r_a_inf.status_code}"
         )
@@ -721,11 +723,8 @@ class TestAPIKeyRevocationE2E:
         assert r_b_inf.status_code == 200, f"New key B should work, got {r_b_inf.status_code}: {r_b_inf.text}"
         print("[revoke] Revoked key A rejected, new key B works — remint after revoke succeeds")
 
-    def test_bulk_revoke_api_response(self, api_keys_base_url: str, headers: dict):
-        """Bulk revoke returns 200 with revokedCount — API-only, no inference check.
-
-        Uses dedicated keys so the session api_key fixture is not affected.
-        """
+    def test_individual_revoke_multiple_keys(self, api_keys_base_url: str, headers: dict):
+        """Create multiple keys and revoke each individually — verifies per-key DELETE returns 200."""
         designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 
         # Create 3 keys to revoke
@@ -791,20 +790,22 @@ class TestAPIKeyRevocationE2E:
         # Poll until all revoked keys are rejected at the gateway
         max_wait = 30
         poll_interval = 0.5
+        deadline = time.monotonic() + max_wait
         for i, k in enumerate(keys):
-            elapsed = 0.0
-            while elapsed < max_wait:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
                 r_inf = requests.post(
                     model_completions_url,
                     headers={"Authorization": f"Bearer {k['key']}", "Content-Type": "application/json"},
                     json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
-                    timeout=30,
+                    timeout=min(remaining, 10),
                     verify=TLS_VERIFY,
                 )
                 if r_inf.status_code == 403:
                     break
                 time.sleep(poll_interval)
-                elapsed += poll_interval
             assert r_inf.status_code == 403, (
                 f"Key {i} should be rejected within {max_wait}s after revoke, got {r_inf.status_code}: {r_inf.text}"
             )
