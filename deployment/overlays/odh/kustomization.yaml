@@ -4,53 +4,45 @@ kind: Kustomization
 metadata:
   name: maas-odh-overlay
 
-# ODH overlay: maas-api with TLS + maas-controller (per-route auth/rate limits)
-# For full deployment including rate limits, use openshift overlay
+# ODH operator overlay
+# This overlay configures MaaS for deployment via OpenDataHub operator
+# Includes: maas-api with TLS, maas-controller, and gateway-level default policies
+#
+# STRUCTURE:
+# - Base resources: maas-api with TLS, maas-controller, gateway policies
+# - Shared config: Inherits common patches/replacements via shared-patches component
+# - ODH-specific: Additional replacements for gateway policies and DestinationRule
+#
+# SHARED CONFIGURATION (from components/shared-patches):
+# - ConfigMap with parameters (images, gateway, namespace)
+# - Environment variables for maas-api deployment
+# - Image replacements for maas-api and maas-controller
+# - Gateway configuration (namespace, name)
+# - AuthPolicy URL placeholder replacement (placehold → actual namespace)
+#
+# ODH-SPECIFIC CONFIGURATION:
+# - Gateway-level policies (gateway-default-auth, gateway-default-deny)
+# - DestinationRule for TLS backend configuration
+#
+# For details, see: deployment/components/shared-patches/README.md
 
+# IMPORTANT: This namespace must match 'app-namespace' in params.env
+# The AuthPolicy URL uses app-namespace for DNS resolution
 namespace: opendatahub
+
 resources:
   - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule + NetworkPolicy)
   - ../../base/maas-controller/default
   - ../../base/maas-controller/policies  # gateway-default-auth, gateway-default-deny
 
-configMapGenerator:
-- envs:
-  - params.env
-  name: maas-parameters
-generatorOptions:
-  disableNameSuffixHash: true
+# Include shared-patches component for common configuration
+# This provides: ConfigMap, env vars, image replacements, gateway config, URL placeholder fix
+components:
+  - ../../components/shared-patches
 
+# ODH-SPECIFIC PATCHES
+# Additional cache TTL configuration for maas-controller
 patches:
-- patch: |-
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: maas-api
-    spec:
-      template:
-        spec:
-          containers:
-          - name: maas-api
-            env:
-            - name: GATEWAY_NAMESPACE
-              valueFrom:
-                configMapKeyRef:
-                  key: gateway-namespace
-                  name: maas-parameters
-            - name: GATEWAY_NAME
-              valueFrom:
-                configMapKeyRef:
-                  key: gateway-name
-                  name: maas-parameters
-            - name: API_KEY_MAX_EXPIRATION_DAYS
-              valueFrom:
-                configMapKeyRef:
-                  key: api-key-max-expiration-days
-                  name: maas-parameters
-                  optional: true
-  target:
-    kind: Deployment
-    name: maas-api
 - patch: |-
     apiVersion: apps/v1
     kind: Deployment
@@ -88,8 +80,11 @@ patches:
     kind: Deployment
     name: maas-controller
 
+# ODH-SPECIFIC REPLACEMENTS
+# These are in addition to shared-patches and handle ODH-specific resources
+# (gateway policies and DestinationRule)
 replacements:
-# Gateway policies must be in openshift-ingress to target maas-default-gateway
+# Replace gateway namespace in gateway policies
 - source:
     kind: ConfigMap
     version: v1
@@ -106,69 +101,19 @@ replacements:
       name: gateway-default-deny
     fieldPaths:
     - metadata.namespace
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.maas-api-image
-  targets:
-  - select:
-      kind: Deployment
-      name: maas-api
-    fieldPaths:
-    - spec.template.spec.containers.[name=maas-api].image
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.maas-controller-image
-  targets:
-  - select:
-      kind: Deployment
-      name: maas-controller
-    fieldPaths:
-    - spec.template.spec.containers.[name=manager].image
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-namespace
-  targets:
-  - select:
-      kind: HTTPRoute
-      name: maas-api-route
-    fieldPaths:
-    - spec.parentRefs.0.namespace
   - select:
       kind: DestinationRule
       name: maas-api-backend-tls
     fieldPaths:
     - metadata.namespace
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-name
-  targets:
-  - select:
-      kind: HTTPRoute
-      name: maas-api-route
-    fieldPaths:
-    - spec.parentRefs.0.name
+
+# Replace app-namespace in DestinationRule host
 - source:
     kind: ConfigMap
     version: v1
     name: maas-parameters
     fieldPath: data.app-namespace
   targets:
-  - select:
-      kind: AuthPolicy
-      name: maas-api-auth-policy
-    fieldPaths:
-    - spec.rules.metadata.apiKeyValidation.http.url
-    options:
-      delimiter: "."
-      index: 1
   - select:
       kind: DestinationRule
       name: maas-api-backend-tls

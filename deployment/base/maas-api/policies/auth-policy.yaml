@@ -33,9 +33,8 @@ spec:
             operator: matches
             value: "^Bearer sk-oai-.*"
         http:
-          # Placeholder URL - gets patched based on deployment mode:
-          #   - Operator mode (ODH/RHOAI): ODH overlay replacement (app-namespace param)
-          #   - Kustomize mode: deploy.sh script patches with $NAMESPACE via sed
+          # Placeholder URL - gets patched via kustomize replacements (app-namespace param)
+          # All overlays use shared-patches component for consistent replacements
           url: https://maas-api.placehold.svc.cluster.local:8443/internal/v1/api-keys/validate
           method: POST
           contentType: application/json

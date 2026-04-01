@@ -664,11 +664,9 @@ deploy_via_kustomize() {
   fi
 
   log_info "Applying kustomize manifests..."
-  # Patch the maas-api URL placeholder with actual namespace
   # Patch MAAS_SUBSCRIPTION_NAMESPACE env var with the configured subscription namespace
   kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
     kustomize build "$overlay" | \
-    sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g" | \
     perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}'"$subscription_namespace"'"/smg'
   )
 
