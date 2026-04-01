@@ -34,5 +34,6 @@ spec:
               request_trailer_mode: "SEND"
               response_trailer_mode: "SEND"
             grpc_service:
+              timeout: 10s
               envoy_grpc:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
