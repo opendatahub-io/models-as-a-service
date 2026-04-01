@@ -106,6 +106,13 @@ mint_api_key() {
   local token="${2:-${BOOTSTRAP_TOKEN}}"
   local response
   local api_key
+  
+  # Pre-flight check for jq
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "[smoke] ERROR: jq is required to mint API keys" | tee -a "${LOG}" >&2
+    return 1
+  fi
+  
   echo "[smoke] Minting API key '${key_name}' via ${MAAS_API_BASE_URL}/v1/api-keys..." | tee -a "${LOG}" >&2
   
   if ! response=$(curl -skS --max-time 30 -X POST \
@@ -121,7 +128,7 @@ mint_api_key() {
   
   if [[ -z "${api_key}" || "${api_key}" == "null" ]]; then
     echo "[smoke] ERROR: Failed to mint API key" | tee -a "${LOG}" >&2
-    echo "[smoke] Response: ${response:0:500}" | tee -a "${LOG}" >&2
+    echo "[smoke] Response from /v1/api-keys was not parseable (may contain sensitive data)" | tee -a "${LOG}" >&2
     return 1
   fi
   
@@ -138,6 +145,9 @@ export TOKEN
 
 # Admin token setup - add to odh-admins, then mint admin API key
 setup_admin_token() {
+  # Clear any stale inherited value to prevent false positive admin tests
+  unset ADMIN_OC_TOKEN
+  
   echo "[smoke] Setting up admin token for admin tests..."
   
   local current_user
