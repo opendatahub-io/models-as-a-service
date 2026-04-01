@@ -295,7 +295,7 @@ func specFromExternalModel(extModel *maasv1alpha1.ExternalModel, model *maasv1al
 	if portStr, ok := ann[AnnPort]; ok {
 		p, err := strconv.ParseInt(portStr, 10, 32)
 		if err != nil {
-			return spec, fmt.Errorf("invalid port %q: %v", portStr, err)
+			return spec, fmt.Errorf("invalid port %q: %w", portStr, err)
 		}
 		if p < 1 || p > 65535 {
 			return spec, fmt.Errorf("port %d out of range (1-65535)", p)
@@ -306,14 +306,14 @@ func specFromExternalModel(extModel *maasv1alpha1.ExternalModel, model *maasv1al
 	if tlsStr, ok := ann[AnnTLS]; ok {
 		parsed, err := strconv.ParseBool(tlsStr)
 		if err != nil {
-			return spec, fmt.Errorf("invalid tls value %q: %v", tlsStr, err)
+			return spec, fmt.Errorf("invalid tls value %q: %w", tlsStr, err)
 		}
 		spec.TLS = parsed
 	}
 
 	if extraStr, ok := ann[AnnExtraHeaders]; ok && extraStr != "" {
 		spec.ExtraHeaders = map[string]string{}
-		for _, pair := range strings.Split(extraStr, ",") {
+		for pair := range strings.SplitSeq(extraStr, ",") {
 			kv := strings.SplitN(pair, "=", 2)
 			if len(kv) == 2 {
 				spec.ExtraHeaders[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])

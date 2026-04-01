@@ -39,15 +39,12 @@ type ExternalModelSpec struct {
 // truncateName ensures base + suffix fits within 63 characters.
 func truncateName(base, suffix string) string {
 	const maxLen = 63
-	max := maxLen - len(suffix)
-	if max < 1 {
-		max = 1
-	}
+	limit := max(maxLen-len(suffix), 1)
 	if len(base) == 0 {
 		base = "model"
 	}
-	if len(base) > max {
-		base = base[:max]
+	if len(base) > limit {
+		base = base[:limit]
 		base = strings.TrimRight(base, "-")
 	}
 	return base + suffix
