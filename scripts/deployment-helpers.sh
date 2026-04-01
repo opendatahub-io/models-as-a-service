@@ -461,7 +461,10 @@ spec:
 
   # Wait for subscription to be installed
   log_info "Waiting for subscription to install..."
-  waitsubscriptioninstalled "$namespace" "$operator_name"
+  if ! waitsubscriptioninstalled "$namespace" "$operator_name"; then
+    log_error "Failed to install operator $operator_name"
+    return 1
+  fi
 
   log_info "Operator $operator_name installed successfully"
 }
