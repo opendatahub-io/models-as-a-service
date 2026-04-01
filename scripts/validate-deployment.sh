@@ -235,7 +235,7 @@ print_info() {
 # First check if kubectl is working, then check for OpenShift-specific API resources
 api_resources=$(kubectl api-resources 2>/dev/null)
 if [ $? -ne 0 ]; then
-    print_warn "Could not query API resources (kubectl may be slow to respond)" "Continuing validation anyway..."
+    print_warning "Could not query API resources (kubectl may be slow to respond)" "Continuing validation anyway..."
 elif ! echo "$api_resources" | grep -q "route.openshift.io"; then
     print_fail "Not running on OpenShift" "This validation script is designed for OpenShift clusters" "Use a different validation approach for vanilla Kubernetes"
     exit 1

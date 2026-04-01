@@ -126,7 +126,8 @@ readonly LLMIS_TIMEOUT="${LLMIS_TIMEOUT:-300}"                      # LLMInferen
 readonly MAASMODELREF_TIMEOUT="${MAASMODELREF_TIMEOUT:-300}"        # MaaSModelRef ready
 readonly AUTHPOLICY_TIMEOUT="${AUTHPOLICY_TIMEOUT:-180}"            # AuthPolicy enforced
 
-# Validate timeout values - must be positive integers
+# Validate timeout values - must be positive integers within a sane range
+readonly _MAX_TIMEOUT=86400  # 24 hours - upper bound to catch misconfigurations
 _validate_timeout() {
   local name="$1"
   local value="$2"
@@ -134,6 +135,11 @@ _validate_timeout() {
     echo "ERROR: Invalid timeout value for $name: '$value'" >&2
     echo "       Timeout values must be positive integers (seconds)" >&2
     echo "       Example: export $name=300" >&2
+    exit 1
+  fi
+  if [[ "$value" -gt $_MAX_TIMEOUT ]]; then
+    echo "ERROR: Timeout value for $name exceeds maximum (${value}s > ${_MAX_TIMEOUT}s)" >&2
+    echo "       Maximum allowed timeout is ${_MAX_TIMEOUT}s (24 hours)" >&2
     exit 1
   fi
 }
@@ -235,7 +241,7 @@ waitsubscriptioninstalled() {
 
   # Wait for CSV to exist (sometimes there's a delay between currentCSV being set and CSV appearing)
   local csv_wait_elapsed=0
-  local csv_wait_timeout=60  # CSV should appear within 60s after currentCSV is set
+  local csv_wait_timeout=$((CSV_TIMEOUT < 60 ? CSV_TIMEOUT : 60))
   while ! kubectl get -n "$ns" csv "$csv" > /dev/null 2>&1; do
     if [[ $csv_wait_elapsed -ge $csv_wait_timeout ]]; then
       echo "    * ERROR: Timeout waiting for CSV $csv to appear in namespace $ns (waited ${csv_wait_timeout}s)"
@@ -463,7 +469,7 @@ spec:
 
   if [[ "$install_plan_approval" == "Manual" ]]; then
     log_info "Manual Subscription: approving initial InstallPlan so first install can proceed..."
-    approve_initial_installplan_if_manual "$namespace" "$operator_name" 180
+    approve_initial_installplan_if_manual "$namespace" "$operator_name" "$CSV_TIMEOUT"
   fi
 
   # Wait for subscription to be installed
@@ -476,25 +482,31 @@ spec:
   log_info "Operator $operator_name installed successfully"
 }
 
-# wait_for_custom_check description check_command timeout interval
+# wait_for_custom_check description timeout interval -- command [args...]
 #   Waits for a custom check command to succeed.
 #
 # Arguments:
 #   description - Description of what we're waiting for
-#   check_command - Command to execute (should return 0 on success)
-#   timeout - Timeout in seconds (default: CUSTOM_CHECK_TIMEOUT)
-#   interval - Check interval in seconds (default: 5)
+#   timeout     - Timeout in seconds (default: CUSTOM_CHECK_TIMEOUT)
+#   interval    - Check interval in seconds (default: 5)
+#   --          - Separator before the command
+#   command     - Command and arguments to execute (should return 0 on success).
+#                 For shell pipelines, pass "bash" "-c" "pipeline..." as the command.
 wait_for_custom_check() {
   local description=${1?description is required}; shift
-  local check_command=${1?check command is required}; shift
   local timeout=${1:-$CUSTOM_CHECK_TIMEOUT}; shift || true
   local interval=${1:-5}; shift || true
+  [[ "${1:-}" == "--" ]] && shift
+  if [[ $# -eq 0 ]]; then
+    log_error "wait_for_custom_check requires a command after --"
+    return 1
+  fi
 
   log_info "Waiting for: $description (timeout: ${timeout}s)"
 
   local elapsed=0
   while [ $elapsed -lt $timeout ]; do
-    if eval "$check_command"; then
+    if "$@"; then
       log_info "$description - Ready"
       return 0
     fi
@@ -1007,11 +1019,12 @@ wait_for_csv_with_min_version() {
   local end_time=$((SECONDS + timeout))
 
   while [ $SECONDS -lt $end_time ]; do
-    local csv_name=$(find_csv_with_min_version "$operator_prefix" "$min_version" "$namespace")
+    local csv_name
+    csv_name=$(find_csv_with_min_version "$operator_prefix" "$min_version" "$namespace") || true
 
     if [ -n "$csv_name" ]; then
-      # Found a CSV with suitable version
-      local installed_version=$(extract_version_from_csv "$csv_name")
+      local installed_version
+      installed_version=$(extract_version_from_csv "$csv_name")
       echo "✅ Found CSV: ${csv_name} (version: ${installed_version} >= ${min_version})"
       # Pass remaining time, not full timeout
       local remaining_time=$((end_time - SECONDS))
@@ -1021,9 +1034,11 @@ wait_for_csv_with_min_version() {
     fi
 
     # Check if any version exists (for progress feedback)
-    local any_csv=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | head -n1 | awk '{print $1}' || echo "")
+    local any_csv
+    any_csv=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | head -n1 | awk '{print $1}' || echo "")
     if [ -n "$any_csv" ]; then
-      local installed_version=$(extract_version_from_csv "$any_csv")
+      local installed_version
+      installed_version=$(extract_version_from_csv "$any_csv")
       echo "   Found ${any_csv} with version ${installed_version}, waiting for version >= ${min_version}..."
     else
       echo "   No CSV found for ${operator_prefix} yet, waiting for installation..."
@@ -1196,8 +1211,9 @@ EOF
   if ! kubectl wait catalogsource "$name" -n "$namespace" \
       --for=jsonpath='{.status.connectionState.lastObservedState}'=READY \
       --timeout="${CATALOGSOURCE_TIMEOUT}s" 2>/dev/null; then
-    local state=$(kubectl get catalogsource "$name" -n "$namespace" \
-      -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null)
+    local state
+    state=$(kubectl get catalogsource "$name" -n "$namespace" \
+      -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null) || true
     echo "  ERROR: CatalogSource not ready after ${CATALOGSOURCE_TIMEOUT}s (state: $state)"
     return 1
   fi

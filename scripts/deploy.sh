@@ -1420,9 +1420,9 @@ apply_kuadrant_cr() {
   log_info "Waiting for Kuadrant to become ready (initial check)..."
   local kuadrant_initial_timeout=$((CUSTOM_CHECK_TIMEOUT / 2))  # Use half of standard timeout for initial check
   if ! wait_for_custom_check "Kuadrant ready in $namespace" \
-    "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
     "$kuadrant_initial_timeout" \
-    5; then
+    5 -- \
+    bash -c "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True"; then
 
     # Check if it's a MissingDependency issue
     local kuadrant_reason
@@ -1436,9 +1436,10 @@ apply_kuadrant_cr() {
       # Retry waiting for Kuadrant
       log_info "Retrying Kuadrant readiness check after operator restart..."
       wait_for_custom_check "Kuadrant ready in $namespace" \
-        "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
         "$CUSTOM_CHECK_TIMEOUT" \
-        5 || log_warn "Kuadrant not ready yet (timeout: ${CUSTOM_CHECK_TIMEOUT}s) - AuthPolicy enforcement may fail on model HTTPRoutes"
+        5 -- \
+        bash -c "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
+        || log_warn "Kuadrant not ready yet (timeout: ${CUSTOM_CHECK_TIMEOUT}s) - AuthPolicy enforcement may fail on model HTTPRoutes"
     else
       log_warn "Kuadrant not ready (reason: $kuadrant_reason) - AuthPolicy enforcement may fail"
     fi
