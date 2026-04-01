@@ -757,7 +757,10 @@ func TestMapHTTPRouteToMaaSModelRefs(t *testing.T) {
 		},
 		{
 			name: "returns empty list when obj is not HTTPRoute",
-			// Pass nil for route, but we'll create a different object type
+			// Pass nil for route, but we'll create a different object type.
+			// This tests that mapHTTPRouteToMaaSModelRefs properly handles non-HTTPRoute
+			// objects via type assertion (returns early when obj.(*gatewayapiv1.HTTPRoute) fails).
+			// We intentionally pass a MaaSModelRef to trigger the type assertion failure.
 			route:        nil,
 			models:       []*maasv1alpha1.MaaSModelRef{newMaaSModelRef("model1", "default", "LLMInferenceService", "llmisvc1")},
 			wantRequests: 0,
