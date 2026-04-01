@@ -575,7 +575,10 @@ deploy_via_operator() {
   install_policy_engine
 
   # Install primary operator (creates namespace)
-  install_primary_operator
+  if ! install_primary_operator; then
+    log_error "Primary operator installation failed"
+    exit 1
+  fi
 
   # Apply custom resources
   apply_custom_resources
