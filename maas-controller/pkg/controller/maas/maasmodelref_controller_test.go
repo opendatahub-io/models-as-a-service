@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -34,6 +35,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -769,7 +771,7 @@ func TestMapHTTPRouteToMaaSModelRefs(t *testing.T) {
 				objects = append(objects, m)
 			}
 
-			r, c := newTestReconciler(objects...)
+			r, _ := newTestReconciler(objects...)
 
 			// Use either the provided route or a non-HTTPRoute object
 			var obj client.Object
@@ -796,22 +798,27 @@ func TestMapHTTPRouteToMaaSModelRefs(t *testing.T) {
 					}
 				}
 			}
-
-			// Verify we didn't accidentally modify the fake client
-			_ = c
 		})
 	}
 }
 
 func TestMapHTTPRouteToMaaSModelRefs_ListError(t *testing.T) {
-	// Test that we handle List() errors gracefully
 	ctx := context.Background()
-	route := newHTTPRoute("test-route", "nonexistent-ns")
+	route := newHTTPRoute("test-route", "default")
 
-	// Create a reconciler with no models
-	r, _ := newTestReconciler()
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*maasv1alpha1.MaaSModelRefList); ok {
+					return fmt.Errorf("simulated API server error")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).
+		Build()
 
-	// Should return empty list on List error (nonexistent namespace)
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
 	requests := r.mapHTTPRouteToMaaSModelRefs(ctx, route)
 	if len(requests) != 0 {
 		t.Errorf("mapHTTPRouteToMaaSModelRefs() with List error returned %d requests, want 0", len(requests))

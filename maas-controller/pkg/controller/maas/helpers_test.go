@@ -128,6 +128,18 @@ func TestValidateCELValue(t *testing.T) {
 			fieldName: "test",
 			wantErr:   false,
 		},
+		{
+			name:      "single quotes are allowed (only double-quoted CEL literals are used)",
+			value:     "value'with'quotes",
+			fieldName: "test",
+			wantErr:   false,
+		},
+		{
+			name:      "newline is allowed (CEL strings handle these)",
+			value:     "value\nwith\nnewlines",
+			fieldName: "test",
+			wantErr:   false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -235,20 +247,13 @@ func TestFindAllSubscriptionsForModel(t *testing.T) {
 				objects = append(objects, *sub)
 			}
 
-			client := fake.NewClientBuilder().
+			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithLists(&maasv1alpha1.MaaSSubscriptionList{Items: objects}).
-				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", func(obj client.Object) []string {
-					sub := obj.(*maasv1alpha1.MaaSSubscription)
-					var keys []string
-					for _, ref := range sub.Spec.ModelRefs {
-						keys = append(keys, ref.Namespace+"/"+ref.Name)
-					}
-					return keys
-				}).
+				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 				Build()
 
-			got, err := findAllSubscriptionsForModel(ctx, client, tt.modelNamespace, tt.modelName)
+			got, err := findAllSubscriptionsForModel(ctx, c, tt.modelNamespace, tt.modelName)
 			if err != nil {
 				t.Fatalf("findAllSubscriptionsForModel() error = %v", err)
 			}
@@ -371,12 +376,12 @@ func TestFindAllAuthPoliciesForModel(t *testing.T) {
 				objects = append(objects, *policy)
 			}
 
-			client := fake.NewClientBuilder().
+			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithLists(&maasv1alpha1.MaaSAuthPolicyList{Items: objects}).
 				Build()
 
-			got, err := findAllAuthPoliciesForModel(ctx, client, tt.modelNamespace, tt.modelName)
+			got, err := findAllAuthPoliciesForModel(ctx, c, tt.modelNamespace, tt.modelName)
 			if err != nil {
 				t.Fatalf("findAllAuthPoliciesForModel() error = %v", err)
 			}
@@ -429,20 +434,13 @@ func TestFindAnySubscriptionForModel(t *testing.T) {
 				objects = append(objects, *sub)
 			}
 
-			client := fake.NewClientBuilder().
+			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithLists(&maasv1alpha1.MaaSSubscriptionList{Items: objects}).
-				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", func(obj client.Object) []string {
-					sub := obj.(*maasv1alpha1.MaaSSubscription)
-					var keys []string
-					for _, ref := range sub.Spec.ModelRefs {
-						keys = append(keys, ref.Namespace+"/"+ref.Name)
-					}
-					return keys
-				}).
+				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 				Build()
 
-			got := findAnySubscriptionForModel(ctx, client, tt.modelNamespace, tt.modelName)
+			got := findAnySubscriptionForModel(ctx, c, tt.modelNamespace, tt.modelName)
 			if (got == nil) != tt.wantNil {
 				t.Errorf("findAnySubscriptionForModel() nil = %v, want nil = %v", got == nil, tt.wantNil)
 			}
@@ -492,12 +490,12 @@ func TestFindAnyAuthPolicyForModel(t *testing.T) {
 				objects = append(objects, *policy)
 			}
 
-			client := fake.NewClientBuilder().
+			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithLists(&maasv1alpha1.MaaSAuthPolicyList{Items: objects}).
 				Build()
 
-			got := findAnyAuthPolicyForModel(ctx, client, tt.modelNamespace, tt.modelName)
+			got := findAnyAuthPolicyForModel(ctx, c, tt.modelNamespace, tt.modelName)
 			if (got == nil) != tt.wantNil {
 				t.Errorf("findAnyAuthPolicyForModel() nil = %v, want nil = %v", got == nil, tt.wantNil)
 			}
