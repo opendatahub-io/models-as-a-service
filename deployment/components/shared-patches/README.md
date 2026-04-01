@@ -93,16 +93,7 @@ This component is used by:
 
 ## Configuration
 
-The component reads all parameter values from `deployment/overlays/common/params.env`:
-
-```env
-maas-api-image=quay.io/opendatahub/maas-api:latest
-maas-controller-image=quay.io/opendatahub/maas-controller:latest
-gateway-namespace=openshift-ingress
-gateway-name=maas-default-gateway
-app-namespace=opendatahub
-api-key-max-expiration-days=90
-```
+The component reads all parameter values from `deployment/overlays/common/params.env`. See that file for the current configuration values.
 
 To change these values, edit `params.env` - all overlays will pick up the changes automatically.
 
