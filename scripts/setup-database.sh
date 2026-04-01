@@ -160,17 +160,13 @@ EOF
 
 # Create the maas-db-config secret used by maas-api
 # URL-encode the password in case it contains reserved characters (@, :, /, ?, etc.)
-url_encode() {
-  local string="$1" i c
-  for (( i = 0; i < ${#string}; i++ )); do
-    c="${string:i:1}"
-    case "$c" in
-      [a-zA-Z0-9.~_-]) printf '%s' "$c" ;;
-      *) printf '%%%02X' "'$c" ;;
-    esac
-  done
-}
-ENCODED_PASSWORD=$(url_encode "$POSTGRES_PASSWORD")
+# 1. printf '%s' outputs the raw password bytes (no trailing newline)
+# 2. xxd -p converts each byte to its two-digit hex representation (e.g., "a" -> "61")
+# 3. tr -d '\n' strips line breaks that xxd inserts every 60 hex characters
+# 4. sed inserts a "%" before every hex pair, producing percent-encoding (e.g., "61" -> "%61")
+# This encodes all characters (including safe ones like letters), which is more aggressive
+# than strictly necessary but is always correct per RFC 3986 — %61 is equivalent to "a".
+ENCODED_PASSWORD=$(printf '%s' "$POSTGRES_PASSWORD" | xxd -p | tr -d '\n' | sed 's/../%\U&/g')
 DB_CONNECTION_URL="postgresql://${POSTGRES_USER}:${ENCODED_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
 create_maas_db_config_secret "$NAMESPACE" "$DB_CONNECTION_URL"
 
