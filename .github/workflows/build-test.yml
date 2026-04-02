@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'maas-controller/api/**'
+      - 'maas-controller/cmd/**'
+      - 'maas-controller/pkg/**'
       - 'maas-controller/Makefile'
       - 'deployment/base/maas-controller/crd/**'
       - 'deployment/**'

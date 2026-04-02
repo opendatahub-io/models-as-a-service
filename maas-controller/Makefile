@@ -103,7 +103,7 @@ manifests: $(CONTROLLER_GEN) ##	generate CRD and RBAC manifests
 .PHONY: verify-codegen
 verify-codegen: generate manifests ##	run generate + manifests and fail if files changed (CI check)
 	@if ! git diff --quiet HEAD -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/clusterrole.yaml; then \
-		echo "ERROR: Generated files are out of date. Please run 'make generate manifests' and commit the results."; \
+		echo "ERROR: Generated files are out of date. Please run 'make -C maas-controller generate manifests' from the repo root and commit the results."; \
 		git diff --stat HEAD -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/clusterrole.yaml; \
 		exit 1; \
 	fi
