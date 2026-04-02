@@ -39,7 +39,7 @@ jobs:
         ./scripts/ci/validate-manifests.sh
 
   verify-codegen:
-    name: Verify generated CRDs and deepcopy
+    name: Verify generated CRDs, RBAC, and deepcopy
     timeout-minutes: 10
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-verify-codegen
