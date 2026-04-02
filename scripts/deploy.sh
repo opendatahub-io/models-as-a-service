@@ -60,6 +60,9 @@
 #   # Test custom MaaS API image
 #   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh
 #
+#   # Use external PostgreSQL (production)
+#   ./scripts/deploy.sh --postgres-connection 'postgresql://user:pass@db.example.com:5432/maas?sslmode=require'
+#
 # For detailed documentation, see:
 # https://opendatahub-io.github.io/models-as-a-service/latest/install/maas-setup/
 ################################################################################
@@ -108,6 +111,7 @@ MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 KUSTOMIZE_FORCE_CONFLICTS="${KUSTOMIZE_FORCE_CONFLICTS:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
+POSTGRES_CONNECTION="${POSTGRES_CONNECTION:-}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -143,6 +147,11 @@ OPTIONS:
       Deploy Keycloak identity provider for external OIDC support (optional)
       Creates keycloak-system namespace and deploys Keycloak operator
       See docs/samples/install/keycloak/ for configuration guide
+
+  --postgres-connection <connection-string>
+      Use an external PostgreSQL database instead of deploying a POC instance.
+      Format: postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require
+      When set, skips the built-in PostgreSQL deployment entirely.
 
   --namespace <namespace>
       Target namespace for deployment
@@ -195,6 +204,7 @@ ENVIRONMENT VARIABLES:
   OIDC_ISSUER_URL          External OIDC issuer URL for maas-api AuthPolicy patching
   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
   KUSTOMIZE_FORCE_CONFLICTS When true, pass --force-conflicts to kubectl apply in kustomize mode (default: false)
+  POSTGRES_CONNECTION       External PostgreSQL connection string (same as --postgres-connection)
 
 TIMEOUT CONFIGURATION (all values in seconds):
   Customize timeouts for slow clusters or CI/CD environments:
@@ -228,6 +238,9 @@ EXAMPLES:
     --operator-type odh \\
     --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:pr-456 \\
     --operator-image quay.io/opendatahub/opendatahub-operator:pr-456
+
+  # Use an external PostgreSQL database
+  ./scripts/deploy.sh --postgres-connection 'postgresql://user:pass@rds.example.com:5432/maas?sslmode=require'
 
 For more information, see: https://github.com/opendatahub-io/models-as-a-service
 EOF
@@ -312,6 +325,11 @@ parse_arguments() {
       --channel)
         require_flag_value "$1" "${2:-}"
         OPERATOR_CHANNEL="$2"
+        shift 2
+        ;;
+      --postgres-connection)
+        require_flag_value "$1" "${2:-}"
+        POSTGRES_CONNECTION="$2"
         shift 2
         ;;
       --external-oidc)
@@ -697,8 +715,30 @@ deploy_via_kustomize() {
 # POSTGRESQL DEPLOYMENT
 #──────────────────────────────────────────────────────────────
 
+validate_postgres_connection() {
+  local conn="$1"
+  if [[ ! "$conn" =~ ^postgres(ql)?:// ]]; then
+    log_error "Invalid PostgreSQL connection string format"
+    log_error "Expected: postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require"
+    return 1
+  fi
+}
+
 deploy_postgresql() {
-  NAMESPACE="$NAMESPACE" "${SCRIPT_DIR}/setup-database.sh"
+  if [[ -n "$POSTGRES_CONNECTION" ]]; then
+    validate_postgres_connection "$POSTGRES_CONNECTION" || exit 1
+    log_info "Using external PostgreSQL connection"
+    create_maas_db_config_secret "$NAMESPACE" "$POSTGRES_CONNECTION"
+    log_info "Created maas-db-config secret with external connection"
+  else
+    log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_warn "  DEPLOYING POC POSTGRESQL — NOT INTENDED FOR PRODUCTION USE"
+    log_warn "  Data is stored in ephemeral storage and will be lost on pod restart."
+    log_warn "  For production, use --postgres-connection with an external database"
+    log_warn "  (AWS RDS, Crunchy Operator, Azure Database, etc.)"
+    log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    NAMESPACE="$NAMESPACE" "${SCRIPT_DIR}/setup-database.sh"
+  fi
 }
 
 #──────────────────────────────────────────────────────────────

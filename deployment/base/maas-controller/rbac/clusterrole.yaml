@@ -1,39 +1,143 @@
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: maas-controller-role
 rules:
-- apiGroups: ["maas.opendatahub.io"]
-  resources: ["externalmodels", "maasauthpolicies", "maasmodelrefs", "maassubscriptions"]
-  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
-- apiGroups: ["maas.opendatahub.io"]
-  resources: ["externalmodels/finalizers", "maasauthpolicies/finalizers", "maasmodelrefs/finalizers", "maassubscriptions/finalizers"]
-  verbs: ["update"]
-- apiGroups: ["maas.opendatahub.io"]
-  resources: ["externalmodels/status", "maasauthpolicies/status", "maasmodelrefs/status", "maassubscriptions/status"]
-  verbs: ["get", "patch", "update"]
-- apiGroups: ["gateway.networking.k8s.io"]
-  resources: ["gateways"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["gateway.networking.k8s.io"]
-  resources: ["httproutes"]
-  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
-- apiGroups: ["gateway.networking.k8s.io"]
-  resources: ["httproutes/finalizers"]
-  verbs: ["update"]
-- apiGroups: ["kuadrant.io"]
-  resources: ["authpolicies", "tokenratelimitpolicies"]
-  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
-- apiGroups: ["serving.kserve.io"]
-  resources: ["llminferenceservices"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["namespaces"]
-  verbs: ["create", "get", "list", "watch"]
-# ExternalModel reconciler: create/manage Istio egress resources
-- apiGroups: [""]
-  resources: ["services"]
-  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
-- apiGroups: ["networking.istio.io"]
-  resources: ["serviceentries", "destinationrules"]
-  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - create
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - config.openshift.io
+  resources:
+  - authentications
+  verbs:
+  - get
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gateways
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - httproutes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - httproutes/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kuadrant.io
+  resources:
+  - authpolicies
+  - tokenratelimitpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
+  - externalmodels
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
+  - maasauthpolicies
+  - maasmodelrefs
+  - maassubscriptions
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
+  - maasauthpolicies/finalizers
+  - maasmodelrefs/finalizers
+  - maassubscriptions/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
+  - maasauthpolicies/status
+  - maasmodelrefs/status
+  - maassubscriptions/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - destinationrules
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - serviceentries
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - serving.kserve.io
+  resources:
+  - llminferenceservices
+  verbs:
+  - get
+  - list
+  - watch

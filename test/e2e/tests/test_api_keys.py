@@ -40,6 +40,18 @@ from conftest import TLS_VERIFY
 log = logging.getLogger(__name__)
 
 
+@pytest.fixture
+def model_completions_url(model_v1: str) -> str:
+    """URL for completions endpoint."""
+    return f"{model_v1}/completions"
+
+
+@pytest.fixture
+def inference_model_name() -> str:
+    """Model name for inference requests. Override with INFERENCE_MODEL_NAME env var."""
+    return os.environ.get("INFERENCE_MODEL_NAME", "facebook/opt-125m")
+
+
 class TestAPIKeyCRUD:
     """Tests 1-3: Create, list, and revoke API keys."""
 
@@ -434,16 +446,6 @@ class TestAPIKeyExpiration:
 class TestAPIKeyModelInference:
     """Tests 11-15: Using API keys for model inference via gateway."""
 
-    @pytest.fixture
-    def model_completions_url(self, model_v1: str) -> str:
-        """URL for completions endpoint."""
-        return f"{model_v1}/completions"
-
-    @pytest.fixture
-    def inference_model_name(self) -> str:
-        """Model name for inference requests. Override with INFERENCE_MODEL_NAME env var."""
-        return os.environ.get("INFERENCE_MODEL_NAME", "facebook/opt-125m")
-
     def test_api_key_model_access_success(
         self,
         model_completions_url: str,
@@ -619,6 +621,195 @@ class TestAPIKeyModelInference:
             print(f"[inference] Chat completions returned {r.status_code}: {r.text[:200]}")
             # Don't fail - chat may not be supported
             pytest.skip(f"Chat completions returned {r.status_code}")
+
+
+class TestAPIKeyRevocationE2E:
+    """End-to-end revocation tests: double revoke, nonexistent key, bulk revoke propagation, remint after revoke."""
+
+    def test_double_revoke_returns_404(self, api_keys_base_url: str, headers: dict):
+        """Revoking the same key twice should return 404 on the second attempt."""
+        # Create a key
+        r_create = requests.post(
+            api_keys_base_url, headers=headers, json={"name": "test-double-revoke"}, timeout=30, verify=TLS_VERIFY
+        )
+        assert r_create.status_code in (200, 201), f"Failed to create key: {r_create.text}"
+        key_id = r_create.json()["id"]
+
+        # First revoke succeeds
+        r1 = requests.delete(f"{api_keys_base_url}/{key_id}", headers=headers, timeout=30, verify=TLS_VERIFY)
+        assert r1.status_code == 200
+        assert r1.json().get("status") == "revoked"
+
+        # Second revoke returns 404 (key is no longer active)
+        r2 = requests.delete(f"{api_keys_base_url}/{key_id}", headers=headers, timeout=30, verify=TLS_VERIFY)
+        assert r2.status_code == 404, f"Expected 404 on double revoke, got {r2.status_code}: {r2.text}"
+        print(f"[revoke] Double revoke correctly returns 404 for key {key_id}")
+
+    def test_revoke_nonexistent_key_returns_404(self, api_keys_base_url: str, headers: dict):
+        """Revoking a key ID that doesn't exist should return 404."""
+        r = requests.delete(
+            f"{api_keys_base_url}/nonexistent-uuid-12345", headers=headers, timeout=30, verify=TLS_VERIFY
+        )
+        assert r.status_code == 404, f"Expected 404 for nonexistent key, got {r.status_code}: {r.text}"
+        print("[revoke] Nonexistent key correctly returns 404")
+
+    def test_revoke_then_create_new_key_works(
+        self,
+        api_keys_base_url: str,
+        model_completions_url: str,
+        headers: dict,
+        inference_model_name: str,
+    ):
+        """After revoking a key, a newly created key should still work for inference."""
+        designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+
+        # Create key A
+        r_a = requests.post(
+            api_keys_base_url,
+            headers=headers,
+            json={"name": "test-revoke-remint-a", "subscription": designated},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_a.status_code in (200, 201), f"Failed to create key A: {r_a.text}"
+        key_a = r_a.json()["key"]
+        key_a_id = r_a.json()["id"]
+
+        # Revoke key A
+        r_revoke = requests.delete(f"{api_keys_base_url}/{key_a_id}", headers=headers, timeout=30, verify=TLS_VERIFY)
+        assert r_revoke.status_code == 200
+
+        # Create key B (new key after revocation)
+        r_b = requests.post(
+            api_keys_base_url,
+            headers=headers,
+            json={"name": "test-revoke-remint-b", "subscription": designated},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_b.status_code in (200, 201), f"Failed to create key B: {r_b.text}"
+        key_b = r_b.json()["key"]
+
+        # Poll until revoked key A is rejected (revocation may take time to propagate)
+        max_wait = 30
+        poll_interval = 0.5
+        deadline = time.monotonic() + max_wait
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            r_a_inf = requests.post(
+                model_completions_url,
+                headers={"Authorization": f"Bearer {key_a}", "Content-Type": "application/json"},
+                json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
+                timeout=min(remaining, 10),
+                verify=TLS_VERIFY,
+            )
+            if r_a_inf.status_code == 403:
+                break
+            time.sleep(poll_interval)
+        assert r_a_inf.status_code == 403, (
+            f"Revoked key A should be rejected within {max_wait}s, got {r_a_inf.status_code}"
+        )
+
+        # Key B should work (200)
+        r_b_inf = requests.post(
+            model_completions_url,
+            headers={"Authorization": f"Bearer {key_b}", "Content-Type": "application/json"},
+            json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
+            timeout=60,
+            verify=TLS_VERIFY,
+        )
+        assert r_b_inf.status_code == 200, f"New key B should work, got {r_b_inf.status_code}: {r_b_inf.text}"
+        print("[revoke] Revoked key A rejected, new key B works — remint after revoke succeeds")
+
+    def test_individual_revoke_multiple_keys(self, api_keys_base_url: str, headers: dict):
+        """Create multiple keys and revoke each individually — verifies per-key DELETE returns 200."""
+        designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+
+        # Create 3 keys to revoke
+        key_ids = []
+        for i in range(3):
+            r = requests.post(
+                api_keys_base_url,
+                headers=headers,
+                json={"name": f"test-bulk-api-{i}", "subscription": designated},
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+            assert r.status_code in (200, 201), f"Failed to create key {i}: {r.text}"
+            key_ids.append(r.json()["id"])
+
+        # Individually revoke them so we don't nuke the session key
+        for kid in key_ids:
+            r = requests.delete(f"{api_keys_base_url}/{kid}", headers=headers, timeout=30, verify=TLS_VERIFY)
+            assert r.status_code == 200, f"Failed to revoke key {kid}: {r.text}"
+
+        print(f"[bulk-revoke] Individually revoked {len(key_ids)} keys")
+
+    def test_revoke_keys_rejected_at_gateway(
+        self,
+        api_keys_base_url: str,
+        model_completions_url: str,
+        headers: dict,
+        inference_model_name: str,
+    ):
+        """After individually revoking keys, they should be rejected at the gateway."""
+        designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+
+        # Create 3 keys, capturing plaintext and IDs
+        keys = []
+        for i in range(3):
+            r = requests.post(
+                api_keys_base_url,
+                headers=headers,
+                json={"name": f"test-revoke-gw-{i}", "subscription": designated},
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+            assert r.status_code in (200, 201), f"Failed to create key {i}: {r.text}"
+            keys.append({"id": r.json()["id"], "key": r.json()["key"]})
+
+        # Smoke-test: verify at least one key works before revocation
+        r_smoke = requests.post(
+            model_completions_url,
+            headers={"Authorization": f"Bearer {keys[0]['key']}", "Content-Type": "application/json"},
+            json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
+            timeout=60,
+            verify=TLS_VERIFY,
+        )
+        assert r_smoke.status_code == 200, (
+            f"Key should work before revoke, got {r_smoke.status_code}: {r_smoke.text}"
+        )
+
+        # Individually revoke all 3 keys (not bulk-revoke, to avoid nuking session key)
+        for k in keys:
+            r = requests.delete(f"{api_keys_base_url}/{k['id']}", headers=headers, timeout=30, verify=TLS_VERIFY)
+            assert r.status_code == 200, f"Failed to revoke key {k['id']}: {r.text}"
+
+        # Poll until all revoked keys are rejected at the gateway
+        max_wait = 30
+        poll_interval = 0.5
+        for i, k in enumerate(keys):
+            deadline = time.monotonic() + max_wait
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                r_inf = requests.post(
+                    model_completions_url,
+                    headers={"Authorization": f"Bearer {k['key']}", "Content-Type": "application/json"},
+                    json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
+                    timeout=min(remaining, 10),
+                    verify=TLS_VERIFY,
+                )
+                if r_inf.status_code == 403:
+                    break
+                time.sleep(poll_interval)
+            assert r_inf.status_code == 403, (
+                f"Key {i} should be rejected within {max_wait}s after revoke, got {r_inf.status_code}: {r_inf.text}"
+            )
+        print("[revoke] All 3 keys correctly rejected at gateway after individual revocation")
 
 
 class TestEphemeralKeyCleanup:

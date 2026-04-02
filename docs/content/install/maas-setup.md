@@ -44,6 +44,13 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
 
     The full `scripts/deploy.sh` script also creates PostgreSQL automatically when deploying MaaS.
 
+!!! note "Using deploy.sh with an external database"
+    If you use `scripts/deploy.sh`, you can supply your own PostgreSQL connection string with the `--postgres-connection` flag. This skips the built-in POC PostgreSQL deployment and creates the `maas-db-config` Secret automatically:
+
+    ```bash
+    ./scripts/deploy.sh --postgres-connection 'postgresql://username:password@hostname:5432/database?sslmode=require'
+    ```
+
 !!! note "Restarting maas-api"
     If you add or update the Secret after the DataScienceCluster already has modelsAsService in managed state, restart the maas-api deployment to pick up the config:
 

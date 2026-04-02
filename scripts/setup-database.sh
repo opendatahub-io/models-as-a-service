@@ -25,6 +25,11 @@
 
 set -euo pipefail
 
+# Source helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=deployment-helpers.sh
+source "${SCRIPT_DIR}/deployment-helpers.sh"
+
 # Default namespace for ODH; use redhat-ods-applications for RHOAI
 : "${NAMESPACE:=opendatahub}"
 
@@ -34,6 +39,15 @@ if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
   kubectl create namespace "$NAMESPACE"
 fi
 
+echo ""
+echo "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
+echo "┃  ⚠️  WARNING FOR PRODUCTION USE. ⚠️                             ┃"
+echo "┃  This deploys PostgreSQL with ephemeral storage (emptyDir).     ┃"
+echo "┃  Data WILL be lost on pod restart.                              ┃"
+echo "┃  For production, use an external database:                      ┃"
+echo "┃    deploy.sh --postgres-connection postgresql://...             ┃"
+echo "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
+echo ""
 echo "🔧 Deploying PostgreSQL for API key storage in namespace '$NAMESPACE'..."
 
 # Check if PostgreSQL already exists
@@ -142,17 +156,20 @@ spec:
   ports:
   - port: 5432
     targetPort: 5432
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: maas-db-config
-  labels:
-    app: maas-api
-    purpose: poc
-stringData:
-  DB_CONNECTION_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
 EOF
+
+# Create the maas-db-config secret used by maas-api
+# URL-encode the password in case it contains reserved characters (@, :, /, ?, etc.)
+# 1. printf '%s' outputs the raw password bytes (no trailing newline)
+# 2. od -An -tx1 converts each byte to space-separated two-digit hex (e.g., "a" -> " 61")
+# 3. tr -d ' \n' strips spaces and newlines to produce a continuous hex string
+# 4. sed inserts a "%" before every hex pair, producing percent-encoding (e.g., "61" -> "%61")
+# This encodes all characters (including safe ones like letters), which is more aggressive
+# than strictly necessary but is always correct per RFC 3986 — %61 is equivalent to "a".
+# Uses od (POSIX) instead of xxd which may not be available in all environments.
+ENCODED_PASSWORD=$(printf '%s' "$POSTGRES_PASSWORD" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')
+DB_CONNECTION_URL="postgresql://${POSTGRES_USER}:${ENCODED_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+create_maas_db_config_secret "$NAMESPACE" "$DB_CONNECTION_URL"
 
 echo "  Waiting for PostgreSQL to be ready..."
 if ! kubectl wait -n "$NAMESPACE" --for=condition=available deployment/postgres --timeout=120s; then
