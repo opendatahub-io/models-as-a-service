@@ -1,10 +1,37 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# HTTP backend overlay for kustomize deployment mode
+# This overlay configures MaaS with HTTP backend (Authorino ↔ MaaS API communication over HTTP)
+#
+# STRUCTURE:
+# - Base resources: maas-api (without TLS), maas-controller
+# - Shared config: Inherits common patches/replacements via shared-patches component
+# - HTTP-specific: NetworkPolicy patch to fix Authorino podSelector
+#
+# SHARED CONFIGURATION (from components/shared-patches):
+# - ConfigMap with parameters (images, gateway, namespace)
+# - Environment variables for maas-api deployment
+# - Image replacements for maas-api and maas-controller
+# - Gateway configuration (namespace, name)
+# - AuthPolicy URL placeholder replacement (placehold → actual namespace)
+#
+# For details, see: deployment/components/shared-patches/README.md
+
+# IMPORTANT: This namespace must match 'app-namespace' in params.env
+# The AuthPolicy URL uses app-namespace for DNS resolution
+namespace: opendatahub
+
 resources:
-  - ../../base/maas-api
+  - ../../base/maas-api  # Without TLS (no DestinationRule)
   - ../../base/maas-controller/default
 
+# Include shared-patches component for common configuration
+# This provides: ConfigMap, env vars, image replacements, gateway config, URL placeholder fix
+components:
+  - ../../components/shared-patches
+
+# HTTP-SPECIFIC PATCHES
 # Fix NetworkPolicy ingress podSelector - the labels transformer in maas-api default
 # adds MaaS labels to the Authorino podSelector. Authorino pods only have
 # authorino-resource: authorino, so we restore the correct selector.

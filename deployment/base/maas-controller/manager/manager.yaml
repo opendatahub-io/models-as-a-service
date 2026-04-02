@@ -33,8 +33,8 @@ spec:
           - --maas-api-namespace=$(MAAS_API_NAMESPACE)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
           - --cluster-audience=$(CLUSTER_AUDIENCE)
-          - --metadata-cache-ttl=$(METADATA_CACHE_TTL)
-          - --authz-cache-ttl=$(AUTHZ_CACHE_TTL)
+          - --metadata-cache-ttl=60
+          - --authz-cache-ttl=60
         env:
           - name: GATEWAY_NAME
             value: "maas-default-gateway"
@@ -48,10 +48,6 @@ spec:
             value: "models-as-a-service"
           - name: CLUSTER_AUDIENCE
             value: "https://kubernetes.default.svc"
-          - name: METADATA_CACHE_TTL
-            value: "60"
-          - name: AUTHZ_CACHE_TTL
-            value: "60"
         image: maas-controller
         name: manager
         imagePullPolicy: Always

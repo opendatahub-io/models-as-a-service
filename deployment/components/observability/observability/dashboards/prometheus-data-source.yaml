@@ -1,0 +1,26 @@
+apiVersion: perses.dev/v1alpha1
+kind: PersesDatasource
+metadata:
+  name: prometheus
+  namespace: opendatahub
+spec:
+  client:
+    tls:
+      caCert:
+        certPath: service-ca.crt
+        name: prometheus-web-tls-ca
+        type: configmap
+      enable: true
+  config:
+    default: false
+    display:
+      name: Prometheus (Thanos Querier)
+    plugin:
+      kind: PrometheusDatasource
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            secret: cluster-prometheus-datasource-secret
+            url: 'https://thanos-querier.openshift-monitoring.svc:9092?namespace=kuadrant-system'
+        scrapeInterval: 30s
