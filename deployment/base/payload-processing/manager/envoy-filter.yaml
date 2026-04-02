@@ -29,10 +29,10 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
-              request_body_mode: "NONE"
-              response_body_mode: "NONE"
-              request_trailer_mode: "SKIP"
-              response_trailer_mode: "SKIP"
+              request_body_mode: "FULL_DUPLEX_STREAMED"
+              response_body_mode: "FULL_DUPLEX_STREAMED"
+              request_trailer_mode: "SEND"
+              response_trailer_mode: "SEND"
             grpc_service:
               timeout: 10s
               envoy_grpc:

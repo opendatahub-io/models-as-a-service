@@ -19,7 +19,7 @@ spec:
       containers:
         - name: bbr
           image: payload-processing
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
