@@ -46,3 +46,30 @@ Both promotion workflows support `workflow_dispatch`, so they can be triggered o
 3. Click **Run workflow**
 
 This is useful when a fix needs to be fast-tracked without waiting for the next scheduled run.
+
+## Release Branch Status
+
+### Upstream Pipeline
+
+These show how many commits are pending promotion between upstream branches:
+
+| Promotion | Commits Difference | Last Commit |
+| --- | :---: | --- |
+| `main` → `stable` | ![main to stable](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=stable&head=main&label=%20) | ![GitHub last commit (stable)](https://img.shields.io/github/last-commit/opendatahub-io/models-as-a-service/stable?label=stable) |
+| `stable` → `rhoai` | ![stable to rhoai](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=rhoai&head=stable&label=%20) | ![GitHub last commit (rhaoi)](https://img.shields.io/github/last-commit/opendatahub-io/models-as-a-service/rhoai?label=rhoai) |
+
+### Downstream Release Branches
+
+Each row shows how far behind a `downstream` [red-hat-data-services](https://github.com/red-hat-data-services/models-as-a-service) release branch is from the `upstream` [opendatahub-io](https://github.com/opendatahub-io/models-as-a-service) source branches:
+
+| `downstream` branch <br>Last Commit | vs `upstream/main`<br>Commit Difference | vs `upstream/stable`<br>Commit Difference | vs `upstream/rhoai`<br>Commit Difference |
+| --- | :---: | :---: | :---: |
+| ![main](https://img.shields.io/github/last-commit/red-hat-data-services/models-as-a-service/main?label=main) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:main&head=main&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:main&head=stable&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:main&head=rhoai&label=%20) |
+| ![rhoai-3.4](https://img.shields.io/github/last-commit/red-hat-data-services/models-as-a-service/rhoai-3.4?label=rhoai-3.4) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.4&head=main&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.4&head=stable&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.4&head=rhoai&label=%20) |
+| ![rhoai-3.4-ea.2](https://img.shields.io/github/last-commit/red-hat-data-services/models-as-a-service/rhoai-3.4-ea.2?label=rhoai-3.4-ea.2) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.4-ea.2&head=main&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.4-ea.2&head=stable&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.4-ea.2&head=rhoai&label=%20) |
+| ![rhoai-3.4-ea.1](https://img.shields.io/github/last-commit/red-hat-data-services/models-as-a-service/rhoai-3.4-ea.1?label=rhoai-3.4-ea.1) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.4-ea.1&head=main&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.4-ea.1&head=stable&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.4-ea.1&head=rhoai&label=%20) |
+| ![rhoai-3.3](https://img.shields.io/github/last-commit/red-hat-data-services/models-as-a-service/rhoai-3.3?label=rhoai-3.3) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.3&head=main&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.3&head=stable&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.3&head=rhoai&label=%20) |
+| ![rhoai-3.2](https://img.shields.io/github/last-commit/red-hat-data-services/models-as-a-service/rhoai-3.2?label=rhoai-3.2) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.2&head=main&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.2&head=stable&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.2&head=rhoai&label=%20) |
+| ![rhoai-3.0](https://img.shields.io/github/last-commit/red-hat-data-services/models-as-a-service/rhoai-3.0?label=rhoai-3.0) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.0&head=main&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.0&head=stable&label=%20) | ![badge](https://img.shields.io/github/commits-difference/opendatahub-io/models-as-a-service?base=red-hat-data-services:rhoai-3.0&head=rhoai&label=%20) |
+
+> **Note:** When new downstream release branches are created (e.g. `rhoai-3.5`), add a corresponding row to the table above.
