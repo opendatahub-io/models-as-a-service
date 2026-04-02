@@ -9,7 +9,7 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
-      == "main"
+      == "stable"
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
@@ -26,20 +26,20 @@ spec:
   - name: output-image
     value: quay.io/opendatahub/maas-controller:odh-pr
   - name: dockerfile
-    value: Dockerfile
+    value: maas-controller/Dockerfile
   - name: path-context
-    value: maas-controller
-  - name: additional-tags
-    value:
-    - 'odh-pr-{{revision}}'
-  - name: pipeline-type
-    value: pull-request
+    value: .
   - name: build-platforms
     value:
     - linux/x86_64
     - linux/arm64
     - linux/ppc64le
     - linux/s390x
+  - name: additional-tags
+    value:
+    - 'odh-pr-{{revision}}'
+  - name: pipeline-type
+    value: pull-request
   pipelineRef:
     resolver: git
     params:
@@ -50,7 +50,7 @@ spec:
     - name: pathInRepo
       value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
-    serviceAccountName: build-pipeline-odh-maas-controller-ci
+    serviceAccountName: build-pipeline-maas-controller-poc
   workspaces:
   - name: git-auth
     secret:
