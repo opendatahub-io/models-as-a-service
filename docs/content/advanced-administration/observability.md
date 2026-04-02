@@ -216,6 +216,9 @@ curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
 
 ### Option 2: Kustomize-Based Installation
 
+!!! tip "Development/Testing Path"
+    For development and testing with Kustomize manifests (without operator deployment), see the [Kustomize Observability README](../../../deployment/components/observability/README.md).
+
 The observability stack is defined in `deployment/base/observability/`. It includes:
 
 | Resource | Purpose |
