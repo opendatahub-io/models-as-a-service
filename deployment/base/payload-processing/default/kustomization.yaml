@@ -4,3 +4,10 @@ kind: Kustomization
 resources:
   - ../manager
   - ../rbac
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/part-of: models-as-a-service
+      app.kubernetes.io/component: payload-processing
+      app.kubernetes.io/name: payload-processing

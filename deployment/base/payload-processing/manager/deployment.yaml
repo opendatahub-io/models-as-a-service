@@ -18,8 +18,8 @@ spec:
         runAsNonRoot: true
       containers:
         - name: bbr
-          image: quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable
-          imagePullPolicy: IfNotPresent
+          image: payload-processing
+          imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -41,4 +41,25 @@ spec:
             - --tracing=false
           ports:
             - containerPort: 9004
+              name: grpc
+              protocol: TCP
             - containerPort: 9005
+              name: metrics
+              protocol: TCP
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 5
+            periodSeconds: 10

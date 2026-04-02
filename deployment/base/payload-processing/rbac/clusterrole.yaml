@@ -7,11 +7,11 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch"]
-  # apikey-injection plugin: watches labeled Secrets for API key injection
+  # apikey-injection plugin: reads Secrets for API key injection
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
-  # model-provider-resolver plugin: watches ExternalModel CRDs
+    verbs: ["get"]
+  # model-provider-resolver plugin: watches ExternalModel CRDs across namespaces
   - apiGroups: ["maas.opendatahub.io"]
     resources: ["externalmodels"]
     verbs: ["get", "list", "watch"]
