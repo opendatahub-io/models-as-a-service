@@ -1301,9 +1301,9 @@ func TestMaaSAuthPolicyReconciler_SubscriptionCacheKey(t *testing.T) {
 		reason string
 	}{
 		{
-			name:   "includes username",
-			substr: "auth.metadata.apiKeyValidation.username",
-			reason: "cache key must include username to distinguish different users",
+			name:   "includes userId",
+			substr: "auth.metadata.apiKeyValidation.userId",
+			reason: "cache key must include userId to distinguish different users",
 		},
 		{
 			name:   "includes groups",
