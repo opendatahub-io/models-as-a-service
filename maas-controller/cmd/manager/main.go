@@ -77,6 +77,12 @@ func ensureSubscriptionNamespaceExists(ctx context.Context, namespace string) er
 		setupLog.Info("subscription namespace already exists", "namespace", namespace)
 		return nil
 	}
+	if errors.IsForbidden(err) {
+		setupLog.Info("insufficient permissions to check namespace existence, assuming it exists — "+
+			"verify that the ClusterRoleBinding references the correct namespace for the controller ServiceAccount",
+			"namespace", namespace, "error", err)
+		return nil
+	}
 	if !errors.IsNotFound(err) {
 		return fmt.Errorf("unable to check if namespace %q exists: %w", namespace, err)
 	}
