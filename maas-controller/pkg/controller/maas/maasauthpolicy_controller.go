@@ -873,6 +873,9 @@ func prerequisiteRequeueDelay(policy *maasv1alpha1.MaaSAuthPolicy) time.Duration
 	}
 
 	elapsed := time.Since(readyCond.LastTransitionTime.Time)
+	if readyCond.LastTransitionTime.IsZero() || elapsed < 0 {
+		return minDelay
+	}
 	// Use elapsed time to determine delay: the longer it's been failing,
 	// the less frequently we retry.
 	delay := elapsed / 2
