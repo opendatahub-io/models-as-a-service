@@ -72,6 +72,13 @@ func (r *Reconciler) gatewayNamespace() string {
 	return defaultGatewayNamespace
 }
 
+//+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=externalmodels,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
+//+kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=get;list;watch;create;update
+//+kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;update;delete
+
 // Reconcile handles create/update/delete of MaaSModelRef CRs with kind=ExternalModel.
 // The ExternalModel kind filter is handled by the predicate in SetupWithManager.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
