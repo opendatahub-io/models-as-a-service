@@ -24,6 +24,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -177,7 +178,12 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	statusSnapshot := policy.Status.DeepCopy()
 
 	if ok, err := r.checkMaaSDBConfigSecret(ctx, log, policy, statusSnapshot); !ok {
-		return ctrl.Result{}, err
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		delay := prerequisiteRequeueDelay(policy)
+		log.Info("requeuing after prerequisite check failure", "delay", delay)
+		return ctrl.Result{RequeueAfter: delay}, nil
 	}
 
 	refs, err := r.reconcileModelAuthPolicies(ctx, log, policy)
@@ -851,6 +857,32 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 		log := logr.FromContextOrDiscard(ctx)
 		log.Error(err, "failed to update MaaSAuthPolicy status", "name", policy.Name)
 	}
+}
+
+// prerequisiteRequeueDelay returns a requeue delay that increases over time.
+// Starts at 5s and doubles on each check, capping at 5 minutes.
+func prerequisiteRequeueDelay(policy *maasv1alpha1.MaaSAuthPolicy) time.Duration {
+	const (
+		minDelay = 5 * time.Second
+		maxDelay = 5 * time.Minute
+	)
+
+	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
+	if readyCond == nil {
+		return minDelay
+	}
+
+	elapsed := time.Since(readyCond.LastTransitionTime.Time)
+	// Use elapsed time to determine delay: the longer it's been failing,
+	// the less frequently we retry.
+	delay := elapsed / 2
+	if delay < minDelay {
+		return minDelay
+	}
+	if delay > maxDelay {
+		return maxDelay
+	}
+	return delay
 }
 
 // checkMaaSDBConfigSecret verifies that the maas-db-config secret exists in the MaaS API namespace.
