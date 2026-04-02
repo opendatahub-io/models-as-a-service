@@ -1,0 +1,160 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# =============================================================================
+# SHARED PATCHES COMPONENT
+# =============================================================================
+# Provides common configuration for all MaaS deployment overlays (tls-backend,
+# http-backend, odh). Centralizes patches and replacements to eliminate duplication
+# and maintain DRY principle.
+#
+# USED BY:
+# - deployment/overlays/tls-backend/
+# - deployment/overlays/http-backend/
+# - deployment/overlays/odh/
+#
+# PROVIDES:
+# - ConfigMap with deployment parameters (from params.env)
+# - Environment variables for maas-api deployment
+# - Image replacements for maas-api and maas-controller
+# - Gateway configuration replacements
+# - AuthPolicy URL placeholder replacement (placehold → actual namespace)
+#
+# For complete documentation, see README.md in this directory.
+# =============================================================================
+
+resources:
+  - ../../overlays/common  # ConfigMap generator for parameters (params.env)
+
+# =============================================================================
+# PATCHES - Environment Variables
+# =============================================================================
+# Inject ConfigMap-based environment variables into the maas-api deployment.
+# These variables are used by maas-api to discover gateway configuration.
+# =============================================================================
+
+patches:
+- patch: |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: maas-api
+    spec:
+      template:
+        spec:
+          containers:
+          - name: maas-api
+            env:
+            - name: GATEWAY_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  key: gateway-namespace
+                  name: maas-parameters
+            - name: GATEWAY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  key: gateway-name
+                  name: maas-parameters
+            - name: API_KEY_MAX_EXPIRATION_DAYS
+              valueFrom:
+                configMapKeyRef:
+                  key: api-key-max-expiration-days
+                  name: maas-parameters
+                  optional: true
+  target:
+    kind: Deployment
+    name: maas-api
+
+# =============================================================================
+# REPLACEMENTS - Common Transformations
+# =============================================================================
+# These replacements apply to all overlays and handle:
+# 1. Container images (allows custom images for PR testing)
+# 2. Gateway configuration (namespace and name)
+# 3. AuthPolicy URL placeholder fix (critical for API key validation)
+#
+# All values come from the maas-parameters ConfigMap (generated from params.env)
+# =============================================================================
+
+replacements:
+# -----------------------------------------------------------------------------
+# 1. CONTAINER IMAGES
+# -----------------------------------------------------------------------------
+# Replace maas-api image from params.env (supports custom PR images)
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.maas-api-image
+  targets:
+  - select:
+      kind: Deployment
+      name: maas-api
+    fieldPaths:
+    - spec.template.spec.containers.[name=maas-api].image
+
+# Replace maas-controller image from params.env (supports custom PR images)
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.maas-controller-image
+  targets:
+  - select:
+      kind: Deployment
+      name: maas-controller
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].image
+
+# -----------------------------------------------------------------------------
+# 2. GATEWAY CONFIGURATION
+# -----------------------------------------------------------------------------
+# Replace gateway namespace in HTTPRoute (typically openshift-ingress)
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-namespace
+  targets:
+  - select:
+      kind: HTTPRoute
+      name: maas-api-route
+    fieldPaths:
+    - spec.parentRefs.0.namespace
+
+# Replace gateway name in HTTPRoute (typically maas-default-gateway)
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-name
+  targets:
+  - select:
+      kind: HTTPRoute
+      name: maas-api-route
+    fieldPaths:
+    - spec.parentRefs.0.name
+
+# -----------------------------------------------------------------------------
+# 3. AUTHPOLICY URL PLACEHOLDER FIX
+# -----------------------------------------------------------------------------
+# CRITICAL: Replaces placeholder namespace in AuthPolicy validation URL
+# From: https://maas-api.placehold.svc.cluster.local:8443/internal/v1/api-keys/validate
+# To:   https://maas-api.<app-namespace>.svc.cluster.local:8443/internal/v1/api-keys/validate
+#
+# Without this replacement, API key validation fails with DNS resolution errors.
+# -----------------------------------------------------------------------------
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.app-namespace
+  targets:
+  - select:
+      kind: AuthPolicy
+      name: maas-api-auth-policy
+    fieldPaths:
+    - spec.rules.metadata.apiKeyValidation.http.url
+    options:
+      delimiter: "."
+      index: 1

@@ -1,0 +1,98 @@
+# Update Docs Latest Alias
+#
+# Updates the docs "latest" alias to point to an existing release tag.
+# The tag must already exist in the repository.
+#
+# Usage:
+#   1. Go to Actions > Update Docs Latest > Run workflow
+#   2. Enter the existing tag to promote to "latest" (e.g., v1.2.0)
+
+name: Update Docs Latest
+run-name: Update Docs Latest → ${{ inputs.tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to set as "latest" (e.g., v1.2.0)'
+        required: true
+        type: string
+
+env:
+  GH_USER_NAME: github-actions[bot]
+  GH_USER_EMAIL: github-actions[bot]@users.noreply.github.com
+
+jobs:
+  update-latest:
+    name: Update Latest Alias
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate tag exists
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! git rev-parse -- "$TAG" >/dev/null 2>&1; then
+            echo "❌ Error: Tag '$TAG' does not exist."
+            echo "This workflow requires an existing tag. Create a release first."
+            exit 1
+          fi
+          echo "✅ Tag '$TAG' found at $(git rev-parse -- "$TAG")"
+
+      - name: Checkout tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: git checkout --detach -- "$TAG"
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('docs/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r docs/requirements.txt
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "${{ env.GH_USER_NAME }}"
+          git config --global user.email "${{ env.GH_USER_EMAIL }}"
+
+      - name: Update latest alias
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          cd docs
+          mike deploy --push --update-aliases "$TAG" latest
+          mike set-default --push latest
+
+      - name: Summary
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          {
+            echo "## Docs Latest Updated"
+            echo ""
+            echo "✅ **\`latest\`** alias now points to **\`$TAG\`**"
+            echo ""
+            echo "- Docs URL: https://opendatahub-io.github.io/models-as-a-service/"
+          } >> "$GITHUB_STEP_SUMMARY"

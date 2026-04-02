@@ -178,4 +178,4 @@ When a new release tag is created using the `create-release.yml` workflow, the f
    - For production deployments, use a release tag: `export MAAS_REF="v1.0.0"`
    - For development/testing, use: `export MAAS_REF="main"`
 
-This ensures that documentation and deployment scripts always reference stable release tags rather than the moving `main` branch.
+This ensures that documentation and deployment scripts always reference stable release tags rather than the moving `main` branch. 

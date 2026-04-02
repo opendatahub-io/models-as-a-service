@@ -20,8 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -194,13 +194,13 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		return fmt.Errorf("failed to fetch HTTPRoute %s/%s: %w", httpRouteNS, httpRouteName, err)
 	}
 
-	limitsMap := map[string]interface{}{}
+	limitsMap := map[string]any{}
 	var subNames []string
 
 	type subInfo struct {
 		sub   maasv1alpha1.MaaSSubscription
 		mRef  maasv1alpha1.ModelSubscriptionRef
-		rates []interface{}
+		rates []any
 	}
 	var subs []subInfo
 	for _, sub := range allSubs {
@@ -208,13 +208,13 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 			if mRef.Namespace != modelNamespace || mRef.Name != modelName {
 				continue
 			}
-			var rates []interface{}
+			var rates []any
 			if len(mRef.TokenRateLimits) > 0 {
 				for _, trl := range mRef.TokenRateLimits {
-					rates = append(rates, map[string]interface{}{"limit": trl.Limit, "window": trl.Window})
+					rates = append(rates, map[string]any{"limit": trl.Limit, "window": trl.Window})
 				}
 			} else {
-				rates = append(rates, map[string]interface{}{"limit": int64(100), "window": "1m"})
+				rates = append(rates, map[string]any{"limit": int64(100), "window": "1m"})
 			}
 			subs = append(subs, subInfo{sub: sub, mRef: mRef, rates: rates})
 			break
@@ -241,15 +241,15 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 
 		// TRLP limit key must be safe for YAML (no slashes)
 		safeKey := strings.ReplaceAll(subRef, "/", "-")
-		limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, si.mRef.Name)] = map[string]interface{}{
+		limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, si.mRef.Name)] = map[string]any{
 			"rates": si.rates,
-			"when": []interface{}{
-				map[string]interface{}{
+			"when": []any{
+				map[string]any{
 					"predicate": fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, modelScopedRef),
 				},
 			},
-			"counters": []interface{}{
-				map[string]interface{}{"expression": "auth.identity.userid"},
+			"counters": []any{
+				map[string]any{"expression": "auth.identity.userid"},
 			},
 		}
 	}
@@ -279,8 +279,8 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		return fmt.Errorf("failed to set owner reference on TokenRateLimitPolicy %s/%s: %w", policy.GetNamespace(), policy.GetName(), err)
 	}
 
-	spec := map[string]interface{}{
-		"targetRef": map[string]interface{}{
+	spec := map[string]any{
+		"targetRef": map[string]any{
 			"group": "gateway.networking.k8s.io",
 			"kind":  "HTTPRoute",
 			"name":  httpRouteName,
@@ -609,7 +609,10 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		&maasv1alpha1.MaaSSubscription{},
 		modelRefIndexKey,
 		func(obj client.Object) []string {
-			sub := obj.(*maasv1alpha1.MaaSSubscription)
+			sub, ok := obj.(*maasv1alpha1.MaaSSubscription)
+			if !ok {
+				return nil
+			}
 			var refs []string
 			for _, modelRef := range sub.Spec.ModelRefs {
 				// Index value format: "namespace/name"

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSanitize(t *testing.T) {
@@ -68,11 +69,16 @@ func TestBuildServiceEntry(t *testing.T) {
 	assert.Equal(t, ModelServiceEntryName("my-gpt4"), se.GetName())
 	assert.Equal(t, "llm", se.GetNamespace())
 
-	hosts := se.Object["spec"].(map[string]interface{})["hosts"].([]interface{})
+	seSpec, ok := se.Object["spec"].(map[string]any)
+	require.True(t, ok, "spec must be map[string]any")
+	hosts, ok := seSpec["hosts"].([]any)
+	require.True(t, ok, "hosts must be []any")
 	assert.Equal(t, "api.openai.com", hosts[0])
 
-	ports := se.Object["spec"].(map[string]interface{})["ports"].([]interface{})
-	port := ports[0].(map[string]interface{})
+	ports, ok := seSpec["ports"].([]any)
+	require.True(t, ok, "ports must be []any")
+	port, ok := ports[0].(map[string]any)
+	require.True(t, ok, "port must be map[string]any")
 	assert.Equal(t, "https", port["name"])
 	assert.Equal(t, "HTTPS", port["protocol"])
 }
@@ -87,9 +93,12 @@ func TestBuildServiceEntryNoTLS(t *testing.T) {
 	labels := commonLabels("test-model")
 
 	se := BuildServiceEntry(spec, "test-model", "llm", labels)
-	seSpec := se.Object["spec"].(map[string]interface{})
-	ports := seSpec["ports"].([]interface{})
-	port := ports[0].(map[string]interface{})
+	seSpec, ok := se.Object["spec"].(map[string]any)
+	require.True(t, ok, "spec must be map[string]any")
+	ports, ok := seSpec["ports"].([]any)
+	require.True(t, ok, "ports must be []any")
+	port, ok := ports[0].(map[string]any)
+	require.True(t, ok, "port must be map[string]any")
 	assert.Equal(t, "HTTP", port["protocol"])
 	assert.Equal(t, "http", port["name"])
 }
@@ -110,11 +119,15 @@ func TestBuildDestinationRule(t *testing.T) {
 	assert.Equal(t, ModelDestinationRuleName("my-gpt4"), dr.GetName())
 	assert.Equal(t, "llm", dr.GetNamespace())
 
-	drSpec := dr.Object["spec"].(map[string]interface{})
+	drSpec, ok := dr.Object["spec"].(map[string]any)
+	require.True(t, ok, "spec must be map[string]any")
 	assert.Equal(t, "api.openai.com", drSpec["host"])
 
 	// Default: no insecureSkipVerify key
-	tlsCfg := drSpec["trafficPolicy"].(map[string]interface{})["tls"].(map[string]interface{})
+	tp, ok := drSpec["trafficPolicy"].(map[string]any)
+	require.True(t, ok, "trafficPolicy must be map[string]any")
+	tlsCfg, ok := tp["tls"].(map[string]any)
+	require.True(t, ok, "tls must be map[string]any")
 	assert.Equal(t, "SIMPLE", tlsCfg["mode"])
 	_, hasInsecure := tlsCfg["insecureSkipVerify"]
 	assert.False(t, hasInsecure, "insecureSkipVerify should not be set by default")
@@ -132,10 +145,14 @@ func TestBuildDestinationRuleInsecureSkipVerify(t *testing.T) {
 
 	dr := BuildDestinationRule(spec, "simulator-model", "llm", labels)
 
-	drSpec := dr.Object["spec"].(map[string]interface{})
+	drSpec, ok := dr.Object["spec"].(map[string]any)
+	require.True(t, ok, "spec must be map[string]any")
 	assert.Equal(t, "3.150.113.9", drSpec["host"])
 
-	tlsCfg := drSpec["trafficPolicy"].(map[string]interface{})["tls"].(map[string]interface{})
+	tp, ok := drSpec["trafficPolicy"].(map[string]any)
+	require.True(t, ok, "trafficPolicy must be map[string]any")
+	tlsCfg, ok := tp["tls"].(map[string]any)
+	require.True(t, ok, "tls must be map[string]any")
 	assert.Equal(t, "SIMPLE", tlsCfg["mode"])
 	assert.Equal(t, true, tlsCfg["insecureSkipVerify"], "insecureSkipVerify must be true when opted in")
 }

@@ -1,21 +1,21 @@
-name: MaaS API
+name: MaaS Controller
 
 on:
   pull_request:
     paths:
-      - 'maas-api/**'
+      - 'maas-controller/**'
 
 permissions:
   actions: read
   contents: read
 
 env:
-  PROJECT_DIR: maas-api
+  PROJECT_DIR: maas-controller
 
 defaults:
-  
+
   run:
-    working-directory: maas-api
+    working-directory: maas-controller
 
 jobs:
   lint:
@@ -31,15 +31,16 @@ jobs:
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version-file: maas-api/go.mod
+          go-version-file: maas-controller/go.mod
           cache: true
-          cache-dependency-path: maas-api/go.sum
-      
+          cache-dependency-path: maas-controller/go.sum
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9
         with:
           version: ${{ steps.golangci-version.outputs.version }}
           working-directory: ${{ env.PROJECT_DIR }}
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -58,7 +59,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: coverage-reports
+          name: maas-controller-coverage
           path: |
             ${{ env.PROJECT_DIR }}/coverage.out
             ${{ env.PROJECT_DIR }}/coverage.html

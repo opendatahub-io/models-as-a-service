@@ -218,13 +218,13 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&maas.MaaSAuthPolicyReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		MaaSAPINamespace:  maasAPINamespace,
-		GatewayName:       gatewayName,
-		ClusterAudience:   clusterAudience,
-		MetadataCacheTTL:  metadataCacheTTL,
-		AuthzCacheTTL:     authzCacheTTL,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		MaaSAPINamespace: maasAPINamespace,
+		GatewayName:      gatewayName,
+		ClusterAudience:  clusterAudience,
+		MetadataCacheTTL: metadataCacheTTL,
+		AuthzCacheTTL:    authzCacheTTL,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
 		os.Exit(1)

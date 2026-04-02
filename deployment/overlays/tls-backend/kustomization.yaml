@@ -1,6 +1,64 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# TLS backend overlay for kustomize deployment mode
+# This overlay configures MaaS with TLS-enabled backend (Authorino ↔ MaaS API communication over TLS)
+#
+# STRUCTURE:
+# - Base resources: maas-api with TLS (includes DestinationRule), maas-controller
+# - Shared config: Inherits common patches/replacements via shared-patches component
+# - TLS-specific: Additional replacements for DestinationRule configuration
+#
+# SHARED CONFIGURATION (from components/shared-patches):
+# - ConfigMap with parameters (images, gateway, namespace)
+# - Environment variables for maas-api deployment
+# - Image replacements for maas-api and maas-controller
+# - Gateway configuration (namespace, name)
+# - AuthPolicy URL placeholder replacement (placehold → actual namespace)
+#
+# For details, see: deployment/components/shared-patches/README.md
+
+# IMPORTANT: This namespace must match 'app-namespace' in params.env
+# The AuthPolicy URL uses app-namespace for DNS resolution
+namespace: opendatahub
+
 resources:
-  - ../../base/maas-api/overlays/tls
+  - ../../base/maas-api/overlays/tls  # Includes DestinationRule for TLS
   - ../../base/maas-controller/default
+
+# Include shared-patches component for common configuration
+# This provides: ConfigMap, env vars, image replacements, gateway config, URL placeholder fix
+components:
+  - ../../components/shared-patches
+
+# TLS-SPECIFIC REPLACEMENTS
+# These are in addition to shared-patches and handle TLS-specific resources (DestinationRule)
+replacements:
+# Replace gateway namespace in DestinationRule
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-namespace
+  targets:
+  - select:
+      kind: DestinationRule
+      name: maas-api-backend-tls
+    fieldPaths:
+    - metadata.namespace
+
+# Replace app-namespace in DestinationRule host
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.app-namespace
+  targets:
+  - select:
+      kind: DestinationRule
+      name: maas-api-backend-tls
+    fieldPaths:
+    - spec.host
+    options:
+      delimiter: "."
+      index: 1

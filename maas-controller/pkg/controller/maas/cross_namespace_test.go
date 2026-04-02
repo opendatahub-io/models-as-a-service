@@ -360,7 +360,10 @@ func TestMaaSSubscriptionReconciler_CrossNamespace(t *testing.T) {
 		WithObjects(modelA, routeA, modelB, routeB, maasSub).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", func(obj client.Object) []string {
-			sub := obj.(*maasv1alpha1.MaaSSubscription)
+			sub, ok := obj.(*maasv1alpha1.MaaSSubscription)
+			if !ok {
+				return nil
+			}
 			var refs []string
 			for _, modelRef := range sub.Spec.ModelRefs {
 				refs = append(refs, modelRef.Namespace+"/"+modelRef.Name)

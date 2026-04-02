@@ -39,7 +39,10 @@ import (
 // subscriptionModelRefIndexer is the field indexer function for MaaSSubscription.
 // Extracted as a helper to be reused across tests with fake clients.
 func subscriptionModelRefIndexer(obj client.Object) []string {
-	sub := obj.(*maasv1alpha1.MaaSSubscription)
+	sub, ok := obj.(*maasv1alpha1.MaaSSubscription)
+	if !ok {
+		return nil
+	}
 	var refs []string
 	for _, modelRef := range sub.Spec.ModelRefs {
 		refs = append(refs, modelRef.Namespace+"/"+modelRef.Name)

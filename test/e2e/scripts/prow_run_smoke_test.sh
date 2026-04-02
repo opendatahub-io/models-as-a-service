@@ -48,6 +48,16 @@
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
+#
+# TIMEOUT CONFIGURATION (all in seconds, sourced from deployment-helpers.sh):
+#   Customize for CI/CD environments or slow clusters:
+#   CUSTOM_RESOURCE_TIMEOUT=600   DataScienceCluster wait
+#   LLMIS_TIMEOUT=300            LLMInferenceService ready
+#   MAASMODELREF_TIMEOUT=300     MaaSModelRef ready
+#   AUTHPOLICY_TIMEOUT=180       AuthPolicy enforced
+#   AUTHORINO_TIMEOUT=120        Authorino ready
+#   ROLLOUT_TIMEOUT=120          Deployment rollout
+#   See deployment-helpers.sh for complete list
 # =============================================================================
 
 set -euo pipefail
@@ -204,8 +214,8 @@ deploy_maas_platform() {
     fi
 
     # Wait for DataScienceCluster (install-odh already waited; deploy may have updated)
-    if ! wait_datasciencecluster_ready "default-dsc" 300; then
-        echo "⚠️  WARNING: DataScienceCluster readiness check had issues, continuing anyway"
+    if ! wait_datasciencecluster_ready "default-dsc" "$CUSTOM_RESOURCE_TIMEOUT"; then
+        echo "⚠️  WARNING: DataScienceCluster readiness check had issues (timeout: ${CUSTOM_RESOURCE_TIMEOUT}s), continuing anyway"
     fi
 
     # Wait for Authorino to be ready and auth service cluster to be healthy
@@ -217,10 +227,10 @@ deploy_maas_platform() {
         echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"
         echo "   This is a temporary workaround for the gateway→Authorino TLS chicken-egg problem"
     else
-        # Using 300s timeout to fit within Prow's 15m job limit
+        # Using configurable timeout (default suitable for Prow's 15m job limit)
         echo "Waiting for Authorino and auth service to be ready (namespace: ${AUTHORINO_NAMESPACE})..."
-        if ! wait_authorino_ready "$AUTHORINO_NAMESPACE" 300; then
-            echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+        if ! wait_authorino_ready "$AUTHORINO_NAMESPACE" "$AUTHORINO_TIMEOUT"; then
+            echo "⚠️  WARNING: Authorino readiness check had issues (timeout: ${AUTHORINO_TIMEOUT}s), continuing anyway"
         fi
     fi
 
@@ -262,15 +272,15 @@ deploy_models() {
     fi
     echo "✅ MaaS system deployed (free + premium + e2e test fixtures)"
 
-    echo "Waiting for models to be ready..."
-    if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for free simulator to be ready"
+    echo "Waiting for models to be ready (timeout: ${LLMIS_TIMEOUT}s)..."
+    if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
+        echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for free simulator to be ready"
         oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
     fi
-    if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for premium simulator to be ready"
+    if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
+        echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for premium simulator to be ready"
         oc get llminferenceservice/premium-simulated-simulated-premium -n llm -o yaml || true
         oc get events -n llm --sort-by='.lastTimestamp' || true
         exit 1
@@ -280,9 +290,8 @@ deploy_models() {
     # Wait for MaaSModelRefs to transition to Ready phase.
     # The controller now properly handles the race condition where MaaSModelRef is created
     # before KServe creates the HTTPRoute (sets Pending, then Ready when HTTPRoute watch triggers).
-    echo "Waiting for MaaSModelRefs to be Ready..."
-    local timeout=300  # 5 minutes - sufficient for KServe to create HTTPRoutes
-    local deadline=$((SECONDS + timeout))
+    echo "Waiting for MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s)..."
+    local deadline=$((SECONDS + MAASMODELREF_TIMEOUT))
     local all_ready=false
     local found_any=false
 
@@ -306,7 +315,7 @@ deploy_models() {
     done
 
     if ! $found_any || ! $all_ready; then
-        echo "❌ ERROR: MaaSModelRefs did not reach Ready state within ${timeout}s"
+        echo "❌ ERROR: MaaSModelRefs did not reach Ready state within ${MAASMODELREF_TIMEOUT}s"
         echo "Dumping MaaSModelRef status:"
         oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o yaml || true
         echo "Dumping controller logs:"
@@ -318,7 +327,7 @@ deploy_models() {
 }
 
 wait_for_auth_policies_enforced() {
-    local timeout=180
+    local timeout="$AUTHPOLICY_TIMEOUT"
     echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
 
     local namespaces
@@ -741,14 +750,18 @@ RBAC_EOF
 # Main execution
 # On exit (success or failure): collect artifacts (authorino-debug.log, cluster state, pod logs) and auth report
 _run_exit_artifacts() {
+    local exit_code=$?
+    # Disable exit-on-error in trap to ensure we collect all artifacts even if some fail
+    set +e
     DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" ARTIFACTS_DIR="$ARTIFACTS_DIR" \
         collect_e2e_artifacts
     echo ""
     echo "========== Auth Debug Report =========="
     mkdir -p "$ARTIFACTS_DIR"
     DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" \
-        run_auth_debug_report 2>&1 | tee "$ARTIFACTS_DIR/auth-debug.log" || true
+        run_auth_debug_report 2>&1 | tee "$ARTIFACTS_DIR/auth-debug.log"
     echo "======================================"
+    exit $exit_code
 }
 trap '_run_exit_artifacts' EXIT
 

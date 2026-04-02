@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Bash strict mode (without -e to continue validation even if some checks fail)
+# -u: treat unset variables as an error
+# -o pipefail: return value of a pipeline is the value of the last command to exit with a non-zero status
+set -uo pipefail
+
 # Source helper functions for JWT decoding
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/deployment-helpers.sh"
@@ -10,7 +15,8 @@ source "$SCRIPT_DIR/deployment-helpers.sh"
 # Usage: ./validate-deployment.sh [MODEL_NAME]
 #   MODEL_NAME: Optional. If provided, the script will validate using this specific model
 
-# Note: We don't use 'set -e' because we want to continue validation even if some checks fail
+# Note: We use 'set -uo pipefail' but NOT 'set -e' because we want to continue
+# validation even if some checks fail, while still catching undefined variables and pipe failures
 
 # Parse command line arguments
 REQUESTED_MODEL=""
@@ -22,7 +28,7 @@ MAX_TOKENS=50  # Default max_tokens for requests
 MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"  # Default namespace for MaaS API (use --namespace to override)
 
 # Show help if requested
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "MaaS Platform Deployment Validation Script"
     echo ""
     echo "Usage: $0 [OPTIONS] [MODEL_NAME]"
@@ -50,9 +56,13 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  -n, --namespace NS        Namespace where MaaS API is deployed"
     echo "                            Default: opendatahub (or MAAS_API_NAMESPACE env var)"
     echo ""
-    echo "Environment (for non-admin users):"
+    echo "Environment Variables:"
     echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
     echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
+    echo "  MAAS_API_NAMESPACE        Namespace where MaaS API is deployed (default: opendatahub)"
+    echo ""
+    echo "Note: This script uses connection timeouts from curl (10s connect, 30s max)"
+    echo "      For cluster-level timeouts, see deployment-helpers.sh timeout constants"
     echo ""
     echo "Examples:"
     echo "  # Basic validation"
@@ -194,13 +204,13 @@ print_success() {
 
 print_fail() {
     echo -e "${RED}❌ FAIL: $1${NC}"
-    if [ -n "$2" ]; then
+    if [ -n "${2:-}" ]; then
         echo -e "${RED}   Reason: $2${NC}"
     fi
-    if [ -n "$3" ]; then
+    if [ -n "${3:-}" ]; then
         echo -e "${YELLOW}   Suggestion: $3${NC}"
     fi
-    if [ -n "$4" ]; then
+    if [ -n "${4:-}" ]; then
         echo -e "${YELLOW}   Suggestion: $4${NC}"
     fi
     ((FAILED++))
@@ -208,10 +218,10 @@ print_fail() {
 
 print_warning() {
     echo -e "${YELLOW}⚠️  WARNING: $1${NC}"
-    if [ -n "$2" ]; then
+    if [ -n "${2:-}" ]; then
         echo -e "${YELLOW}   Note: $2${NC}"
     fi
-    if [ -n "$3" ]; then
+    if [ -n "${3:-}" ]; then
         echo -e "${YELLOW}   $3${NC}"
     fi
     ((WARNINGS++))
@@ -222,7 +232,11 @@ print_info() {
 }
 
 # Check if running on OpenShift
-if ! kubectl api-resources | grep -q "route.openshift.io"; then
+# First check if kubectl is working, then check for OpenShift-specific API resources
+api_resources=$(kubectl api-resources 2>/dev/null)
+if [ $? -ne 0 ]; then
+    print_warning "Could not query API resources (kubectl may be slow to respond)" "Continuing validation anyway..."
+elif ! echo "$api_resources" | grep -q "route.openshift.io"; then
     print_fail "Not running on OpenShift" "This validation script is designed for OpenShift clusters" "Use a different validation approach for vanilla Kubernetes"
     exit 1
 fi
@@ -632,7 +646,7 @@ else
         print_check "Rate limiting"
 
         # Log current user tier and attempt to fetch the configured rate limit from the cluster
-        if [ -n "$TIER" ]; then
+        if [ -n "${TIER:-}" ]; then
             print_info "Current user tier: $TIER"
             # Query the TokenRateLimitPolicy to show the configured limit for this tier
             TIER_LIMIT=$(kubectl get tokenratelimitpolicy -n openshift-ingress -o jsonpath="{.items[0].spec.limits.${TIER}-user-tokens.rates[0].limit}" 2>/dev/null || echo "")
@@ -678,7 +692,7 @@ else
         # Determine if the user tier has high rate limits (enterprise/premium users)
         # For high-tier users, all requests succeeding is expected and not a failure
         HIGH_TIER=false
-        if [ -n "$TIER" ]; then
+        if [ -n "${TIER:-}" ]; then
             case "$TIER" in
                 enterprise|premium)
                     HIGH_TIER=true
