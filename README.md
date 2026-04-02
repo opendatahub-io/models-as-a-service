@@ -62,11 +62,11 @@ Note: The `scripts/deploy.sh` script creates a development PostgreSQL instance a
 Use the unified deployment script for all deployment scenarios:
 
 ```bash
-# Deploy RHOAI (default)
+# Deploy ODH (default)
 ./scripts/deploy.sh
 
-# Deploy ODH
-./scripts/deploy.sh --operator-type odh
+# Deploy RHOAI
+./scripts/deploy.sh --operator-type rhoai
 
 # Deploy via Kustomize
 ./scripts/deploy.sh --deployment-mode kustomize
@@ -87,7 +87,7 @@ For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md
 | Flag | Values | Default | Description |
 |------|--------|---------|-------------|
 | `--deployment-mode` | `operator`, `kustomize` | `operator` | Deployment method |
-| `--operator-type` | `rhoai`, `odh` | `rhoai` | Which operator to install |
+| `--operator-type` | `odh`, `rhoai` | `odh` | Which operator to install |
 | `--enable-tls-backend` | flag | enabled | TLS for Authorino ↔ MaaS API |
 | `--disable-tls-backend` | flag | `false` | Disable TLS backend |
 | `--namespace` | string | auto | Target namespace |

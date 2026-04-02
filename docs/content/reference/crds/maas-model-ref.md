@@ -7,6 +7,7 @@ Identifies an AI/ML model on the cluster. Create MaaSModelRef in the **same name
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | modelRef | ModelReference | Yes | Reference to the model endpoint |
+| endpointOverride | string | No | Overrides the endpoint URL that the controller would otherwise discover from the backend (e.g. LLMInferenceService status or Gateway/HTTPRoute) |
 
 ## ModelReference
 
@@ -25,4 +26,7 @@ For `kind: ExternalModel`, the MaaSModelRef references an [ExternalModel](extern
 | endpoint | string | Endpoint URL for the model |
 | httpRouteName | string | Name of the HTTPRoute associated with this model |
 | httpRouteNamespace | string | Namespace of the HTTPRoute |
+| httpRouteGatewayName | string | Name of the Gateway that the HTTPRoute references |
+| httpRouteGatewayNamespace | string | Namespace of the Gateway that the HTTPRoute references |
+| httpRouteHostnames | []string | Hostnames configured on the HTTPRoute |
 | conditions | []Condition | Latest observations of the model's state |

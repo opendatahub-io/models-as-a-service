@@ -4,7 +4,7 @@
 
 ### Major Changes
 
-Version 3.4.0 introduces new CRDs and API resources that are not compatible with previous versions. All MaaS custom resources (`MaaSModelRef`, `MaaSAuthPolicy`, `MaaSSubscription`) are new in this release.
+Version 3.4.0 introduces new CRDs and API resources that are not compatible with previous versions. All MaaS custom resources (`MaaSModelRef`, `MaaSAuthPolicy`, `MaaSSubscription`, `ExternalModel`) are new in this release.
 
 **Migration:** See the overall migration plan for detailed upgrade instructions from previous versions.
 
