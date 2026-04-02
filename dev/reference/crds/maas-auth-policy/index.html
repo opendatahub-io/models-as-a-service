@@ -1764,6 +1764,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/authorino-caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authorino Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2204,6 +2232,39 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#meteringmetadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MeteringMetadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maasauthpolicystatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaaSAuthPolicyStatus
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authpolicyrefstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AuthPolicyRefStatus
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2320,6 +2381,39 @@
     <span class="md-ellipsis">
       
         GroupReference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#meteringmetadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MeteringMetadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maasauthpolicystatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaaSAuthPolicyStatus
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#authpolicyrefstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AuthPolicyRefStatus
       
     </span>
   </a>
@@ -2449,6 +2543,107 @@
 </tr>
 </tbody>
 </table>
+<h2 id="meteringmetadata">MeteringMetadata</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>organizationId</td>
+<td>string</td>
+<td>No</td>
+<td>Organization identifier for billing</td>
+</tr>
+<tr>
+<td>costCenter</td>
+<td>string</td>
+<td>No</td>
+<td>Cost center for billing attribution</td>
+</tr>
+<tr>
+<td>labels</td>
+<td>map[string]string</td>
+<td>No</td>
+<td>Additional labels for tracking</td>
+</tr>
+</tbody>
+</table>
+<h2 id="maasauthpolicystatus">MaaSAuthPolicyStatus</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>phase</td>
+<td>string</td>
+<td>One of: <code>Pending</code>, <code>Active</code>, <code>Failed</code></td>
+</tr>
+<tr>
+<td>conditions</td>
+<td>[]Condition</td>
+<td>Latest observations of the policy's state</td>
+</tr>
+<tr>
+<td>authPolicies</td>
+<td>[]AuthPolicyRefStatus</td>
+<td>Underlying Kuadrant AuthPolicies and their state</td>
+</tr>
+</tbody>
+</table>
+<h2 id="authpolicyrefstatus">AuthPolicyRefStatus</h2>
+<p>Reports the status of each underlying Kuadrant AuthPolicy created by this MaaSAuthPolicy.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>name</td>
+<td>string</td>
+<td>Name of the AuthPolicy resource</td>
+</tr>
+<tr>
+<td>namespace</td>
+<td>string</td>
+<td>Namespace of the AuthPolicy resource</td>
+</tr>
+<tr>
+<td>model</td>
+<td>string</td>
+<td>MaaSModelRef name this AuthPolicy targets</td>
+</tr>
+<tr>
+<td>modelNamespace</td>
+<td>string</td>
+<td>Namespace of the MaaSModelRef</td>
+</tr>
+<tr>
+<td>accepted</td>
+<td>string</td>
+<td>Whether the AuthPolicy has been accepted (from <code>status.conditions</code> type=Accepted)</td>
+</tr>
+<tr>
+<td>enforced</td>
+<td>string</td>
+<td>Whether the AuthPolicy is enforced (from <code>status.conditions</code> type=Enforced)</td>
+</tr>
+</tbody>
+</table>
 
 
 
@@ -2471,7 +2666,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 2, 2026 19:21:56 UTC">April 2, 2026</span>
   </span>
 
     
