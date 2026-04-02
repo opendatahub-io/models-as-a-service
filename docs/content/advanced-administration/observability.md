@@ -43,8 +43,8 @@ The observability stack is defined in `deployment/base/observability/`. It inclu
 
 | Resource | Purpose |
 |----------|---------|
-| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
-| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
+| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `subscription`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `subscription`. |
+| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `subscription` label to gateway latency (`istio_request_duration_milliseconds_bucket`) via the `X-MaaS-Subscription` header injected by the controller-generated AuthPolicy. Enables per-subscription latency tracking (P50/P95/P99). |
 
 **Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Subscription` is injected):
 
@@ -464,6 +464,14 @@ The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimen
     # Users hitting rate limits most
     topk(10, sum by (user) (limited_calls))
 
+**Latency metrics** (per-subscription SLA tracking):
+
+    # P99 latency per subscription
+    histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=""}[5m])))
+
+    # P50 latency per subscription
+    histogram_quantile(0.5, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=""}[5m])))
+
 **Latency queries:**
 
     # P99 latency by service
@@ -503,6 +511,7 @@ Some features require upstream changes and are currently blocked:
 | **`model` label on `authorized_calls` / `limited_calls`** | Kuadrant wasm-shim does not pass `responseBodyJSON` context for these counters | Use `authorized_hits` for per-model breakdown; `authorized_calls`/`limited_calls` support per-user and per-subscription |
 | **Input/output token split** | Kuadrant TokenRateLimitPolicy sends a single `hits_addend` (total tokens); no mechanism for separate prompt/completion counters | Total tokens available via `authorized_hits`; the response body contains `usage.prompt_tokens` and `usage.completion_tokens` but the wasm-shim does not split them |
 | **Input/output token breakdown per user** | vLLM does not label its own metrics with `user` | Total tokens per user available via `authorized_hits{user="..."}`; vLLM prompt/generation token metrics are per-model only |
+| **Rate-limited requests not in Istio metrics** | When the Kuadrant WASM plugin rejects a request (429), it calls `sendLocalReply()` which short-circuits the Envoy filter chain. These requests appear in Limitador metrics (`limited_calls`) but may not appear in Istio gateway metrics. | Use `limited_calls` from Limitador for rate-limiting visibility (has correct `subscription` and `user` labels). |
 | **Kuadrant policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` etc. are defined in Kuadrant dev but not yet shipped in RHCL 1.x | Enable `observability.enable: true` on the Kuadrant CR; the ServiceMonitors are created but policy-specific gauges will appear in a future operator release |
 | **Authorino auth server metrics (upstream)** | The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime); `/server-metrics` is not scraped by the upstream operator | **Resolved by MaaS**: The `authorino-server-metrics` ServiceMonitor (deployed by `install-observability.sh`) scrapes `/server-metrics`. Auth evaluation latency and success/deny rate are visualized in the Platform Admin dashboard. |
 | **maas-api application metrics** | The maas-api Go service does not expose a `/metrics` endpoint | No workaround available. Metrics such as API key creation rate, token issuance rate, model discovery latency, and handler durations require adding Prometheus instrumentation to the Go service (e.g. `promhttp` handler, custom counters/histograms). |
