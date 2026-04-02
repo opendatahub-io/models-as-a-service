@@ -17,9 +17,9 @@ spec:
             filter:
               name: "envoy.filters.network.http_connection_manager"
               subFilter:
-                name: envoy.filters.http.router
+                name: extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
       patch:
-        operation: INSERT_BEFORE
+        operation: INSERT_AFTER
         value:
           name: envoy.filters.http.ext_proc.bbr
           typed_config:
@@ -34,6 +34,5 @@ spec:
               request_trailer_mode: "SEND"
               response_trailer_mode: "SEND"
             grpc_service:
-              timeout: 10s
               envoy_grpc:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
