@@ -13,7 +13,7 @@
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
 #   4. Deploy MaaS system (free + premium + e2e test fixtures: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
 #   5. Setup test tokens (admin + regular user) for comprehensive testing
-#   6. Run E2E tests (API keys + subscription + models endpoint tests)
+#   6. Run E2E tests (API keys + subscription + models + external OIDC when enabled)
 #   7. Run deployment validation + token metadata verification
 # 
 # USAGE:
@@ -39,12 +39,13 @@
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
-#   EXTERNAL_OIDC - Enable external OIDC e2e coverage with an externally provisioned IdP (default: false)
-#   OIDC_ISSUER_URL - Required when EXTERNAL_OIDC=true; issuer URL used by deploy.sh
-#   OIDC_TOKEN_URL - Required when EXTERNAL_OIDC=true; token endpoint used by pytest
-#   OIDC_CLIENT_ID - Required when EXTERNAL_OIDC=true; client ID used to request tokens
-#   OIDC_USERNAME - Required when EXTERNAL_OIDC=true; test user for OIDC token requests
-#   OIDC_PASSWORD - Required when EXTERNAL_OIDC=true; password for the OIDC test user
+#   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: true). deploy.sh runs with
+#                   --external-oidc and --enable-keycloak; Keycloak test realms (tenant-a) are applied.
+#   OIDC_ISSUER_URL - When EXTERNAL_OIDC=true: defaults to Keycloak tenant-a realm if unset
+#   OIDC_TOKEN_URL - Defaults to .../protocol/openid-connect/token under the issuer realm
+#   OIDC_CLIENT_ID - Defaults to test-client (see docs/samples/install/keycloak/test-realms/)
+#   OIDC_USERNAME - Defaults to alice_lead
+#   OIDC_PASSWORD - Defaults to letmein (test realm; dev/test only)
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
@@ -83,7 +84,7 @@ SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}  # Skip platform and model deployment 
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
-EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
+EXTERNAL_OIDC=${EXTERNAL_OIDC:-true}
 
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
@@ -110,6 +111,25 @@ print_header() {
     echo ""
 }
 
+# When EXTERNAL_OIDC=true and OIDC_* are not set, use Keycloak test realm (tenant-a) on this cluster.
+# Requires oc and ingress domain (OpenShift). Idempotent: respects existing exports.
+apply_default_oidc_for_keycloak() {
+    [[ "${EXTERNAL_OIDC}" == "true" ]] || return 0
+    local cluster_domain
+    cluster_domain="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null)" || true
+    if [[ -z "$cluster_domain" ]]; then
+        echo "⚠️  Could not read cluster ingress domain; OIDC defaults for Keycloak not applied"
+        return 0
+    fi
+    local realm_base="https://keycloak.${cluster_domain}/realms/tenant-a"
+    export OIDC_ISSUER_URL="${OIDC_ISSUER_URL:-$realm_base}"
+    export OIDC_TOKEN_URL="${OIDC_TOKEN_URL:-${OIDC_ISSUER_URL}/protocol/openid-connect/token}"
+    export OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-test-client}"
+    export OIDC_USERNAME="${OIDC_USERNAME:-alice_lead}"
+    export OIDC_PASSWORD="${OIDC_PASSWORD:-letmein}"
+    echo "OIDC for e2e (Keycloak tenant-a defaults): issuer=${OIDC_ISSUER_URL}"
+}
+
 require_external_oidc_config() {
     local required_vars=(OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD)
     local missing=()
@@ -122,9 +142,9 @@ require_external_oidc_config() {
     done
 
     if [[ ${#missing[@]} -gt 0 ]]; then
-        echo "❌ ERROR: EXTERNAL_OIDC=true requires an externally provisioned OIDC provider"
-        echo "   Missing required variables: ${missing[*]}"
-        echo "   This branch no longer installs Keycloak automatically."
+        echo "❌ ERROR: EXTERNAL_OIDC=true requires OIDC variables (or a resolvable cluster domain for Keycloak defaults)"
+        echo "   Missing: ${missing[*]}"
+        echo "   Set OIDC_ISSUER_URL and related vars, or ensure 'oc get ingresses.config.openshift.io cluster' works."
         exit 1
     fi
 }
@@ -183,7 +203,8 @@ deploy_maas_platform() {
     fi
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
-        echo "Using externally provisioned OIDC configuration for external OIDC tests..."
+        echo "External OIDC enabled (Keycloak via deploy.sh --enable-keycloak, realm tenant-a defaults)..."
+        apply_default_oidc_for_keycloak
         require_external_oidc_config
         export OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD
         echo "Using OIDC issuer: ${OIDC_ISSUER_URL}"
@@ -205,12 +226,20 @@ deploy_maas_platform() {
         deploy_cmd+=(--disable-tls-backend)
     fi
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
-        deploy_cmd+=(--external-oidc)
+        deploy_cmd+=(--external-oidc --enable-keycloak)
     fi
 
     if ! "${deploy_cmd[@]}"; then
         echo "❌ ERROR: MaaS platform deployment failed"
         exit 1
+    fi
+
+    if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        echo "Applying Keycloak test realms (tenant-a / tenant-b) for OIDC token tests..."
+        if ! bash "$PROJECT_ROOT/docs/samples/install/keycloak/test-realms/apply-test-realms.sh"; then
+            echo "❌ ERROR: Keycloak test realm import failed (see docs/samples/install/keycloak/test-realms/)"
+            exit 1
+        fi
     fi
 
     # Wait for DataScienceCluster (install-odh already waited; deploy may have updated)
@@ -407,6 +436,7 @@ setup_vars_for_tests() {
     export EXTERNAL_OIDC
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        apply_default_oidc_for_keycloak
         require_external_oidc_config
         export OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD
         echo "OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}"
