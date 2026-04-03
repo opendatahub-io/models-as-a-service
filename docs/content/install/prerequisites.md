@@ -44,3 +44,12 @@ component enabled (KServe) and properly configured for deploying models with
 `LLMInferenceService` resources.
 
 A specific requirement for MaaS v0.2.0+ is to set up RHOAI Model Serving with Red Hat Connectivity Link (RHCL) v1.3 or later.
+
+## Optional: Observability Prerequisites
+
+If you plan to use MaaS dashboards, showback, or usage metrics, additional platform configuration is required:
+
+- **User Workload Monitoring** — Required for Prometheus to scrape metrics from MaaS components
+- **Kuadrant Observability** — Required for rate-limiting and usage metrics (e.g., `authorized_calls`, `limited_calls`)
+
+See [Observability Prerequisites](../advanced-administration/observability.md#prerequisites) for detailed configuration steps.

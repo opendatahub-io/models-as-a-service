@@ -51,7 +51,37 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Verify Gateway is in `Programmed` state: `kubectl get gateway -n openshift-ingress maas-default-gateway`
       - [ ] Check HTTPRoute configuration and status
 
+7. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
+      - [ ] Verify User Workload Monitoring is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#user-workload-monitoring)
+      - [ ] Verify Kuadrant observability is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#kuadrant-observability)
+      - [ ] Check prometheus-user-workload pods are running:
+
+      ```bash
+      kubectl get pods -n openshift-user-workload-monitoring
+      ```
+
+      - [ ] Verify ServiceMonitors/PodMonitors exist:
+
+      ```bash
+      kubectl get servicemonitor,podmonitor -A | grep -E "(maas|kuadrant|limitador)"
+      ```
+
+8. **Rate limiting metrics missing (authorized_calls, limited_calls)**: Kuadrant observability is not enabled.
+      - [ ] Enable observability on Kuadrant CR:
+
+      ```bash
+      kubectl patch kuadrant kuadrant -n kuadrant-system --type=merge \
+        -p '{"spec":{"observability":{"enable":true}}}'
+      ```
+
+      - [ ] Verify the PodMonitor was created:
+
+      ```bash
+      kubectl get podmonitor -n kuadrant-system
+      ```
+
 ## Additional Resources
 
 - [Validation Guide](validation.md) — Manual validation steps
+- [Observability Guide](../advanced-administration/observability.md) — Metrics, monitoring, and dashboards
 - [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md) — Deployment scripts documentation
