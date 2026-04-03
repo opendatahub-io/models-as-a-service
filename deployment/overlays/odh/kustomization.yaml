@@ -96,7 +96,19 @@ replacements:
       kind: Deployment
       name: payload-processing
     fieldPaths:
-    - spec.template.spec.containers.[name=bbr].image
+    - spec.template.spec.containers.[name=payload-processing].image
+# Payload-processing replicas (configurable for large-scale deployments)
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.payload-processing-replicas
+  targets:
+  - select:
+      kind: Deployment
+      name: payload-processing
+    fieldPaths:
+    - spec.replicas
 # Payload-processing resources must be in the gateway namespace
 - source:
     kind: ConfigMap

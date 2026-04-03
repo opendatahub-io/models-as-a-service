@@ -17,7 +17,7 @@ spec:
       securityContext:
         runAsNonRoot: true
       containers:
-        - name: bbr
+        - name: payload-processing
           image: payload-processing
           imagePullPolicy: IfNotPresent
           securityContext:
