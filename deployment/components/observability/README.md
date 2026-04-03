@@ -44,8 +44,12 @@ kustomize build deployment/components/observability/observability/dashboards \
 ```
 
 CI runs `scripts/ci/validate-manifests.sh` on every PR that touches `deployment/**`,
-which runs `kustomize build` against **all** `kustomization.yaml` files in the repo
-(Components are skipped since they cannot build standalone).
+which runs `kustomize build` against **all** `kustomization.yaml` files in the repo.
+Files with `kind: Component` (like `deployment/components/shared-patches/`) are skipped
+because they must be included via a parent's `components:` field, but directories whose
+kustomization.yaml declares `kind: Kustomization` (like
+`deployment/components/observability/{grafana,prometheus,observability}`) can build
+standalone and are validated by CI dry-run.
 
 ### Apply to a dev cluster
 
