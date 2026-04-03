@@ -147,9 +147,9 @@ There are two ways to enable deployment-based observability:
 1. **Operator-managed** (recommended): Enable via ModelsAsService CR
 2. **Kustomize-based**: Deploy manifests directly
 
-### Option 1: Operator-Managed Observability
+### Option 1: Operator-Managed Telemetry
 
-When using the ODH/RHOAI operator, observability can be enabled via the ModelsAsService CR:
+When using the ODH/RHOAI operator, telemetry can be enabled via the ModelsAsService CR:
 
 ```yaml
 apiVersion: components.platform.opendatahub.io/v1alpha1
@@ -157,31 +157,37 @@ kind: ModelsAsService
 metadata:
   name: default-modelsasservice
 spec:
-  observability:
-    enabled: true  # Enable per-subscription latency tracking
+  telemetry:
+    enabled: true  # Enable TelemetryPolicy and Istio Telemetry
+    metrics:
+      captureOrganization: true
+      captureUser: false      # Disabled by default (GDPR)
+      captureGroup: false     # High cardinality
+      captureModelUsage: true
 ```
 
 Or patch an existing CR:
 
 ```bash
 kubectl patch modelsasservice default-modelsasservice --type=merge \
-  -p '{"spec":{"observability":{"enabled":true}}}'
+  -p '{"spec":{"telemetry":{"enabled":true}}}'
 ```
 
-**What the operator creates:**
+**What the operator creates when `telemetry.enabled: true`:**
 
 | Resource | Namespace | Purpose |
 |----------|-----------|---------|
-| Istio Telemetry (`latency-per-subscription`) | Gateway namespace | Adds `subscription` label to latency metrics |
+| TelemetryPolicy (`maas-telemetry`) | Gateway namespace | Adds `user`, `subscription`, `model` labels to Limitador usage metrics |
+| Istio Telemetry (`latency-per-subscription`) | Gateway namespace | Adds `subscription` label to gateway latency metrics |
 
-!!! note "Prerequisites for Operator-Managed Observability"
-    The operator-managed observability feature requires:
+!!! note "Prerequisites for Operator-Managed Telemetry"
+    The operator-managed telemetry feature requires:
 
     - **OpenShift Service Mesh (Istio)** 2.4+ — for Istio Telemetry CRD
-    - **Kuadrant/Authorino** — AuthPolicy must inject `X-MaaS-Subscription` header
+    - **Kuadrant/RHCL** — for TelemetryPolicy CRD and AuthPolicy header injection
     - **Gateway deployed** — Telemetry targets the gateway via selector
 
-    The operator checks for Istio Telemetry CRD availability before creating resources. If the CRD is not present, the feature is silently skipped.
+    The operator checks for CRD availability before creating resources. If a CRD is not present, that resource is silently skipped.
 
 !!! warning "AuthPolicy Header Dependency"
     The Istio Telemetry reads the `subscription` value from the `X-MaaS-Subscription` header, which must be injected by AuthPolicy:
