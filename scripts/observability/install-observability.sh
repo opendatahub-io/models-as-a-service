@@ -18,6 +18,20 @@ for cmd in kubectl kustomize jq yq; do
     fi
 done
 
+# Cluster context safety check (CWE-16 mitigation)
+if [[ "${SKIP_CLUSTER_CHECK:-false}" != "true" ]]; then
+    CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "unknown")
+    echo "⚠️  Current kubectl context: ${CURRENT_CONTEXT}"
+    echo "   This script will apply resources to the cluster above."
+    echo "   Set SKIP_CLUSTER_CHECK=true to bypass this prompt."
+    read -p "   Continue? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "❌ Aborted by user"
+        exit 1
+    fi
+fi
+
 # Parse arguments
 # For RHOAI use --namespace redhat-ods-applications.
 NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"
