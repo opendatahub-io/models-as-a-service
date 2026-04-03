@@ -73,7 +73,6 @@ kustomize build deployment/components/observability/observability/dashboards | k
 
 ## Directory Layout
 
-```
 deployment/
 ├── base/observability/                          # Always-on telemetry CRs + conditional monitors
 │   ├── kustomization.yaml                       # → gateway-telemetry-policy, istio-gateway-telemetry
