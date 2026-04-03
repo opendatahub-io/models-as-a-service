@@ -130,6 +130,11 @@ replacements:
     fieldPaths:
     - metadata.namespace
   - select:
+      kind: ConfigMap
+      name: payload-processing-plugins
+    fieldPaths:
+    - metadata.namespace
+  - select:
       kind: ClusterRoleBinding
       name: payload-processing-reader
     fieldPaths:

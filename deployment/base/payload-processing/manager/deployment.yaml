@@ -31,14 +31,35 @@ spec:
             - --v
             - "3"
             - --plugin
-            - "body-field-to-header:model-extractor:{\"field_name\":\"model\",\"header_name\":\"X-Gateway-Model-Name\"}"
+            - "$(PLUGIN_0)"
             - --plugin
-            - "model-provider-resolver:model-provider-resolver"
+            - "$(PLUGIN_1)"
             - --plugin
-            - "api-translation:api-translation"
+            - "$(PLUGIN_2)"
             - --plugin
-            - "apikey-injection:apikey-injection"
+            - "$(PLUGIN_3)"
             - --tracing=false
+          env:
+            - name: PLUGIN_0
+              valueFrom:
+                configMapKeyRef:
+                  name: payload-processing-plugins
+                  key: plugin-0
+            - name: PLUGIN_1
+              valueFrom:
+                configMapKeyRef:
+                  name: payload-processing-plugins
+                  key: plugin-1
+            - name: PLUGIN_2
+              valueFrom:
+                configMapKeyRef:
+                  name: payload-processing-plugins
+                  key: plugin-2
+            - name: PLUGIN_3
+              valueFrom:
+                configMapKeyRef:
+                  name: payload-processing-plugins
+                  key: plugin-3
           ports:
             - containerPort: 9004
               name: grpc
