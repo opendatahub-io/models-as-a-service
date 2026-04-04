@@ -94,6 +94,14 @@ jobs:
         run: |
           pip install -r docs/requirements.txt
 
+      - name: Prepare OpenAPI spec
+        run: |
+          # Ensure the OpenAPI spec is available for docs build
+          # Remove symlink and copy actual file (handles git symlink resolution in CI)
+          mkdir -p docs/content/api
+          rm -f docs/content/api/openapi3.yaml
+          cp maas-api/openapi3.yaml docs/content/api/openapi3.yaml
+
       - name: Build documentation
         run: |
           cd docs
@@ -131,6 +139,14 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r docs/requirements.txt
+
+      - name: Prepare OpenAPI spec
+        run: |
+          # Ensure the OpenAPI spec is available for docs build
+          # Remove symlink and copy actual file (handles git symlink resolution in CI)
+          mkdir -p docs/content/api
+          rm -f docs/content/api/openapi3.yaml
+          cp maas-api/openapi3.yaml docs/content/api/openapi3.yaml
 
       - name: Configure Git
         run: |
