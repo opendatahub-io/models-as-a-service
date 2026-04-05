@@ -8,6 +8,4 @@ spec:
   trafficPolicy:
     tls:
       mode: SIMPLE
-      caCertificates: /etc/ssl/certs/ca-bundle.crt
-      subjectAltNames:
-        - payload-processing.openshift-ingress.svc.cluster.local
+      insecureSkipVerify: true
