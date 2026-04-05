@@ -79,6 +79,21 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 	g.SetLimit(maxDiscoveryConcurrency)
 	for i := range models {
 		model := models[i]
+		// External models cannot be probed — their /v1/models endpoint requires
+		// the provider API key (injected by BBR), not the user's MaaS token.
+		// Include them directly if they are Ready; access is enforced by the
+		// gateway auth policy at inference time.
+		if model.Kind == "ExternalModel" {
+			if model.Ready {
+				m.logger.Debug("FilterModelsByAccess: including external model (no probe)", "id", model.ID)
+				mu.Lock()
+				out = append(out, model)
+				mu.Unlock()
+			} else {
+				m.logger.Debug("FilterModelsByAccess: skipping external model (not ready)", "id", model.ID)
+			}
+			continue
+		}
 		if model.URL == nil {
 			m.logger.Debug("FilterModelsByAccess: skipping model with no URL", "id", model.ID)
 			continue
