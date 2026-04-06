@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/reference/maas-api-overview/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/contributing/testing-guide/">
       
       
-        <link rel="prev" href="../../contributing/testing-guide/">
+        <link rel="prev" href="../../user-guide/self-service-model-access/">
       
       
-        <link rel="next" href="../api-reference/">
+        <link rel="next" href="../../reference/maas-api-overview/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>MaaS API Overview - ODH Models-as-a-Service Documentation</title>
+        <title>MaaS Testing and Contribution Guide - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#maas-api-overview" class="md-skip">
+        <a href="#maas-testing-and-contribution-guide" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              MaaS API Overview
+              MaaS Testing and Contribution Guide
             
           </span>
         </div>
@@ -339,11 +339,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../contributing/testing-guide/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
           
   
   
@@ -359,13 +361,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../reference/maas-api-overview/" class="md-tabs__link">
           
   
   
@@ -1920,95 +1920,6 @@
       
   
   
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
-        
-          
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Contributing
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Contributing
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../contributing/testing-guide/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    MaaS Testing and Contribution Guide
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
     
   
   
@@ -2030,17 +1941,17 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
-          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
             
   
   
   <span class="md-ellipsis">
     
   
-    API Reference
+    Contributing
   
 
     
@@ -2051,12 +1962,12 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_7">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
-    API Reference
+    Contributing
   
 
           </label>
@@ -2085,7 +1996,7 @@
   <span class="md-ellipsis">
     
   
-    MaaS API Overview
+    MaaS Testing and Contribution Guide
   
 
     
@@ -2103,7 +2014,7 @@
   <span class="md-ellipsis">
     
   
-    MaaS API Overview
+    MaaS Testing and Contribution Guide
   
 
     
@@ -2129,33 +2040,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#authentication" class="md-nav__link">
+  <a href="#test-overview" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Authentication
+        Test Overview
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#endpoints-by-category" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Endpoints by Category
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Endpoints by Category">
+    <nav class="md-nav" aria-label="Test Overview">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#health" class="md-nav__link">
+  <a href="#repository-structure-testing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Health
+        Repository Structure (Testing)
       
     </span>
   </a>
@@ -2163,54 +2063,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#models" class="md-nav__link">
+  <a href="#e2e-test-modules" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Models
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#tiers-legacy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tiers (Legacy)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-keys" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API Keys
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#subscriptions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Subscriptions
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#internal-endpoints-cluster-only" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Internal Endpoints (Cluster-Only)
+        E2E Test Modules
       
     </span>
   </a>
@@ -2223,10 +2079,60 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#base-url" class="md-nav__link">
+  <a href="#running-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Base URL
+        Running Tests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unit-tests-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unit Tests (Go)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#e2e-tests-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        E2E Tests (Python)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Environment Variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI Pipeline
       
     </span>
   </a>
@@ -2234,10 +2140,99 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#next-steps" class="md-nav__link">
+  <a href="#adding-new-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Next Steps
+        Adding New Tests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Adding New Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#adding-a-go-unit-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a Go Unit Test
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adding-an-e2e-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding an E2E Test
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#integration-testing-with-odh-operator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration Testing with ODH Operator
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Integration Testing with ODH Operator">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#contributing-integration-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contributing Integration Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-to-add-in-repo-vs-integration-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When to Add In-Repo vs Integration Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checklist-adding-a-new-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checklist: Adding a New Test
       
     </span>
   </a>
@@ -2253,6 +2248,67 @@
 
               
             
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
               
                 
   
@@ -2260,7 +2316,35 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-reference/" class="md-nav__link">
+      <a href="../../reference/maas-api-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS API Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-reference/" class="md-nav__link">
         
   
   
@@ -2294,13 +2378,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -2309,7 +2390,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_3" >
         
           
-          <label class="md-nav__link" for="__nav_7_3" id="__nav_7_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_7_3" id="__nav_7_3_label" tabindex="0">
             
   
   
@@ -2345,7 +2426,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../crds/maas-model-ref/" class="md-nav__link">
+      <a href="../../reference/crds/maas-model-ref/" class="md-nav__link">
         
   
   
@@ -2373,7 +2454,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../crds/external-model/" class="md-nav__link">
+      <a href="../../reference/crds/external-model/" class="md-nav__link">
         
   
   
@@ -2401,7 +2482,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../crds/maas-auth-policy/" class="md-nav__link">
+      <a href="../../reference/crds/maas-auth-policy/" class="md-nav__link">
         
   
   
@@ -2429,7 +2510,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../crds/maas-subscription/" class="md-nav__link">
+      <a href="../../reference/crds/maas-subscription/" class="md-nav__link">
         
   
   
@@ -2492,33 +2573,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#authentication" class="md-nav__link">
+  <a href="#test-overview" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Authentication
+        Test Overview
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#endpoints-by-category" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Endpoints by Category
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Endpoints by Category">
+    <nav class="md-nav" aria-label="Test Overview">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#health" class="md-nav__link">
+  <a href="#repository-structure-testing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Health
+        Repository Structure (Testing)
       
     </span>
   </a>
@@ -2526,54 +2596,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#models" class="md-nav__link">
+  <a href="#e2e-test-modules" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Models
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#tiers-legacy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tiers (Legacy)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-keys" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API Keys
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#subscriptions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Subscriptions
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#internal-endpoints-cluster-only" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Internal Endpoints (Cluster-Only)
+        E2E Test Modules
       
     </span>
   </a>
@@ -2586,10 +2612,60 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#base-url" class="md-nav__link">
+  <a href="#running-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Base URL
+        Running Tests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unit-tests-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unit Tests (Go)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#e2e-tests-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        E2E Tests (Python)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Environment Variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI Pipeline
       
     </span>
   </a>
@@ -2597,10 +2673,99 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#next-steps" class="md-nav__link">
+  <a href="#adding-new-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Next Steps
+        Adding New Tests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Adding New Tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#adding-a-go-unit-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a Go Unit Test
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adding-an-e2e-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding an E2E Test
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#integration-testing-with-odh-operator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration Testing with ODH Operator
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Integration Testing with ODH Operator">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#contributing-integration-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contributing Integration Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-to-add-in-repo-vs-integration-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When to Add In-Repo vs Integration Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#checklist-adding-a-new-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checklist: Adding a New Test
       
     </span>
   </a>
@@ -2627,176 +2792,373 @@
   
 
 
-<h1 id="maas-api-overview">MaaS API Overview</h1>
-<p>This page provides a high-level overview of the MaaS API endpoints. For full request/response schemas and interactive documentation, see <a href="../api-reference/">MaaS API (Swagger)</a>.</p>
-<h2 id="authentication">Authentication</h2>
-<p>All endpoints except <code>/health</code> require authentication via the <code>Authorization: Bearer &lt;token&gt;</code> header. Use either:</p>
-<ul>
-<li><strong>OpenShift token</strong> — from <code>oc whoami -t</code> for interactive use</li>
-<li><strong>API key</strong> — created via <code>POST /v1/api-keys</code> for programmatic access</li>
-</ul>
-<hr />
-<h2 id="endpoints-by-category">Endpoints by Category</h2>
-<h3 id="health">Health</h3>
+<h1 id="maas-testing-and-contribution-guide">MaaS Testing and Contribution Guide</h1>
+<p>This guide covers what tests exist in the MaaS project, how to run them, and how to add new tests when contributing a feature or fix.</p>
+<h2 id="test-overview">Test Overview</h2>
 <table>
 <thead>
 <tr>
-<th>Method</th>
-<th>Path</th>
-<th>Description</th>
+<th>Type</th>
+<th>Location</th>
+<th>Language</th>
+<th>Runner</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>GET</td>
-<td><code>/health</code></td>
-<td>Health check. No authentication required. Used by load balancers and monitoring.</td>
+<td><strong>Unit tests</strong></td>
+<td><code>maas-api/internal/</code>, <code>maas-api/cmd/</code></td>
+<td>Go</td>
+<td><code>make test</code></td>
+</tr>
+<tr>
+<td><strong>Unit tests</strong></td>
+<td><code>maas-controller/pkg/</code></td>
+<td>Go</td>
+<td><code>make test</code></td>
+</tr>
+<tr>
+<td><strong>E2E tests</strong></td>
+<td><code>test/e2e/tests/</code></td>
+<td>Python (pytest)</td>
+<td><code>run-tests-quick.sh</code>, <code>smoke.sh</code></td>
+</tr>
+<tr>
+<td><strong>CI smoke / E2E</strong></td>
+<td><code>test/e2e/scripts/prow_run_smoke_test.sh</code></td>
+<td>Bash + pytest</td>
+<td>Konflux integration</td>
+</tr>
+<tr>
+<td><strong>Integration tests</strong></td>
+<td><a href="https://github.com/opendatahub-io/opendatahub-tests">opendatahub-tests</a></td>
+<td>Python (pytest)</td>
+<td>ODH CI / Nightly</td>
 </tr>
 </tbody>
 </table>
-<h3 id="models">Models</h3>
+<h3 id="repository-structure-testing">Repository Structure (Testing)</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>maas-api/
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>├── internal/**/*_test.go        # Unit tests for API handlers, services, auth
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├── cmd/*_test.go                # Unit tests for CLI/server setup
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>└── test/fixtures/               # Shared Go test helpers (fakes, test data)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>maas-controller/
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>└── pkg/**/*_test.go             # Unit tests for CRD reconcilers
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>test/e2e/
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>├── tests/                       # Pytest E2E test modules
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>│   ├── conftest.py              # Shared session-scoped fixtures
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>│   └── test_*.py                # Test modules (see table below)
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>├── fixtures/                    # Kustomize overlays for test CRs
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>├── scripts/prow_run_smoke_test.sh  # Full deploy + E2E (CI entrypoint)
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>├── smoke.sh                     # Run all E2E modules locally
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>├── run-tests-quick.sh           # Quick pytest run (no deploy)
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>└── requirements.txt             # Python dependencies
+</code></pre></div>
+<h3 id="e2e-test-modules">E2E Test Modules</h3>
 <table>
 <thead>
 <tr>
-<th>Method</th>
-<th>Path</th>
-<th>Description</th>
+<th>Module</th>
+<th>What it covers</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>GET</td>
-<td><code>/v1/models</code></td>
-<td>List available LLMs in OpenAI-compatible format. Returns models the authenticated user can access.</td>
+<td><code>test_smoke.py</code></td>
+<td>Health checks, catalog shape, basic inference</td>
+</tr>
+<tr>
+<td><code>test_api_keys.py</code></td>
+<td>API key CRUD, admin authorization, validation</td>
+</tr>
+<tr>
+<td><code>test_subscription.py</code></td>
+<td>Subscription enforcement, rate limiting, auth flows</td>
+</tr>
+<tr>
+<td><code>test_subscription_list_endpoints.py</code></td>
+<td>Subscription listing endpoints</td>
+</tr>
+<tr>
+<td><code>test_models_endpoint.py</code></td>
+<td><code>/v1/models</code> subscription-aware filtering</td>
+</tr>
+<tr>
+<td><code>test_namespace_scoping.py</code></td>
+<td>Namespace isolation behavior</td>
+</tr>
+<tr>
+<td><code>test_external_oidc.py</code></td>
+<td>External OIDC token flows (skipped unless <code>EXTERNAL_OIDC=true</code>)</td>
 </tr>
 </tbody>
 </table>
-<h3 id="tiers-legacy">Tiers (Legacy)</h3>
-<table>
-<thead>
-<tr>
-<th>Method</th>
-<th>Path</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>POST</td>
-<td><code>/v1/tiers/lookup</code></td>
-<td>Look up the highest subscription tier for a set of groups. Used by tier-based access control.</td>
-</tr>
-</tbody>
-</table>
-<div class="admonition note">
-<p class="admonition-title">Subscription model</p>
-<p>The subscription-based architecture (MaaSAuthPolicy, MaaSSubscription) is the current approach. The tiers endpoint is retained for backward compatibility with tier-based deployments.</p>
+<h2 id="running-tests">Running Tests</h2>
+<h3 id="unit-tests-go">Unit Tests (Go)</h3>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">maas-api</label><label for="__tabbed_1_2">maas-controller</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span>maas-api
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>make<span class="w"> </span><span class="nb">test</span><span class="w">    </span><span class="c1"># runs go test with race detection + coverage</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>make<span class="w"> </span>lint<span class="w">    </span><span class="c1"># golangci-lint</span>
+</code></pre></div>
 </div>
-<h3 id="api-keys">API Keys</h3>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">cd</span><span class="w"> </span>maas-controller
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>make<span class="w"> </span><span class="nb">test</span><span class="w">    </span><span class="c1"># runs go test with race detection + coverage</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>make<span class="w"> </span>lint<span class="w">    </span><span class="c1"># golangci-lint</span>
+</code></pre></div>
+</div>
+</div>
+</div>
+<p>Both generate a <code>coverage.html</code> report in their respective directories.</p>
+<h3 id="e2e-tests-python">E2E Tests (Python)</h3>
+<div class="admonition note">
+<p class="admonition-title">Prerequisites</p>
+<p>OpenShift cluster with MaaS deployed, <code>oc</code> logged in as cluster-admin, Python 3.9+.</p>
+</div>
+<div class="tabbed-set tabbed-alternate" data-tabs="2:4"><input checked="checked" id="__tabbed_2_1" name="__tabbed_2" type="radio" /><input id="__tabbed_2_2" name="__tabbed_2" type="radio" /><input id="__tabbed_2_3" name="__tabbed_2" type="radio" /><input id="__tabbed_2_4" name="__tabbed_2" type="radio" /><div class="tabbed-labels"><label for="__tabbed_2_1">Quick (local dev)</label><label for="__tabbed_2_2">Smoke (all modules)</label><label for="__tabbed_2_3">Full CI (deploy + test)</label><label for="__tabbed_2_4">Direct pytest</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Cluster must already have MaaS deployed</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./test/e2e/run-tests-quick.sh
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Run specific file or filter</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>./test/e2e/run-tests-quick.sh<span class="w"> </span>tests/test_api_keys.py
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>./test/e2e/run-tests-quick.sh<span class="w"> </span>-k<span class="w"> </span>test_create_api_key
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>./test/e2e/smoke.sh
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Deploys the full platform, models, fixtures, then runs E2E</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>./test/e2e/scripts/prow_run_smoke_test.sh
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># Skip deploy if cluster is already set up</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="nv">SKIP_DEPLOYMENT</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>./test/e2e/scripts/prow_run_smoke_test.sh
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">cd</span><span class="w"> </span>test/e2e
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>python3<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.venv<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">source</span><span class="w"> </span>.venv/bin/activate
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GATEWAY_HOST</span><span class="o">=</span><span class="s2">&quot;maas.apps.your-cluster.example.com&quot;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">E2E_SKIP_TLS_VERIFY</span><span class="o">=</span><span class="nb">true</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>pytest<span class="w"> </span>tests/<span class="w"> </span>-v<span class="w">                                    </span><span class="c1"># all tests</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>pytest<span class="w"> </span>tests/test_subscription.py<span class="w"> </span>-v<span class="w">                </span><span class="c1"># one module</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>pytest<span class="w"> </span>tests/test_api_keys.py::TestAPIKeyCreation<span class="w"> </span>-v<span class="w">  </span><span class="c1"># one class</span>
+</code></pre></div>
+</div>
+</div>
+</div>
+<h3 id="key-environment-variables">Key Environment Variables</h3>
+<p>The E2E framework auto-discovers most values from the cluster. These are the most common overrides:</p>
 <table>
 <thead>
 <tr>
-<th>Method</th>
-<th>Path</th>
+<th>Variable</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>POST</td>
-<td><code>/v1/api-keys</code></td>
-<td>Create a new API key. Returns plaintext key <strong>once</strong>; only the hash is stored. Optional body field <code>subscription</code> selects the MaaSSubscription; if omitted, the highest-priority accessible subscription is used.</td>
+<td><code>GATEWAY_HOST</code></td>
+<td>Gateway hostname (required unless <code>MAAS_API_BASE_URL</code> is set)</td>
 </tr>
 <tr>
-<td>POST</td>
-<td><code>/v1/api-keys/search</code></td>
-<td>Search and filter API keys with pagination, sorting, and status filters.</td>
+<td><code>MAAS_API_BASE_URL</code></td>
+<td>Full MaaS API URL (auto-derived if not set)</td>
 </tr>
 <tr>
-<td>GET</td>
-<td><code>/v1/api-keys/{id}</code></td>
-<td>Get metadata for a specific API key.</td>
+<td><code>TOKEN</code></td>
+<td>User bearer token (falls back to <code>oc whoami -t</code>)</td>
 </tr>
 <tr>
-<td>DELETE</td>
-<td><code>/v1/api-keys/{id}</code></td>
-<td>Revoke a specific API key.</td>
+<td><code>ADMIN_OC_TOKEN</code></td>
+<td>Admin token; admin tests skip if unset</td>
 </tr>
 <tr>
-<td>POST</td>
-<td><code>/v1/api-keys/bulk-revoke</code></td>
-<td>Revoke all active API keys for a user. Admins can revoke any user's keys.</td>
+<td><code>E2E_SKIP_TLS_VERIFY</code></td>
+<td>Set <code>true</code> to skip TLS verification</td>
+</tr>
+<tr>
+<td><code>MODEL_NAME</code></td>
+<td>Override model ID (defaults to first from catalog)</td>
+</tr>
+<tr>
+<td><code>EXTERNAL_OIDC</code></td>
+<td>Set <code>true</code> to enable external OIDC tests</td>
 </tr>
 </tbody>
 </table>
-<h3 id="subscriptions">Subscriptions</h3>
+<p>See <code>test/e2e/tests/conftest.py</code> and individual test module docstrings for the full set of supported variables.</p>
+<h2 id="ci-pipeline">CI Pipeline</h2>
+<p>CI runs automatically on every PR and push to <code>main</code>. Here's how the different test types fit together:</p>
+<pre class="mermaid"><code>graph TB
+    A[PR opened / push to main] --&gt; B{What changed?}
+    B --&gt;|maas-api/**| C[GitHub Actions: lint + unit tests]
+    B --&gt;|maas-controller/api/**| D[GitHub Actions: verify-codegen]
+    B --&gt;|Any non-docs change| E[Konflux: Build images]
+    E --&gt; F[Integration test on ephemeral cluster]
+    F --&gt; G[prow_run_smoke_test.sh → E2E pytest]
+    B --&gt;|docs/** or *.md only| H[Skip build + E2E]</code></pre>
 <table>
 <thead>
 <tr>
-<th>Method</th>
-<th>Path</th>
-<th>Description</th>
+<th>System</th>
+<th>Trigger</th>
+<th>What runs</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>GET</td>
-<td><code>/v1/subscriptions</code></td>
-<td>List subscriptions accessible to the authenticated user.</td>
+<td><strong>GitHub Actions</strong></td>
+<td><code>maas-api/**</code> changes</td>
+<td>golangci-lint, <code>make test</code> (Go unit tests), image build</td>
 </tr>
 <tr>
-<td>GET</td>
-<td><code>/v1/model/{model-id}/subscriptions</code></td>
-<td>List subscriptions that provide access to a specific model.</td>
+<td><strong>GitHub Actions</strong></td>
+<td><code>maas-controller/api/**</code> or <code>deployment/**</code> changes</td>
+<td><code>make verify-codegen</code>, kustomize manifest validation</td>
+</tr>
+<tr>
+<td><strong>Konflux</strong></td>
+<td>Any non-docs PR or push to <code>main</code></td>
+<td>Builds multi-arch images, then runs full E2E on an ephemeral OpenShift cluster</td>
 </tr>
 </tbody>
 </table>
-<h3 id="internal-endpoints-cluster-only">Internal Endpoints (Cluster-Only)</h3>
-<p>These endpoints are registered under <code>/internal/v1/</code> and are <strong>not exposed</strong> on the external Service or Route. They are called by internal components (Authorino, CronJob) and protected by NetworkPolicy.</p>
-<table>
-<thead>
-<tr>
-<th>Method</th>
-<th>Path</th>
-<th>Called By</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>POST</td>
-<td><code>/internal/v1/api-keys/validate</code></td>
-<td>Authorino</td>
-<td>Validate an API key (hash lookup, status/expiry check). Returns user identity and subscription for the gateway.</td>
-</tr>
-<tr>
-<td>POST</td>
-<td><code>/internal/v1/api-keys/cleanup</code></td>
-<td>CronJob <code>maas-api-key-cleanup</code></td>
-<td>Delete expired ephemeral keys (30-minute grace period). Returns <code>{"deletedCount": N, "message": "..."}</code>.</td>
-</tr>
-<tr>
-<td>POST</td>
-<td><code>/internal/v1/subscriptions/select</code></td>
-<td>Authorino</td>
-<td>Select the appropriate subscription for a request based on user groups and optional explicit selection.</td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h2 id="base-url">Base URL</h2>
-<p>The MaaS API is typically exposed under a path prefix, for example:</p>
+<p>Konflux provisions a fresh cluster, deploys ODH + MaaS with the PR's built images, and runs <code>test/e2e/scripts/prow_run_smoke_test.sh</code>. Nightly builds use the same script against the latest <code>main</code> images — there is no separate nightly test suite.</p>
+<div class="admonition tip">
+<p class="admonition-title">Docs-only changes</p>
+<p>PRs that only touch <code>docs/**</code> or <code>*.md</code> files skip Konflux builds and E2E entirely (controlled via CEL expressions in <code>.tekton/</code> pipeline definitions).</p>
+</div>
+<h2 id="adding-new-tests">Adding New Tests</h2>
+<h3 id="adding-a-go-unit-test">Adding a Go Unit Test</h3>
+<ol>
+<li>Create a <code>*_test.go</code> file next to the code you're testing (standard Go convention)</li>
+<li>Use <code>testify/assert</code> and <code>testify/require</code> for assertions</li>
+<li>For <code>maas-api</code> handlers: use <code>net/http/httptest</code> and the fake listers in <code>maas-api/test/fixtures/</code></li>
+<li>For <code>maas-controller</code> reconcilers: use <code>controller-runtime/pkg/client/fake</code> with scheme setup</li>
+<li>Run <code>make test</code> in the relevant directory to verify</li>
+</ol>
+<p><strong>Quick reference</strong> — a minimal handler test in <code>maas-api</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestMyHandler_Returns200</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="nx">req</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">httptest</span><span class="p">.</span><span class="nx">NewRequest</span><span class="p">(</span><span class="nx">http</span><span class="p">.</span><span class="nx">MethodGet</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/v1/my-endpoint&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nx">rec</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">httptest</span><span class="p">.</span><span class="nx">NewRecorder</span><span class="p">()</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nx">handler</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">NewMyHandler</span><span class="p">(</span><span class="cm">/* fake dependencies */</span><span class="p">)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nx">handler</span><span class="p">.</span><span class="nx">ServeHTTP</span><span class="p">(</span><span class="nx">rec</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">)</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">    </span><span class="nx">require</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">StatusOK</span><span class="p">,</span><span class="w"> </span><span class="nx">rec</span><span class="p">.</span><span class="nx">Code</span><span class="p">)</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>Quick reference</strong> — a minimal reconciler test in <code>maas-controller</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestMyReconciler_Succeeds</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span><span class="nx">client</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">fake</span><span class="p">.</span><span class="nx">NewClientBuilder</span><span class="p">().</span><span class="nx">WithScheme</span><span class="p">(</span><span class="nx">scheme</span><span class="p">).</span><span class="nx">WithObjects</span><span class="p">(</span><span class="cm">/* seed */</span><span class="p">).</span><span class="nx">Build</span><span class="p">()</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">MyReconciler</span><span class="p">{</span><span class="nx">Client</span><span class="p">:</span><span class="w"> </span><span class="nx">client</span><span class="p">,</span><span class="w"> </span><span class="nx">Scheme</span><span class="p">:</span><span class="w"> </span><span class="nx">scheme</span><span class="p">}</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Reconcile</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">reconcile</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span><span class="nx">NamespacedName</span><span class="p">:</span><span class="w"> </span><span class="nx">key</span><span class="p">})</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">    </span><span class="nx">require</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">    </span><span class="nx">require</span><span class="p">.</span><span class="nx">False</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">Requeue</span><span class="p">)</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="p">}</span>
+</code></pre></div>
+<div class="admonition tip">
+<p class="admonition-title">CRD codegen</p>
+<p>If you modify API types under <code>maas-controller/api/</code>, run <code>make -C maas-controller generate manifests</code> and commit the generated files. CI will fail if they're stale.</p>
+</div>
+<h3 id="adding-an-e2e-test">Adding an E2E Test</h3>
+<ol>
+<li>
+<p><strong>Pick the right module</strong> — add your test to an existing <code>test_*.py</code> file if it fits the scope (see the <a href="#e2e-test-modules">E2E test modules table</a>). Create a new module only if your feature doesn't fit any existing one.</p>
+</li>
+<li>
+<p><strong>Use shared fixtures</strong> — <code>conftest.py</code> provides session-scoped fixtures like <code>maas_api_base_url</code>, <code>headers</code>, <code>token</code>, <code>admin_headers</code>, <code>api_key</code>, etc. Import <code>TLS_VERIFY</code> from <code>conftest</code> for HTTP calls.</p>
+</li>
+<li>
+<p><strong>Add test resources if needed</strong> — if your feature requires new MaaS CRs (models, subscriptions, auth policies), add a kustomize overlay under <code>test/e2e/fixtures/</code> and include it in the base <code>kustomization.yaml</code>.</p>
+</li>
+<li>
+<p><strong>Register new modules in CI</strong> — <code>prow_run_smoke_test.sh</code> runs an <strong>explicit file list</strong>. If you create a new test module, add it to the pytest invocation in <code>run_e2e_tests()</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># In test/e2e/scripts/prow_run_smoke_test.sh</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>pytest<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="s2">&quot;</span><span class="nv">$test_dir</span><span class="s2">/tests/test_api_keys.py&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="s2">&quot;</span><span class="nv">$test_dir</span><span class="s2">/tests/test_namespace_scoping.py&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span>...
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="s2">&quot;</span><span class="nv">$test_dir</span><span class="s2">/tests/test_my_new_feature.py&quot;</span><span class="w">  </span><span class="c1"># ← add here</span>
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p><code>smoke.sh</code> auto-discovers all files under <code>tests/</code>, but <code>prow_run_smoke_test.sh</code> does <strong>not</strong>. Your new module will not run in Konflux CI or nightly builds unless you add it to that explicit list.</p>
+</div>
+</li>
+<li>
+<p><strong>Use skip markers for optional features</strong> — if your test depends on optional infrastructure (e.g., external OIDC), gate it with <code>pytest.mark.skipif</code> so the same module runs cleanly in all environments.</p>
+</li>
+</ol>
+<h2 id="integration-testing-with-odh-operator">Integration Testing with ODH Operator</h2>
+<p>MaaS is a component of <a href="https://github.com/opendatahub-io">Open Data Hub (ODH)</a>. Beyond the in-repo E2E tests, MaaS is also validated as part of the broader ODH integration test suite in <a href="https://github.com/opendatahub-io/opendatahub-tests">opendatahub-tests</a>.</p>
+<h3 id="how-it-works">How It Works</h3>
 <ul>
-<li><code>https://maas.example.com/maas-api</code></li>
-<li><code>https://&lt;cluster-domain&gt;/maas-api</code></li>
+<li>The <a href="https://github.com/opendatahub-io/opendatahub-tests">opendatahub-tests</a> repo contains cross-component integration tests for the entire ODH platform, including model serving and MaaS functionality.</li>
+<li>These tests run in ODH CI and nightly pipelines against full ODH deployments with all components installed.</li>
+<li>MaaS-related integration tests validate that MaaS works correctly when deployed through the ODH operator alongside KServe, Authorino, and other platform components.</li>
 </ul>
-<p>Use the base URL appropriate for your deployment when calling these endpoints.</p>
-<hr />
-<h2 id="next-steps">Next Steps</h2>
-<ul>
-<li><strong><a href="../api-reference/">MaaS API (Swagger)</a></strong> — Interactive API documentation with full schemas and "Try it out"</li>
-<li><strong><a href="../../configuration-and-management/token-management/">Token Management</a></strong> — How to create and use API keys</li>
-<li><strong><a href="../../user-guide/self-service-model-access/">Self-Service Model Access</a></strong> — End-user guide for getting an API key and calling models</li>
+<h3 id="contributing-integration-tests">Contributing Integration Tests</h3>
+<p>If your change affects how MaaS integrates with the ODH operator or other ODH components, you may need to add or update tests in the <code>opendatahub-tests</code> repo:</p>
+<ol>
+<li>Follow the <a href="https://github.com/opendatahub-io/opendatahub-tests/blob/main/docs/CONTRIBUTING.md">opendatahub-tests contributing guide</a> and <a href="https://github.com/opendatahub-io/opendatahub-tests/blob/main/docs/DEVELOPER_GUIDE.md">developer guide</a></li>
+<li>Tests are organized by component — look for MaaS-related tests under the relevant directory</li>
+<li>The project uses <a href="https://github.com/RedHatQE/openshift-python-wrapper">openshift-python-wrapper</a> for Kubernetes/OpenShift API interactions</li>
+<li>Follow the project's <a href="https://github.com/opendatahub-io/opendatahub-tests/blob/main/docs/STYLE_GUIDE.md">style guide</a> and run <code>pre-commit</code> checks before submitting</li>
+</ol>
+<h3 id="when-to-add-in-repo-vs-integration-tests">When to Add In-Repo vs Integration Tests</h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Where to add tests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>New MaaS API endpoint or controller behavior</td>
+<td>In-repo: Go unit tests + E2E in <code>test/e2e/</code></td>
+</tr>
+<tr>
+<td>MaaS CRD changes or subscription logic</td>
+<td>In-repo: controller unit tests + E2E</td>
+</tr>
+<tr>
+<td>Interaction with ODH operator, KServe, or Authorino</td>
+<td><code>opendatahub-tests</code> repo</td>
+</tr>
+<tr>
+<td>End-to-end model serving through the full ODH stack</td>
+<td><code>opendatahub-tests</code> repo</td>
+</tr>
+<tr>
+<td>Bug fix with regression test</td>
+<td>In-repo (unit or E2E depending on scope)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="checklist-adding-a-new-test">Checklist: Adding a New Test</h2>
+<ul class="task-list">
+<li class="task-list-item"><input type="checkbox"/> <strong>Unit test</strong>: Add <code>*_test.go</code> alongside your source in <code>maas-api/</code> or <code>maas-controller/</code>; run <code>make test</code></li>
+<li class="task-list-item"><input type="checkbox"/> <strong>E2E test</strong>: Add to an existing <code>test_*.py</code> or create a new module in <code>test/e2e/tests/</code></li>
+<li class="task-list-item"><input type="checkbox"/> <strong>Test fixtures</strong>: If new CRs are needed, add a kustomize overlay in <code>test/e2e/fixtures/</code></li>
+<li class="task-list-item"><input type="checkbox"/> <strong>CI registration</strong>: Add new E2E modules to the explicit list in <code>prow_run_smoke_test.sh</code></li>
+<li class="task-list-item"><input type="checkbox"/> <strong>Skip markers</strong>: Use <code>pytest.mark.skipif</code> for tests requiring optional infrastructure</li>
+<li class="task-list-item"><input type="checkbox"/> <strong>Local validation</strong>: Run <code>make test</code> and/or <code>./test/e2e/run-tests-quick.sh</code> before pushing</li>
+<li class="task-list-item"><input type="checkbox"/> <strong>Integration tests</strong>: If your change affects ODH operator integration, update tests in <a href="https://github.com/opendatahub-io/opendatahub-tests">opendatahub-tests</a></li>
 </ul>
 
 
@@ -2820,7 +3182,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 30, 2026 16:08:31 UTC">March 30, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 6, 2026 19:44:13 UTC">April 6, 2026</span>
   </span>
 
     
@@ -2830,7 +3192,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 6, 2026 19:44:13 UTC">April 6, 2026</span>
   </span>
 
     
