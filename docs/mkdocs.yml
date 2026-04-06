@@ -58,6 +58,7 @@ nav:
       - Tier to Subscription: migration/tier-to-subscription.md
   - Concepts:
     - Architecture: architecture.md
+    - Personas: concepts/personas.md
     - Access and Quota Overview: configuration-and-management/subscription-overview.md
     - MaaS Models: configuration-and-management/maas-models.md
   - Install:

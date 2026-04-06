@@ -2,20 +2,29 @@
 
 ## Overview
 
-The MaaS Platform is a Kubernetes-native layer for AI model serving built on [Gateway API](https://gateway-api.sigs.k8s.io/) and policy controllers ([Kuadrant](https://docs.kuadrant.io/), [Authorino](https://docs.kuadrant.io/1.0.x/authorino/), [Limitador](https://docs.kuadrant.io/1.0.x/limitador/)). It provides policy-based authentication and authorization, plus subscription-based rate limiting. Future work includes improved request routing and discovery.
+The MaaS Platform is a Kubernetes-native layer for AI model serving built on [Gateway API](https://gateway-api.sigs.k8s.io/) and policy controllers ([Kuadrant](https://docs.kuadrant.io/), [Authorino](https://docs.kuadrant.io/1.0.x/authorino/), [Limitador](https://docs.kuadrant.io/1.0.x/limitador/)). It provides policy-based authentication and authorization, plus subscription-based rate limiting.
+
+Our future plans include improved request routing and discovery—and we're already sketching what comes after that.
 
 ## Architecture
 
 ### 🏗️ High-Level Architecture
 
-The MaaS Platform is an end-to-end solution built on [Kuadrant](https://docs.kuadrant.io/).
+The MaaS Platform is a layer for **authorization and rate limiting** built on [Kuadrant](https://docs.kuadrant.io/). It sits in front of **models** you deploy on the cluster; the same pattern is expected to extend to models hosted outside the cluster over time.
 
-All traffic flows through the Gateway    **maas-default-gateway** (Gateway API). Then utilizes [Authorino](https://docs.kuadrant.io/1.0.x/authorino/) to enforcing authentication, authorization and [Limitador](https://docs.kuadrant.io/1.0.x/limitador/) to enforce and track token usage. Auth policies use **caching** (e.g., subscription selection results, API key validation) to reduce latency on the hot path.
+**Our main components include:**
+
+- **Gateway (`maas-default-gateway`)** — Entry point for traffic using [Gateway API](https://gateway-api.sigs.k8s.io/); HTTPRoutes attach here.
+- **[Kuadrant](https://docs.kuadrant.io/1.4.x/)** — Policy engine: connects routes and **AuthPolicy** resources to the Gateway and orchestrates enforcement on the hot path.
+- **[Authorino](https://docs.kuadrant.io/1.4.x/authorino/)** — **Authentication and authorization** at the edge.
+- **[Limitador](https://docs.kuadrant.io/1.4.x/limitador/)** — **Rate limiting** and tracking usage against subscription limits.
+- **maas-api** — Custom service for **API key minting** and **validation** (including the internal endpoint the gateway calls for `sk-oai-*` keys).
 
 **Main Flows:**
 
-- **Key Minting** — For obtaining API keys to authenticate programmatic access. 
-- **Inference** — For calling models to generate completions.
+- **Key minting** (blue) — Obtain `sk-oai-*` API keys for programmatic access to models (after authenticating with your cluster identity or configured OIDC).
+- **Inference** (green) — Call deployed models to generate completions using an API key (and subscription) on the inference route.
+
 
 ```mermaid
 graph TB
@@ -35,8 +44,10 @@ graph TB
     end
     
     subgraph ModelServingLayer["Model Serving Layer"]
+        MaaSModelRef["MaaSModelRef"]
         InferenceService[Inference Service]
         LLM[LLM]
+        ExternalModel["ExternalModel /<br/>external API"]
     end
     
     User -->|"Request Key"| Gateway
@@ -48,68 +59,42 @@ graph TB
     Gateway --> MaaSAuthPolicy
     MaaSAuthPolicy -.->|"Validate API Key"| MaaSAPI
     MaaSAuthPolicy -->|"Rate Limit"| MaaSSubscription
-    MaaSSubscription --> InferenceService
+    MaaSSubscription --> MaaSModelRef
+    MaaSModelRef -->|"On-cluster"| InferenceService
+    MaaSModelRef -.->|"Tech Preview"| ExternalModel
     InferenceService --> LLM
     LLM -->|"Return Response"| User
+    ExternalModel -.->|"Return Response"| User
     
     linkStyle 0,1,2,3 stroke:#1976d2,stroke-width:2px
-    linkStyle 4,5,6,7,8,9,10 stroke:#388e3c,stroke-width:2px
+    linkStyle 4,5,6,7,8,9,11,12 stroke:#388e3c,stroke-width:2px
+    linkStyle 10,13 stroke:#388e3c,stroke-width:2px,stroke-dasharray: 6 4
     
     style MaaSAPI fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
     style Gateway fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
     style AuthPolicy fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
     style MaaSAuthPolicy fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
     style MaaSSubscription fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style MaaSModelRef fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
     style InferenceService fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
     style LLM fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
+    style ExternalModel fill:#00695c,stroke:#333,stroke-width:2px,color:#fff
 ```
 
 ### Key Minting Flow — Request & Validation
 
 **Flow summary:**
 
-1. User sends `POST /v1/api-keys` with Bearer `{identity-token}`.
-2. Gateway routes the request to AuthPolicy (Authorino).
-3. AuthPolicy validates the presented identity token via the configured auth method (`kubernetesTokenReview` for OpenShift, or OIDC JWT validation when enabled).
-4. Gateway forwards the authenticated request and user context to the Key Minting Service.
-
-```mermaid
-graph TB
-    subgraph UserLayer["User"]
-        U[User]
-    end
-    
-    subgraph GatewayLayer["Gateway & Policy"]
-        G[Gateway]
-        AP[AuthPolicy<br/>Authorino]
-    end
-    
-    subgraph KeyMintingLayer["MaaS API"]
-        KMS[MaaS API]
-    end
-    
-    U -->|"1. POST /v1/api-keys<br/>Bearer {identity-token}"| G
-    G -->|"2. Route /maas-api"| AP
-    AP -->|"3. Validate identity token<br/>TokenReview or OIDC JWT"| G
-    G -->|"4. Forward + user context"| KMS
-    
-    style KMS fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
-    style G fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
-    style AP fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
-```
-
-!!! Tip "OIDC Support"
-    The `maas-api` route can be configured to validate external OIDC tokens (for example Keycloak-issued JWTs) in addition to the existing OpenShift TokenReview flow. Model routes still use the current API-key policy, so the interim OIDC flow is: authenticate with OIDC at `maas-api`, mint an `sk-oai-*` key, then use that key for model discovery and inference.
-
-
-### Key Minting Service (Default Implementation)
-
-**Flow summary:**
-
-1. Gateway forwards the authenticated request and user context to the Key Minting Service (MaaS API).
-2. The service generates a random `sk-oai-*` key and hashes it with SHA-256.
-3. Only the hash and metadata (username, groups, name, optional `expiresAt` when TTL is set) are stored in PostgreSQL.
-4. The plaintext key is returned to the user **once**, along with `expiresAt` when a TTL was specified; the key cannot be retrieved again.
+1. User sends `POST /maas-api/v1/api-keys` with `Authorization: Bearer {identity-token}`.
+2. **Gateway** routes the request to **AuthPolicy** and authenticates it against that policy.
+3. **Validate identity** — the policy stack checks the token using the configured method:
+    - **`kubernetesTokenReview`** — OpenShift cluster tokens
+    - **OIDC JWT validation** — external IdP (for example Keycloak) — **Tech Preview**
+4. **AuthPolicy** (policy stack) forwards the authenticated request and **user context** to **MaaS API** (key minting)—the same identity headers used for authorization are passed through for minting.
+5. **MaaS API** receives that forwarded request and context from the policy layer.
+6. The service generates a random `sk-oai-*` key and hashes it with SHA-256.
+7. Only the hash and metadata (username, groups, name, optional `expiresAt` when TTL is set) are stored in PostgreSQL.
+8. The plaintext key is returned to the user **only in this minting response** (show-once), along with `expiresAt` when a TTL was specified; it is **not** exposed again on later reads. The diagram below stops at storage and does not show the HTTP response back to the user.
 
 Keys can be permanent (no expiration) or have an optional **TTL** (`expiresIn`, e.g., `30d`, `90d`, `1h`); the response includes `expiresAt` when a TTL is set.
 
@@ -118,32 +103,40 @@ graph TB
     subgraph UserLayer["User"]
         U[User]
     end
-    
+
     subgraph GatewayLayer["Gateway & Policy"]
         G[Gateway]
+        AP["AuthPolicy<sub>Authorino</sub>"]
     end
-    
-    subgraph KeyMintingService["Key Minting Service (Default)"]
+
+    subgraph KeyMinting["MaaS API"]
         API[MaaS API]
         Gen[Generate sk-oai-* key]
         Hash[Hash with SHA-256]
     end
-    
-    subgraph Storage["Storage (Default)"]
+
+    subgraph Storage["Storage"]
         DB[(PostgreSQL<br/>key hashes + metadata + TTL)]
     end
-    
-    U --> G
-    G -->|"Forward + user context"| API
+
+    U -->|"POST /maas-api/v1/api-keys"| G
+    G -->|"Authenticate vs AuthPolicy"| AP
+    AP -->|"Validate identity"| G
+    AP -->|"Forward + user context"| API
     API --> Gen
     Gen --> Hash
-    Hash -->|"Store hash + expiresAt"| DB
-    API -->|"Return key ONCE"| U
-    
+    Hash -->|"Store hash + metadata"| DB
+
     style API fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style Gen fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style Hash fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
     style G fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
+    style AP fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
     style DB fill:#336791,stroke:#333,stroke-width:2px,color:#fff
 ```
+
+!!! Tip "OIDC Support"
+    **Tech Preview:** OIDC JWT validation on the `maas-api` route is optional alongside OpenShift `kubernetesTokenReview`. Model routes still rely on API-key auth; the typical flow is authenticate at `maas-api`, mint an `sk-oai-*` key, then use that key for discovery and inference.
 
 !!! tip "Future Plans"
     This is the **default implementation**. Future plans include integration with other key store providers (e.g., HashiCorp Vault, cloud secret managers).
