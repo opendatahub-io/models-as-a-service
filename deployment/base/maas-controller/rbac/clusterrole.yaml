@@ -76,13 +76,6 @@ rules:
   - maas.opendatahub.io
   resources:
   - externalmodels
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - maas.opendatahub.io
-  resources:
   - maasauthpolicies
   - maasmodelrefs
   - maassubscriptions
@@ -97,6 +90,7 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
+  - externalmodels/finalizers
   - maasauthpolicies/finalizers
   - maasmodelrefs/finalizers
   - maassubscriptions/finalizers
@@ -105,6 +99,7 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
+  - externalmodels/status
   - maasauthpolicies/status
   - maasmodelrefs/status
   - maassubscriptions/status

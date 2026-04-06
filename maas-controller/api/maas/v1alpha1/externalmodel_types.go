@@ -41,6 +41,23 @@ type ExternalModelSpec struct {
 	// The Secret must contain a data key "api-key" with the credential value.
 	// +kubebuilder:validation:Required
 	CredentialRef CredentialReference `json:"credentialRef"`
+
+	// BackendModelName is the actual model identifier used by the external provider.
+	// When specified, client requests using this ExternalModel's name (metadata.name)
+	// will be translated to use this backend model name in API calls.
+	// If not specified, the metadata.name is used as the backend model name.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`
+	BackendModelName string `json:"backendModelName,omitempty"`
+
+	// ModelAliases defines additional virtual names that clients can use to reference this model.
+	// These aliases, along with the metadata.name, will all resolve to the same backend model.
+	// Each alias must be unique across all ExternalModel and MaaSModelRef resources in the cluster.
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:UniqueItems=true
+	ModelAliases []string `json:"modelAliases,omitempty"`
 }
 
 // ExternalModelStatus defines the observed state of ExternalModel
@@ -52,6 +69,16 @@ type ExternalModelStatus struct {
 	// Conditions represent the latest available observations of the external model's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// VirtualNames lists all virtual names (metadata.name + aliases) that resolve to this model.
+	// This field is populated by the controller for observability.
+	// +optional
+	VirtualNames []string `json:"virtualNames,omitempty"`
+
+	// ResolvedBackendModelName shows the resolved backend model name being used.
+	// This field is populated by the controller for observability.
+	// +optional
+	ResolvedBackendModelName string `json:"resolvedBackendModelName,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -64,6 +91,23 @@ type ExternalModelStatus struct {
 // ExternalModel is the Schema for the externalmodels API.
 // It defines an external LLM provider (e.g., OpenAI, Anthropic) that can be
 // referenced by MaaSModelRef resources.
+//
+// Model Name Virtualization:
+// ExternalModel supports model name virtualization where the Kubernetes resource name
+// (metadata.name) serves as a virtual model name that clients use in API requests.
+// The actual provider-specific model identifier is specified in spec.backendModelName.
+// Additional virtual names can be defined via spec.modelAliases.
+//
+// Example:
+//   metadata:
+//     name: claude                    # Virtual name clients use
+//   spec:
+//     provider: anthropic
+//     backendModelName: claude-3-5-sonnet-20241022  # Real provider model
+//     modelAliases: ["claude-3", "claude-sonnet"]   # Additional virtual names
+//
+// With this configuration, client requests using "claude", "claude-3", or "claude-sonnet"
+// will be automatically translated to use "claude-3-5-sonnet-20241022" when sent to the Anthropic API.
 type ExternalModel struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -33,7 +33,27 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: MaaSModelRef is the Schema for the maasmodelrefs API
+        description: |-
+          MaaSModelRef is the Schema for the maasmodelrefs API.
+
+          Model Name Virtualization:
+          MaaSModelRef supports model name virtualization where the Kubernetes resource name
+          (metadata.name) serves as a virtual model name that clients use in API requests.
+          The actual backend model identifier is specified in spec.backendModelName.
+          Additional virtual names can be defined via spec.modelAliases.
+
+          Example:
+            metadata:
+              name: support-bot              # Virtual name clients use
+            spec:
+              modelRef:
+                kind: LLMInferenceService
+                name: llama-7b-support-finetuned-v2
+              backendModelName: llama-7b-support-finetuned-v2  # Backend model name
+              modelAliases: ["customer-ai", "help-assistant"]  # Additional virtual names
+
+          With this configuration, client requests using "support-bot", "customer-ai", or "help-assistant"
+          will be automatically translated to use "llama-7b-support-finetuned-v2" for internal routing.
         properties:
           apiVersion:
             description: |-
@@ -55,12 +75,32 @@ spec:
           spec:
             description: MaaSModelSpec defines the desired state of MaaSModelRef
             properties:
+              backendModelName:
+                description: |-
+                  BackendModelName is the actual model identifier used for internal routing.
+                  For LLMInferenceService models, this typically matches the InferenceService name.
+                  When specified, client requests using this MaaSModelRef's name (metadata.name)
+                  will be translated to use this backend model name for routing.
+                  If not specified, the ModelRef.Name is used as the backend model name.
+                maxLength: 253
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                type: string
               endpointOverride:
                 description: |-
                   EndpointOverride, when set, overrides the endpoint URL that the controller
                   would otherwise discover from the backend (e.g. LLMInferenceService status
                   or Gateway/HTTPRoute).
                 type: string
+              modelAliases:
+                description: |-
+                  ModelAliases defines additional virtual names that clients can use to reference this model.
+                  These aliases, along with the metadata.name, will all resolve to the same backend model.
+                  Each alias must be unique across all ExternalModel and MaaSModelRef resources in the cluster.
+                items:
+                  type: string
+                maxItems: 20
+                type: array
+                uniqueItems: true
               modelRef:
                 description: ModelRef references the actual model endpoint
                 properties:
@@ -182,6 +222,18 @@ spec:
                 - Unhealthy
                 - Failed
                 type: string
+              resolvedBackendModelName:
+                description: |-
+                  ResolvedBackendModelName shows the resolved backend model name being used.
+                  This field is populated by the controller for observability.
+                type: string
+              virtualNames:
+                description: |-
+                  VirtualNames lists all virtual names (metadata.name + aliases) that resolve to this model.
+                  This field is populated by the controller for observability.
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true

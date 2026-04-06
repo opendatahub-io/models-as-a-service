@@ -179,6 +179,13 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		model.Status.Endpoint = ""
 		r.updateStatus(ctx, model, "Pending", "Waiting for backend to become ready", statusSnapshot)
 	}
+
+	// Update virtual name status fields
+	if err := r.updateVirtualNameStatus(ctx, model); err != nil {
+		log.Error(err, "failed to update virtual name status")
+		// Don't return error to avoid re-queue, virtual name status is non-critical
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -286,6 +293,34 @@ func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, mod
 		log.Error(err, "failed to update MaaSModelRef status", "name", model.Name)
 		// Intentionally do not return the error so we do not re-queue on status update conflict/failure.
 	}
+}
+
+// updateVirtualNameStatus populates the status fields with virtual name information for MaaSModelRef
+func (r *MaaSModelRefReconciler) updateVirtualNameStatus(ctx context.Context, model *maasv1alpha1.MaaSModelRef) error {
+	// Calculate virtual names (resource name + aliases)
+	virtualNames := getVirtualNames(model.Name, model.Spec.ModelAliases)
+	
+	// Calculate resolved backend model name
+	resolvedBackendModelName := getBackendModelName(model.Spec.BackendModelName, model.Name)
+	
+	// Check if status needs updating
+	statusChanged := false
+	if !equalStringSlices(model.Status.VirtualNames, virtualNames) {
+		model.Status.VirtualNames = virtualNames
+		statusChanged = true
+	}
+	if model.Status.ResolvedBackendModelName != resolvedBackendModelName {
+		model.Status.ResolvedBackendModelName = resolvedBackendModelName
+		statusChanged = true
+	}
+	
+	if statusChanged {
+		if err := r.Status().Update(ctx, model); err != nil {
+			return fmt.Errorf("failed to update MaaSModelRef virtual name status: %w", err)
+		}
+	}
+	
+	return nil
 }
 
 // llmisvcReadyChangedPredicate passes Create/Delete events and Update events

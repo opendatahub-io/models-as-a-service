@@ -29,6 +29,24 @@ type MaaSModelSpec struct {
 	// or Gateway/HTTPRoute).
 	// +optional
 	EndpointOverride string `json:"endpointOverride,omitempty"`
+
+	// BackendModelName is the actual model identifier used for internal routing.
+	// For LLMInferenceService models, this typically matches the InferenceService name.
+	// When specified, client requests using this MaaSModelRef's name (metadata.name)
+	// will be translated to use this backend model name for routing.
+	// If not specified, the ModelRef.Name is used as the backend model name.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`
+	BackendModelName string `json:"backendModelName,omitempty"`
+
+	// ModelAliases defines additional virtual names that clients can use to reference this model.
+	// These aliases, along with the metadata.name, will all resolve to the same backend model.
+	// Each alias must be unique across all ExternalModel and MaaSModelRef resources in the cluster.
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:UniqueItems=true
+	ModelAliases []string `json:"modelAliases,omitempty"`
 }
 
 // CredentialReference references a Kubernetes Secret with provider API credentials.
@@ -90,6 +108,16 @@ type MaaSModelStatus struct {
 	// Conditions represent the latest available observations of the model's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// VirtualNames lists all virtual names (metadata.name + aliases) that resolve to this model.
+	// This field is populated by the controller for observability.
+	// +optional
+	VirtualNames []string `json:"virtualNames,omitempty"`
+
+	// ResolvedBackendModelName shows the resolved backend model name being used.
+	// This field is populated by the controller for observability.
+	// +optional
+	ResolvedBackendModelName string `json:"resolvedBackendModelName,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -100,7 +128,26 @@ type MaaSModelStatus struct {
 //+kubebuilder:printcolumn:name="Gateway",type="string",JSONPath=".status.httpRouteGatewayName"
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
-// MaaSModelRef is the Schema for the maasmodelrefs API
+// MaaSModelRef is the Schema for the maasmodelrefs API.
+//
+// Model Name Virtualization:
+// MaaSModelRef supports model name virtualization where the Kubernetes resource name
+// (metadata.name) serves as a virtual model name that clients use in API requests.
+// The actual backend model identifier is specified in spec.backendModelName.
+// Additional virtual names can be defined via spec.modelAliases.
+//
+// Example:
+//   metadata:
+//     name: support-bot              # Virtual name clients use
+//   spec:
+//     modelRef:
+//       kind: LLMInferenceService
+//       name: llama-7b-support-finetuned-v2
+//     backendModelName: llama-7b-support-finetuned-v2  # Backend model name
+//     modelAliases: ["customer-ai", "help-assistant"]  # Additional virtual names
+//
+// With this configuration, client requests using "support-bot", "customer-ai", or "help-assistant"
+// will be automatically translated to use "llama-7b-support-finetuned-v2" for internal routing.
 type MaaSModelRef struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
