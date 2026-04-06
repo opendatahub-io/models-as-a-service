@@ -1,5 +1,5 @@
 apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
+kind: PodMonitor
 metadata:
   name: maas-controller-metrics
   labels:
@@ -8,9 +8,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: maas-controller
       control-plane: maas-controller
-  endpoints:
+  podMetricsEndpoints:
   - port: metrics
     path: /metrics
     interval: 30s

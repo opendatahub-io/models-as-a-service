@@ -51,6 +51,10 @@ spec:
         image: maas-controller
         name: manager
         imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
