@@ -2390,15 +2390,47 @@
 <li class="task-list-item"><input type="checkbox"/> Verify that the model is token rate limited by checking the inference endpoint (see <a href="../validation/#6-test-rate-limiting">Validation Guide - Test Rate Limiting</a>)</li>
 </ul>
 </li>
-<li><strong>Routes not accessible (503 errors)</strong>: Check MaaS Default Gateway status and HTTPRoute configuration<ul class="task-list">
+<li>
+<p><strong>Routes not accessible (503 errors)</strong>: Check MaaS Default Gateway status and HTTPRoute configuration</p>
+<ul class="task-list">
 <li class="task-list-item"><input type="checkbox"/> Verify Gateway is in <code>Programmed</code> state: <code>kubectl get gateway -n openshift-ingress maas-default-gateway</code></li>
 <li class="task-list-item"><input type="checkbox"/> Check HTTPRoute configuration and status</li>
 </ul>
+</li>
+<li>
+<p><strong>Metrics not appearing in dashboards</strong>: Prometheus is not scraping MaaS components.</p>
+<ul class="task-list">
+<li class="task-list-item"><input type="checkbox"/> Verify User Workload Monitoring is enabled — see <a href="../../advanced-administration/observability/#user-workload-monitoring">Observability Prerequisites</a></li>
+<li class="task-list-item"><input type="checkbox"/> Verify Kuadrant observability is enabled — see <a href="../../advanced-administration/observability/#kuadrant-observability">Observability Prerequisites</a></li>
+<li class="task-list-item"><input type="checkbox"/> Check prometheus-user-workload pods are running:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>openshift-user-workload-monitoring
+</code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><input type="checkbox"/> Verify ServiceMonitors/PodMonitors exist:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>servicemonitor,podmonitor<span class="w"> </span>-A<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;(maas|kuadrant|limitador)&quot;</span>
+</code></pre></div>
+</li>
+<li>
+<p><strong>Rate limiting metrics missing (authorized_calls, limited_calls)</strong>: Kuadrant observability is not enabled.</p>
+<ul class="task-list">
+<li class="task-list-item"><input type="checkbox"/> Enable observability on Kuadrant CR:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>kuadrant<span class="w"> </span>kuadrant<span class="w"> </span>-n<span class="w"> </span>kuadrant-system<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;observability&quot;:{&quot;enable&quot;:true}}}&#39;</span>
+</code></pre></div>
+<ul class="task-list">
+<li class="task-list-item"><input type="checkbox"/> Verify the PodMonitor was created:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>podmonitor<span class="w"> </span>-n<span class="w"> </span>kuadrant-system
+</code></pre></div>
 </li>
 </ol>
 <h2 id="additional-resources">Additional Resources</h2>
 <ul>
 <li><a href="../validation/">Validation Guide</a> — Manual validation steps</li>
+<li><a href="../../advanced-administration/observability/">Observability Guide</a> — Metrics, monitoring, and dashboards</li>
 <li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md">scripts/README.md</a> — Deployment scripts documentation</li>
 </ul>
 
@@ -2423,7 +2455,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 6, 2026 12:45:36 UTC">April 6, 2026</span>
   </span>
 
     
