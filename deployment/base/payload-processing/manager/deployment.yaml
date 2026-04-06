@@ -31,35 +31,35 @@ spec:
             - --v
             - "3"
             - --plugin
-            - "$(PLUGIN_0)"
+            - "$(MODEL_TO_HEADER)"
             - --plugin
-            - "$(PLUGIN_1)"
+            - "$(MODEL_PROVIDER_RESOLVER)"
             - --plugin
-            - "$(PLUGIN_2)"
+            - "$(API_TRANSLATION)"
             - --plugin
-            - "$(PLUGIN_3)"
+            - "$(APIKEY_INJECTION)"
             - --tracing=false
           env:
-            - name: PLUGIN_0
+            - name: MODEL_TO_HEADER
               valueFrom:
                 configMapKeyRef:
                   name: payload-processing-plugins
-                  key: plugin-0
-            - name: PLUGIN_1
+                  key: model-to-header-plugin
+            - name: MODEL_PROVIDER_RESOLVER
               valueFrom:
                 configMapKeyRef:
                   name: payload-processing-plugins
-                  key: plugin-1
-            - name: PLUGIN_2
+                  key: model-provider-resolver-plugin
+            - name: API_TRANSLATION
               valueFrom:
                 configMapKeyRef:
                   name: payload-processing-plugins
-                  key: plugin-2
-            - name: PLUGIN_3
+                  key: api-translation-plugin
+            - name: APIKEY_INJECTION
               valueFrom:
                 configMapKeyRef:
                   name: payload-processing-plugins
-                  key: plugin-3
+                  key: apikey-injection-plugin
           ports:
             - containerPort: 9004
               name: grpc

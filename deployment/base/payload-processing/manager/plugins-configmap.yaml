@@ -7,7 +7,7 @@ data:
   # Each key defines a plugin passed as --plugin <value> to the BBR ext_proc server.
   # Format: "<plugin-type>:<plugin-name>[:<json-config>]"
   # Overlays can add/remove plugins by patching this ConfigMap.
-  plugin-0: "body-field-to-header:model-extractor:{\"field_name\":\"model\",\"header_name\":\"X-Gateway-Model-Name\"}"
-  plugin-1: "model-provider-resolver:model-provider-resolver"
-  plugin-2: "api-translation:api-translation"
-  plugin-3: "apikey-injection:apikey-injection"
+  model-to-header-plugin: "body-field-to-header:model-extractor:{\"fieldName\":\"model\",\"headerName\":\"X-Gateway-Model-Name\"}"
+  model-provider-resolver-plugin: "model-provider-resolver:model-provider-resolver"
+  api-translation-plugin: "api-translation:api-translation"
+  apikey-injection-plugin: "apikey-injection:apikey-injection"
