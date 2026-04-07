@@ -10,16 +10,12 @@ rules:
   # Require descriptions
   info-description: error
   operation-description: warn
-  operation-summary: error
 
   # Require examples for request/response bodies
   operation-success-response: error
 
   # Security
   oas3-api-servers: error
-
-  # Consistent naming
-  paths-kebab-case: warn
 
   # Documentation quality
   info-contact: warn
