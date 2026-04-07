@@ -83,6 +83,13 @@ spec:
                   e.g. "openai", "anthropic".
                 maxLength: 63
                 type: string
+              targetModel:
+                description: |-
+                  TargetModel is the upstream model name at the external provider.
+                  e.g. "gpt-4o", "claude-sonnet-4-5-20241022".
+                  When omitted, the MaaSModelRef name is used as the model identifier.
+                maxLength: 253
+                type: string
             required:
             - credentialRef
             - endpoint
