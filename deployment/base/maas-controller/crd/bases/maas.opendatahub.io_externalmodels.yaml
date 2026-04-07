@@ -81,7 +81,13 @@ spec:
               provider:
                 description: |-
                   Provider identifies the API format and auth type for the external model.
-                  e.g. "openai", "anthropic".
+                  The allowed values are: "openai", "anthropic", "azure-openai", "vertex" and "bedrock-openai".
+                enum:
+                - openai
+                - anthropic
+                - azure-openai
+                - vertex
+                - bedrock-openai
                 maxLength: 63
                 minLength: 1
                 type: string
