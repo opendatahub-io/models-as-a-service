@@ -44,10 +44,10 @@ type ExternalModelSpec struct {
 
 	// TargetModel is the upstream model name at the external provider.
 	// e.g. "gpt-4o", "claude-sonnet-4-5-20241022".
-	// When omitted, the MaaSModelRef name is used as the model identifier.
-	// +optional
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	TargetModel string `json:"targetModel,omitempty"`
+	TargetModel string `json:"targetModel"`
 }
 
 // ExternalModelStatus defines the observed state of ExternalModel

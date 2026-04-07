@@ -9,7 +9,7 @@ Defines an external AI/ML model hosted outside the cluster (e.g., OpenAI, Anthro
 | provider | string | Yes | Provider identifier (e.g., `openai`, `anthropic`, `azure`). Max length: 63 characters. |
 | endpoint | string | Yes | FQDN of the external provider (no scheme or path), e.g., `api.openai.com`. This is metadata for downstream consumers. Max length: 253 characters. |
 | credentialRef | CredentialReference | Yes | Reference to the Secret containing API credentials. Must exist in the same namespace as the ExternalModel. |
-| targetModel | string | No | Upstream model name at the external provider (e.g., `gpt-4o`, `claude-sonnet-4-5-20241022`). When omitted, the MaaSModelRef name is used as the model identifier. Max length: 253 characters. |
+| targetModel | string | Yes | Upstream model name at the external provider (e.g., `gpt-4o`, `claude-sonnet-4-5-20241022`). Max length: 253 characters. |
 
 ## CredentialReference
 
