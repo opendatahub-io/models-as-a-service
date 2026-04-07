@@ -113,8 +113,8 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 	// List all ModelsAsService resources (should be at most one)
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "opendatahub.io",
-		Version: "v1",
+		Group:   "components.platform.opendatahub.io",
+		Version: "v1alpha1",
 		Kind:    "ModelsAsServiceList",
 	})
 
@@ -215,7 +215,7 @@ func authzCacheKeySelector(ns, name string) string {
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
-//+kubebuilder:rbac:groups=opendatahub.io,resources=modelsasservices,verbs=get;list;watch
+//+kubebuilder:rbac:groups=components.platform.opendatahub.io,resources=modelsasservices,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
@@ -1013,8 +1013,8 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Watch ModelsAsService so we re-reconcile when OIDC configuration changes.
 	modelsAsService := &unstructured.Unstructured{}
 	modelsAsService.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "opendatahub.io",
-		Version: "v1",
+		Group:   "components.platform.opendatahub.io",
+		Version: "v1alpha1",
 		Kind:    "ModelsAsService",
 	})
 
