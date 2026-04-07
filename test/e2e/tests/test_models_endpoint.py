@@ -411,7 +411,7 @@ class TestModelsEndpoint:
                 result = subprocess.run([
                     "kubectl", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                     "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
-                ], capture_output=True, text=True)
+                ], capture_output=True, text=True, check=True, timeout=30)
 
                 if sa_user in result.stdout:
                     users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
@@ -566,7 +566,7 @@ class TestModelsEndpoint:
                 result = subprocess.run([
                     "kubectl", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                     "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
-                ], capture_output=True, text=True)
+                ], capture_output=True, text=True, check=True, timeout=30)
 
                 if sa_user in result.stdout:
                     users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
