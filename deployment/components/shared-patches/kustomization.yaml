@@ -158,3 +158,23 @@ replacements:
     options:
       delimiter: "."
       index: 1
+
+# -----------------------------------------------------------------------------
+# 4. CLUSTER AUDIENCE FOR KUBERNETESTOKENREVIEW
+# -----------------------------------------------------------------------------
+# Sets the correct audience for kubernetesTokenReview authentication.
+# Clusters with custom OIDC issuers (e.g., HyperShift, ROSA) use a different
+# audience than the default https://kubernetes.default.svc. The operator
+# detects this from Authentication/cluster and sets the param accordingly.
+# -----------------------------------------------------------------------------
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.cluster-audience
+  targets:
+  - select:
+      kind: AuthPolicy
+      name: maas-api-auth-policy
+    fieldPaths:
+    - spec.rules.authentication.openshift-identities.kubernetesTokenReview.audiences.0

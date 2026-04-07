@@ -2,10 +2,113 @@
 
 This document covers the observability stack for the MaaS Platform, including metrics collection, monitoring, and visualization.
 
-!!! warning "Important"
-    [User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled in order to collect metrics.
+## Prerequisites
 
-    Add `enableUserWorkload: true` to the `cluster-monitoring-config` in the `openshift-monitoring` namespace
+Before deploying the observability stack, ensure the following platform prerequisites are configured. Without these, metrics pipelines for dashboards and showback will not function.
+
+### User Workload Monitoring
+
+[User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled for Prometheus to scrape metrics from MaaS components.
+
+!!! warning "Required for metrics collection"
+    Without User Workload Monitoring enabled, ServiceMonitors deployed by MaaS will not be processed and no metrics will be collected.
+
+**Step 1: Create or update the cluster-monitoring-config ConfigMap**
+
+The ConfigMap must exist in the `openshift-monitoring` namespace (not the MaaS application namespace). Cluster admin permissions are required.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+```
+
+Apply with:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+EOF
+```
+
+**Step 2: Verify User Workload Monitoring is active**
+
+```bash
+# Check that prometheus-user-workload pods are running
+kubectl get pods -n openshift-user-workload-monitoring
+
+# Expected output: prometheus-user-workload-0 and prometheus-user-workload-1 in Running state
+```
+
+If pods are not present, wait a few minutes for the monitoring operator to reconcile.
+
+### Kuadrant Observability
+
+The Kuadrant CR must have `observability.enabled` set to `true` for the operator to create the necessary PodMonitor that scrapes Limitador metrics.
+
+!!! warning "Required for rate-limiting and usage metrics"
+    Without Kuadrant observability enabled, metrics like `authorized_hits`, `authorized_calls`, and `limited_calls` will not be scraped into Prometheus. Dashboards showing token consumption and rate limiting will have no data.
+
+**Step 1: Enable observability on the Kuadrant CR**
+
+```bash
+kubectl patch kuadrant kuadrant -n kuadrant-system --type=merge \
+  -p '{"spec":{"observability":{"enable":true}}}'
+```
+
+Or edit the Kuadrant CR directly:
+
+```yaml
+apiVersion: kuadrant.io/v1beta1
+kind: Kuadrant
+metadata:
+  name: kuadrant
+  namespace: kuadrant-system
+spec:
+  observability:
+    enable: true  # Required for PodMonitor creation
+```
+
+**Step 2: Verify the PodMonitor exists**
+
+```bash
+# Check that the Kuadrant-created PodMonitor exists
+kubectl get podmonitor -n kuadrant-system
+
+# Expected: kuadrant-limitador-monitor should be listed
+```
+
+**Step 3: Verify Limitador metrics are being scraped**
+
+```bash
+# Query Prometheus for Limitador metrics
+curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+  "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/query?query=limitador_up"
+
+# Should return data with limitador_up = 1
+```
+
+### Prerequisites Summary
+
+| Prerequisite | Namespace | How to Enable | Verification |
+|--------------|-----------|---------------|--------------|
+| **User Workload Monitoring** | `openshift-monitoring` | Create `cluster-monitoring-config` ConfigMap with `enableUserWorkload: true` | `kubectl get pods -n openshift-user-workload-monitoring` shows running Prometheus pods |
+| **Kuadrant Observability** | `kuadrant-system` | Set `spec.observability.enable: true` on Kuadrant CR | `kubectl get podmonitor -n kuadrant-system` shows `kuadrant-limitador-monitor` |
+
+!!! note "Cluster Admin Permissions"
+    Configuring User Workload Monitoring requires cluster admin permissions to create ConfigMaps in the `openshift-monitoring` namespace. If you don't have these permissions, contact your cluster administrator.
 
 ## Overview
 
@@ -38,6 +141,80 @@ The observability stack consists of:
     The maas-api Go service does **not** expose a `/metrics` endpoint. Metrics such as API key creation rate, token issuance rate, model discovery latency, and request handler durations are not available in Prometheus. Adding Prometheus instrumentation (e.g. `promhttp` handler + application-specific counters/histograms) to the Go service is a recommended future improvement.
 
 ## Installation
+
+There are two ways to enable deployment-based observability:
+
+1. **Operator-managed** (recommended): Enable via ModelsAsService CR
+2. **Kustomize-based**: Deploy manifests directly
+
+### Option 1: Operator-Managed Telemetry
+
+When using the ODH/RHOAI operator, telemetry can be enabled via the ModelsAsService CR:
+
+```yaml
+apiVersion: components.platform.opendatahub.io/v1alpha1
+kind: ModelsAsService
+metadata:
+  name: default-modelsasservice
+spec:
+  telemetry:
+    enabled: true  # Enable TelemetryPolicy and Istio Telemetry
+    metrics:
+      captureOrganization: true
+      captureUser: false      # Disabled by default (GDPR)
+      captureGroup: false     # High cardinality
+      captureModelUsage: true
+```
+
+Or patch an existing CR:
+
+```bash
+kubectl patch modelsasservice default-modelsasservice --type=merge \
+  -p '{"spec":{"telemetry":{"enabled":true}}}'
+```
+
+**What the operator creates when `telemetry.enabled: true`:**
+
+| Resource | Namespace | Purpose |
+|----------|-----------|---------|
+| TelemetryPolicy (`maas-telemetry`) | Gateway namespace | Adds `user`, `subscription`, `model` labels to Limitador usage metrics |
+| Istio Telemetry (`latency-per-subscription`) | Gateway namespace | Adds `subscription` label to gateway latency metrics |
+
+!!! note "Prerequisites for Operator-Managed Telemetry"
+    The operator-managed telemetry feature requires:
+
+    - **OpenShift Service Mesh (Istio)** 2.4+ — for Istio Telemetry CRD
+    - **Kuadrant/RHCL** — for TelemetryPolicy CRD and AuthPolicy header injection
+    - **Gateway deployed** — Telemetry targets the gateway via selector
+
+    The operator checks for CRD availability before creating resources. If a CRD is not present, that resource is silently skipped.
+
+!!! warning "AuthPolicy Header Dependency"
+    The Istio Telemetry reads the `subscription` value from the `X-MaaS-Subscription` header, which must be injected by AuthPolicy:
+
+    ```yaml
+    response:
+      success:
+        headers:
+          X-MaaS-Subscription:
+            plain:
+              expression: 'auth.metadata.apiKeyValidation.subscription'
+    ```
+
+    Without this header injection, the `subscription` label on latency metrics will be empty.
+
+**Verify the feature is working:**
+
+```bash
+# Check Istio Telemetry was created
+kubectl get telemetry -n openshift-ingress latency-per-subscription
+
+# Query Prometheus for subscription label
+curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+  "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/label/subscription/values"
+```
+
+### Option 2: Kustomize-Based Installation
 
 The observability stack is defined in `deployment/base/observability/`. It includes:
 

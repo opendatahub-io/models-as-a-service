@@ -1,8 +1,10 @@
 apiVersion: extensions.kuadrant.io/v1alpha1
 kind: TelemetryPolicy
 metadata:
-  name: user-group
+  name: maas-telemetry
   namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: maas-observability
 spec:
   metrics:
     default:

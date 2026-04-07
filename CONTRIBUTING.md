@@ -108,7 +108,7 @@ Konflux builds multi-arch container images (x86_64, arm64, ppc64le, s390x) for b
 
 ## Testing
 
-**New functionality should include tests.** Add or extend tests to cover your changes—for example, unit tests in `maas-api/` or `test/`, or E2E coverage where appropriate. This section will be expanded with more detailed testing guidelines.
+**New functionality should include tests.** Add or extend tests to cover your changes—for example, unit tests in `maas-api/` or `test/`, or E2E coverage where appropriate. See the full [MaaS Testing and Contribution Guide](https://opendatahub-io.github.io/models-as-a-service/contributing/testing-guide/) for how to write, run, and add tests to the project.
 
 ## Documentation
 

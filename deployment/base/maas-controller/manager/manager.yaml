@@ -47,10 +47,17 @@ spec:
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
           - name: CLUSTER_AUDIENCE
-            value: "https://kubernetes.default.svc"
+            valueFrom:
+              configMapKeyRef:
+                name: maas-parameters
+                key: cluster-audience
         image: maas-controller
         name: manager
         imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

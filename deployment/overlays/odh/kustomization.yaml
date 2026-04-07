@@ -34,6 +34,7 @@ resources:
   - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule + NetworkPolicy)
   - ../../base/maas-controller/default
   - ../../base/maas-controller/policies  # gateway-default-auth, gateway-default-deny
+  - ../../base/payload-processing/default  # BBR ext_proc for external model payload processing
 
 # Include shared-patches component for common configuration
 # This provides: ConfigMap, env vars, image replacements, gateway config, URL placeholder fix
@@ -84,6 +85,107 @@ patches:
 # These are in addition to shared-patches and handle ODH-specific resources
 # (gateway policies and DestinationRule)
 replacements:
+# Payload-processing image replacement
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.payload-processing-image
+  targets:
+  - select:
+      kind: Deployment
+      name: payload-processing
+    fieldPaths:
+    - spec.template.spec.containers.[name=payload-processing].image
+# Payload-processing replicas (configurable for large-scale deployments)
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.payload-processing-replicas
+  targets:
+  - select:
+      kind: Deployment
+      name: payload-processing
+    fieldPaths:
+    - spec.replicas
+# Payload-processing resources must be in the gateway namespace
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-namespace
+  targets:
+  - select:
+      kind: Deployment
+      name: payload-processing
+    fieldPaths:
+    - metadata.namespace
+  - select:
+      kind: Service
+      name: payload-processing
+    fieldPaths:
+    - metadata.namespace
+  - select:
+      kind: ServiceAccount
+      name: payload-processing
+    fieldPaths:
+    - metadata.namespace
+  - select:
+      kind: EnvoyFilter
+      name: payload-processing
+    fieldPaths:
+    - metadata.namespace
+  - select:
+      kind: DestinationRule
+      name: payload-processing
+    fieldPaths:
+    - metadata.namespace
+  - select:
+      kind: ConfigMap
+      name: payload-processing-plugins
+    fieldPaths:
+    - metadata.namespace
+  - select:
+      kind: ClusterRoleBinding
+      name: payload-processing-reader
+    fieldPaths:
+    - subjects.0.namespace
+# Payload-processing EnvoyFilter must target the correct gateway name
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-name
+  targets:
+  - select:
+      kind: EnvoyFilter
+      name: payload-processing
+    fieldPaths:
+    - spec.targetRefs.0.name
+# Replace gateway namespace in payload-processing DestinationRule host and EnvoyFilter cluster_name
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-namespace
+  targets:
+  - select:
+      kind: DestinationRule
+      name: payload-processing
+    fieldPaths:
+    - spec.host
+    options:
+      delimiter: "."
+      index: 1
+  - select:
+      kind: EnvoyFilter
+      name: payload-processing
+    fieldPaths:
+    - spec.configPatches.0.patch.value.typed_config.grpc_service.envoy_grpc.cluster_name
+    options:
+      delimiter: "."
+      index: 1
 # Replace gateway namespace in gateway policies
 - source:
     kind: ConfigMap

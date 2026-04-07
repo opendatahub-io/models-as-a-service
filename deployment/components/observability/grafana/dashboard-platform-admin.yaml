@@ -273,7 +273,7 @@ spec:
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "count(count by (user) (authorized_calls))", "instant": true, "refId": "A"}],
-          "description": "Unique users with at least one successful request (aligns with maas_tier_active_users concept; platform total).",
+          "description": "Unique users with at least one successful request (aligns with maas_subscription_active_users concept; platform total).",
           "title": "👥 Active Users",
           "type": "stat"
         },
@@ -297,7 +297,7 @@ spec:
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "(sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)", "instant": true, "refId": "A"}],
-          "description": "Percentage of gateway requests rejected by rate limiting (HTTP 429). High values indicate users are exceeding their tier quotas — consider adjusting rate limits or upgrading user tiers. This is a capacity planning signal, not a system health issue.",
+          "description": "Percentage of gateway requests rejected by rate limiting (HTTP 429). High values indicate users are exceeding their subscription quotas — consider adjusting rate limits or upgrading subscriptions. This is a capacity planning signal, not a system health issue.",
           "title": "🚦 Rate Limit Ratio",
           "type": "stat"
         },
@@ -340,9 +340,9 @@ spec:
           "id": 7,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (tier) (rate(authorized_hits[5m]))", "legendFormat": "{{tier}}", "refId": "A"}],
-          "description": "Token consumption rate (tokens/s) by tier (aligns with Token Consumption by Tier; metric: authorized_hits).",
-          "title": "📊 Token Consumption by Tier",
+          "targets": [{"expr": "sum by (subscription) (rate(authorized_hits[5m]))", "legendFormat": "{{subscription}}", "refId": "A"}],
+          "description": "Token consumption rate (tokens/s) by subscription (aligns with Token Consumption by Subscription; metric: authorized_hits).",
+          "title": "📊 Token Consumption by Subscription",
           "type": "timeseries"
         },
         {
@@ -352,9 +352,9 @@ spec:
           "id": 19,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (tier) (rate(authorized_calls[5m]))", "legendFormat": "{{tier}}", "refId": "A"}],
-          "description": "Request rate (req/s) by tier (aligns with Request Volume by Tier; metric: authorized_calls).",
-          "title": "📈 Request Volume by Tier",
+          "targets": [{"expr": "sum by (subscription) (rate(authorized_calls[5m]))", "legendFormat": "{{subscription}}", "refId": "A"}],
+          "description": "Request rate (req/s) by subscription (aligns with Request Volume by Subscription; metric: authorized_calls).",
+          "title": "📈 Request Volume by Subscription",
           "type": "timeseries"
         },
         {
@@ -376,9 +376,9 @@ spec:
           "id": 20,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (tier) (rate(limited_calls[5m]))", "legendFormat": "{{tier}}", "refId": "A"}],
-          "description": "Rate limit violations (HTTP 429) by tier (aligns with Rate Limit Violations; metric: limited_calls).",
-          "title": "🚫 Rate Limit Violations by Tier",
+          "targets": [{"expr": "sum by (subscription) (rate(limited_calls[5m]))", "legendFormat": "{{subscription}}", "refId": "A"}],
+          "description": "Rate limit violations (HTTP 429) by subscription (aligns with Rate Limit Violations; metric: limited_calls).",
+          "title": "🚫 Rate Limit Violations by Subscription",
           "type": "timeseries"
         },
         {
@@ -592,7 +592,7 @@ spec:
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "📊 Declined Requests"}]},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "topk(10, sum by (user) (limited_calls{user!=\"\"}))", "format": "table", "instant": true, "refId": "A"}],
-          "description": "Top 10 users ranked by rate-limited requests (HTTP 429). High counts may indicate users need a higher tier or are experiencing quota issues.",
+          "description": "Top 10 users ranked by rate-limited requests (HTTP 429). High counts may indicate users need a higher subscription tier or are experiencing quota issues.",
           "title": "🏆 Top 10 Users by Declined Requests",
           "type": "table"
         },
@@ -618,14 +618,14 @@ spec:
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": [{"matcher": {"id": "byName", "options": "user"}, "properties": [{"id": "displayName", "value": "👤 User"}]}, {"matcher": {"id": "byName", "options": "model"}, "properties": [{"id": "displayName", "value": "🤖 Model"}]}, {"matcher": {"id": "byName", "options": "tier"}, "properties": [{"id": "displayName", "value": "🏷️ Tier"}]}, {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "📊 Requests"}]}]},
+          "fieldConfig": {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": [{"matcher": {"id": "byName", "options": "user"}, "properties": [{"id": "displayName", "value": "👤 User"}]}, {"matcher": {"id": "byName", "options": "model"}, "properties": [{"id": "displayName", "value": "🤖 Model"}]}, {"matcher": {"id": "byName", "options": "subscription"}, "properties": [{"id": "displayName", "value": "🏷️ Subscription"}]}, {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "📊 Requests"}]}]},
           "gridPos": {"h": 8, "w": 24, "x": 0, "y": 124},
           "id": 9,
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": true}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "📊 Requests"}]},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (user, tier) (authorized_calls{user!=\"\"})", "format": "table", "instant": true, "refId": "A"}],
-          "description": "Request count by user and tier. Excludes anonymous/internal requests (no user label). The model label is not available on authorized_calls; use authorized_hits for per-model token breakdown.",
-          "title": "📋 Request Volume by User & Tier",
+          "targets": [{"expr": "sum by (user, subscription) (authorized_calls{user!=\"\"})", "format": "table", "instant": true, "refId": "A"}],
+          "description": "Request count by user and subscription. Excludes anonymous/internal requests (no user label). The model label is not available on authorized_calls; use authorized_hits for per-model token breakdown.",
+          "title": "📋 Request Volume by User & Subscription",
           "type": "table"
         },
         {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 132}, "id": 107, "panels": [], "title": "📦 Resource Allocation", "type": "row"},
@@ -658,14 +658,14 @@ spec:
         {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 150}, "id": 108, "panels": [], "title": "📊 Per-Tier & Per-Model Breakdown", "type": "row"},
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "P50 / P95 / P99 latency per access tier.\n\nThe tier label is added via Istio Telemetry reading the X-MaaS-Tier header injected by AuthPolicy.\nPer-user latency is not on the histogram to keep cardinality bounded.",
+          "description": "P50 / P95 / P99 latency per subscription.\n\nThe subscription label is added via Istio Telemetry reading the X-MaaS-Subscription header injected by AuthPolicy.\nPer-user latency is not on the histogram to keep cardinality bounded.",
           "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "auto", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "ms"}, "overrides": []},
           "gridPos": {"h": 8, "w": 8, "x": 0, "y": 151},
           "id": 31,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "histogram_quantile(0.5, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=\"\",tier!=\"unknown\"}[5m])))", "legendFormat": "{{tier}} P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=\"\",tier!=\"unknown\"}[5m])))", "legendFormat": "{{tier}} P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=\"\",tier!=\"unknown\"}[5m])))", "legendFormat": "{{tier}} P99", "refId": "C"}],
-          "title": "⏱️ Latency per Tier (P50 / P95 / P99)",
+          "targets": [{"expr": "histogram_quantile(0.5, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=\"\",subscription!=\"unknown\"}[5m])))", "legendFormat": "{{subscription}} P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=\"\",subscription!=\"unknown\"}[5m])))", "legendFormat": "{{subscription}} P95", "refId": "B"}, {"expr": "histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=\"\",subscription!=\"unknown\"}[5m])))", "legendFormat": "{{subscription}} P99", "refId": "C"}],
+          "title": "⏱️ Latency per Subscription (P50 / P95 / P99)",
           "type": "timeseries"
         },
         {
@@ -682,14 +682,14 @@ spec:
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "description": "Token consumption per tier over time (stacked).\n\nShows absolute token volume per tier as stacked bars. The height of each bar is the total tokens consumed in that interval; the stacking shows the tier proportion.\n\nFor per-user billing, use the AI Engineer dashboard or query Prometheus:\n  sum by (user) (increase(authorized_hits[24h]))",
+          "description": "Token consumption per subscription over time (stacked).\n\nShows absolute token volume per subscription as stacked bars. The height of each bar is the total tokens consumed in that interval; the stacking shows the subscription proportion.\n\nFor per-user billing, use the AI Engineer dashboard or query Prometheus:\n  sum by (user) (increase(authorized_hits[24h]))",
           "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "tokens", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "bars", "fillOpacity": 80, "gradientMode": "hue", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "normal"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
           "gridPos": {"h": 8, "w": 8, "x": 16, "y": 151},
           "id": 33,
           "options": {"legend": {"calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum by (tier) (increase(authorized_hits{tier!=\"\"}[5m]))", "legendFormat": "{{tier}}", "refId": "A"}],
-          "title": "📊 Token Volume by Tier",
+          "targets": [{"expr": "sum by (subscription) (increase(authorized_hits{subscription!=\"\"}[5m]))", "legendFormat": "{{subscription}}", "refId": "A"}],
+          "title": "📊 Token Volume by Subscription",
           "type": "timeseries"
         }
       ],

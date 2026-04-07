@@ -90,6 +90,8 @@ nav:
       - Authorino Caching: configuration-and-management/authorino-caching.md
   - User Guide:
     - Self Service Model Access: user-guide/self-service-model-access.md
+  - Contributing:
+    - MaaS Testing and Contribution Guide: contributing/testing-guide.md
   - API Reference:
     - MaaS API Overview: reference/maas-api-overview.md
     - MaaS API (Swagger): reference/api-reference.md
