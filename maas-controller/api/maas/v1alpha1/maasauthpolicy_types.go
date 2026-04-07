@@ -30,6 +30,14 @@ type MaaSAuthPolicySpec struct {
 	// +kubebuilder:validation:XValidation:rule="size(self.groups) > 0 || size(self.users) > 0",message="at least one group or user must be specified in subjects"
 	Subjects SubjectSpec `json:"subjects"`
 
+	// PublicPaths is a list of URL path suffixes that should be accessible without authentication.
+	// When set, the generated AuthPolicy will include an anonymous authentication rule
+	// scoped to requests matching these paths (e.g., "/docs", "/openapi.json").
+	// Inference and other endpoints remain fully authenticated.
+	// +optional
+	// +kubebuilder:validation:MaxItems=10
+	PublicPaths []string `json:"publicPaths,omitempty"`
+
 	// MeteringMetadata contains billing and tracking information
 	// +optional
 	MeteringMetadata *MeteringMetadata `json:"meteringMetadata,omitempty"`

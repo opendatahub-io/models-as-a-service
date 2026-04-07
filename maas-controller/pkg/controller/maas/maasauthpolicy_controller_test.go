@@ -1232,3 +1232,243 @@ func contains(s, substr string) bool {
 			return false
 		}())
 }
+
+func TestBuildPublicPathsRegex(t *testing.T) {
+	tests := []struct {
+		name   string
+		paths  []string
+		expect string
+	}{
+		{
+			name:   "single path",
+			paths:  []string{"/docs"},
+			expect: `.*/docs$`,
+		},
+		{
+			name:   "multiple paths",
+			paths:  []string{"/docs", "/openapi.json"},
+			expect: `.*/docs$|.*/openapi\.json$`,
+		},
+		{
+			name:   "path without leading slash",
+			paths:  []string{"docs"},
+			expect: `.*/docs$`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildPublicPathsRegex(tc.paths)
+			if got != tc.expect {
+				t.Errorf("buildPublicPathsRegex(%v) = %q, want %q", tc.paths, got, tc.expect)
+			}
+		})
+	}
+}
+
+func TestBuildPublicPathsCELPredicate(t *testing.T) {
+	tests := []struct {
+		name   string
+		paths  []string
+		expect string
+	}{
+		{
+			name:   "single path",
+			paths:  []string{"/docs"},
+			expect: `!request.path.endsWith("/docs")`,
+		},
+		{
+			name:   "multiple paths",
+			paths:  []string{"/docs", "/openapi.json"},
+			expect: `!request.path.endsWith("/docs") && !request.path.endsWith("/openapi.json")`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildPublicPathsCELPredicate(tc.paths)
+			if got != tc.expect {
+				t.Errorf("buildPublicPathsCELPredicate(%v) = %q, want %q", tc.paths, got, tc.expect)
+			}
+		})
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_PublicPaths verifies that when publicPaths is configured
+// on a MaaSAuthPolicy, the generated AuthPolicy includes an anonymous authentication
+// rule scoped to those paths and adds when predicates to skip metadata and authorization
+// for public paths.
+func TestMaaSAuthPolicyReconciler_PublicPaths(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+
+	maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: maasPolicyName, Namespace: namespace},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: namespace}},
+			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
+			PublicPaths: []string{"/docs", "/openapi.json"},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy: %v", err)
+	}
+
+	// Verify anonymous-public-paths authentication rule exists
+	t.Run("anonymous authentication rule exists", func(t *testing.T) {
+		anonRule, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "authentication", "anonymous-public-paths")
+		if err != nil || !found {
+			t.Fatalf("spec.rules.authentication.anonymous-public-paths missing: found=%v err=%v", found, err)
+		}
+		// Verify it has anonymous config
+		_, hasAnon, _ := unstructured.NestedMap(anonRule, "anonymous")
+		if !hasAnon {
+			t.Error("anonymous-public-paths should have 'anonymous' field")
+		}
+		// Verify it has when conditions
+		whenList, hasWhen, _ := unstructured.NestedSlice(anonRule, "when")
+		if !hasWhen || len(whenList) == 0 {
+			t.Fatal("anonymous-public-paths should have 'when' conditions")
+		}
+		// Verify the when condition uses url_path matching
+		firstWhen, ok := whenList[0].(map[string]any)
+		if !ok {
+			t.Fatal("first when condition should be a map")
+		}
+		selector, _ := firstWhen["selector"].(string)
+		if selector != "request.url_path" {
+			t.Errorf("when selector = %q, want %q", selector, "request.url_path")
+		}
+		value, _ := firstWhen["value"].(string)
+		if !contains(value, "docs") || !contains(value, "openapi") {
+			t.Errorf("when value should match docs and openapi paths, got: %s", value)
+		}
+	})
+
+	// Verify metadata rules have when predicates excluding public paths
+	t.Run("metadata rules exclude public paths", func(t *testing.T) {
+		apiKeyWhen, found, err := unstructured.NestedSlice(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "when")
+		if err != nil || !found {
+			t.Fatalf("apiKeyValidation.when missing: found=%v err=%v", found, err)
+		}
+		// Should have the original sk-oai- when condition PLUS the public paths exclusion
+		if len(apiKeyWhen) < 2 {
+			t.Fatalf("apiKeyValidation.when should have at least 2 conditions, got %d", len(apiKeyWhen))
+		}
+		// Check that one of the when conditions is a CEL predicate for public paths
+		foundPredicate := false
+		for _, w := range apiKeyWhen {
+			wMap, ok := w.(map[string]any)
+			if !ok {
+				continue
+			}
+			if pred, ok := wMap["predicate"].(string); ok && contains(pred, "endsWith") && contains(pred, "/docs") {
+				foundPredicate = true
+				break
+			}
+		}
+		if !foundPredicate {
+			t.Error("apiKeyValidation.when should contain a CEL predicate excluding public paths")
+		}
+	})
+
+	// Verify authorization rules have when predicates excluding public paths
+	t.Run("authorization rules exclude public paths", func(t *testing.T) {
+		authValidWhen, found, err := unstructured.NestedSlice(got.Object, "spec", "rules", "authorization", "auth-valid", "when")
+		if err != nil || !found {
+			t.Fatalf("authorization.auth-valid.when missing: found=%v err=%v", found, err)
+		}
+		foundPredicate := false
+		for _, w := range authValidWhen {
+			wMap, ok := w.(map[string]any)
+			if !ok {
+				continue
+			}
+			if pred, ok := wMap["predicate"].(string); ok && contains(pred, "endsWith") && contains(pred, "/docs") {
+				foundPredicate = true
+				break
+			}
+		}
+		if !foundPredicate {
+			t.Error("authorization.auth-valid.when should contain a CEL predicate excluding public paths")
+		}
+	})
+}
+
+// TestMaaSAuthPolicyReconciler_NoPublicPaths verifies that when publicPaths is empty,
+// no anonymous authentication rule is added and no extra when predicates are injected.
+func TestMaaSAuthPolicyReconciler_NoPublicPaths(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy: %v", err)
+	}
+
+	// Verify no anonymous-public-paths rule exists
+	_, found, _ := unstructured.NestedMap(got.Object, "spec", "rules", "authentication", "anonymous-public-paths")
+	if found {
+		t.Error("anonymous-public-paths should NOT exist when publicPaths is empty")
+	}
+
+	// Verify apiKeyValidation has only the original when condition (no public paths predicate)
+	apiKeyWhen, found, err := unstructured.NestedSlice(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "when")
+	if err != nil || !found {
+		t.Fatalf("apiKeyValidation.when missing: found=%v err=%v", found, err)
+	}
+	if len(apiKeyWhen) != 1 {
+		t.Errorf("apiKeyValidation.when should have exactly 1 condition (no public paths), got %d", len(apiKeyWhen))
+	}
+}

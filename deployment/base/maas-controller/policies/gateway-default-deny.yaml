@@ -2,8 +2,9 @@
 # Scoped to model inference paths only — does NOT affect non-model routes
 # like /maas-api/ or /v1/models (the MaaS API management endpoints).
 #
-# The when predicate below excludes /maas-api and /v1/models so this deny
-# applies only to model inference paths (e.g. /llm/..., /production/...).
+# The when predicate below excludes /maas-api, /v1/models, and well-known
+# documentation paths (/docs, /openapi.json) so this deny applies only to
+# model inference paths (e.g. /llm/..., /production/...).
 #
 # The PRIMARY default deny is gateway-default-auth.yaml (AuthPolicy), which
 # returns 401/403 for unconfigured models. This TRLP is a defense-in-depth layer:
@@ -33,7 +34,7 @@ spec:
     limits:
       deny-all-by-default:
         when:
-          - predicate: '!request.path.startsWith("/maas-api") && !request.path.startsWith("/v1/models")'
+          - predicate: '!request.path.startsWith("/maas-api") && !request.path.startsWith("/v1/models") && !request.path.endsWith("/docs") && !request.path.endsWith("/openapi.json")'
         rates:
           - limit: 0
             window: 1m
