@@ -89,7 +89,7 @@ jobs:
           node-version: '20'
 
       - name: Install oasdiff
-        run: npm install -g oasdiff
+        run: npm install -g @oasdiff/cli
 
       - name: Check for Breaking Changes
         id: breaking_changes
