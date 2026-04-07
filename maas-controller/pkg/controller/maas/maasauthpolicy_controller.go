@@ -110,13 +110,6 @@ func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
 func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr.Logger) *oidcConfig {
 	// ModelsAsService is a cluster-scoped singleton resource
 	// GVK: opendatahub.io/v1, Kind: ModelsAsService
-	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "opendatahub.io",
-		Version: "v1",
-		Kind:    "ModelsAsService",
-	})
-
 	// List all ModelsAsService resources (should be at most one)
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(schema.GroupVersionKind{
@@ -459,12 +452,21 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		if oidcConfig != nil && oidcConfig.IssuerURL != "" {
 			authenticationRules, ok := rule["authentication"].(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf("failed to convert authentication rules to map[string]any")
+				return nil, errors.New("failed to convert authentication rules to map[string]any")
 			}
+
+			// Build JWT config with issuer URL (required) and optional audience
+			jwtConfig := map[string]any{
+				"issuerUrl": oidcConfig.IssuerURL,
+			}
+			// Add audience validation if clientId is configured
+			// The JWT's aud claim should match the OIDC client ID for stricter validation
+			if oidcConfig.ClientID != "" {
+				jwtConfig["audiences"] = []string{oidcConfig.ClientID}
+			}
+
 			authenticationRules["oidc-identities"] = map[string]any{
-				"jwt": map[string]any{
-					"issuerUrl": oidcConfig.IssuerURL,
-				},
+				"jwt": jwtConfig,
 				"when": []any{
 					// Only for /v1/models endpoint
 					map[string]any{
@@ -1008,6 +1010,14 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	generatedAuthPolicy := &unstructured.Unstructured{}
 	generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 
+	// Watch ModelsAsService so we re-reconcile when OIDC configuration changes.
+	modelsAsService := &unstructured.Unstructured{}
+	modelsAsService.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "opendatahub.io",
+		Version: "v1",
+		Kind:    "ModelsAsService",
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaaSAuthPolicy{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
@@ -1026,7 +1036,34 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
 			r.mapGeneratedAuthPolicyToParent,
 		)).
+		// Watch ModelsAsService so OIDC configuration changes trigger reconciles.
+		Watches(modelsAsService, handler.EnqueueRequestsFromMapFunc(
+			r.mapModelsAsServiceToMaaSAuthPolicies,
+		)).
 		Complete(r)
+}
+
+// mapModelsAsServiceToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources
+// when ModelsAsService changes (to pick up OIDC configuration changes).
+func (r *MaaSAuthPolicyReconciler) mapModelsAsServiceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	// List all MaaSAuthPolicy resources
+	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
+	if err := r.List(ctx, policyList); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for ModelsAsService change")
+		return nil
+	}
+
+	// Enqueue reconcile requests for all policies
+	requests := make([]reconcile.Request, len(policyList.Items))
+	for i, policy := range policyList.Items {
+		requests[i] = reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      policy.Name,
+				Namespace: policy.Namespace,
+			},
+		}
+	}
+	return requests
 }
 
 // mapGeneratedAuthPolicyToParent maps a generated AuthPolicy back to any
