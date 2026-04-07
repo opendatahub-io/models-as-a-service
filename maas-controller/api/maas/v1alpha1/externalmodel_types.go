@@ -20,6 +20,24 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Provider",type="string",JSONPath=".spec.provider"
+//+kubebuilder:printcolumn:name="Endpoint",type="string",JSONPath=".spec.endpoint"
+//+kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+
+// ExternalModel is the Schema for the externalmodels API.
+// It defines an external LLM provider (e.g., OpenAI, Anthropic) that can be
+// referenced by MaaSModelRef resources.
+type ExternalModel struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   ExternalModelSpec   `json:"spec,omitempty"`
+	Status ExternalModelStatus `json:"status,omitempty"`
+}
+
 // ExternalModelSpec defines the desired state of ExternalModel
 type ExternalModelSpec struct {
 	// Provider identifies the API format and auth type for the external model.
@@ -56,6 +74,7 @@ type ExternalModelSpec struct {
 // The Secret must be in the same namespace as the ExternalModel.
 type CredentialReference struct {
 	// Name is the name of the Secret
+	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
@@ -70,24 +89,6 @@ type ExternalModelStatus struct {
 	// Conditions represent the latest available observations of the external model's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
-//+kubebuilder:printcolumn:name="Provider",type="string",JSONPath=".spec.provider"
-//+kubebuilder:printcolumn:name="Endpoint",type="string",JSONPath=".spec.endpoint"
-//+kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
-//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-
-// ExternalModel is the Schema for the externalmodels API.
-// It defines an external LLM provider (e.g., OpenAI, Anthropic) that can be
-// referenced by MaaSModelRef resources.
-type ExternalModel struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   ExternalModelSpec   `json:"spec,omitempty"`
-	Status ExternalModelStatus `json:"status,omitempty"`
 }
 
 //+kubebuilder:object:root=true
