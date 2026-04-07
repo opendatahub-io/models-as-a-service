@@ -25,6 +25,7 @@ type ExternalModelSpec struct {
 	// Provider identifies the API format and auth type for the external model.
 	// e.g. "openai", "anthropic".
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	Provider string `json:"provider"`
 
@@ -33,6 +34,7 @@ type ExternalModelSpec struct {
 	// This field is metadata for downstream consumers (e.g. BBR provider-resolver plugin)
 	// and is not used by the controller for endpoint derivation.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$`
 	Endpoint string `json:"endpoint"`
@@ -48,6 +50,15 @@ type ExternalModelSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	TargetModel string `json:"targetModel"`
+}
+
+// CredentialReference references a Kubernetes Secret with provider API credentials.
+// The Secret must be in the same namespace as the ExternalModel.
+type CredentialReference struct {
+	// Name is the name of the Secret
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
 }
 
 // ExternalModelStatus defines the observed state of ExternalModel

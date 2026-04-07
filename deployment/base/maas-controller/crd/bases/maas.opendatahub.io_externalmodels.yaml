@@ -75,6 +75,7 @@ spec:
                   This field is metadata for downstream consumers (e.g. BBR provider-resolver plugin)
                   and is not used by the controller for endpoint derivation.
                 maxLength: 253
+                minLength: 1
                 pattern: ^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$
                 type: string
               provider:
@@ -82,6 +83,7 @@ spec:
                   Provider identifies the API format and auth type for the external model.
                   e.g. "openai", "anthropic".
                 maxLength: 63
+                minLength: 1
                 type: string
               targetModel:
                 description: |-
