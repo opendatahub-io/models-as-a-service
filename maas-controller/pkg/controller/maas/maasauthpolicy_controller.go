@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -111,21 +112,22 @@ const (
 )
 
 // buildPublicPathsRegex constructs a regex pattern that matches any of the given path suffixes.
-// Each path is escaped and anchored with .* prefix and $ suffix.
-// Example: ["/docs", "/openapi.json"] -> ".*/docs$|.*/openapi\\.json$"
+// Each path is fully escaped with regexp.QuoteMeta and anchored with .* prefix and $ suffix.
+// Example: ["/docs", "/openapi.json"] -> ".*/docs$|.*/openapi\.json$"
 func buildPublicPathsRegex(paths []string) string {
 	var parts []string
 	for _, p := range paths {
-		escaped := strings.ReplaceAll(p, ".", "\\.")
-		if !strings.HasPrefix(escaped, "/") {
-			escaped = "/" + escaped
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
 		}
+		escaped := regexp.QuoteMeta(p)
 		parts = append(parts, fmt.Sprintf(".*%s$", escaped))
 	}
 	return strings.Join(parts, "|")
 }
 
 // buildPublicPathsCELPredicate constructs a CEL predicate that excludes public paths from evaluation.
+// Paths are escaped to prevent CEL injection via quotes or backslashes.
 // Example: ["/docs", "/openapi.json"] -> '!request.path.endsWith("/docs") && !request.path.endsWith("/openapi.json")'
 func buildPublicPathsCELPredicate(paths []string) string {
 	var parts []string
@@ -133,7 +135,9 @@ func buildPublicPathsCELPredicate(paths []string) string {
 		if !strings.HasPrefix(p, "/") {
 			p = "/" + p
 		}
-		parts = append(parts, fmt.Sprintf(`!request.path.endsWith("%s")`, p))
+		escaped := strings.ReplaceAll(p, `\`, `\\`)
+		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+		parts = append(parts, fmt.Sprintf(`!request.path.endsWith("%s")`, escaped))
 	}
 	return strings.Join(parts, " && ")
 }
@@ -274,7 +278,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		// Aggregate publicPaths from ALL auth policies for this model
 		var publicPaths []string
 		for _, ap := range allPolicies {
-			publicPaths = append(publicPaths, ap.Spec.PublicPaths...)
+			for _, p := range ap.Spec.PublicPaths {
+				if err := validatePublicPath(p); err != nil {
+					return nil, fmt.Errorf("invalid publicPath in MaaSAuthPolicy %s: %w", ap.Name, err)
+				}
+				publicPaths = append(publicPaths, p)
+			}
 		}
 
 		// Deduplicate and sort to ensure stable output across reconciles

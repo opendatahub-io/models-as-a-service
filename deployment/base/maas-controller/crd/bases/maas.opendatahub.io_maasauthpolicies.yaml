@@ -96,6 +96,7 @@ spec:
                   scoped to requests matching these paths (e.g., "/docs", "/openapi.json").
                   Inference and other endpoints remain fully authenticated.
                 items:
+                  maxLength: 256
                   type: string
                 maxItems: 10
                 type: array

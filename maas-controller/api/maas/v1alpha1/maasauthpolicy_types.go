@@ -36,6 +36,7 @@ type MaaSAuthPolicySpec struct {
 	// Inference and other endpoints remain fully authenticated.
 	// +optional
 	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:MaxLength=256
 	PublicPaths []string `json:"publicPaths,omitempty"`
 
 	// MeteringMetadata contains billing and tracking information

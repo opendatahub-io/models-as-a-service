@@ -1254,6 +1254,16 @@ func TestBuildPublicPathsRegex(t *testing.T) {
 			paths:  []string{"docs"},
 			expect: `.*/docs$`,
 		},
+		{
+			name:   "empty paths",
+			paths:  []string{},
+			expect: "",
+		},
+		{
+			name:   "path with regex metacharacters",
+			paths:  []string{"/api/v1[test]"},
+			expect: `.*/api/v1\[test\]$`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1281,6 +1291,16 @@ func TestBuildPublicPathsCELPredicate(t *testing.T) {
 			name:   "multiple paths",
 			paths:  []string{"/docs", "/openapi.json"},
 			expect: `!request.path.endsWith("/docs") && !request.path.endsWith("/openapi.json")`,
+		},
+		{
+			name:   "path without leading slash",
+			paths:  []string{"docs"},
+			expect: `!request.path.endsWith("/docs")`,
+		},
+		{
+			name:   "empty paths",
+			paths:  []string{},
+			expect: "",
 		},
 	}
 
