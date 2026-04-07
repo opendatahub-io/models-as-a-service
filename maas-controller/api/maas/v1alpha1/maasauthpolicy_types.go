@@ -37,6 +37,7 @@ type MaaSAuthPolicySpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=10
 	// +kubebuilder:validation:items:MaxLength=256
+	// +kubebuilder:validation:items:MinLength=1
 	PublicPaths []string `json:"publicPaths,omitempty"`
 
 	// MeteringMetadata contains billing and tracking information

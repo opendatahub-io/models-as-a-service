@@ -558,11 +558,10 @@ allow {
 			publicPathsCEL := buildPublicPathsCELPredicate(publicPaths)
 			for name, evaluator := range authRules {
 				eval := evaluator.(map[string]any)
-				eval["when"] = []any{
-					map[string]any{
-						"predicate": publicPathsCEL,
-					},
-				}
+				when, _ := eval["when"].([]any)
+				eval["when"] = append(when, map[string]any{
+					"predicate": publicPathsCEL,
+				})
 				authRules[name] = eval
 			}
 		}
