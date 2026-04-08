@@ -107,7 +107,7 @@ jobs:
           cd docs
           # Debug: Show the file structure
           echo "📁 Checking docs structure:"
-          ls -la content/api/ || echo "⚠️  content/api/ directory not found"
+          ls -la content/
           echo ""
           echo "📄 Building documentation..."
           # Note: --strict temporarily removed due to mkdocs-swagger-ui-tag plugin warnings
