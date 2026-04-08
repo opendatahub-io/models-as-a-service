@@ -41,6 +41,13 @@ type ExternalModelSpec struct {
 	// The Secret must contain a data key "api-key" with the credential value.
 	// +kubebuilder:validation:Required
 	CredentialRef CredentialReference `json:"credentialRef"`
+
+	// TargetModel is the upstream model name at the external provider.
+	// e.g. "gpt-4o", "claude-sonnet-4-5-20241022".
+	// When omitted, the MaaSModelRef name is used as the model identifier.
+	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	TargetModel string `json:"targetModel,omitempty"`
 }
 
 // ExternalModelStatus defines the observed state of ExternalModel
