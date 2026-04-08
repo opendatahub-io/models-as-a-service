@@ -35,13 +35,13 @@
 #### 1.2 Breaking Change Detection
 **Goal**: Prevent accidental API breaking changes
 
-**Tool**: [oasdiff](https://github.com/Tufin/oasdiff)
+**Tool**: [oasdiff](https://github.com/oasdiff/oasdiff)
 
 **Implementation**:
 ```yaml
 - name: Check for Breaking Changes
   run: |
-    npm install -g oasdiff
+    curl -fsSL https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | sh
     oasdiff breaking origin/main:maas-api/openapi3.yaml maas-api/openapi3.yaml
 ```
 

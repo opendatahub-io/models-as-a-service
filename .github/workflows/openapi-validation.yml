@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write  # For PR comments
 
 jobs:
   validate-spec:
@@ -89,7 +88,9 @@ jobs:
           node-version: '20'
 
       - name: Install oasdiff
-        run: npm install -g @oasdiff/cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | sh
+          oasdiff --version
 
       - name: Check for Breaking Changes
         id: breaking_changes
@@ -144,6 +145,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for git diff
 
       - name: Check if API changed
         id: api_changed
