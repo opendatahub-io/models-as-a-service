@@ -53,12 +53,6 @@ standalone and are validated by CI dry-run.
 
 ### Apply to a dev cluster
 
-> **⚠️  Safety Check:** Verify your kubectl context before running apply commands:
-> ```bash
-> kubectl config current-context  # Confirm you're pointed at a dev/test cluster
-> ```
-> These commands apply directly to your active cluster. Never run against production.
-
 ```bash
 # 1. Base telemetry (requires Gateway + AuthPolicy to exist first)
 kustomize build deployment/base/observability | kubectl apply -f -
@@ -66,7 +60,6 @@ kustomize build deployment/base/observability | kubectl apply -f -
 # 2. Conditional ServiceMonitors (Limitador, Authorino, Gateway, LLM models)
 #    Use the install script — it detects existing Kuadrant monitors to avoid duplicates:
 ./scripts/observability/install-observability.sh
-#    Note: Scripts prompt for cluster confirmation. Skip with: SKIP_CLUSTER_CHECK=true
 
 # 3. Grafana dashboards (discovers Grafana instance cluster-wide)
 ./scripts/observability/install-grafana-dashboards.sh
@@ -78,8 +71,7 @@ kustomize build deployment/components/observability/observability | kubectl appl
 kustomize build deployment/components/observability/observability/dashboards | kubectl apply -f -
 ```
 
-## Directory Layout
-
+```text
 deployment/
 ├── base/observability/                          # Always-on telemetry CRs + conditional monitors
 │   ├── kustomization.yaml                       # → gateway-telemetry-policy, istio-gateway-telemetry

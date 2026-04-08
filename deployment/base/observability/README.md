@@ -1,8 +1,9 @@
 # Base Observability (Telemetry CRs + Conditional ServiceMonitors)
 
-> **Development / testing path.** The standard customer install is operator-managed.
-> See the [components observability README](../../components/observability/README.md)
-> for the full entrypoint map and operator-equivalence table.
+!!! note "Development / testing path"
+    The standard customer install is operator-managed.
+    See the [components observability README](../../components/observability/README.md)
+    for the full entrypoint map and operator-equivalence table.
 
 ## What `kustomize build` produces
 
