@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write  # For PR comments
 
 jobs:
   validate-spec:
@@ -22,15 +21,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
         with:
           node-version: '20'
 
       - name: Install Spectral
-        run: npm install -g @stoplight/spectral-cli
+        run: npm install -g @stoplight/spectral-cli@6.13.1
 
       - name: Validate OpenAPI Spec
         run: |
@@ -66,7 +65,7 @@ jobs:
 
       - name: Upload Validation Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
         with:
           name: openapi-validation-report
           path: openapi-validation-report.json
@@ -79,27 +78,37 @@ jobs:
 
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           fetch-depth: 0  # Need full history for comparison
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
         with:
           node-version: '20'
 
       - name: Install oasdiff
-        run: npm install -g @oasdiff/cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | sh
+          oasdiff --version
 
       - name: Check for Breaking Changes
         id: breaking_changes
         continue-on-error: true
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
+          # Validate base ref to prevent script injection
+          if [[ ! "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "❌ Invalid base ref format"
+            exit 1
+          fi
+
           echo "🔍 Checking for API breaking changes..."
 
           # Get base branch spec
-          git fetch origin ${{ github.base_ref }}
-          git show origin/${{ github.base_ref }}:maas-api/openapi3.yaml > base-spec.yaml
+          git fetch origin "$BASE_REF"
+          git show "origin/$BASE_REF:maas-api/openapi3.yaml" > base-spec.yaml
 
           # Run breaking change detection
           oasdiff breaking base-spec.yaml maas-api/openapi3.yaml > breaking-changes.txt || true
@@ -120,7 +129,7 @@ jobs:
 
       - name: Upload Breaking Changes Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
         with:
           name: breaking-changes-report
           path: breaking-changes.txt
@@ -143,12 +152,22 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0  # Need full history for git diff
 
       - name: Check if API changed
         id: api_changed
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q "maas-api/openapi3.yaml"; then
+          # Validate base ref to prevent script injection
+          if [[ ! "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "❌ Invalid base ref format"
+            exit 1
+          fi
+
+          if git diff --name-only "origin/$BASE_REF...HEAD" | grep -q "maas-api/openapi3.yaml"; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
@@ -156,7 +175,15 @@ jobs:
 
       - name: Verify Changelog Entry
         if: steps.api_changed.outputs.changed == 'true'
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
+          # Validate base ref to prevent script injection
+          if [[ ! "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "❌ Invalid base ref format"
+            exit 1
+          fi
+
           echo "📝 Checking for API changelog entry..."
 
           # Check if there's an API changelog file
@@ -167,7 +194,7 @@ jobs:
           fi
 
           # Check if changelog was updated in this PR
-          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q "docs/content/release-notes/api-changelog.md"; then
+          if git diff --name-only "origin/$BASE_REF...HEAD" | grep -q "docs/content/release-notes/api-changelog.md"; then
             echo "✅ API changelog updated" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️  API spec changed but changelog not updated" >> $GITHUB_STEP_SUMMARY

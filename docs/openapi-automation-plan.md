@@ -16,7 +16,7 @@
 
 **Tools**: 
 - [Spectral](https://stoplight.io/open-source/spectral) - OpenAPI linter
-- [Redocly CLI](https://redocly.com/docs/cli/) - OpenAPI validator
+- [Redocly CLI](https://redocly.com/docs/cli) - OpenAPI validator
 
 **Implementation**:
 ```yaml
@@ -35,13 +35,13 @@
 #### 1.2 Breaking Change Detection
 **Goal**: Prevent accidental API breaking changes
 
-**Tool**: [oasdiff](https://github.com/Tufin/oasdiff)
+**Tool**: [oasdiff](https://github.com/oasdiff/oasdiff)
 
 **Implementation**:
 ```yaml
 - name: Check for Breaking Changes
   run: |
-    npm install -g oasdiff
+    curl -fsSL https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | sh
     oasdiff breaking origin/main:maas-api/openapi3.yaml maas-api/openapi3.yaml
 ```
 
@@ -55,7 +55,7 @@
 #### 2.1 Spec-Implementation Alignment
 **Goal**: Ensure API implementation matches OpenAPI spec
 
-**Tool**: [Dredd](https://dredd.org/) or [Prism](https://stoplight.io/open-source/prism)
+**Tool**: [Dredd](https://dredd.org/en/latest/) or [Prism](https://stoplight.io/open-source/prism)
 
 **Implementation**:
 ```yaml
@@ -127,7 +127,7 @@ openapi-generator generate \
 #### 3.2 Enhanced API Documentation
 **Goal**: Better docs than raw swagger UI
 
-**Tool**: [Redoc](https://redocly.com/redoc/) or [Stoplight Elements](https://stoplight.io/open-source/elements)
+**Tool**: [Redoc](https://redocly.com/redoc) or [Stoplight Elements](https://stoplight.io/open-source/elements)
 
 **Implementation**:
 ```html
