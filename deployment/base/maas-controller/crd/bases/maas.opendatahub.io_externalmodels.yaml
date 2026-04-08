@@ -18,6 +18,9 @@ spec:
     - jsonPath: .spec.provider
       name: Provider
       type: string
+    - jsonPath: .spec.targetModel
+      name: TargetModel
+      type: string
     - jsonPath: .spec.endpoint
       name: Endpoint
       type: string

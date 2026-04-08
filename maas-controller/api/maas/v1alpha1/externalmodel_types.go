@@ -23,6 +23,7 @@ import (
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
 //+kubebuilder:printcolumn:name="Provider",type="string",JSONPath=".spec.provider"
+//+kubebuilder:printcolumn:name="TargetModel",type="string",JSONPath=".spec.targetModel"
 //+kubebuilder:printcolumn:name="Endpoint",type="string",JSONPath=".spec.endpoint"
 //+kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
@@ -48,6 +49,13 @@ type ExternalModelSpec struct {
 	// +kubebuilder:validation:Enum=openai;anthropic;azure-openai;vertex;bedrock-openai
 	Provider string `json:"provider"`
 
+	// TargetModel is the upstream model name at the external provider.
+	// e.g. "gpt-4o", "claude-sonnet-4-5-20241022".
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	TargetModel string `json:"targetModel"`
+
 	// Endpoint is the FQDN of the external provider (no scheme or path).
 	// e.g. "api.openai.com".
 	// This field is metadata for downstream consumers (e.g. BBR provider-resolver plugin)
@@ -62,13 +70,6 @@ type ExternalModelSpec struct {
 	// The Secret must contain a data key "api-key" with the credential value.
 	// +kubebuilder:validation:Required
 	CredentialRef CredentialReference `json:"credentialRef"`
-
-	// TargetModel is the upstream model name at the external provider.
-	// e.g. "gpt-4o", "claude-sonnet-4-5-20241022".
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	TargetModel string `json:"targetModel"`
 }
 
 // CredentialReference references a Kubernetes Secret with provider API credentials.
