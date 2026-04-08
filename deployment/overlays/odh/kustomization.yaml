@@ -230,6 +230,11 @@ replacements:
     fieldPaths:
     - subjects.0.namespace
   - select:
+      kind: ClusterRoleBinding
+      name: maas-api-supplemental
+    fieldPaths:
+    - subjects.0.namespace
+  - select:
       kind: RoleBinding
       name: maas-controller-leader-election-rolebinding
     fieldPaths:

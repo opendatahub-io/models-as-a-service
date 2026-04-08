@@ -36,6 +36,7 @@ import requests
 import time
 
 from conftest import TLS_VERIFY
+from test_subscription import SIMULATOR_SUBSCRIPTION
 
 log = logging.getLogger(__name__)
 
@@ -536,7 +537,7 @@ class TestAPIKeyModelInference:
     ):
         """Test 14: Revoked API key should be rejected with 403."""
         # Create a new key
-        designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+        designated = SIMULATOR_SUBSCRIPTION
         r_create = requests.post(
             api_keys_base_url,
             headers=headers,
@@ -661,7 +662,7 @@ class TestAPIKeyRevocationE2E:
         inference_model_name: str,
     ):
         """After revoking a key, a newly created key should still work for inference."""
-        designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+        designated = SIMULATOR_SUBSCRIPTION
 
         # Create key A
         r_a = requests.post(
@@ -725,7 +726,7 @@ class TestAPIKeyRevocationE2E:
 
     def test_individual_revoke_multiple_keys(self, api_keys_base_url: str, headers: dict):
         """Create multiple keys and revoke each individually — verifies per-key DELETE returns 200."""
-        designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+        designated = SIMULATOR_SUBSCRIPTION
 
         # Create 3 keys to revoke
         key_ids = []
@@ -755,7 +756,7 @@ class TestAPIKeyRevocationE2E:
         inference_model_name: str,
     ):
         """After individually revoking keys, they should be rejected at the gateway."""
-        designated = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+        designated = SIMULATOR_SUBSCRIPTION
 
         # Create 3 keys, capturing plaintext and IDs
         keys = []
