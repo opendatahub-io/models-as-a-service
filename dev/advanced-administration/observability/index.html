@@ -1893,6 +1893,67 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Option 2: Kustomize-Based Installation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#kustomize-entrypoint-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kustomize Entrypoint Map
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dry-run-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-Run Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-to-a-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deploy to a Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-vs-kustomize-drift-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator vs Kustomize Drift Reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keeping-docs-accurate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping Docs Accurate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
       </ul>
@@ -3014,6 +3075,67 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Option 2: Kustomize-Based Installation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#kustomize-entrypoint-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kustomize Entrypoint Map
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dry-run-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-Run Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-to-a-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deploy to a Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-vs-kustomize-drift-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator vs Kustomize Drift Reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keeping-docs-accurate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping Docs Accurate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
       </ul>
@@ -3685,7 +3807,50 @@
 <a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="s2">&quot;https://thanos-querier-openshift-monitoring.&lt;cluster&gt;/api/v1/label/subscription/values&quot;</span>
 </code></pre></div>
 <h3 id="option-2-kustomize-based-installation">Option 2: Kustomize-Based Installation</h3>
-<p>The observability stack is defined in <code>deployment/base/observability/</code>. It includes:</p>
+<div class="admonition warning">
+<p class="admonition-title">Development/Testing Only</p>
+<p><strong>This is not the standard customer install.</strong> The production path is operator-managed via ODH/RHOAI (Option 1 above).</p>
+<p>These Kustomize entrypoints exist so the team can install, iterate, and test observability without a full operator-driven deployment.</p>
+</div>
+<h4 id="kustomize-entrypoint-map">Kustomize Entrypoint Map</h4>
+<p>The observability stack is defined across multiple Kustomize directories. Each can be built and applied independently:</p>
+<table>
+<thead>
+<tr>
+<th>Entrypoint (kustomize build target)</th>
+<th>What it deploys</th>
+<th>Operator-owned equivalent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>deployment/base/observability/</code></td>
+<td>TelemetryPolicy + Istio Telemetry (conditional ServiceMonitors applied only via script)</td>
+<td>Operator installs TelemetryPolicy as part of the MaaS stack; Kuadrant operator owns ServiceMonitors when <code>spec.observability.enable: true</code></td>
+</tr>
+<tr>
+<td><code>deployment/components/observability/grafana/</code></td>
+<td>GrafanaDashboard CRs (Platform Admin, AI Engineer)</td>
+<td>Operator does not manage Grafana dashboards; same CRs are used in both paths</td>
+</tr>
+<tr>
+<td><code>deployment/components/observability/prometheus/</code></td>
+<td>Standalone Prometheus + RBAC + ServiceMonitors in <code>llm-observability</code> namespace</td>
+<td>OpenShift User Workload Monitoring (built-in Prometheus) — operator path relies on this instead</td>
+</tr>
+<tr>
+<td><code>deployment/components/observability/observability/</code></td>
+<td>Aggregator that pulls in <code>prometheus/</code> above</td>
+<td>Same as above — this is a convenience wrapper</td>
+</tr>
+<tr>
+<td><code>deployment/components/observability/observability/dashboards/</code></td>
+<td>Perses PersesDashboard + Prometheus datasource</td>
+<td>No operator equivalent — Perses is optional in both paths</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Base observability resources</strong> (<code>deployment/base/observability/</code>):</p>
 <table>
 <thead>
 <tr>
@@ -3704,11 +3869,83 @@
 </tr>
 </tbody>
 </table>
-<p><strong>Deploy observability</strong> (after Gateway and AuthPolicy are in place, so <code>X-MaaS-Subscription</code> is injected):</p>
-<div class="highlight"><pre><span></span><code>./scripts/observability/install-observability.sh [--namespace NAMESPACE]
+<p><strong>Conditional resources</strong> (not in kustomization.yaml, applied only by <code>install-observability.sh</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Applied when…</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>limitador-servicemonitor.yaml</code></td>
+<td>No Kuadrant PodMonitor scraping Limitador <code>/metrics</code></td>
+</tr>
+<tr>
+<td><code>authorino-server-metrics-servicemonitor.yaml</code></td>
+<td>No existing monitor scraping Authorino <code>/server-metrics</code></td>
+</tr>
+<tr>
+<td><code>istio-gateway-service.yaml</code></td>
+<td>Gateway deployment exists in <code>openshift-ingress</code></td>
+</tr>
+<tr>
+<td><code>istio-gateway-servicemonitor.yaml</code></td>
+<td>Gateway deployment exists (paired with the Service above)</td>
+</tr>
+</tbody>
+</table>
+<h4 id="dry-run-verification">Dry-Run Verification</h4>
+<p>Validate that every kustomization builds cleanly without applying to a cluster:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Base telemetry (TelemetryPolicy + Istio Telemetry)</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/base/observability<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="c1"># Grafana dashboards</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/grafana<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="c1"># Standalone Prometheus stack</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/prometheus<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="c1"># Prometheus aggregator (same content as prometheus/ above)</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/observability<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a><span class="c1"># Perses dashboards</span>
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/observability/dashboards<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">CI Validation</p>
+<p>CI runs <code>scripts/ci/validate-manifests.sh</code> on every PR that touches <code>deployment/**</code>, which runs <code>kustomize build</code> against all <code>kustomization.yaml</code> files. Files with <code>kind: Component</code> are skipped (they must be included via a parent's <code>components:</code> field), but directories whose kustomization.yaml declares <code>kind: Kustomization</code> can build standalone and are validated by CI dry-run.</p>
+</div>
+<h4 id="deploy-to-a-cluster">Deploy to a Cluster</h4>
+<p><strong>Quick deployment</strong> (recommended):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Deploys base telemetry + conditional ServiceMonitors</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>./scripts/observability/install-observability.sh<span class="w"> </span><span class="o">[</span>--namespace<span class="w"> </span>NAMESPACE<span class="o">]</span>
+</code></pre></div>
+<p><strong>Manual deployment</strong> (step-by-step):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># 1. Base telemetry (requires Gateway + AuthPolicy to exist first)</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/base/observability<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># 2. Conditional ServiceMonitors (Limitador, Authorino, Gateway, LLM models)</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="c1">#    Use the install script — it detects existing Kuadrant monitors to avoid duplicates:</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>./scripts/observability/install-observability.sh
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="c1"># 3. Grafana dashboards (discovers Grafana instance cluster-wide)</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>./scripts/observability/install-grafana-dashboards.sh
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="c1"># 4. (Optional) Standalone Prometheus — only if NOT using OpenShift User Workload Monitoring</span>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/observability<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>
+<a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a><span class="c1"># 5. (Optional) Perses dashboards</span>
+<a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/observability/dashboards<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
 </code></pre></div>
 <p>When using the full deployment script, this is applied automatically:</p>
-<div class="highlight"><pre><span></span><code>./scripts/deploy.sh
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>./scripts/deploy.sh
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Prerequisites</p>
@@ -3718,7 +3955,75 @@
 <li><strong>Namespace</strong>: Use <code>--namespace</code> if your MaaS API is deployed to a namespace other than <code>maas-api</code> (e.g. <code>--namespace opendatahub</code>)</li>
 </ul>
 </div>
-<p><strong>Optional:</strong> The Istio gateway (Envoy) ServiceMonitor is included in <code>deployment/base/observability/</code> and deployed automatically by <code>install-observability.sh</code>.</p>
+<h4 id="operator-vs-kustomize-drift-reference">Operator vs Kustomize Drift Reference</h4>
+<p>When updating manifests in <code>deployment/base/observability/</code> or <code>deployment/components/observability/</code>, check whether the operator path produces equivalent resources. Drift between the two is expected in some areas (e.g., the standalone Prometheus stack has no operator equivalent) but should be tracked for the telemetry CRs and ServiceMonitors.</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Kustomize source</th>
+<th>Operator creates?</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TelemetryPolicy</td>
+<td><code>base/observability/gateway-telemetry-policy.yaml</code></td>
+<td>Yes</td>
+<td>Keep in sync — labels must match</td>
+</tr>
+<tr>
+<td>Istio Telemetry</td>
+<td><code>base/observability/istio-gateway-telemetry.yaml</code></td>
+<td>Yes</td>
+<td>Keep in sync — header extraction must match</td>
+</tr>
+<tr>
+<td>Limitador ServiceMonitor</td>
+<td><code>base/observability/limitador-servicemonitor.yaml</code></td>
+<td>Kuadrant PodMonitor when <code>observability.enable: true</code></td>
+<td>Script skips ours if Kuadrant's exists</td>
+</tr>
+<tr>
+<td>Authorino /server-metrics</td>
+<td><code>base/observability/authorino-server-metrics-servicemonitor.yaml</code></td>
+<td>Not yet (Kuadrant only scrapes <code>/metrics</code>)</td>
+<td>MaaS supplements the operator gap</td>
+</tr>
+<tr>
+<td>Istio Gateway ServiceMonitor</td>
+<td><code>base/observability/istio-gateway-servicemonitor.yaml</code></td>
+<td>No</td>
+<td>MaaS-only; applied conditionally</td>
+</tr>
+<tr>
+<td>Grafana Dashboards</td>
+<td><code>components/observability/grafana/</code></td>
+<td>No</td>
+<td>Same CRs used in both paths</td>
+</tr>
+<tr>
+<td>Standalone Prometheus</td>
+<td><code>components/observability/prometheus/</code></td>
+<td>No (uses OpenShift UWM instead)</td>
+<td>Dev/test only — not for production</td>
+</tr>
+<tr>
+<td>Perses Dashboards</td>
+<td><code>components/observability/observability/dashboards/</code></td>
+<td>No</td>
+<td>Optional in both paths</td>
+</tr>
+</tbody>
+</table>
+<h4 id="keeping-docs-accurate">Keeping Docs Accurate</h4>
+<p>When you change any YAML under <code>deployment/base/observability/</code> or <code>deployment/components/observability/</code>:</p>
+<ol>
+<li>Verify the build still passes: <code>kustomize build &lt;dir&gt; | kubectl apply --dry-run=client -f -</code></li>
+<li>Update the <strong>entrypoint map table above</strong> if you add, remove, or rename an entrypoint</li>
+<li>Update this document if the change affects user-facing instructions (metrics, ServiceMonitor behavior, dashboard content)</li>
+</ol>
 <h2 id="metrics-collection">Metrics Collection</h2>
 <h3 id="limitador-metrics">Limitador Metrics</h3>
 <p>Limitador exposes the following Prometheus metrics (verified against <a href="https://github.com/Kuadrant/limitador/blob/main/limitador-server/src/prometheus_metrics.rs">Limitador source code</a>):</p>
@@ -4786,7 +5091,7 @@ histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 6, 2026 12:45:36 UTC">April 6, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 8, 2026 14:54:07 UTC">April 8, 2026</span>
   </span>
 
     
