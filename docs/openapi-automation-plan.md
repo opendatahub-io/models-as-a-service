@@ -16,7 +16,7 @@
 
 **Tools**: 
 - [Spectral](https://stoplight.io/open-source/spectral) - OpenAPI linter
-- [Redocly CLI](https://redocly.com/docs/cli/) - OpenAPI validator
+- [Redocly CLI](https://redocly.com/docs/cli) - OpenAPI validator
 
 **Implementation**:
 ```yaml
@@ -55,7 +55,7 @@
 #### 2.1 Spec-Implementation Alignment
 **Goal**: Ensure API implementation matches OpenAPI spec
 
-**Tool**: [Dredd](https://dredd.org/) or [Prism](https://stoplight.io/open-source/prism)
+**Tool**: [Dredd](https://dredd.org/en/latest/) or [Prism](https://stoplight.io/open-source/prism)
 
 **Implementation**:
 ```yaml
@@ -127,7 +127,7 @@ openapi-generator generate \
 #### 3.2 Enhanced API Documentation
 **Goal**: Better docs than raw swagger UI
 
-**Tool**: [Redoc](https://redocly.com/redoc/) or [Stoplight Elements](https://stoplight.io/open-source/elements)
+**Tool**: [Redoc](https://redocly.com/redoc) or [Stoplight Elements](https://stoplight.io/open-source/elements)
 
 **Implementation**:
 ```html
