@@ -104,6 +104,7 @@ jobs:
 
       - name: Build documentation
         run: |
+          set -o pipefail
           cd docs
           # Debug: Show the file structure
           echo "📁 Checking docs structure:"
