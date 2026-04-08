@@ -46,6 +46,7 @@ from test_subscription import (
     MODEL_NAMESPACE,
     MODEL_REF,
     PREMIUM_MODEL_REF,
+    PREMIUM_SIMULATOR_SUBSCRIPTION,
     UNCONFIGURED_MODEL_REF,
     SIMULATOR_ACCESS_POLICY,
     SIMULATOR_SUBSCRIPTION,
@@ -358,7 +359,7 @@ class TestModelsEndpoint:
             # Add SA to premium-simulator-subscription to give it access to a second subscription
             log.info(f"Adding {sa_user} to premium-simulator-subscription users")
             subprocess.run([
-                "kubectl", "patch", "maassubscription", "premium-simulator-subscription",
+                "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                 "-n", maas_ns,
                 "--type=json",
                 "-p", f'[{{"op": "add", "path": "/spec/owner/users/-", "value": "{sa_user}"}}]'
@@ -374,7 +375,7 @@ class TestModelsEndpoint:
                 url,
                 headers={
                     "Authorization": f"Bearer {sa_token}",  # K8s token, not API key
-                    "x-maas-subscription": "simulator-subscription",
+                    "x-maas-subscription": SIMULATOR_SUBSCRIPTION,
                 },
                 timeout=TIMEOUT,
                 verify=TLS_VERIFY,
@@ -397,8 +398,8 @@ class TestModelsEndpoint:
                 assert isinstance(model["subscriptions"], list), "subscriptions should be a list"
                 assert len(model["subscriptions"]) == 1, \
                     f"Expected 1 subscription (explicit header), got {len(model['subscriptions'])}"
-                assert model["subscriptions"][0]["name"] == "simulator-subscription", \
-                    f"Expected 'simulator-subscription', got '{model['subscriptions'][0]['name']}'"
+                assert model["subscriptions"][0]["name"] == SIMULATOR_SUBSCRIPTION, \
+                    f"Expected '{SIMULATOR_SUBSCRIPTION}', got '{model['subscriptions'][0]['name']}'"
 
             log.info(f"✅ K8s token with explicit subscription header → {r.status_code} with {len(models)} model(s)")
 
@@ -408,15 +409,15 @@ class TestModelsEndpoint:
                 log.info(f"Removing {sa_user} from premium-simulator-subscription users")
                 # Get current users list, remove our SA, then patch
                 result = subprocess.run([
-                    "kubectl", "get", "maassubscription", "premium-simulator-subscription",
+                    "kubectl", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                     "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
-                ], capture_output=True, text=True)
+                ], capture_output=True, text=True, check=True, timeout=30)
 
                 if sa_user in result.stdout:
                     users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
                     users = [u for u in users if u != sa_user]
                     subprocess.run([
-                        "kubectl", "patch", "maassubscription", "premium-simulator-subscription",
+                        "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                         "-n", maas_ns,
                         "--type=merge",
                         "-p", json.dumps({"spec": {"owner": {"users": users}}})
@@ -499,7 +500,7 @@ class TestModelsEndpoint:
             # Add SA to premium subscription
             log.info(f"Adding {sa_user} to premium-simulator-subscription")
             subprocess.run([
-                "kubectl", "patch", "maassubscription", "premium-simulator-subscription",
+                "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                 "-n", maas_ns,
                 "--type=json",
                 "-p", f'[{{"op": "add", "path": "/spec/owner/users/-", "value": "{sa_user}"}}]'
@@ -523,7 +524,7 @@ class TestModelsEndpoint:
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {api_key}",
-                    "x-maas-subscription": "simulator-subscription",
+                    "x-maas-subscription": SIMULATOR_SUBSCRIPTION,
                 },
                 timeout=TIMEOUT,
                 verify=TLS_VERIFY,
@@ -537,7 +538,7 @@ class TestModelsEndpoint:
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {api_key}",
-                    "x-maas-subscription": "premium-simulator-subscription",
+                    "x-maas-subscription": PREMIUM_SIMULATOR_SUBSCRIPTION,
                 },
                 timeout=TIMEOUT,
                 verify=TLS_VERIFY,
@@ -563,15 +564,15 @@ class TestModelsEndpoint:
             # Cleanup
             if sa_user is not None:
                 result = subprocess.run([
-                    "kubectl", "get", "maassubscription", "premium-simulator-subscription",
+                    "kubectl", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                     "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
-                ], capture_output=True, text=True)
+                ], capture_output=True, text=True, check=True, timeout=30)
 
                 if sa_user in result.stdout:
                     users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
                     users = [u for u in users if u != sa_user]
                     subprocess.run([
-                        "kubectl", "patch", "maassubscription", "premium-simulator-subscription",
+                        "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                         "-n", maas_ns,
                         "--type=merge",
                         "-p", json.dumps({"spec": {"owner": {"users": users}}})
