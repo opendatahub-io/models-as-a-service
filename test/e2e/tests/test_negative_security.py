@@ -8,8 +8,6 @@ Validates that the platform correctly rejects abuse scenarios:
 - AuthPolicy removal: access revoked when policy deleted
 - Missing resources: CRs referencing non-existent models
 
-See docs/negative-security-test-matrix.md for the full scenario inventory.
-
 Requires:
   - GATEWAY_HOST env var
   - MAAS_API_BASE_URL env var (for API key creation)
