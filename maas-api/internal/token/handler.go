@@ -60,15 +60,14 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		groupHeader := c.GetHeader(constant.HeaderGroup)
 
 		// Validate required headers exist and are not empty
-		// Missing headers indicate a configuration issue with the auth policy (internal error)
+		// Missing headers mean Authorino did not inject identity — treat as unauthenticated
 		if username == "" {
 			h.logger.Error("Missing or empty username header",
 				"header", constant.HeaderUsername,
 			)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":         "Exception thrown while generating token",
-				"exceptionCode": "AUTH_FAILURE",
-				"refId":         "001",
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "authentication failed: user identity not provided",
+				"type":  "authentication_error",
 			})
 			c.Abort()
 			return
@@ -79,10 +78,9 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 				"header", constant.HeaderGroup,
 				"username", username,
 			)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":         "Exception thrown while generating token",
-				"exceptionCode": "AUTH_FAILURE",
-				"refId":         "002",
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "authentication failed: user identity not provided",
+				"type":  "authentication_error",
 			})
 			c.Abort()
 			return
@@ -97,10 +95,9 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 				"header_value", groupHeader,
 				"error", err,
 			)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":         "Exception thrown while generating token",
-				"exceptionCode": "AUTH_FAILURE",
-				"refId":         "003",
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "authentication failed: user identity not provided",
+				"type":  "authentication_error",
 			})
 			c.Abort()
 			return
