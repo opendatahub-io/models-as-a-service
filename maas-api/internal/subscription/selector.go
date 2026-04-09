@@ -86,9 +86,24 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 
 	var accessible []*SelectResponse
 	for _, sub := range subscriptions {
-		if userHasAccess(&sub, username, groups) {
-			accessible = append(accessible, toResponse(&sub))
+		// Check user access
+		if !userHasAccess(&sub, username, groups) {
+			continue
 		}
+
+		// Allowlist: only include Active and Degraded subscriptions
+		// Empty phase ("") is treated as Active (backward compatible - subscription without status)
+		// Exclude Failed, Pending, unknown phases, and deleting subscriptions
+		if sub.Phase != "" && sub.Phase != PhaseActive && sub.Phase != PhaseDegraded {
+			continue
+		}
+
+		// Exclude subscriptions being deleted
+		if sub.DeletionTimestamp != nil {
+			continue
+		}
+
+		accessible = append(accessible, toResponse(&sub))
 	}
 
 	// Sort for deterministic ordering

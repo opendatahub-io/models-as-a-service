@@ -199,6 +199,63 @@ func TestGetAllAccessible(t *testing.T) {
 			expectedCount: 1,
 			expectedNames: []string{"basic-sub"},
 		},
+		{
+			name: "exclude Failed subscriptions",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithHealth("failed-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, phaseFailed, false, false),
+				createSubscriptionWithHealth("active-sub", []string{"basic-users"}, nil, 20, defaultTestTokenRateLimit, phaseActive, true, false),
+			},
+			groups:        []string{"basic-users"},
+			username:      "alice",
+			expectedCount: 1,
+			expectedNames: []string{"active-sub"},
+		},
+		{
+			name: "exclude Pending subscriptions",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithHealth("pending-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, phasePending, false, false),
+				createSubscriptionWithHealth("active-sub", []string{"basic-users"}, nil, 20, defaultTestTokenRateLimit, phaseActive, true, false),
+			},
+			groups:        []string{"basic-users"},
+			username:      "alice",
+			expectedCount: 1,
+			expectedNames: []string{"active-sub"},
+		},
+		{
+			name: "include Degraded subscriptions",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithHealth("degraded-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, phaseDegraded, true, false),
+				createSubscriptionWithHealth("active-sub", []string{"basic-users"}, nil, 20, defaultTestTokenRateLimit, phaseActive, true, false),
+			},
+			groups:        []string{"basic-users"},
+			username:      "alice",
+			expectedCount: 2,
+			expectedNames: []string{"active-sub", "degraded-sub"},
+		},
+		{
+			name: "exclude deleting subscriptions",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithHealth("deleting-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, phaseActive, true, true),
+				createSubscriptionWithHealth("active-sub", []string{"basic-users"}, nil, 20, defaultTestTokenRateLimit, phaseActive, true, false),
+			},
+			groups:        []string{"basic-users"},
+			username:      "alice",
+			expectedCount: 1,
+			expectedNames: []string{"active-sub"},
+		},
+		{
+			name: "filter by phase - only Active and Degraded included",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithHealth("active-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, phaseActive, true, false),
+				createSubscriptionWithHealth("degraded-sub", []string{"basic-users"}, nil, 20, defaultTestTokenRateLimit, phaseDegraded, true, false),
+				createSubscriptionWithHealth("failed-sub", []string{"basic-users"}, nil, 30, defaultTestTokenRateLimit, phaseFailed, false, false),
+				createSubscriptionWithHealth("pending-sub", []string{"basic-users"}, nil, 40, defaultTestTokenRateLimit, phasePending, false, false),
+			},
+			groups:        []string{"basic-users"},
+			username:      "alice",
+			expectedCount: 2,
+			expectedNames: []string{"active-sub", "degraded-sub"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -567,6 +624,7 @@ func TestSelector_ListAccessibleWithHealth(t *testing.T) {
 
 	subscriptions := []*unstructured.Unstructured{
 		createSubscriptionWithHealth("active-sub", []string{"g1"}, nil, 10, 1000, phaseActive, true, false),
+		createSubscriptionWithHealth("degraded-sub", []string{"g1"}, nil, 9, 1000, phaseDegraded, true, false),
 		createSubscriptionWithHealth("failed-sub", []string{"g1"}, nil, 5, 1000, phaseFailed, false, false),
 		createSubscriptionWithHealth("deleting-sub", []string{"g1"}, nil, 8, 1000, phaseActive, true, true),
 	}
@@ -579,11 +637,12 @@ func TestSelector_ListAccessibleWithHealth(t *testing.T) {
 		t.Fatalf("GetAllAccessible() error = %v", err)
 	}
 
-	if len(results) != 3 {
-		t.Fatalf("Expected 3 subscriptions, got %d", len(results))
+	// Only Active and Degraded subscriptions are returned (Failed and deleting are filtered out)
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 subscriptions (Active and Degraded only), got %d", len(results))
 	}
 
-	// Check that health fields are populated in all results
+	// Check that health fields are populated in returned results
 	for _, result := range results {
 		switch result.Name {
 		case "active-sub":
@@ -591,16 +650,15 @@ func TestSelector_ListAccessibleWithHealth(t *testing.T) {
 				t.Errorf("active-sub health fields incorrect: Phase=%s, Ready=%v, DeletionTimestamp=%s",
 					result.Phase, result.Ready, result.DeletionTimestamp)
 			}
+		case "degraded-sub":
+			if result.Phase != phaseDegraded || !result.Ready || result.DeletionTimestamp != "" {
+				t.Errorf("degraded-sub health fields incorrect: Phase=%s, Ready=%v, DeletionTimestamp=%s",
+					result.Phase, result.Ready, result.DeletionTimestamp)
+			}
 		case "failed-sub":
-			if result.Phase != phaseFailed || result.Ready || result.DeletionTimestamp != "" {
-				t.Errorf("failed-sub health fields incorrect: Phase=%s, Ready=%v, DeletionTimestamp=%s",
-					result.Phase, result.Ready, result.DeletionTimestamp)
-			}
+			t.Errorf("failed-sub should have been filtered out")
 		case "deleting-sub":
-			if result.Phase != phaseActive || !result.Ready || result.DeletionTimestamp == "" {
-				t.Errorf("deleting-sub health fields incorrect: Phase=%s, Ready=%v, DeletionTimestamp=%s",
-					result.Phase, result.Ready, result.DeletionTimestamp)
-			}
+			t.Errorf("deleting-sub should have been filtered out")
 		}
 	}
 }
