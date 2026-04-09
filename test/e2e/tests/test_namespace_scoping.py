@@ -115,7 +115,7 @@ def _delete_cr(kind: str, name: str, namespace: str):
 
 def _create_external_model(name: str, 
                            namespace: str, 
-                           provider: str = "test", 
+                           provider: str = "openai",
                            endpoint: str = "test.example.com", 
                            target_model: Optional[str] = None):
     """ Create an ExternalModel CR with the given name and namespace.
