@@ -105,7 +105,7 @@ spec:
     spec:
       containers:
       - name: postgres
-        image: registry.redhat.io/rhel9/postgresql-15:latest
+        image: registry.redhat.io/rhel9/postgresql-16:latest@sha256:680b42d2c51b76d23cd5b68dd774af456b1e4c98c4aaeb49d0de0948dc933716
         env:
         - name: POSTGRESQL_USER
           valueFrom:
