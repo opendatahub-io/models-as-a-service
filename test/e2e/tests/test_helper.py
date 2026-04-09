@@ -219,8 +219,20 @@ def _is_transient_kubectl_error(stderr):
     return any(pattern.lower() in stderr_lower for pattern in transient_patterns)
 
 
+def _is_not_found_error(stderr):
+    """Check if kubectl error indicates the resource was not found."""
+    stderr_lower = stderr.lower()
+    return "notfound" in stderr_lower or "not found" in stderr_lower
+
+
 def _get_cr(kind, name, namespace=None):
-    """Get a CR as dict, or None if not found. Retries on transient errors."""
+    """Get a CR as dict, or None if not found. Retries on transient errors.
+
+    Returns None only when the resource genuinely does not exist (server NotFound).
+    Raises RuntimeError for other failures (RBAC, missing CRD, transport errors
+    that persist after retries) so callers can distinguish infrastructure issues
+    from true absence.
+    """
     namespace = namespace or _ns()
     max_retries = 3
     retry_delay = 2
@@ -238,11 +250,17 @@ def _get_cr(kind, name, namespace=None):
             time.sleep(retry_delay * (attempt + 1))
             continue
 
+        # Terminal failure — distinguish not-found from other errors
+        if _is_not_found_error(result.stderr):
+            return None
+
         log.error(
-            f"Failed to get {kind}/{name} in namespace '{namespace}' after {max_retries} retries. "
+            f"Failed to get {kind}/{name} in namespace '{namespace}' after {attempt + 1} attempts. "
             f"Last error: {result.stderr.strip()}"
         )
-        return None
+        raise RuntimeError(
+            f"Failed to get {kind}/{name} in namespace '{namespace}': {result.stderr.strip()}"
+        )
 
 
 # ---------------------------------------------------------------------------
