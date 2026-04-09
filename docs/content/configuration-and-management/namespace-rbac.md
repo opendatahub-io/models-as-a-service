@@ -177,7 +177,7 @@ kubectl get clusterrole admin -o yaml | grep -A 10 "maas.opendatahub.io"
 ### "Forbidden" Error When Creating MaaSModelRef
 
 **Problem:**
-```
+```text
 Error from server (Forbidden): maasmodelrefs.maas.opendatahub.io is forbidden: 
 User "user@example.com" cannot create resource "maasmodelrefs" in API group 
 "maas.opendatahub.io" in the namespace "my-models"
