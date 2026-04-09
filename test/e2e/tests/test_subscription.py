@@ -1914,7 +1914,7 @@ class TestE2ESubscriptionFlow:
             assert subs_r.status_code == 200, (
                 f"Failed to list subscriptions: {subs_r.status_code} {subs_r.text[:200]}"
             )
-            subs = subs_r.json().get("data", [])
+            subs = subs_r.json()
             assert len(subs) == 1, (
                 f"Test requires exactly 1 subscription for auto-select, "
                 f"found {len(subs)}: {[s.get('name') for s in subs]}. "
