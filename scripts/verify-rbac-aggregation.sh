@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+
+# verify-rbac-aggregation.sh
+# Verifies that MaaS RBAC aggregation is correctly configured
+# This script checks that the aggregated ClusterRoles exist and that
+# the built-in admin/edit/view roles include MaaS resource permissions
+
+set -euo pipefail
+
+# Color output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Test results
+PASSED=0
+FAILED=0
+
+log_info() {
+    echo -e "${BLUE}ℹ${NC} $*"
+}
+
+log_success() {
+    echo -e "${GREEN}✓${NC} $*"
+    ((PASSED++))
+}
+
+log_error() {
+    echo -e "${RED}✗${NC} $*"
+    ((FAILED++))
+}
+
+log_warning() {
+    echo -e "${YELLOW}⚠${NC} $*"
+}
+
+echo "=========================================="
+echo "MaaS RBAC Aggregation Verification"
+echo "=========================================="
+echo ""
+
+# Check 1: Verify aggregated ClusterRoles exist
+log_info "Checking for aggregated ClusterRoles..."
+
+if kubectl get clusterrole maas-user-admin-role &>/dev/null; then
+    log_success "ClusterRole 'maas-user-admin-role' exists"
+else
+    log_error "ClusterRole 'maas-user-admin-role' not found"
+fi
+
+if kubectl get clusterrole maas-user-view-role &>/dev/null; then
+    log_success "ClusterRole 'maas-user-view-role' exists"
+else
+    log_error "ClusterRole 'maas-user-view-role' not found"
+fi
+
+echo ""
+
+# Check 2: Verify aggregation labels on maas-user-admin-role
+log_info "Checking aggregation labels on maas-user-admin-role..."
+
+ADMIN_LABELS=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels}' 2>/dev/null || echo "{}")
+
+if echo "$ADMIN_LABELS" | grep -q "aggregate-to-admin.*true"; then
+    log_success "maas-user-admin-role has 'aggregate-to-admin: true' label"
+else
+    log_error "maas-user-admin-role missing 'aggregate-to-admin: true' label"
+fi
+
+if echo "$ADMIN_LABELS" | grep -q "aggregate-to-edit.*true"; then
+    log_success "maas-user-admin-role has 'aggregate-to-edit: true' label"
+else
+    log_error "maas-user-admin-role missing 'aggregate-to-edit: true' label"
+fi
+
+echo ""
+
+# Check 3: Verify aggregation labels on maas-user-view-role
+log_info "Checking aggregation labels on maas-user-view-role..."
+
+VIEW_LABELS=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels}' 2>/dev/null || echo "{}")
+
+if echo "$VIEW_LABELS" | grep -q "aggregate-to-view.*true"; then
+    log_success "maas-user-view-role has 'aggregate-to-view: true' label"
+else
+    log_error "maas-user-view-role missing 'aggregate-to-view: true' label"
+fi
+
+if echo "$VIEW_LABELS" | grep -q "aggregate-to-admin.*true"; then
+    log_success "maas-user-view-role has 'aggregate-to-admin: true' label"
+else
+    log_error "maas-user-view-role missing 'aggregate-to-admin: true' label"
+fi
+
+if echo "$VIEW_LABELS" | grep -q "aggregate-to-edit.*true"; then
+    log_success "maas-user-view-role has 'aggregate-to-edit: true' label"
+else
+    log_error "maas-user-view-role missing 'aggregate-to-edit: true' label"
+fi
+
+echo ""
+
+# Check 4: Verify built-in admin role includes MaaS permissions
+log_info "Checking if 'admin' ClusterRole includes MaaS permissions..."
+
+ADMIN_RULES=$(kubectl get clusterrole admin -o yaml 2>/dev/null || echo "")
+
+if echo "$ADMIN_RULES" | grep -q "maas.opendatahub.io"; then
+    log_success "'admin' ClusterRole includes maas.opendatahub.io API group"
+
+    # Check for specific resources
+    if echo "$ADMIN_RULES" | grep -A5 "maas.opendatahub.io" | grep -q "maasmodelrefs"; then
+        log_success "'admin' ClusterRole includes maasmodelrefs resource"
+    else
+        log_warning "'admin' ClusterRole may not include maasmodelrefs resource"
+    fi
+
+    if echo "$ADMIN_RULES" | grep -A5 "maas.opendatahub.io" | grep -q "externalmodels"; then
+        log_success "'admin' ClusterRole includes externalmodels resource"
+    else
+        log_warning "'admin' ClusterRole may not include externalmodels resource"
+    fi
+else
+    log_error "'admin' ClusterRole does not include maas.opendatahub.io API group"
+    log_warning "RBAC aggregation may take a few seconds after ClusterRole creation"
+fi
+
+echo ""
+
+# Check 5: Verify built-in edit role includes MaaS permissions
+log_info "Checking if 'edit' ClusterRole includes MaaS permissions..."
+
+EDIT_RULES=$(kubectl get clusterrole edit -o yaml 2>/dev/null || echo "")
+
+if echo "$EDIT_RULES" | grep -q "maas.opendatahub.io"; then
+    log_success "'edit' ClusterRole includes maas.opendatahub.io API group"
+else
+    log_error "'edit' ClusterRole does not include maas.opendatahub.io API group"
+    log_warning "RBAC aggregation may take a few seconds after ClusterRole creation"
+fi
+
+echo ""
+
+# Check 6: Verify built-in view role includes MaaS permissions
+log_info "Checking if 'view' ClusterRole includes MaaS permissions..."
+
+VIEW_RULES=$(kubectl get clusterrole view -o yaml 2>/dev/null || echo "")
+
+if echo "$VIEW_RULES" | grep -q "maas.opendatahub.io"; then
+    log_success "'view' ClusterRole includes maas.opendatahub.io API group"
+else
+    log_error "'view' ClusterRole does not include maas.opendatahub.io API group"
+    log_warning "RBAC aggregation may take a few seconds after ClusterRole creation"
+fi
+
+echo ""
+
+# Check 7: Verify correct verbs for admin role
+log_info "Checking verbs for 'admin' ClusterRole MaaS permissions..."
+
+ADMIN_VERBS=$(kubectl get clusterrole admin -o yaml 2>/dev/null | grep -A20 "maas.opendatahub.io" | grep "verbs:" -A10 || echo "")
+
+EXPECTED_VERBS=("create" "delete" "get" "list" "patch" "update" "watch")
+for verb in "${EXPECTED_VERBS[@]}"; do
+    if echo "$ADMIN_VERBS" | grep -q "- $verb"; then
+        log_success "'admin' role has '$verb' verb for MaaS resources"
+    else
+        log_warning "'admin' role may be missing '$verb' verb for MaaS resources"
+    fi
+done
+
+echo ""
+
+# Check 8: Verify correct verbs for view role (read-only)
+log_info "Checking verbs for 'view' ClusterRole MaaS permissions..."
+
+VIEW_VERBS=$(kubectl get clusterrole view -o yaml 2>/dev/null | grep -A20 "maas.opendatahub.io" | grep "verbs:" -A10 || echo "")
+
+READ_VERBS=("get" "list" "watch")
+for verb in "${READ_VERBS[@]}"; do
+    if echo "$VIEW_VERBS" | grep -q "- $verb"; then
+        log_success "'view' role has '$verb' verb for MaaS resources"
+    else
+        log_warning "'view' role may be missing '$verb' verb for MaaS resources"
+    fi
+done
+
+# Ensure view role doesn't have write verbs
+WRITE_VERBS=("create" "delete" "patch" "update")
+for verb in "${WRITE_VERBS[@]}"; do
+    if echo "$VIEW_VERBS" | grep -q "- $verb"; then
+        log_error "'view' role incorrectly has '$verb' verb (should be read-only)"
+    fi
+done
+
+echo ""
+echo "=========================================="
+echo "Summary"
+echo "=========================================="
+echo -e "${GREEN}Passed:${NC} $PASSED"
+echo -e "${RED}Failed:${NC} $FAILED"
+echo ""
+
+if [[ $FAILED -eq 0 ]]; then
+    echo -e "${GREEN}✓ All RBAC aggregation checks passed!${NC}"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Grant namespace users 'admin' or 'edit' role to enable MaaSModelRef creation"
+    echo "  2. Grant namespace users 'view' role for read-only access"
+    echo ""
+    echo "Example: Grant admin role to a user in namespace 'my-models'"
+    echo "  kubectl create rolebinding my-models-admin \\"
+    echo "    --clusterrole=admin \\"
+    echo "    --user=user@example.com \\"
+    echo "    -n my-models"
+    exit 0
+else
+    echo -e "${RED}✗ Some RBAC aggregation checks failed${NC}"
+    echo ""
+    echo "Troubleshooting:"
+    echo "  1. Verify MaaS controller is deployed: kubectl get deployment maas-controller -n opendatahub"
+    echo "  2. Check ClusterRole definitions: kubectl get clusterrole | grep maas-user"
+    echo "  3. Wait a few seconds for RBAC aggregation to propagate"
+    echo "  4. Check for RBAC controller errors: kubectl logs -n kube-system -l component=kube-controller-manager"
+    exit 1
+fi
