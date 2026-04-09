@@ -30,7 +30,7 @@ type SelectResponse struct {
 
 	// Health fields (populated from status and metadata)
 	Phase             string `json:"phase,omitempty"`             // Subscription phase: "Active", "Failed", "Pending", or ""
-	Ready             bool   `json:"ready,omitempty"`             // Whether subscription is ready (from Ready condition)
+	Ready             bool   `json:"ready"`                       // Whether subscription is ready (from Ready condition)
 	DeletionTimestamp string `json:"deletionTimestamp,omitempty"` // Set when subscription is being deleted
 
 	// Error fields (populated when selection fails)
@@ -50,7 +50,7 @@ type SubscriptionInfo struct {
 	CostCenter              string            `json:"cost_center,omitempty"`
 	Labels                  map[string]string `json:"labels,omitempty"`
 	Phase                   string            `json:"phase,omitempty"`              // Subscription phase from status
-	Ready                   bool              `json:"ready,omitempty"`              // Whether subscription is ready
+	Ready                   bool              `json:"ready"`                        // Whether subscription is ready
 	DeletionTimestamp       string            `json:"deletion_timestamp,omitempty"` // Set when being deleted
 }
 

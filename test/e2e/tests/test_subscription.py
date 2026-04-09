@@ -2732,14 +2732,27 @@ class TestDegradedSubscriptionFiltering:
             result = subprocess.run(cmd, capture_output=True, text=True)
             assert result.returncode == 0, f"Failed to patch subscription: {result.stderr}"
 
-            # Verify the valid model is now marked unhealthy
-            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
-            model_statuses = cr.get("status", {}).get("modelRefStatuses", [])
-            valid_model_status = next((s for s in model_statuses if s.get("name") == MODEL_REF), None)
-            assert valid_model_status is not None and valid_model_status.get("ready") is False, \
-                f"Expected {MODEL_REF} to be marked unhealthy"
+            # Poll for the status update to be visible (avoid racing cached state)
+            log.info(f"Polling for {MODEL_REF} to be marked unhealthy...")
+            max_wait = 30
+            poll_interval = 2
+            elapsed = 0
+            valid_model_status = None
 
-            log.info(f"✅ {MODEL_REF} manually marked as unhealthy")
+            while elapsed < max_wait:
+                cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+                model_statuses = cr.get("status", {}).get("modelRefStatuses", [])
+                valid_model_status = next((s for s in model_statuses if s.get("name") == MODEL_REF), None)
+
+                if valid_model_status is not None and valid_model_status.get("ready") is False:
+                    log.info(f"✅ {MODEL_REF} marked as unhealthy after {elapsed}s")
+                    break
+
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+
+            assert valid_model_status is not None and valid_model_status.get("ready") is False, \
+                f"Expected {MODEL_REF} to be marked unhealthy after {max_wait}s"
 
             # Try inference to the valid model (which now has unhealthy status)
             # The route exists, so request reaches selector, which should reject
@@ -2940,18 +2953,14 @@ class TestDegradedSubscriptionFiltering:
 
             # Verify health fields
             assert "phase" in our_sub, "Missing phase field in subscription response"
-            
-            # Note: ready field has omitempty in Go, so false values are omitted from JSON
-            # This is expected behavior for Degraded subscriptions
-            if "ready" in our_sub:
-                log.info(f"Subscription: phase={our_sub.get('phase')}, ready={our_sub.get('ready')}")
-                assert our_sub["ready"] is False, \
-                    f"Expected ready=false for Degraded, got {our_sub['ready']}"
-            else:
-                log.info(f"Subscription: phase={our_sub.get('phase')}, ready field omitted (false)")
+            assert "ready" in our_sub, "Missing ready field in subscription response"
+
+            log.info(f"Subscription: phase={our_sub.get('phase')}, ready={our_sub.get('ready')}")
 
             assert our_sub["phase"] == "Degraded", \
                 f"Expected phase=Degraded, got {our_sub['phase']}"
+            assert our_sub["ready"] is False, \
+                f"Expected ready=false for Degraded, got {our_sub['ready']}"
 
             log.info("✅ /v1/subscriptions correctly reports Degraded subscription health")
 
