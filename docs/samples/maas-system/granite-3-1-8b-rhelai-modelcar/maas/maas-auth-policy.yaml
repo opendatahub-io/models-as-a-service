@@ -6,7 +6,6 @@ metadata:
 spec:
   modelRefs:
     - name: granite-3-1-8b-starter
-      namespace: llm
   subjects:
     groups:
       - name: system:authenticated
