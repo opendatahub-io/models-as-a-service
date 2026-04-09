@@ -546,7 +546,7 @@ paths:
                                   priority: 10
                                   model_refs: []
                                   phase: Degraded
-                                  ready: true
+                                  ready: false
                 "500":
                     description: Internal Server Error response.
                     content:

@@ -42,7 +42,7 @@ The controller populates the `status` field with operational state. These fields
 |-------|------|-------------|
 | phase | string | Subscription health phase: `Active` (healthy), `Degraded` (some models unhealthy), `Failed` (not operational), or `Pending` (provisioning) |
 | conditions | []Condition | Standard Kubernetes conditions (e.g., Ready) |
-| modelRefStatuses | []ModelRefStatus | Per-model health status (populated for Degraded subscriptions) |
+| modelRefStatuses | []ModelRefStatus | Per-model health status for each referenced MaaSModelRef |
 
 ### ModelRefStatus
 
