@@ -500,7 +500,7 @@ run_e2e_tests() {
     # Wait for gateway to be reachable (DNS propagation + route readiness)
     local scheme="https"
     [[ "$INSECURE_HTTP" == "true" ]] && scheme="http"
-    local gw_url="${scheme}://${GATEWAY_HOST}/maas-api/healthz"
+    local gw_url="${scheme}://${GATEWAY_HOST}/maas-api/health"
     local gw_timeout=120
     local gw_deadline=$((SECONDS + gw_timeout))
     echo "Waiting for gateway to be reachable: ${gw_url} (timeout: ${gw_timeout}s)..."

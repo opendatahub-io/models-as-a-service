@@ -361,8 +361,8 @@ class TestModelsEndpoint:
             subprocess.run([
                 "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                 "-n", maas_ns,
-                "--type=json",
-                "-p", f'[{{"op": "add", "path": "/spec/owner/users/-", "value": "{sa_user}"}}]'
+                "--type=merge",
+                "-p", json.dumps({"spec": {"owner": {"users": [sa_user]}}})
             ], check=True)
 
             _wait_reconcile()
@@ -502,8 +502,8 @@ class TestModelsEndpoint:
             subprocess.run([
                 "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                 "-n", maas_ns,
-                "--type=json",
-                "-p", f'[{{"op": "add", "path": "/spec/owner/users/-", "value": "{sa_user}"}}]'
+                "--type=merge",
+                "-p", json.dumps({"spec": {"owner": {"users": [sa_user]}}})
             ], check=True)
 
             # Create API key

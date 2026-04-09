@@ -1165,7 +1165,7 @@ apply_custom_resources() {
 
   local webhook_deployment
   if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
-    webhook_deployment="rhods-operator-controller-manager"
+    webhook_deployment="rhods-operator"
   else
     webhook_deployment="opendatahub-operator-controller-manager"
   fi
