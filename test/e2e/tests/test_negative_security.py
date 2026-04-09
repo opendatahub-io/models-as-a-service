@@ -313,6 +313,36 @@ class TestAuthPolicyRemoval:
 class TestMissingModelRef:
     """Verify CRs referencing non-existent MaaSModelRefs report errors."""
 
+    @staticmethod
+    def _poll_for_terminal_non_active(kind, name, timeout=30):
+        """Poll a CR until it reaches a terminal non-Active phase or timeout.
+
+        Returns the final phase string. Fails immediately if phase becomes Active.
+        Terminal phases: any non-empty phase that isn't Pending (e.g., Failed).
+        """
+        deadline = time.time() + timeout
+        last_phase = ""
+        while time.time() < deadline:
+            cr = _get_cr(kind, name)
+            assert cr is not None, f"{kind} CR '{name}' should exist"
+
+            phase = cr.get("status", {}).get("phase", "")
+            last_phase = phase
+
+            if phase == "Active":
+                raise AssertionError(
+                    f"{kind} '{name}' referencing non-existent model should not be Active"
+                )
+
+            # A non-empty phase other than Pending is terminal
+            if phase and phase != "Pending":
+                return phase
+
+            time.sleep(2)
+
+        # Timeout — the CR never settled to a terminal phase, but it's not Active
+        return last_phase
+
     def test_subscription_with_nonexistent_model_ref(self):
         """MaaSSubscription referencing non-existent model does not reach Active."""
         suffix = uuid.uuid4().hex[:8]
@@ -326,16 +356,8 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            # Wait for reconciliation, then check status
-            _wait_reconcile()
-            cr = _get_cr("maassubscription", sub_name)
-            assert cr is not None, "MaaSSubscription CR should exist"
-
-            phase = cr.get("status", {}).get("phase", "")
+            phase = self._poll_for_terminal_non_active("maassubscription", sub_name)
             log.info("MaaSSubscription with ghost model -> phase: %s", phase)
-            assert phase != "Active", (
-                f"MaaSSubscription referencing non-existent model should not be Active, got phase: {phase}"
-            )
         finally:
             _delete_cr("maassubscription", sub_name)
 
@@ -352,16 +374,8 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            # Wait for reconciliation, then check status
-            _wait_reconcile()
-            cr = _get_cr("maasauthpolicy", policy_name)
-            assert cr is not None, "MaaSAuthPolicy CR should exist"
-
-            phase = cr.get("status", {}).get("phase", "")
+            phase = self._poll_for_terminal_non_active("maasauthpolicy", policy_name)
             log.info("MaaSAuthPolicy with ghost model -> phase: %s", phase)
-            assert phase != "Active", (
-                f"MaaSAuthPolicy referencing non-existent model should not be Active, got phase: {phase}"
-            )
         finally:
             _delete_cr("maasauthpolicy", policy_name)
 
