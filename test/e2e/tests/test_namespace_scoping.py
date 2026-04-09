@@ -43,6 +43,7 @@ from test_helper import (
     _get_cr,
     _maas_api_url,
     _ns,
+    _revoke_api_key,
     _wait_reconcile,
 )
 
@@ -159,8 +160,12 @@ def _get_cr_annotation(kind: str, name: str, namespace: str, key: str):
 @pytest.fixture(scope="module")
 def api_key():
     """Create an API key for tests."""
-    _, key = _create_ns_api_key("e2e-ns-scoping-key")
-    return key
+    key_id, key = _create_ns_api_key("e2e-ns-scoping-key")
+    try:
+        yield key
+    finally:
+        if key_id:
+            _revoke_api_key(_get_token(), key_id)
 
 
 class TestMaaSAPIWatchNamespace:
