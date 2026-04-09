@@ -181,14 +181,16 @@ def _revoke_api_key(oc_token: str, key_id: str):
     """Revoke an API key (best-effort, for cleanup)."""
     url = f"{_maas_api_url()}/v1/api-keys/{key_id}"
     try:
-        requests.delete(
+        r = requests.delete(
             url,
             headers={"Authorization": f"Bearer {oc_token}"},
             timeout=TIMEOUT,
             verify=TLS_VERIFY,
         )
-    except Exception as e:
-        log.warning(f"Failed to revoke API key {key_id}: {e}")
+        if r.status_code not in (200, 204, 404):
+            log.warning("Failed to revoke API key %s: %s %s", key_id, r.status_code, r.text[:200])
+    except requests.RequestException as e:
+        log.warning("Failed to revoke API key %s: %s", key_id, e)
 
 
 # ---------------------------------------------------------------------------

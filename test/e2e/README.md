@@ -167,7 +167,7 @@ Tests that MaaS controller and API only watch the subscription namespace:
 pytest tests/test_namespace_scoping.py -v
 ```
 
-**Test Coverage (4 test classes):**
+**Test Coverage (3 test classes):**
 - MaaS API only sees subscriptions in the subscription namespace
 - Controller only reconciles CRs in the subscription namespace
 - AuthPolicy model ref scoping (only reconciled into the referenced model's namespace)
