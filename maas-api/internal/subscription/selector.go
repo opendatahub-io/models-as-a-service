@@ -14,7 +14,7 @@ import (
 )
 
 // Phase constants for MaaSSubscription status.
-// These must match the Phase values defined in maas-controller/api/maas/v1alpha1/common_types.go
+// These must match the Phase values defined in maas-controller/api/maas/v1alpha1/common_types.go.
 const (
 	PhasePending  = "Pending"
 	PhaseActive   = "Active"

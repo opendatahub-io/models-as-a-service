@@ -341,6 +341,8 @@ func TestSelectHighestPriority(t *testing.T) {
 }
 
 // createSubscriptionWithHealth creates a subscription with health status fields.
+//
+//nolint:unparam // Test helper - parameters provide flexibility for future tests
 func createSubscriptionWithHealth(
 	name string, groups []string, users []string, priority int32,
 	tokenLimit int64, phase string, ready bool, deleting bool,
