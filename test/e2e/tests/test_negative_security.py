@@ -22,9 +22,13 @@ Environment variables:
   - E2E_UNCONFIGURED_MODEL_REF: MaaSModelRef name for the unconfigured model
 """
 
+import http.client
+import json
 import logging
+import ssl
 import time
 import uuid
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -89,6 +93,7 @@ class TestHeaderSpoofing:
 
         # Request succeeds with the REAL identity (API key owner), not the spoofed one.
         # If spoofed headers were honored, the test user would gain cluster-admin access.
+        log.info("Spoofed identity headers -> %s", r.status_code)
         assert r.status_code == 200, (
             f"Expected 200 (spoofed headers stripped, real identity used), "
             f"got {r.status_code}: {r.text[:500]}"
@@ -103,28 +108,51 @@ class TestHeaderSpoofing:
         """
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
 
-        # Send request with two conflicting subscription headers.
-        # requests library supports duplicate headers via a prepared request.
-        url = f"{_gateway_url()}{MODEL_PATH}/v1/completions"
-        req = requests.Request(
-            "POST", url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
-        )
-        prepared = req.prepare()
-        # Inject duplicate header
-        prepared.headers["X-MaaS-Subscription"] = "nonexistent-evil-sub"
+        # Use http.client to send genuinely duplicate X-MaaS-Subscription headers.
+        # The requests library uses a dict for headers, so it cannot send two
+        # headers with the same name — the second value overwrites the first.
+        gateway = _gateway_url()
+        parsed = urlparse(gateway)
+        path = f"{MODEL_PATH}/v1/completions"
+        body = json.dumps({"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 3})
 
-        session = requests.Session()
-        r = session.send(prepared, timeout=TIMEOUT, verify=TLS_VERIFY)
+        if parsed.scheme == "https":
+            ctx = ssl.create_default_context()
+            if not TLS_VERIFY:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            conn = http.client.HTTPSConnection(
+                parsed.hostname, parsed.port or 443, timeout=TIMEOUT, context=ctx,
+            )
+        else:
+            conn = http.client.HTTPConnection(
+                parsed.hostname, parsed.port or 80, timeout=TIMEOUT,
+            )
+
+        # Two separate X-MaaS-Subscription header lines
+        headers = [
+            ("Authorization", f"Bearer {api_key}"),
+            ("Content-Type", "application/json"),
+            ("X-MaaS-Subscription", SIMULATOR_SUBSCRIPTION),
+            ("X-MaaS-Subscription", "nonexistent-fake-sub"),
+        ]
+
+        conn.putrequest("POST", path)
+        for key, value in headers:
+            conn.putheader(key, value)
+        conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body.encode())
+
+        resp = conn.getresponse()
+        status = resp.status
+        resp_body = resp.read().decode(errors="replace")
+        conn.close()
 
         # API key binding wins — request succeeds with key-derived subscription.
-        assert r.status_code == 200, (
-            f"Expected 200 (API key subscription binding wins over header), "
-            f"got {r.status_code}: {r.text[:500]}"
+        log.info("Duplicate X-MaaS-Subscription headers -> %s", status)
+        assert status == 200, (
+            f"Expected 200 (API key subscription binding wins over duplicate headers), "
+            f"got {status}: {resp_body[:500]}"
         )
 
 
@@ -169,6 +197,7 @@ class TestExpiredKeyRejection:
 
         # Expired key should be rejected at gateway
         r = _poll_status(expired_key, (401, 403), timeout=30)
+        log.info("Expired API key -> %s", r.status_code)
         assert r.status_code in (401, 403), (
             f"Expected 401 or 403 for expired key, got {r.status_code}: {r.text[:500]}"
         )
@@ -198,6 +227,7 @@ class TestCrossModelAccess:
         # should fail because the subscription doesn't cover UNCONFIGURED_MODEL_REF.
         r = _inference(api_key, path=UNCONFIGURED_MODEL_PATH)
 
+        log.info("Cross-model access (model outside subscription) -> %s", r.status_code)
         assert r.status_code in (401, 403), (
             f"Expected 401 or 403 for model outside subscription scope, "
             f"got {r.status_code}: {r.text[:500]}"
@@ -252,11 +282,13 @@ class TestAuthPolicyRemoval:
 
             # Verify inference works
             r = _poll_status(api_key, 200, path=UNCONFIGURED_MODEL_PATH, timeout=90)
+            log.info("With AuthPolicy -> %s", r.status_code)
             assert r.status_code == 200, (
                 f"Setup: expected 200 with valid auth policy, got {r.status_code}"
             )
 
             # Delete the auth policy
+            log.info("Deleting MaaSAuthPolicy %s", policy_name)
             _delete_cr("maasauthpolicy", policy_name)
 
             # Wait for Kuadrant AuthPolicy removal to propagate
@@ -264,6 +296,7 @@ class TestAuthPolicyRemoval:
 
             # Access should now be denied
             r = _poll_status(api_key, (401, 403), path=UNCONFIGURED_MODEL_PATH, timeout=90)
+            log.info("After AuthPolicy deletion -> %s", r.status_code)
             assert r.status_code in (401, 403), (
                 f"Expected 401 or 403 after AuthPolicy deletion, "
                 f"got {r.status_code}: {r.text[:500]}"
@@ -299,6 +332,7 @@ class TestMissingModelRef:
             assert cr is not None, "MaaSSubscription CR should exist"
 
             phase = cr.get("status", {}).get("phase", "")
+            log.info("MaaSSubscription with ghost model -> phase: %s", phase)
             assert phase != "Active", (
                 f"MaaSSubscription referencing non-existent model should not be Active, got phase: {phase}"
             )
@@ -324,6 +358,7 @@ class TestMissingModelRef:
             assert cr is not None, "MaaSAuthPolicy CR should exist"
 
             phase = cr.get("status", {}).get("phase", "")
+            log.info("MaaSAuthPolicy with ghost model -> phase: %s", phase)
             assert phase != "Active", (
                 f"MaaSAuthPolicy referencing non-existent model should not be Active, got phase: {phase}"
             )
@@ -356,6 +391,7 @@ class TestHeaderAbuse:
         for payload in injection_payloads:
             r = _inference(api_key, extra_headers={"X-MaaS-Subscription": payload})
 
+            log.info("Injection payload %r -> %s", payload, r.status_code)
             # API key binding wins — request should succeed (200) because
             # the spoofed header is ignored for API key requests.
             # If the platform processes the header, it should return 403, not 500.
