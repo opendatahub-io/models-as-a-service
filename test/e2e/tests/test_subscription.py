@@ -1902,6 +1902,25 @@ class TestE2ESubscriptionFlow:
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
             _wait_reconcile()
 
+            # Assert precondition: user must see exactly one subscription for auto-select to work.
+            # On clusters with extra system:authenticated subscriptions this would fail with an
+            # opaque 403 timeout instead of a clear message (see RHOAIENG-57377).
+            subs_r = requests.get(
+                f"{_maas_api_url()}/v1/subscriptions",
+                headers={"Authorization": f"Bearer {oc_token}"},
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+            assert subs_r.status_code == 200, (
+                f"Failed to list subscriptions: {subs_r.status_code} {subs_r.text[:200]}"
+            )
+            subs = subs_r.json().get("data", [])
+            assert len(subs) == 1, (
+                f"Test requires exactly 1 subscription for auto-select, "
+                f"found {len(subs)}: {[s.get('name') for s in subs]}. "
+                f"Other subscriptions on the cluster may grant system:authenticated access."
+            )
+
             # Exactly one subscription for this user → mint can auto-bind it without explicit name
             api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
 
