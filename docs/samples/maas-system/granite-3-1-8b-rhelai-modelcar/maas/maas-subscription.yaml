@@ -1,0 +1,16 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: granite-3-1-8b-starter-subscription
+  namespace: models-as-a-service
+spec:
+  owner:
+    groups:
+      - name: system:authenticated
+    users: []
+  modelRefs:
+    - name: granite-3-1-8b-starter
+      namespace: llm
+      tokenRateLimits:
+        - limit: 10000
+          window: 1m
