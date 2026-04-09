@@ -164,7 +164,7 @@ ADMIN_VERBS=$(kubectl get clusterrole admin -o yaml 2>/dev/null | grep -A20 "maa
 
 EXPECTED_VERBS=("create" "delete" "get" "list" "patch" "update" "watch")
 for verb in "${EXPECTED_VERBS[@]}"; do
-    if echo "$ADMIN_VERBS" | grep -q "- $verb"; then
+    if echo "$ADMIN_VERBS" | grep -q -- "- $verb"; then
         log_success "'admin' role has '$verb' verb for MaaS resources"
     else
         log_warning "'admin' role may be missing '$verb' verb for MaaS resources"
@@ -180,7 +180,7 @@ VIEW_VERBS=$(kubectl get clusterrole view -o yaml 2>/dev/null | grep -A20 "maas.
 
 READ_VERBS=("get" "list" "watch")
 for verb in "${READ_VERBS[@]}"; do
-    if echo "$VIEW_VERBS" | grep -q "- $verb"; then
+    if echo "$VIEW_VERBS" | grep -q -- "- $verb"; then
         log_success "'view' role has '$verb' verb for MaaS resources"
     else
         log_warning "'view' role may be missing '$verb' verb for MaaS resources"
@@ -190,7 +190,7 @@ done
 # Ensure view role doesn't have write verbs
 WRITE_VERBS=("create" "delete" "patch" "update")
 for verb in "${WRITE_VERBS[@]}"; do
-    if echo "$VIEW_VERBS" | grep -q "- $verb"; then
+    if echo "$VIEW_VERBS" | grep -q -- "- $verb"; then
         log_error "'view' role incorrectly has '$verb' verb (should be read-only)"
     fi
 done
