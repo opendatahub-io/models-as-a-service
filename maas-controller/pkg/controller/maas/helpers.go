@@ -29,6 +29,18 @@ func validateCELValue(value, fieldName string) error {
 	return nil
 }
 
+// validatePublicPath checks that a public path is safe for use in regex and CEL expressions.
+// Rejects paths containing characters that could cause injection or unintended matching.
+func validatePublicPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("publicPath cannot be empty")
+	}
+	if strings.ContainsAny(path, `"'\{}()|*+?^$[]#@`) {
+		return fmt.Errorf("publicPath %q contains characters unsafe for regex/CEL expressions", path)
+	}
+	return nil
+}
+
 // findAllSubscriptionsForModel returns all MaaSSubscriptions that reference the given model,
 // excluding subscriptions that are being deleted.
 // Uses the field index for efficient lookup instead of cluster-wide scans.

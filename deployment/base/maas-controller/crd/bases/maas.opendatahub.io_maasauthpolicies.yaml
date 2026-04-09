@@ -89,6 +89,18 @@ spec:
                   type: object
                 minItems: 1
                 type: array
+              publicPaths:
+                description: |-
+                  PublicPaths is a list of URL path suffixes that should be accessible without authentication.
+                  When set, the generated AuthPolicy will include an anonymous authentication rule
+                  scoped to requests matching these paths (e.g., "/docs", "/openapi.json").
+                  Inference and other endpoints remain fully authenticated.
+                items:
+                  maxLength: 256
+                  minLength: 1
+                  type: string
+                maxItems: 10
+                type: array
               subjects:
                 description: Subjects defines who has access (OR logic - any match
                   grants access)
