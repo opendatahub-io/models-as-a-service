@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: otel-collector
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  podSelector:
+    matchLabels:
+      app: otel-collector
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          gateway.networking.k8s.io/gateway-name: maas-default-gateway
+    ports:
+    - protocol: TCP
+      port: 4317

@@ -1,0 +1,12 @@
+# ConfigMap for LokiStack Gateway TLS CA certificate
+# OpenShift service CA operator injects the CA bundle automatically
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-gateway-serving-ca
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability

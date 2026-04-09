@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  ports:
+  - name: grpc
+    port: 4317
+    targetPort: 4317
+    protocol: TCP
+  selector:
+    app: otel-collector

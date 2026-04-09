@@ -1,0 +1,516 @@
+# Perses Dashboard: AI Engineer Dashboard
+# Hybrid Prometheus + Loki: per-user panels query Loki structured logs via LogQL,
+# platform-wide panels (inferenceSuccessRate) still use Prometheus/vLLM metrics.
+#
+# user_id, tokens_total, etc. are Loki structured metadata — accessible via
+# pipeline filters (| user_id=~"..." | unwrap tokens_total) without | json.
+# Stream labels (from groupbyattrs): subscription, model, response_code, method.
+#
+# user_id!="-" filters out health-check / probe traffic (user_id="-").
+# Stat "total" panels use [1h] windows (matching dashboard duration) + calculation: last.
+apiVersion: perses.dev/v1alpha1
+kind: PersesDashboard
+metadata:
+  name: ai-engineer-dashboard
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  display:
+    name: "AI Engineer Dashboard"
+    description: "API usage metrics for AI Engineers using MaaS platform"
+  duration: 1h
+
+  variables:
+    - kind: TextVariable
+      spec:
+        name: user
+        display:
+          name: "User ID"
+        value: ".+"
+
+  panels:
+    # =============================================
+    # Section: My Usage Summary (6 panels)
+    # =============================================
+    myTotalTokens:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Total Tokens"
+          description: "Total API tokens you have consumed in the last hour."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum(sum_over_time({service_name="maas-gateway", response_code=~"2.."}
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [1h]))
+                    or vector(0)
+
+    myTotalRequests:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Total Requests"
+          description: "Total API requests that were successfully authorized in the last hour."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last
+            format:
+              unit: decimal
+              shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum(count_over_time({service_name="maas-gateway", response_code=~"2.."}
+                    | user_id=~"$user" | user_id!="-" [1h]))
+                    or vector(0)
+
+    tokenRate:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Token Rate"
+          description: "Your current token consumption rate (tokens per second) averaged over the last 5 minutes."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              decimalPlaces: 2
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum(rate({service_name="maas-gateway", response_code=~"2.."}
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [5m]))
+
+    requestRate:
+      kind: Panel
+      spec:
+        display:
+          name: "⚡ Request Rate"
+          description: "Your current request rate (requests per second) averaged over the last 5 minutes."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: decimal
+              decimalPlaces: 2
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum(rate({service_name="maas-gateway", response_code=~"2.."}
+                    | user_id=~"$user" | user_id!="-" [5m]))
+
+    rateLimitRatio:
+      kind: Panel
+      spec:
+        display:
+          name: "🚦 Rate Limit Ratio"
+          description: "Percentage of your requests rejected by rate limiting (HTTP 429)."
+        plugin:
+          kind: StatChart
+          spec:
+            calculation: last-number
+            format:
+              unit: percent-decimal
+              decimalPlaces: 1
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum(count_over_time({service_name="maas-gateway", response_code="429"}
+                    | user_id=~"$user" | user_id!="-" [5m]))
+                    /
+                    sum(count_over_time({service_name="maas-gateway"}
+                    | user_id=~"$user" | user_id!="-" [5m]))
+
+    inferenceSuccessRate:
+      kind: Panel
+      spec:
+        display:
+          name: "✅ Inference Success Rate"
+          description: "Model inference success rate: percentage of requests that reached the model and completed successfully. Platform-wide health indicator."
+        plugin:
+          kind: GaugeChart
+          spec:
+            calculation: last-number
+            format:
+              unit: percent-decimal
+              decimalPlaces: 1
+            max: 1
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  seriesNameFormat: "Success Rate"
+                  query: ((sum(rate(vllm:request_success_total[5m])) / clamp_min(sum(rate(vllm:e2e_request_latency_seconds_count[5m])), 1e-9)) * (sum(rate(vllm:e2e_request_latency_seconds_count[5m])) > 0)) OR vector(0)
+
+    # =============================================
+    # Section: Usage Trends (2 panels)
+    # =============================================
+    tokenUsageByModel:
+      kind: Panel
+      spec:
+        display:
+          name: "📈 Token Usage by Model"
+          description: "Your token consumption broken down by model."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum by (model) (sum_over_time({service_name="maas-gateway", response_code=~"2..", model!=""}
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [5m]))
+
+    usageTrends:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Usage Trends (Tokens vs Rate Limited Requests)"
+          description: "Token consumption rate (authorized) and rate-limited request rate over time."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum(rate({service_name="maas-gateway", response_code=~"2.."}
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [5m]))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum(rate({service_name="maas-gateway", response_code="429"}
+                    | user_id=~"$user" | user_id!="-" [5m]))
+
+    # =============================================
+    # Section: Hourly Usage Patterns (1 panel)
+    # =============================================
+    hourlyTokenUsageByModel:
+      kind: Panel
+      spec:
+        display:
+          name: "⏰ Hourly Token Usage by Model"
+          description: "Hourly token consumption broken down by model."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            visual:
+              display: bar
+              stack: all
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum by (model) (sum_over_time({service_name="maas-gateway", response_code=~"2..", model!=""}
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [1h]))
+
+    # =============================================
+    # Section: Detailed Analysis (3 panels)
+    # =============================================
+    tokenVolumeByModel:
+      kind: Panel
+      spec:
+        display:
+          name: "📊 Token Volume by Model (Hourly)"
+          description: "Token volume per model in 1-hour windows."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            visual:
+              display: bar
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum by (model) (sum_over_time({service_name="maas-gateway", response_code=~"2..", model!=""}
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [1h]))
+
+    rateLimitedBySubscription:
+      kind: Panel
+      spec:
+        display:
+          name: "❌ Rate Limited by Subscription (Hourly)"
+          description: "Rate-limited requests by subscription in 1-hour windows."
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+            yAxis:
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum by (subscription) (count_over_time({service_name="maas-gateway", response_code="429", subscription!=""}
+                    | user_id=~"$user" | user_id!="-" [1h]))
+
+    usageSummaryByModelSubscription:
+      kind: Panel
+      spec:
+        display:
+          name: "🔍 My Usage Summary by Model & Subscription"
+          description: "Token consumption by model and subscription."
+        plugin:
+          kind: Table
+          spec:
+            density: "compact"
+            transforms:
+              - kind: "MergeSeries"
+                spec: {}
+            columnSettings:
+              - name: "timestamp"
+                hide: true
+              - name: "model"
+                header: "Model"
+                align: "left"
+                enableSorting: true
+              - name: "subscription"
+                header: "Subscription"
+                align: "left"
+                enableSorting: true
+              - name: "value"
+                header: "Tokens"
+                align: "right"
+                enableSorting: true
+                sort: "desc"
+                format:
+                  unit: decimal
+                  shortValues: true
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum by (model, subscription) (sum_over_time({service_name="maas-gateway", response_code=~"2..", model!=""}
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [1h]))
+
+  # Layout definition
+  layouts:
+    - kind: Grid
+      spec:
+        display:
+          title: "📊 My Usage Summary"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 4
+            height: 5
+            content:
+              "$ref": "#/spec/panels/myTotalTokens"
+          - x: 4
+            "y": 0
+            width: 4
+            height: 5
+            content:
+              "$ref": "#/spec/panels/myTotalRequests"
+          - x: 8
+            "y": 0
+            width: 4
+            height: 5
+            content:
+              "$ref": "#/spec/panels/tokenRate"
+          - x: 12
+            "y": 0
+            width: 4
+            height: 5
+            content:
+              "$ref": "#/spec/panels/requestRate"
+          - x: 16
+            "y": 0
+            width: 4
+            height: 5
+            content:
+              "$ref": "#/spec/panels/rateLimitRatio"
+          - x: 20
+            "y": 0
+            width: 4
+            height: 5
+            content:
+              "$ref": "#/spec/panels/inferenceSuccessRate"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "📈 Usage Trends"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/tokenUsageByModel"
+          - x: 12
+            "y": 0
+            width: 12
+            height: 8
+            content:
+              "$ref": "#/spec/panels/usageTrends"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "⏰ Hourly Usage Patterns"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/hourlyTokenUsageByModel"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "🔍 Detailed Analysis"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/tokenVolumeByModel"
+          - x: 0
+            "y": 8
+            width: 24
+            height: 8
+            content:
+              "$ref": "#/spec/panels/rateLimitedBySubscription"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "📋 Usage Summary"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 6
+            content:
+              "$ref": "#/spec/panels/usageSummaryByModelSubscription"

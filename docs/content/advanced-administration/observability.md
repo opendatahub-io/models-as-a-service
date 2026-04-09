@@ -122,16 +122,18 @@ The observability stack consists of:
 - **Limitador**: Rate limiting service that exposes usage and rate-limit metrics (with labels from TelemetryPolicy)
 - **Authorino**: Authentication/authorization service that exposes auth evaluation metrics (`auth_server_*`)
 - **Istio Telemetry**: Adds `subscription` to gateway latency metrics for per-subscription latency (P50/P95/P99)
+- **OTel Collector**: Receives Envoy access logs via OTel ALS and exports structured log records to Loki (carries `user_id`, `subscription`, `model`, token counts)
+- **Loki (LokiStack)**: Multi-tenant log store for structured Envoy access logs; tenant isolation via `kubernetes_namespace_name` label + LokiStack gateway RBAC
 - **vLLM / llm-d / Simulator**: Expose inference metrics (TTFT, ITL, queue depth, token throughput, KV-cache usage); llm-d also exposes EPP routing metrics
 - **Prometheus**: Metrics collection and storage (uses OpenShift platform Prometheus)
 - **ServiceMonitors**: Deployed to configure Prometheus metric scraping
-- **Visualization**: Grafana dashboards (see [Grafana documentation](https://grafana.com/docs/grafana/latest/))
+- **Visualization**: Grafana dashboards or Perses dashboards (OpenShift Console integration)
 
 ### Component Metrics Status
 
 | Component | Exposes Metrics? | Scraped into Prometheus? | In Dashboards? |
 |-----------|-----------------|--------------------------|----------------|
-| **Limitador** | Yes (`/metrics`) | Yes (Kuadrant PodMonitor or MaaS ServiceMonitor) | Yes — 16 panels use `authorized_hits`, `authorized_calls`, `limited_calls`, `limitador_up` |
+| **Limitador** | Yes (`/metrics`) | Yes (Kuadrant PodMonitor or MaaS ServiceMonitor) | Yes — 16 panels use `authorized_hits`, `authorized_calls`, `limited_calls`; health check uses `kube_pod_status_phase` |
 | **Authorino** | Yes (`/metrics` + `/server-metrics`) | Yes — `/metrics` via Kuadrant operator; `/server-metrics` via MaaS `authorino-server-metrics` ServiceMonitor | Yes — Auth Evaluation Latency (P50/P95/P99), Auth Success/Deny Rate, plus pod-up check |
 | **Istio Gateway** | Yes (Envoy `/stats/prometheus`) | Yes (`istio-gateway-metrics` ServiceMonitor) | Yes — latency histograms, request counts, error rates |
 | **maas-api** | **No** — returns 404 on `/metrics` | No | Only pod-up check via `kube_pod_status_phase` |
@@ -177,7 +179,7 @@ kubectl patch modelsasservice default-modelsasservice --type=merge \
 
 | Resource | Namespace | Purpose |
 |----------|-----------|---------|
-| TelemetryPolicy (`maas-telemetry`) | Gateway namespace | Adds `user`, `subscription`, `model` labels to Limitador usage metrics |
+| TelemetryPolicy (`maas-telemetry`) | Gateway namespace | Adds `subscription`, `model`, `organization_id`, `cost_center` labels to Limitador usage metrics |
 | Istio Telemetry (`latency-per-subscription`) | Gateway namespace | Adds `subscription` label to gateway latency metrics |
 
 !!! note "Prerequisites for Operator-Managed Telemetry"
@@ -237,8 +239,12 @@ The observability stack is defined across multiple Kustomize directories. Each c
 
 | Resource | Purpose |
 |----------|---------|
-| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `subscription`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `subscription`. |
-| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `subscription` label to gateway latency (`istio_request_duration_milliseconds_bucket`) via the `X-MaaS-Subscription` header injected by the controller-generated AuthPolicy. Enables per-subscription latency tracking (P50/P95/P99). |
+| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `model`, `subscription`, `organization_id`, and `cost_center` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `subscription`. Per-user tracking is handled by Loki structured logs (`user_id` attribute), not Prometheus labels. |
+| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `subscription` label to gateway latency (`istio_request_duration_milliseconds_bucket`) via the `X-MaaS-Subscription` header injected by AuthPolicy. Enables per-subscription latency tracking (P50/P95/P99). |
+
+!!! note "Upgrading from tier-based gateway telemetry"
+    If an older cluster has `Telemetry` named `latency-per-tier`, remove it after applying the current manifest so only `latency-per-subscription` remains:
+    `kubectl delete telemetry latency-per-tier -n openshift-ingress --ignore-not-found`
 
 **Conditional resources** (not in kustomization.yaml, applied only by `install-observability.sh`):
 
@@ -361,12 +367,15 @@ When Kuadrant TelemetryPolicy and TokenRateLimitPolicy are applied, Limitador ex
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `authorized_hits` | Counter | `user`, `subscription`, `model`, `limitador_namespace` | Total tokens consumed per request (from `usage.total_tokens` in the model response; input + output combined). The `model` label is extracted via `responseBodyJSON("/model")`. |
-| `authorized_calls` | Counter | `user`, `subscription`, `limitador_namespace` | Requests allowed (not rate-limited). |
-| `limited_calls` | Counter | `user`, `subscription`, `limitador_namespace` | Requests denied due to token rate limits. |
+| `authorized_hits` | Counter | `subscription`, `model`, `limitador_namespace` | Total tokens consumed per request (from `usage.total_tokens` in the model response; input + output combined). The `model` label is extracted via `responseBodyJSON("/model")`. |
+| `authorized_calls` | Counter | `subscription`, `limitador_namespace` | Requests allowed (not rate-limited). |
+| `limited_calls` | Counter | `subscription`, `limitador_namespace` | Requests denied due to token rate limits. |
 
 !!! note "`model` label availability"
-    The `model` label is currently available **only on `authorized_hits`**. The `authorized_calls` and `limited_calls` metrics carry `user` and `subscription` labels but not `model`, due to how the wasm-shim constructs the CEL evaluation context for these counters. This is a known upstream limitation tracked for improvement in Kuadrant.
+    The `model` label is currently available **only on `authorized_hits`**. The `authorized_calls` and `limited_calls` metrics carry `subscription` but not `model`, due to how the wasm-shim constructs the CEL evaluation context for these counters. This is a known upstream limitation tracked for improvement in Kuadrant.
+
+!!! note "Per-user tracking via Loki"
+    Per-user metrics (token consumption, request counts, rate-limited requests) are tracked via **Loki structured logs** (`user_id` attribute from Envoy access logs), not Prometheus labels. The `user` label was removed from TelemetryPolicy to avoid high cardinality on Prometheus counters. Perses dashboards query Loki for per-user panels (e.g. `sum by (user_id) (sum_over_time({service_name="maas-gateway"} | user_id!="" | user_id!="-" | unwrap tokens_total [1h]))`).
 
 Gateway latency is labeled by **subscription only** via Istio Telemetry (see [Per-Subscription Latency Tracking](#per-subscription-latency-tracking)); per-user latency is not exposed on the gateway histogram to keep cardinality bounded.
 
@@ -395,6 +404,9 @@ Authorino exposes metrics on two separate endpoints:
 
 !!! note "MaaS ServiceMonitor"
     The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime stats). MaaS deploys an additional `authorino-server-metrics` ServiceMonitor to scrape `/server-metrics` for auth evaluation metrics. This is deployed automatically by `install-observability.sh`.
+
+!!! note "Authconfig label values are hashed"
+    In Kuadrant deployments, the `authconfig` label on Authorino metrics contains SHA-256 hashes (e.g. `18e32965...`) rather than human-readable AuthPolicy names. Kuadrant creates AuthConfig CRs in `kuadrant-system` with hashed names derived from the policy and route configuration. Since all AuthConfig CRs in a MaaS deployment are Kuadrant-managed MaaS auth policies, dashboard panels use `authconfig!=""` to include all evaluations. This is safe because Authorino is deployed exclusively for MaaS via Kuadrant.
 
 !!! note "Lazily registered metrics"
     Authorino upstream [documents](https://github.com/Kuadrant/authorino/blob/main/docs/user-guides/observability.md) additional per-evaluator metrics (`auth_server_evaluator_total`, `auth_server_evaluator_duration_seconds`, `auth_server_evaluator_cancelled`, `auth_server_evaluator_denied`). These are **lazily registered** and only appear when specific evaluator types (e.g. OPA, HTTP authorization) are triggered. The MaaS AuthPolicy uses `kubernetesTokenReview`, which does not emit these metrics. They are not listed in the table above because they are not present in a standard MaaS deployment.
@@ -471,7 +483,7 @@ When using llm-d, the inference gateway's Endpoint Picker (EPP) exposes addition
     EPP metrics are not currently scraped or visualized by MaaS. When deploying llm-d with the EPP, refer to the [llm-d monitoring docs](https://llm-d.ai/docs/usage/monitoring) and the [inference gateway dashboard](https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/v1.0.1/tools/dashboards/inference_gateway.json) for EPP-specific visualization.
 
 !!! note "Input/Output Token Split"
-    vLLM metrics provide input vs output token breakdown **per model** (`vllm:prompt_tokens_total` / `vllm:generation_tokens_total` counters, or `vllm:request_prompt_tokens` / `vllm:request_generation_tokens` histograms). However, these do not carry `user` or `subscription` labels. For per-user billing with input/output split, upstream changes to the Kuadrant wasm-shim are required (see [Known Limitations](#known-limitations)).
+    vLLM metrics provide input vs output token breakdown **per model** (`vllm:prompt_tokens_total` / `vllm:generation_tokens_total` counters, or `vllm:request_prompt_tokens` / `vllm:request_generation_tokens` histograms). However, these do not carry `user` or `subscription` labels. Per-user input/output token split is available via Loki structured logs (`tokens_prompt` and `tokens_completion` attributes with `user_id`). See [Known Limitations](#known-limitations).
 
 #### Dashboard Metric Queries
 
@@ -526,7 +538,7 @@ By default, Limitador stores rate-limiting counters in memory, which means:
 
 To enable persistent metric counts, refer to the detailed guide:
 
-**[Configuring Redis storage for rate limiting](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp)**
+**[Configuring Redis storage for rate limiting](https://docs.kuadrant.io/1.0.x/limitador-operator/doc/storage/)**
 
 This Red Hat documentation provides:
 
@@ -539,14 +551,26 @@ For local development and testing, you can also use our [Limitador Persistence](
 
 ## Visualization
 
-For dashboard visualization options, see:
+MaaS provides two visualization options — choose one (or both):
+
+| Platform | Integration | Install Script |
+|----------|------------|----------------|
+| **Grafana** | Standalone Grafana Operator; GrafanaDashboard CRs | `./scripts/observability/install-grafana-dashboards.sh` |
+| **Perses** | OpenShift Console native (via Cluster Observability Operator UIPlugin) | `./scripts/observability/install-perses-dashboards.sh` |
+
+Both options deploy Platform Admin and AI Engineer dashboards with equivalent metrics coverage. Perses additionally includes a **Usage Dashboard** for per-user consumption tracking and chargeback. Choose based on your environment:
+
+- **Grafana**: Feature-rich, standalone UI. Best when a Grafana instance already exists or when you need advanced alerting, annotations, or external sharing. Deploys: Platform Admin, AI Engineer.
+- **Perses**: CNCF native, integrated into the OpenShift Console. Best for OpenShift-native workflows where a separate Grafana instance is not desired. Deploys: Platform Admin, AI Engineer, Usage.
+
+For general references:
 
 - **OpenShift Monitoring**: [Monitoring overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index)
 - **Grafana on OpenShift**: [Red Hat OpenShift AI Monitoring](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25/html/managing_and_monitoring_models/index)
 
 ### Included Dashboards
 
-MaaS includes two Grafana dashboards for different personas:
+MaaS includes dashboards for different personas (Platform Admin and AI Engineer available in both Grafana and Perses; Usage is Perses-only):
 
 #### Platform Admin Dashboard
 
@@ -560,8 +584,8 @@ Provides a comprehensive view of system health, usage across all users, and reso
 | **Traffic Analysis** | Token/Request Rate by Model, Error Rates (4xx excl. 429, 5xx, 429 Rate Limited), Token/Request Rate by Subscription, P95 Latency |
 | **Error Breakdown** | Rate Limited Requests, Unauthorized Requests |
 | **Model Metrics** | vLLM queue depth, inference latency, KV cache usage, token throughput, prompt vs generation token ratio, queue wait time, TTFT, ITL |
-| **Top Users** | By token usage, by declined requests |
-| **Detailed Breakdown** | Token Rate by User, Request Volume by User & Subscription |
+| **Top Users** (Loki) | By token usage, by declined requests |
+| **Detailed Breakdown** (Loki) | Token Rate by User, Request Volume by User & Subscription |
 | **Resource Allocation** | CPU/Memory/GPU per model pod |
 
 !!! note "Template Variables"
@@ -573,60 +597,99 @@ Provides a comprehensive view of system health, usage across all users, and reso
     | `$maas_namespace` | auto-detected | MaaS API namespace (auto-detected from `kube_pod_info{pod=~"maas-api.*"}`) |
     | `$kuadrant_namespace` | `kuadrant-system` | Kuadrant components namespace |
     | `$gateway_namespace` | `openshift-ingress` | Istio/Gateway namespace |
-    | `$llm_namespace` | `llm` | LLM model pods namespace |
+    | `$llm_namespace` | `All` (auto-detected) | LLM model pods namespace(s) (auto-detected from `vllm:num_requests_running`) |
     | `$model` | `All` | Filter by model name |
 
     To customize for your environment, change the variable values in Grafana's dashboard settings (gear icon → Variables).
 
 #### AI Engineer Dashboard
 
-Personal usage view for individual developers:
+Personal usage view for individual developers. All per-user panels query **Loki** structured logs filtered by `user_id=$user`:
 
 | Section | Metrics |
 |---------|---------|
-| **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Inference Success Rate |
-| **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
-| **Detailed Analysis** | Token Volume by Model, Rate Limited by Subscription |
+| **Usage Summary** (Loki) | My Total Tokens (1h), My Total Requests (1h), Token Rate, Request Rate, Rate Limit Ratio, Inference Success Rate |
+| **Usage Trends** (Loki) | Token Usage by Model, Usage Trends (tokens vs rate limited) |
+| **Hourly Usage Patterns** (Loki) | Hourly Token Usage by Model |
+| **Detailed Analysis** (Loki) | Token Volume by Model, Rate Limited by Subscription |
+| **Usage Summary** (Loki) | My Usage Summary by Model & Subscription |
+
+#### Usage Dashboard
+
+Tabular view for per-user consumption tracking and chargeback (Perses only):
+
+| Section | Metrics |
+|---------|---------|
+| **Overview Stats** | Total Tokens, Total Requests, Active Users |
+| **Token Consumption by User** | Table with columns: User, Subscription, Tokens, Requests, Rate Limited |
+
+The Usage Dashboard uses **Loki structured logs** for all per-user data (tokens, requests, rate-limited counts). It supports filtering by User, Subscription, and Model variables, with a `$range` dropdown (1h to 30d, default 7d). Stat panels use `calculation: last` with `[$range]` windows; the table aggregates by `(user_id, subscription)`. All queries include `| user_id!="-"` to exclude probe traffic.
+
+!!! note "Perses Usage Dashboard: why variables use StaticListVariable"
+    **Ideally, in Grafana/Prometheus,** the dashboard time range drives every LogQL window (for example via `$__range`). **Perses does not** bind the native time picker to Loki that way. **Workaround:** add a separate **Time Range** variable built with **`StaticListVariable`** (the “Time Range” dropdown). Users pick values such as 24h there; all LogQL panels use **`[$range]`** from that list. Set the console’s native time picker to **at least** the selected `$range` so results are not clipped.
+
+    **Perses** cannot do dynamic time binding to Loki queries or dynamic Loki label pickers, so we use **`StaticListVariable`**—hardcoded dropdown options—instead. **The same applies to the Subscription and Model dropdowns:** label auto-discovery is not available in Perses. The **Subscription** and **Model** filters use **`values:`** in `deployment/components/observability/perses/dashboards/dashboard-usage.yaml`; new names do not appear as dropdown entries until the YAML is updated and the dashboard is re-applied. With the default **`$__all`**, aggregates and the table still include **all** subscriptions and models in Loki (including new ones); only **filtering by a specific new name** requires updating the static lists.
 
 !!! note "Inference Success Rate"
-    Both dashboards use `rate()` on vLLM counters (`request_success_total`, `e2e_request_latency_seconds_count`) instead of raw counter values. This handles pod restarts correctly (counters reset independently and raw division produces incorrect results). When no traffic is present, `rate()/rate()` produces `NaN`; the dashboards use `((ratio) >= 0) OR vector(1)` to filter `NaN` and default to 100% (healthy) when no traffic exists.
+    Both dashboards use `rate()` on vLLM counters (`request_success_total`, `e2e_request_latency_seconds_count`) instead of raw counter values. This handles pod restarts correctly (counters reset independently and raw division produces incorrect results). When no traffic is present, the denominator is clamped with `clamp_min(..., 1e-9)` and multiplied by a traffic existence check `(sum(rate(...)) > 0)`, falling back to `OR vector(0)` so idle periods show 0% instead of a misleading 100%.
+
+!!! info "Inference Success Rate is platform-wide"
+    The Inference Success Rate panel in the AI Engineer dashboard shows the **platform-wide** model success rate, not per-user. This is because vLLM metrics do not carry user labels — they are emitted by the model backend and measure all inference requests regardless of caller. All other panels in the AI Engineer dashboard are filtered by the selected user.
 
 !!! info "Tokens vs Requests"
     Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
 
 !!! tip "Per-User Token Billing"
-    The **Platform Admin dashboard** shows token consumption aggregated by **subscription** and **model** for system-level visibility. Per-user token consumption for billing is available via:
+    The **Platform Admin dashboard** shows token consumption aggregated by **subscription** and **model** for system-level visibility. The **Usage dashboard** provides a per-user table with subscription, tokens, requests, and rate-limited counts (via Loki structured logs). Per-user token consumption for billing is also available via:
 
-    - **AI Engineer dashboard**: Individual users see their own token usage
-    - **Prometheus API**: Query `sum by (user) (increase(authorized_hits[24h]))` for billing periods
+    - **AI Engineer dashboard**: Individual users see their own token usage (Loki `user_id` filter)
+    - **Loki LogQL**: Query `sum by (user_id) (sum_over_time({service_name="maas-gateway"} | user_id!="" | user_id!="-" | unwrap tokens_total [24h]))` for billing periods
     - **RFE**: A dedicated `/maas-api/v1/usage` chargeback API endpoint is recommended for production billing workflows
 
 ### Prerequisites
+
+**For Grafana dashboards:**
 
 - **Grafana** must be installed (for example via your observability team's process, a centralized instance, or the [Grafana Operator](https://grafana.github.io/grafana-operator/docs/installation/)). The dashboard helper does **not** install Grafana; it only deploys MaaS dashboard definitions and **never fails** (warnings only if none or multiple instances are found).
 - Ensure the Grafana instance has label `app=grafana` so MaaS dashboard definitions attach.
 - Configure a **Prometheus or Thanos datasource** in Grafana; the MaaS dashboards use the default Prometheus datasource.
 
+**For Perses dashboards (two-step install):**
+
+- **OpenShift 4.18+** with the Cluster Observability Operator available in the operator catalog.
+- **Step 1** — Run `scripts/installers/install-perses.sh` to install the Cluster Observability Operator and wait for Perses CRDs to become available.
+- **Step 2** — Run `scripts/observability/install-perses-dashboards.sh` to enable the Perses UIPlugin in the OpenShift Console and deploy MaaS dashboard definitions.
+- Both scripts must be run in sequence; `install-perses-dashboards.sh` will exit with a warning if CRDs from step 1 are not yet present.
+- Perses dashboards are accessed via the OpenShift Console (Observe → Dashboards → Perses tab).
+
 ### Deploying Dashboards
 
-Monitoring is installed by `install-observability.sh`. Dashboards are installed by a **separate helper** that discovers Grafana cluster-wide:
+Monitoring is installed by `install-observability.sh`. Dashboards are installed by **separate helpers** — one for each visualization platform:
+
+**Grafana:**
 
     ./scripts/observability/install-grafana-dashboards.sh
 
-**Behavior:** Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning (and, for multiple, lists them) and exits without error. Use flags to target a specific instance:
+Scans for Grafana CRs cluster-wide. If **one** instance is found, deploys dashboards to that namespace and prints a success message. If **none** or **multiple** are found, prints a warning and exits without error. Use flags to target a specific instance:
 
     ./scripts/observability/install-grafana-dashboards.sh --grafana-namespace maas-api
     ./scripts/observability/install-grafana-dashboards.sh --grafana-label app=grafana
 
-To deploy only the dashboard manifests manually (same namespace as your Grafana):
+**Perses:**
 
-    kustomize build deployment/components/observability/grafana | \
+    ./scripts/observability/install-perses-dashboards.sh
+
+Checks for Perses CRDs and, if they are missing, exits with a warning directing you to run `install-perses.sh` first (operator installation is a separate step handled by `scripts/installers/install-perses.sh`). When CRDs are present, `install-perses-dashboards.sh` enables the Perses UIPlugin in the OpenShift Console and deploys PersesDashboard CRs to `openshift-operators`. After installation, dashboards are accessible at **Observe → Dashboards → Perses tab** in the OpenShift Console.
+
+**Manual Grafana import (dashboard JSON only):**
+
+    kustomize build deployment/components/observability/grafana/dashboards | \
       sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
       kubectl apply -f -
 
 ### Sample Dashboard JSON
 
-For manual import, a sample dashboard JSON file is available:
+For manual Grafana import, a sample dashboard JSON file is available:
 
 - [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
 
@@ -642,17 +705,17 @@ To import into Grafana:
 
 | Metric | Description | Labels |
 |--------|-------------|--------|
-| `authorized_hits` | Total tokens consumed (input + output combined, from `usage.total_tokens` in model responses) | `user`, `subscription`, `model` |
-| `authorized_calls` | Total requests allowed | `user`, `subscription` |
-| `limited_calls` | Total requests rate-limited | `user`, `subscription` |
+| `authorized_hits` | Total tokens consumed (input + output combined, from `usage.total_tokens` in model responses) | `subscription`, `model` |
+| `authorized_calls` | Total requests allowed | `subscription` |
+| `limited_calls` | Total requests rate-limited | `subscription` |
 
 !!! tip "When to use which metric"
     - **Billing/Cost**: Use `authorized_hits` - represents actual token consumption, with `model` label for per-model breakdown
-    - **API Usage**: Use `authorized_calls` - represents number of API calls (per user, per subscription)
-    - **Rate Limiting**: Use `limited_calls` - shows quota violations (per user, per subscription)
+    - **API Usage**: Use `authorized_calls` - represents number of API calls (per subscription); per-user via Loki `count_over_time`
+    - **Rate Limiting**: Use `limited_calls` - shows quota violations (per subscription); per-user via Loki `response_code="429"`
 
 !!! note "Total tokens only (input/output split not yet available)"
-    Token consumption is reported as **total tokens** (prompt + completion) per request. The pipeline reads `usage.total_tokens` from the model response via Kuadrant's TokenRateLimitPolicy. Separate input-token (`prompt_tokens`) and output-token (`completion_tokens`) counters are **not yet available** at the gateway level; this would require upstream changes in the Kuadrant wasm-shim to send separate `hits_addend` values for each token type. Chargeback and usage tracking per user, per subscription, and per model are supported using `authorized_hits`.
+    Prometheus token consumption is reported as **total tokens** (prompt + completion) per request via `authorized_hits`. Separate input-token and output-token Prometheus counters are **not yet available** at the gateway level; this would require upstream wasm-shim changes. However, Loki structured logs **do** carry `tokens_prompt` and `tokens_completion` individually, enabling per-user input/output split for billing via LogQL queries.
 
 ### Latency Metrics
 
@@ -663,7 +726,7 @@ To import into Grafana:
 
 #### Per-Subscription Latency Tracking
 
-The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimension to gateway latency metrics. This enables tracking request latency per subscription (e.g. free, premium, enterprise). Gateway latency is labeled by **subscription only** (not by user) to keep metric cardinality bounded and to align with latency-by-subscription requirements (e.g. P50/P95/P99 per subscription). Per-user metrics remain available from Limitador (`authorized_hits`, `authorized_calls`, `limited_calls`).
+The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimension to gateway latency metrics. This enables tracking request latency per subscription (e.g. free, premium, enterprise). Gateway latency is labeled by **subscription only** (not by user) to keep metric cardinality bounded and to align with latency-by-subscription requirements (e.g. P50/P95/P99 per subscription). Per-user metrics are available from Loki structured logs (`user_id` attribute).
 
 **How it works:**
 
@@ -699,36 +762,40 @@ The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimen
 
 ### Common Queries
 
-**Token-based queries (billing/cost):**
-
-    # Total tokens consumed per user
-    sum by (user) (authorized_hits)
+**Token-based queries (billing/cost) — Prometheus:**
 
     # Token consumption rate per model (tokens/sec)
     sum by (model) (rate(authorized_hits[5m]))
 
-    # Top 10 users by tokens consumed
-    topk(10, sum by (user) (authorized_hits))
-
     # Token consumption by subscription
     sum by (subscription) (authorized_hits)
 
-**Request-based queries (capacity/usage):**
+**Token-based queries (billing/cost) — Loki (per-user):**
 
-    # Total requests per user
-    sum by (user) (authorized_calls)
+    # Total tokens consumed per user (last 1h)
+    sum by (user_id) (sum_over_time({service_name="maas-gateway", response_code=~"2.."}
+    | user_id!="" | user_id!="-" | unwrap tokens_total [1h]))
+
+    # Top 10 users by tokens consumed
+    topk(10, sum by (user_id) (sum_over_time({service_name="maas-gateway", response_code=~"2.."}
+    | user_id!="" | user_id!="-" | unwrap tokens_total [5m])))
+
+**Request-based queries (capacity/usage) — Prometheus:**
 
     # Request rate per subscription (requests/sec)
     sum by (subscription) (rate(authorized_calls[5m]))
 
-    # Top 10 users by request count
-    topk(10, sum by (user) (authorized_calls))
+**Request-based queries (capacity/usage) — Loki (per-user):**
+
+    # Total requests per user (last 1h)
+    sum by (user_id) (count_over_time({service_name="maas-gateway", response_code=~"2.."}
+    | user_id!="" | user_id!="-" [1h]))
 
 **Inference success rate** (system health — did requests that reached the model succeed?):
 
     # Inference success rate using rate() to handle counter resets correctly
     # The >= 0 filter removes NaN (0/0 when no traffic), falling back to vector(1) = 100%
-    ((sum(rate(vllm:request_success_total[5m])) / sum(rate(vllm:e2e_request_latency_seconds_count[5m]))) >= 0) OR vector(1)
+    ((sum(rate(vllm:request_success_total[5m])) / clamp_min(sum(rate(vllm:e2e_request_latency_seconds_count[5m])), 1e-9)) * (sum(rate(vllm:e2e_request_latency_seconds_count[5m])) > 0)) OR vector(0)
 
 **Rate limiting metrics** (capacity planning — are users exceeding their quotas?):
 
@@ -741,8 +808,8 @@ The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimen
     # Rate limit violations per second by subscription
     sum by (subscription) (rate(limited_calls[5m]))
 
-    # Users hitting rate limits most
-    topk(10, sum by (user) (limited_calls))
+    # Subscriptions hitting rate limits most
+    topk(10, sum by (subscription) (limited_calls))
 
 **Latency metrics** (per-subscription SLA tracking):
 
@@ -763,8 +830,8 @@ The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimen
     # P99 latency per subscription
     histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=""}[5m])))
 
-!!! tip "Filtering by subscription"
-    For per-subscription latency queries, use `subscription!=""` to exclude requests where the `X-MaaS-Subscription` header was not injected. Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
+!!! tip "Filtering metrics"
+    For per-subscription latency queries, use `subscription!=""` to exclude requests where the `X-MaaS-Subscription` header was not injected. Limitador usage metrics already exclude rate-limited requests. `authorized_hits` reflects token usage for successful responses, while `authorized_calls` counts requests that were allowed through rate limiting and may still fail downstream.
 
 ## Maintenance
 
@@ -782,47 +849,65 @@ The Grafana datasource uses a ServiceAccount token to authenticate with Promethe
 
 ## Known Limitations
 
+### Perses Loki Plugin Limitations
+
+The Perses Loki plugin (v0.5.0-rc.1) has the following limitations that affect dashboard design:
+
+| Limitation | Impact | Workaround |
+|------------|--------|------------|
+| **No `$__range` variable** | Loki queries cannot reference the native time picker's range | Usage Dashboard uses a `$range` dropdown variable (StaticListVariable). AI Engineer uses hardcoded `[1h]` matching `duration: 1h`. |
+| **No Loki-driven filter variables** | Perses cannot populate Subscription/Model dropdowns by querying Loki for label values | Usage Dashboard uses **`StaticListVariable`** with hardcoded `values:` for **subscription** and **model**; update `dashboard-usage.yaml` when new names must appear as selectable options; **`$__all`** still includes all traffic in aggregates. |
+| **No instant query support** | Stat panels cannot make instant queries | All stat panels use `range` queries with `calculation: last` to pick the final data point. |
+| **`user_id="-"` probe traffic** | Envoy health probes generate access logs with `user_id="-"` | All Loki queries include `| user_id!="-"` to exclude probe traffic. Usage Dashboard also filtered by `subscription` (defense-in-depth). |
+| **Overcounting with `[5m]` + `calculation: sum`** | Without explicit `step`, Loki uses a default step (~15s for 1h range), creating overlapping 5m windows that count each log ~20x | Stat totals use `[$range]` or `[1h]` with `calculation: last` (single non-overlapping window). Time series charts use `[5m]` with `rate()` or `last-number` which are safe. |
+
 ### Currently Blocked Features
 
 Some features require upstream changes and are currently blocked:
 
 | Feature | Blocker | Workaround |
 |---------|---------|------------|
-| **`model` label on `authorized_calls` / `limited_calls`** | Kuadrant wasm-shim does not pass `responseBodyJSON` context for these counters | Use `authorized_hits` for per-model breakdown; `authorized_calls`/`limited_calls` support per-user and per-subscription |
+| **`model` label on `authorized_calls` / `limited_calls`** | Kuadrant wasm-shim does not pass `responseBodyJSON` context for these counters | Use `authorized_hits` for per-model breakdown. `authorized_calls`/`limited_calls` natively support per-subscription |
 | **Input/output token split** | Kuadrant TokenRateLimitPolicy sends a single `hits_addend` (total tokens); no mechanism for separate prompt/completion counters | Total tokens available via `authorized_hits`; the response body contains `usage.prompt_tokens` and `usage.completion_tokens` but the wasm-shim does not split them |
-| **Input/output token breakdown per user** | vLLM does not label its own metrics with `user` | Total tokens per user available via `authorized_hits{user="..."}`; vLLM prompt/generation token metrics are per-model only |
-| **Rate-limited requests not in Istio metrics** | When the Kuadrant WASM plugin rejects a request (429), it calls `sendLocalReply()` which short-circuits the Envoy filter chain. These requests appear in Limitador metrics (`limited_calls`) but may not appear in Istio gateway metrics. | Use `limited_calls` from Limitador for rate-limiting visibility (has correct `subscription` and `user` labels). |
+| **Input/output token breakdown per user** | vLLM does not label its own metrics with `user` | Total tokens per user available via Loki (`user_id` attribute on structured logs); vLLM prompt/generation token metrics are per-model only |
 | **Kuadrant policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` etc. are defined in Kuadrant dev but not yet shipped in RHCL 1.x | Enable `observability.enable: true` on the Kuadrant CR; the ServiceMonitors are created but policy-specific gauges will appear in a future operator release |
 | **Authorino auth server metrics (upstream)** | The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime); `/server-metrics` is not scraped by the upstream operator | **Resolved by MaaS**: The `authorino-server-metrics` ServiceMonitor (deployed by `install-observability.sh`) scrapes `/server-metrics`. Auth evaluation latency and success/deny rate are visualized in the Platform Admin dashboard. |
+| **Rate-limited requests not in Istio metrics** | When the Kuadrant WASM plugin rejects a request (429), it calls `sendLocalReply()` which short-circuits the Envoy filter chain. These requests appear in Limitador metrics (`limited_calls`) but may not appear in Istio gateway metrics. | Use `limited_calls` from Limitador for rate-limiting visibility (has `subscription` label). Rate-limited requests per user are available in Loki (`response_code="429"` + `user_id`). |
 | **maas-api application metrics** | The maas-api Go service does not expose a `/metrics` endpoint | No workaround available. Metrics such as API key creation rate, token issuance rate, model discovery latency, and handler durations require adding Prometheus instrumentation to the Go service (e.g. `promhttp` handler, custom counters/histograms). |
 | **PromQL "name does not end in _total" warnings** | Limitador metrics (`authorized_hits`, `authorized_calls`, `limited_calls`) and Authorino's `auth_server_authconfig_response_status` are counters but do not follow the Prometheus naming convention of ending in `_total`. When `rate()` is applied, Prometheus generates a warning that Grafana displays on panels. This is [Grafana issue #84636](https://github.com/grafana/grafana/issues/84636) (open). | The warnings are cosmetic and do not affect data correctness. All dashboard queries correctly apply `rate()` or `increase()` to these counters. The metric names are defined by upstream Kuadrant (Limitador) and Authorino — renaming requires upstream changes. |
 
 !!! note "Total Tokens vs Token Breakdown"
-    Total token consumption per user **is available** via `authorized_hits{user="..."}`. The blocked feature is the input/output split (prompt vs generation tokens) at the gateway level, which requires the wasm-shim to send two separate counter updates to Limitador.
+    Total token consumption per user **is available** via Loki structured logs (`user_id` + `tokens_total` attributes). The blocked feature is the input/output split (prompt vs generation tokens) at the gateway level, which requires the wasm-shim to send two separate counter updates to Limitador. Loki logs do carry `tokens_prompt` and `tokens_completion` individually, enabling per-user input/output split for billing when queried directly.
 
 ### Available Per-User and Per-Subscription Metrics
 
-| Feature | Metric | Label |
-|---------|--------|-------|
-| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription` |
-| **Token consumption per user** | `authorized_hits` | `user` |
-| **Token consumption per subscription** | `authorized_hits` | `subscription` |
-| **Token consumption per model** | `authorized_hits` | `model` |
-| **Requests per user** | `authorized_calls` | `user` |
-| **Requests per subscription** | `authorized_calls` | `subscription` |
-| **Rate limited per user** | `limited_calls` | `user` |
-| **Rate limited per subscription** | `limited_calls` | `subscription` |
+Per-subscription metrics are available from **Prometheus** (Limitador counters). Per-user metrics are available from **Loki** (structured Envoy access logs):
+
+| Feature | Source | Metric / Query | Label / Attribute |
+|---------|--------|----------------|-------------------|
+| **Latency per subscription** | Prometheus | `istio_request_duration_milliseconds_bucket` | `subscription` |
+| **Token consumption per subscription** | Prometheus | `authorized_hits` | `subscription` |
+| **Token consumption per model** | Prometheus | `authorized_hits` | `model` |
+| **Requests per subscription** | Prometheus | `authorized_calls` | `subscription` |
+| **Rate limited per subscription** | Prometheus | `limited_calls` | `subscription` |
+| **Token consumption per user** | Loki | `sum_over_time({service_name="maas-gateway"} \| unwrap tokens_total [...])` | `user_id` |
+| **Requests per user** | Loki | `count_over_time({service_name="maas-gateway"} \| user_id!="" [...])` | `user_id` |
+| **Rate limited per user** | Loki | `count_over_time({service_name="maas-gateway", response_code="429"} [...])` | `user_id` |
+| **Active users** | Loki | `count(sum by (user_id) (count_over_time({...} \| user_id!="" \| user_id!="-" [...])))` | `user_id` |
+
+!!! note "Per-user tracking moved from Prometheus to Loki"
+    The `user` label was removed from TelemetryPolicy to avoid high-cardinality Prometheus metrics. All per-user panels in Perses dashboards (Usage, AI Engineer, Platform Admin) now query Loki structured logs using the `user_id` attribute set by Envoy's access log. This provides the same per-user visibility without Prometheus cardinality concerns. Grafana dashboards that still reference the Prometheus `user` label will need migration.
 
 ### Requirements Alignment
 
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| **Usage dashboards** (token consumption per user, per subscription, per model) | Met | Grafana dashboard + `authorized_hits` with `user`, `subscription`, `model`; Prometheus scrapes Limitador `/metrics`. |
-| **Latency by subscription** (P50/P95/P99) | Met | `istio_request_duration_milliseconds_bucket` with `subscription` label; subscription-only avoids unbounded cardinality. |
-| **Request tracking** (per user, per subscription) | Met | `authorized_calls` with `user` and `subscription` labels; `limited_calls` for rate-limit violations. |
-| **Export for chargeback** (CSV/API) | Not provided (RFE) | Per-user token data exists in Prometheus (`authorized_hits{user="..."}`) but no dedicated billing API or export endpoint is implemented. **RFE recommendation**: Add `/maas-api/v1/usage` endpoint that queries Prometheus and returns per-user, per-subscription, per-model token consumption in CSV/JSON for finance and chargeback systems. |
+| **Usage dashboards** (token consumption per user, per subscription, per model) | Met | Perses dashboards (Platform Admin, AI Engineer, Usage) use Prometheus for per-subscription/model metrics (`authorized_hits` with `subscription`, `model`) and Loki structured logs for per-user panels (`user_id` attribute). Grafana dashboards use Prometheus only (per-user panels require migration to Loki). |
+| **Latency by subscription** (P50/P95/P99) | Met | `istio_request_duration_milliseconds_bucket` with `subscription` label via Istio Telemetry + `X-MaaS-Subscription` header; subscription-only avoids unbounded cardinality. |
+| **Request tracking** (per user, per subscription) | Met | `authorized_calls` with `subscription` label (Prometheus); per-user request counts via Loki `count_over_time` on `user_id`; `limited_calls` for rate-limit violations. |
+| **Export for chargeback** (CSV/API) | Not provided (RFE) | Per-user token data exists in Loki structured logs (`user_id` + `tokens_total`) but no dedicated billing API or export endpoint is implemented. **RFE recommendation**: Add `/maas-api/v1/usage` endpoint that queries Loki and returns per-user, per-subscription, per-model token consumption in CSV/JSON for finance and chargeback systems. |
 | **Input/output token split** | Not available | Only total tokens (`authorized_hits`); separate input and output counters require upstream Kuadrant wasm-shim changes to send split `hits_addend` values. |
-| **`model` label on request/rate-limit counters** | Partial | `model` available on `authorized_hits` only; requires upstream Kuadrant fix to propagate `responseBodyJSON` context to `authorized_calls`/`limited_calls` counters. |
+| **`model` label on request/rate-limit counters** | Partial | `model` available on `authorized_hits` only; the Usage Dashboard uses `group_left` joins to propagate `model` to other metrics for display. Requires upstream Kuadrant fix to natively propagate `responseBodyJSON` context to `authorized_calls`/`limited_calls` counters. |
 | **Policy enforcement health** | Future | Kuadrant operator metrics (`kuadrant_policies_enforced`, `kuadrant_ready`, etc.) defined upstream but not yet shipped in RHCL 1.x; `limitador_up` and `datastore_partitioned` are available now. |
 | **Auth evaluation metrics** | Met | Authorino `/server-metrics` is scraped by the `authorino-server-metrics` ServiceMonitor. Auth evaluation latency (P50/P95/P99) and success/deny rate are available in the Platform Admin dashboard. |
 | **maas-api application metrics** | Not available (gap) | The maas-api Go service does not expose `/metrics`. API key creation rate, token issuance rate, and handler latency are not observable. Requires adding Prometheus instrumentation to the Go service. |

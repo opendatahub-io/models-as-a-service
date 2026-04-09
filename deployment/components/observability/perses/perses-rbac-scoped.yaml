@@ -1,0 +1,31 @@
+# Grants metrics.k8s.io/pods 'create' for Thanos port 9092.
+# Perses sends queries as HTTP POST → kube-rbac-proxy maps to 'create'.
+# The 'view' ClusterRole only has get/list/watch, not 'create'.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: perses-scoped-metrics
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+rules:
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: perses-scoped-metrics
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: perses-scoped-metrics
+subjects:
+  - kind: Group
+    name: system:authenticated
+    apiGroup: rbac.authorization.k8s.io

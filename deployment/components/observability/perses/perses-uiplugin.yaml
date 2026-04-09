@@ -1,0 +1,15 @@
+# UIPlugin for Perses Dashboards Integration
+# Enables Perses dashboards in OpenShift Console (Observe > Dashboards)
+# This is a cluster-scoped resource - applied separately from namespaced resources
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: monitoring
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  type: Monitoring
+  monitoring:
+    perses:
+      enabled: true

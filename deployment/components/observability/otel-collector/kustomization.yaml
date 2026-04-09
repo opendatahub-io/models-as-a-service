@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+metadata:
+  name: maas-otel-collector
+
+namespace: openshift-ingress
+
+resources:
+  - loki-gateway-ca-configmap.yaml
+  - otel-collector-rbac.yaml
+  - otel-collector-configmap.yaml
+  - otel-collector-deployment.yaml
+  - otel-collector-service.yaml
+  - otel-collector-networkpolicy.yaml
+  - envoy-otel-access-log.yaml

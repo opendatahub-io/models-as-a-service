@@ -1,0 +1,16 @@
+# ConfigMap for OpenShift service CA bundle.
+# The annotation triggers OpenShift's service CA operator to inject the
+# cluster CA into this ConfigMap (key: service-ca.crt), enabling TLS
+# verification for connections to Thanos Querier.
+# On vanilla Kubernetes (without this operator), populate the ConfigMap
+# manually with the CA that signed the Prometheus/Thanos server certificate.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thanos-querier-serving-ca
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability

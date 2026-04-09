@@ -1,0 +1,11 @@
+# TLS trust bundle for the OTel Collector to verify HTTPS to the LokiStack gateway.
+# OpenShift Service CA operator injects PEM content into service-ca.crt (annotation below).
+# Kept in git so `kustomize build | kubectl apply` is self-contained — no imperative kubectl create.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-gateway-ca
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+data:
+  service-ca.crt: ""

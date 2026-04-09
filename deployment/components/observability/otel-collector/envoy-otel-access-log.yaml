@@ -1,0 +1,198 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: maas-otel-access-log
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+  configPatches:
+  - applyTo: CLUSTER
+    match:
+      cluster:
+        service: otel-collector.openshift-ingress.svc.cluster.local
+    patch:
+      operation: ADD
+      value:
+        name: otel_als_cluster
+        type: STRICT_DNS
+        connect_timeout: 1s
+        http2_protocol_options: {}
+        lb_policy: ROUND_ROBIN
+        load_assignment:
+          cluster_name: otel_als_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: otel-collector.openshift-ingress.svc.cluster.local
+                    port_value: 4317
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+            subFilter:
+              name: envoy.filters.http.router
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.json_to_metadata
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.json_to_metadata.v3.JsonToMetadata
+          response_rules:
+            rules:
+            - selectors:
+              - key: usage
+              - key: total_tokens
+              on_present:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: tokens_total
+                type: NUMBER
+              on_missing:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: tokens_total
+                value: "0"
+                type: STRING
+              on_error:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: tokens_total
+                value: "0"
+                type: STRING
+            - selectors:
+              - key: usage
+              - key: prompt_tokens
+              on_present:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: tokens_prompt
+                type: NUMBER
+              on_missing:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: tokens_prompt
+                value: "0"
+                type: STRING
+              on_error:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: tokens_prompt
+                value: "0"
+                type: STRING
+            - selectors:
+              - key: usage
+              - key: completion_tokens
+              on_present:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: tokens_completion
+                type: NUMBER
+              on_missing:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: tokens_completion
+                value: "0"
+                type: STRING
+              on_error:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: tokens_completion
+                value: "0"
+                type: STRING
+            - selectors:
+              - key: model
+              on_present:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: model
+                type: STRING
+              on_missing:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: model
+                value: ""
+                type: STRING
+              on_error:
+                metadata_namespace: envoy.filters.http.json_to_metadata
+                key: model
+                value: ""
+                type: STRING
+  - applyTo: NETWORK_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+    patch:
+      operation: MERGE
+      value:
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          access_log:
+          - name: envoy.access_loggers.open_telemetry
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig
+              common_config:
+                log_name: maas-usage-log
+                transport_api_version: V3
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: otel_als_cluster
+              body:
+                string_value: "%RESPONSE_CODE% %REQ(:METHOD)% %REQ(:PATH)%"
+              attributes:
+                values:
+                - key: user_id
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%"
+                - key: subscription
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.selected_subscription:PLAIN)%"
+                - key: tokens_total
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_total)%"
+                - key: tokens_prompt
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_prompt)%"
+                - key: tokens_completion
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_completion)%"
+                - key: model
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%"
+                - key: response_code
+                  value:
+                    string_value: "%RESPONSE_CODE%"
+                - key: method
+                  value:
+                    string_value: "%REQ(:METHOD)%"
+                - key: path
+                  value:
+                    string_value: "%REQ(:PATH)%"
+                - key: duration_ms
+                  value:
+                    string_value: "%DURATION%"
+                - key: request_id
+                  value:
+                    string_value: "%REQ(X-REQUEST-ID)%"
+                - key: authority
+                  value:
+                    string_value: "%REQ(:AUTHORITY)%"
+                - key: route_name
+                  value:
+                    string_value: "%ROUTE_NAME%"
+                - key: downstream_remote_address
+                  value:
+                    string_value: "%DOWNSTREAM_REMOTE_ADDRESS%"
+                - key: upstream_cluster
+                  value:
+                    string_value: "%UPSTREAM_CLUSTER%"
+                - key: bytes_received
+                  value:
+                    string_value: "%BYTES_RECEIVED%"
+                - key: bytes_sent
+                  value:
+                    string_value: "%BYTES_SENT%"
+                - key: response_code_details
+                  value:
+                    string_value: "%RESPONSE_CODE_DETAILS%"

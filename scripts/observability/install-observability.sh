@@ -1,12 +1,15 @@
 #!/bin/bash
 
 # MaaS Observability Stack Installation Script
-# Configures metrics collection (ServiceMonitors, TelemetryPolicy). For dashboards, use install-grafana-dashboards.sh.
+# Configures metrics collection (ServiceMonitors, TelemetryPolicy) and structured logs pipeline
+# (OTel Collector -> Loki). For dashboards, use install-grafana-dashboards.sh or install-perses-dashboards.sh.
 #
 # This script is idempotent - safe to run multiple times
 #
 # Usage: ./install-observability.sh [--namespace NAMESPACE]
-# For Grafana dashboards, run the helper: ./scripts/observability/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
+# For dashboards, run the corresponding helper:
+#   Grafana: ./scripts/observability/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
+#   Perses:  ./scripts/observability/install-perses-dashboards.sh
 
 set -euo pipefail
 
@@ -25,16 +28,18 @@ NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"
 show_help() {
     echo "Usage: $0 [--namespace NAMESPACE]"
     echo ""
-    echo "Installs monitoring components only (no dashboards):"
+    echo "Installs monitoring and logging components (no dashboards):"
     echo "  - Enables user-workload-monitoring"
     echo "  - Deploys TelemetryPolicy and ServiceMonitors"
     echo "  - Configures Istio Gateway and LLM model metrics"
+    echo "  - Deploys OTel Collector + EnvoyFilter for structured logs -> Loki"
     echo ""
     echo "Options:"
     echo "  -n, --namespace   Target namespace for observability (default: opendatahub)"
     echo ""
-    echo "To install MaaS Grafana dashboards (separate step), run:"
+    echo "To install dashboards (separate step), run one of:"
     echo "  $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
+    echo "  $(dirname "$0")/install-perses-dashboards.sh"
     echo ""
     echo "Examples:"
     echo "  $0                    # Install monitoring only"
@@ -161,7 +166,7 @@ echo ""
 echo "3️⃣ Deploying TelemetryPolicy and ServiceMonitors..."
 
 # Deploy base observability resources (TelemetryPolicy + Istio Telemetry)
-# TelemetryPolicy is CRITICAL - it extracts user/subscription/model labels for Limitador metrics
+# TelemetryPolicy is CRITICAL - it adds model/subscription/organization_id/cost_center labels for Limitador metrics (per-user via Loki logs, not Prometheus)
 BASE_OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/base/observability"
 if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     kustomize build "$BASE_OBSERVABILITY_DIR" | kubectl apply -f -
@@ -194,11 +199,15 @@ else
     echo "   ⚠️  Base observability directory not found - TelemetryPolicy may be missing!"
 fi
 
-# Deploy Istio Gateway metrics (if gateway exists)
+# Deploy Istio Gateway metrics (if gateway exists and manifest files are present)
 if kubectl get deploy -n openshift-ingress maas-default-gateway-openshift-default &>/dev/null; then
-    kubectl apply -f "$BASE_OBSERVABILITY_DIR/istio-gateway-service.yaml"
-    kubectl apply -f "$BASE_OBSERVABILITY_DIR/istio-gateway-servicemonitor.yaml"
-    echo "   ✅ Istio Gateway metrics configured"
+    if [ -f "$BASE_OBSERVABILITY_DIR/istio-gateway-service.yaml" ] && [ -f "$BASE_OBSERVABILITY_DIR/istio-gateway-servicemonitor.yaml" ]; then
+        kubectl apply -f "$BASE_OBSERVABILITY_DIR/istio-gateway-service.yaml"
+        kubectl apply -f "$BASE_OBSERVABILITY_DIR/istio-gateway-servicemonitor.yaml"
+        echo "   ✅ Istio Gateway metrics configured"
+    else
+        echo "   ⚠️  Istio Gateway manifest files not found in $BASE_OBSERVABILITY_DIR - skipping"
+    fi
 else
     echo "   ⚠️  Istio Gateway not found - skipping Istio metrics"
 fi
@@ -210,6 +219,44 @@ if kubectl get ns llm &>/dev/null; then
     echo "   ✅ LLM models metrics configured"
 else
     echo "   ⚠️  llm namespace not found - skipping LLM metrics"
+fi
+
+# ==========================================
+# Step 4: Deploy OTel Collector + EnvoyFilter (structured logs -> Loki)
+# ==========================================
+echo ""
+echo "4️⃣ Deploying OTel Collector (structured logs pipeline)..."
+
+OTEL_DIR="$PROJECT_ROOT/deployment/components/observability/otel-collector"
+GATEWAY_NS="openshift-ingress"
+
+# Auto-detect LokiStack gateway endpoint
+LOKISTACK_NAME=$(kubectl get lokistack -n openshift-logging -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+if [ -z "$LOKISTACK_NAME" ]; then
+    echo "   ⚠️  No LokiStack found in openshift-logging -- skipping OTel Collector"
+    echo "   💡 Install the Loki Operator and create a LokiStack CR in openshift-logging first"
+else
+    LOKI_GATEWAY_SVC="${LOKISTACK_NAME}-gateway-http.openshift-logging.svc:8080"
+    LOKI_OTLP_ENDPOINT="https://${LOKI_GATEWAY_SVC}/api/logs/v1/application/otlp"
+    echo "   Detected LokiStack: $LOKISTACK_NAME"
+    echo "   Loki OTLP endpoint: $LOKI_OTLP_ENDPOINT"
+
+    # loki-gateway-ca ConfigMap is declared in otel-collector kustomize (loki-gateway-ca-configmap.yaml);
+    # Service CA injection is applied server-side. Same apply as Deployment — idempotent, GitOps-friendly.
+
+    # Build manifests and replace placeholders
+    kustomize build "$OTEL_DIR" \
+        | sed "s|LOKI_OTLP_ENDPOINT_PLACEHOLDER|${LOKI_OTLP_ENDPOINT}|g" \
+        | sed "s|LOKI_TLS_INSECURE_SKIP_VERIFY_PLACEHOLDER|false|g" \
+        | kubectl apply --server-side=true --force-conflicts -f -
+    echo "   ✅ OTel Collector + EnvoyFilter deployed to $GATEWAY_NS"
+
+    # Wait for OTel Collector pods
+    echo "   Waiting for OTel Collector pods..."
+    kubectl rollout status deployment/otel-collector -n "$GATEWAY_NS" --timeout=120s 2>/dev/null \
+        || echo "   ⚠️  OTel Collector pods still starting, continuing..."
+    OTEL_READY=$(kubectl get pods -n "$GATEWAY_NS" -l app=otel-collector --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
+    echo "   ✅ OTel Collector: $OTEL_READY pod(s) running"
 fi
 
 # ==========================================
@@ -227,7 +274,14 @@ echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authcon
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:kv_cache_usage_perc"
 echo ""
+if [ -n "${LOKISTACK_NAME:-}" ]; then
+    echo "📝 Structured logs pipeline:"
+    echo "   OTel Collector: Envoy ALS -> OTLP -> Loki (${LOKI_GATEWAY_SVC:-})"
+    echo "   Attributes: user_id, subscription, model, tokens_total/prompt/completion, ..."
+    echo ""
+fi
 
-echo "💡 To install MaaS Grafana dashboards (discovers Grafana cluster-wide, warn-only):"
-echo "   $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
+echo "💡 To install dashboards:"
+echo "   Grafana:  $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
+echo "   Perses:   $(dirname "$0")/install-perses-dashboards.sh"
 echo ""
