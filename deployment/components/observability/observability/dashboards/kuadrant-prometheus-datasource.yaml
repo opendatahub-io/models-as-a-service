@@ -1,7 +1,7 @@
 apiVersion: perses.dev/v1alpha1
 kind: PersesDatasource
 metadata:
-  name: cluster-prometheus-datasource
+  name: kuadrant-prometheus-datasource
   namespace: opendatahub
 spec:
   client:

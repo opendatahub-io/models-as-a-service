@@ -8,7 +8,7 @@ metadata:
 
 resources:
   - usage-dashboard.yaml
-  - cluster-prometheus-datasource.yaml
+  - kuadrant-prometheus-datasource.yaml
 
 labels:
   - pairs:
