@@ -468,8 +468,7 @@ allow {
 	object.get(input.auth.metadata["subscription-info"], "name", "") != ""
 	# Allowlist: phase must be exactly "Active" or "Degraded"
 	phase := object.get(input.auth.metadata["subscription-info"], "phase", "")
-	phase != ""
-	{ phase == "Active"; phase == "Degraded" }
+	phase in {"Active", "Degraded"}
 	# Subscription must not be deleting
 	object.get(input.auth.metadata["subscription-info"], "deletionTimestamp", "") == ""
 }`,

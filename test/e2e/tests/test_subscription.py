@@ -2513,8 +2513,8 @@ class TestStatusReporting:
             # Check model ref status shows NotFound
             if len(model_statuses) > 0:
                 model_status = model_statuses[0]
-                assert model_status.get("ready") is False, f"Expected modelRefStatus ready=false after deletion"
-                assert model_status.get("reason") == "NotFound", f"Expected reason 'NotFound' after deletion"
+                assert model_status.get("ready") is False, "Expected modelRefStatus ready=false after deletion"
+                assert model_status.get("reason") == "NotFound", "Expected reason 'NotFound' after deletion"
 
             log.info("✅ MaaSSubscription status transition verified (Active → Failed)")
 
