@@ -8,6 +8,11 @@ spec:
     kind: HTTPRoute
     name: maas-api-route
   rules:
+    # Skip auth for the health endpoint so unauthenticated readiness probes
+    # (e.g. the e2e gateway reachability check) get a 200 instead of 401.
+    # Auth is evaluated before URLRewrite, so the path is still /maas-api/health.
+    when:
+      - predicate: 'request.path != "/maas-api/health"'
     authentication:
       # API key authentication (for sk-oai-* tokens)
       api-keys:
