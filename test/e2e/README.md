@@ -137,8 +137,6 @@ The `/v1/models` endpoint implements subscription-aware model filtering:
 
 ### Negative & Security Tests
 
-Tests for abuse and failure scenarios (`tests/test_negative_security.py`):
-
 ```bash
 cd test/e2e
 source .venv/bin/activate
