@@ -21,7 +21,7 @@ This allows namespace admins and contributors to create and manage MaaS resource
 
 ### Included Resources
 
-- **MaaSModelRef** - References to model backends (LLMInferenceService, ExternalModel)
+- **MaaSModelRef** - References to model backends (LLMInferenceService or ExternalModel backend)
 - **ExternalModel** - External LLM provider definitions (OpenAI, Anthropic, etc.)
 
 ### Excluded Resources
@@ -69,10 +69,7 @@ User "user@example.com" cannot create resource "maasmodelrefs" in API group
 You need the `admin` or `edit` role in the namespace. Ask your platform administrator to grant you access:
 
 ```bash
-kubectl create rolebinding my-models-admin \
-  --clusterrole=admin \
-  --user=user@example.com \
-  -n my-models
+kubectl create rolebinding my-models-admin --clusterrole=admin --user=user@example.com -n my-models
 ```
 
 ### Cannot Create MaaSSubscription
