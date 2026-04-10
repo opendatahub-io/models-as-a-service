@@ -643,6 +643,93 @@ def _wait_for_maas_subscription_ready(name, namespace=None, timeout=30):
     )
 
 
+def _wait_for_subscription_phase(name, expected_phase, namespace=None, timeout=60):
+    """Wait for MaaSSubscription to reach a specific phase with populated status.
+
+    Args:
+        name: Name of the MaaSSubscription
+        expected_phase: Expected phase (e.g., "Active", "Failed", "Degraded")
+        namespace: Namespace (defaults to _ns())
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Returns:
+        The subscription CR dict when the expected phase is reached
+
+    Raises:
+        TimeoutError: If MaaSSubscription doesn't reach expected phase within timeout
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    log.info(f"Waiting for MaaSSubscription {name} to reach phase '{expected_phase}' (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("maassubscription", name, namespace)
+        if cr:
+            status = cr.get("status", {})
+            phase = status.get("phase")
+            model_statuses = status.get("modelRefStatuses", [])
+
+            # Check if phase matches AND modelRefStatuses is populated
+            if phase == expected_phase and len(model_statuses) > 0:
+                log.info(f"✅ MaaSSubscription {name} reached phase '{expected_phase}' with {len(model_statuses)} model status(es)")
+                return cr
+            log.debug(f"MaaSSubscription {name}: phase={phase}, modelRefStatuses={len(model_statuses)}")
+        time.sleep(2)
+
+    # Timeout - return current state for debugging
+    cr = _get_cr("maassubscription", name, namespace)
+    status = cr.get("status", {}) if cr else {}
+    raise TimeoutError(
+        f"MaaSSubscription {name} did not reach phase '{expected_phase}' within {timeout}s "
+        f"(current: phase={status.get('phase')}, modelRefStatuses={len(status.get('modelRefStatuses', []))})"
+    )
+
+
+def _wait_for_authpolicy_phase(name, expected_phase, namespace=None, timeout=60, require_auth_policies=True):
+    """Wait for MaaSAuthPolicy to reach a specific phase with populated status.
+
+    Args:
+        name: Name of the MaaSAuthPolicy
+        expected_phase: Expected phase (e.g., "Active", "Failed", "Degraded")
+        namespace: Namespace (defaults to _ns())
+        timeout: Maximum wait time in seconds (default: 60)
+        require_auth_policies: If True, requires authPolicies to be populated (default: True).
+                               Set to False for Failed phase with missing models.
+
+    Returns:
+        The auth policy CR dict when the expected phase is reached
+
+    Raises:
+        TimeoutError: If MaaSAuthPolicy doesn't reach expected phase within timeout
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    log.info(f"Waiting for MaaSAuthPolicy {name} to reach phase '{expected_phase}' (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("maasauthpolicy", name, namespace)
+        if cr:
+            status = cr.get("status", {})
+            phase = status.get("phase")
+            auth_policies = status.get("authPolicies", [])
+
+            # Check if phase matches, optionally require authPolicies
+            if phase == expected_phase:
+                if not require_auth_policies or len(auth_policies) > 0:
+                    log.info(f"✅ MaaSAuthPolicy {name} reached phase '{expected_phase}' with {len(auth_policies)} auth policy status(es)")
+                    return cr
+            log.debug(f"MaaSAuthPolicy {name}: phase={phase}, authPolicies={len(auth_policies)}")
+        time.sleep(2)
+
+    # Timeout - return current state for debugging
+    cr = _get_cr("maasauthpolicy", name, namespace)
+    status = cr.get("status", {}) if cr else {}
+    raise TimeoutError(
+        f"MaaSAuthPolicy {name} did not reach phase '{expected_phase}' within {timeout}s "
+        f"(current: phase={status.get('phase')}, authPolicies={len(status.get('authPolicies', []))})"
+    )
+
+
 def _wait_for_token_rate_limit_policy(model_ref, model_namespace="llm", timeout=60):
     """Wait for TokenRateLimitPolicy to be created and enforced for a model.
 
@@ -2193,25 +2280,19 @@ class TestStatusReporting:
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
 
             _wait_for_maas_auth_policy_ready(auth_name)
-            _wait_for_maas_subscription_ready(subscription_name)
 
-            # Get subscription status
-            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
-            assert cr is not None, f"MaaSSubscription {subscription_name} not found"
+            # Wait for subscription to reach Active phase with populated status
+            cr = _wait_for_subscription_phase(subscription_name, "Active", timeout=60)
 
             status = cr.get("status", {})
-            phase = status.get("phase")
             model_statuses = status.get("modelRefStatuses", [])
             trlp_statuses = status.get("tokenRateLimitStatuses", [])
 
-            log.info(f"Subscription status: phase={phase}, modelRefStatuses={len(model_statuses)}, tokenRateLimitStatuses={len(trlp_statuses)}")
-
-            assert phase == "Active", f"Expected phase 'Active', got '{phase}'"
-            assert len(model_statuses) > 0, "Expected at least one modelRefStatus"
+            log.info(f"Subscription status: phase={status.get('phase')}, modelRefStatuses={len(model_statuses)}, tokenRateLimitStatuses={len(trlp_statuses)}")
 
             # Check model ref status
             model_status = model_statuses[0]
-            assert model_status.get("ready") is True, f"Expected modelRefStatus ready=true, got {model_status}"
+            assert model_status.get("ready") is True, "Expected modelRefStatus ready=true"
             assert model_status.get("reason") == "Valid", f"Expected reason 'Valid', got {model_status.get('reason')}"
 
             log.info("✅ MaaSSubscription Active status verified")
@@ -2242,25 +2323,17 @@ class TestStatusReporting:
             # Create subscription with non-existent model
             _create_test_subscription(subscription_name, missing_model, users=[sa_user])
 
-            # Wait for reconciliation
-            _wait_reconcile(seconds=10)
-
-            # Get subscription status
-            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
-            assert cr is not None, f"MaaSSubscription {subscription_name} not found"
+            # Wait for subscription to reach Failed phase with polling
+            cr = _wait_for_subscription_phase(subscription_name, "Failed", timeout=60)
 
             status = cr.get("status", {})
-            phase = status.get("phase")
             model_statuses = status.get("modelRefStatuses", [])
 
-            log.info(f"Subscription status: phase={phase}, modelRefStatuses={model_statuses}")
-
-            assert phase == "Failed", f"Expected phase 'Failed', got '{phase}'"
-            assert len(model_statuses) > 0, "Expected at least one modelRefStatus"
+            log.info(f"Subscription status: phase={status.get('phase')}, modelRefStatuses={model_statuses}")
 
             # Check model ref status shows NotFound
             model_status = model_statuses[0]
-            assert model_status.get("ready") is False, f"Expected modelRefStatus ready=false, got {model_status}"
+            assert model_status.get("ready") is False, "Expected modelRefStatus ready=false"
             assert model_status.get("reason") == "NotFound", f"Expected reason 'NotFound', got {model_status.get('reason')}"
 
             log.info("✅ MaaSSubscription Failed status verified")
@@ -2288,24 +2361,17 @@ class TestStatusReporting:
 
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
 
-            _wait_for_maas_auth_policy_ready(auth_name)
-
-            # Get auth policy status
-            cr = _get_cr("maasauthpolicy", auth_name, namespace=ns)
-            assert cr is not None, f"MaaSAuthPolicy {auth_name} not found"
+            # Wait for auth policy to reach Active phase with populated status
+            cr = _wait_for_authpolicy_phase(auth_name, "Active", timeout=90)
 
             status = cr.get("status", {})
-            phase = status.get("phase")
             auth_policies = status.get("authPolicies", [])
 
-            log.info(f"AuthPolicy status: phase={phase}, authPolicies={auth_policies}")
-
-            assert phase == "Active", f"Expected phase 'Active', got '{phase}'"
-            assert len(auth_policies) > 0, "Expected at least one authPolicy status"
+            log.info(f"AuthPolicy status: phase={status.get('phase')}, authPolicies={auth_policies}")
 
             # Check auth policy status
             ap_status = auth_policies[0]
-            assert ap_status.get("ready") is True, f"Expected authPolicy ready=true, got {ap_status}"
+            assert ap_status.get("ready") is True, "Expected authPolicy ready=true"
             assert ap_status.get("reason") == "AcceptedEnforced", f"Expected reason 'AcceptedEnforced', got {ap_status.get('reason')}"
 
             log.info("✅ MaaSAuthPolicy Active status verified")
@@ -2335,20 +2401,11 @@ class TestStatusReporting:
             # Create auth policy with non-existent model
             _create_test_auth_policy(auth_name, missing_model, users=[sa_user])
 
-            # Wait for reconciliation
-            _wait_reconcile(seconds=10)
-
-            # Get auth policy status
-            cr = _get_cr("maasauthpolicy", auth_name, namespace=ns)
-            assert cr is not None, f"MaaSAuthPolicy {auth_name} not found"
+            # Wait for auth policy to reach Failed phase (no authPolicies expected for missing model)
+            cr = _wait_for_authpolicy_phase(auth_name, "Failed", timeout=60, require_auth_policies=False)
 
             status = cr.get("status", {})
-            phase = status.get("phase")
-            auth_policies = status.get("authPolicies", [])
-
-            log.info(f"AuthPolicy status: phase={phase}, authPolicies={auth_policies}")
-
-            assert phase == "Failed", f"Expected phase 'Failed', got '{phase}'"
+            log.info(f"AuthPolicy status: phase={status.get('phase')}, authPolicies={status.get('authPolicies', [])}")
 
             log.info("✅ MaaSAuthPolicy Failed status verified")
 
@@ -2381,20 +2438,14 @@ class TestStatusReporting:
             # Create subscription with both valid and missing models
             _create_test_subscription(subscription_name, [MODEL_REF, missing_model], users=[sa_user])
 
-            # Wait for reconciliation
-            _wait_reconcile(seconds=10)
-
-            # Get subscription status
-            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
-            assert cr is not None, f"MaaSSubscription {subscription_name} not found"
+            # Wait for subscription to reach Degraded phase with polling
+            cr = _wait_for_subscription_phase(subscription_name, "Degraded", timeout=60)
 
             status = cr.get("status", {})
-            phase = status.get("phase")
             model_statuses = status.get("modelRefStatuses", [])
 
-            log.info(f"Subscription status: phase={phase}, modelRefStatuses={model_statuses}")
+            log.info(f"Subscription status: phase={status.get('phase')}, modelRefStatuses={model_statuses}")
 
-            assert phase == "Degraded", f"Expected phase 'Degraded', got '{phase}'"
             assert len(model_statuses) == 2, f"Expected 2 modelRefStatuses, got {len(model_statuses)}"
 
             # Check we have one valid and one invalid
@@ -2432,20 +2483,13 @@ class TestStatusReporting:
             # Create auth policy with both valid and missing models
             _create_test_auth_policy(auth_name, [MODEL_REF, missing_model], users=[sa_user])
 
-            # Wait for auth policy to reconcile
-            _wait_reconcile(seconds=10)
-
-            # Get auth policy status
-            cr = _get_cr("maasauthpolicy", auth_name, namespace=ns)
-            assert cr is not None, f"MaaSAuthPolicy {auth_name} not found"
+            # Wait for auth policy to reach Degraded phase with polling
+            cr = _wait_for_authpolicy_phase(auth_name, "Degraded", timeout=60)
 
             status = cr.get("status", {})
-            phase = status.get("phase")
             auth_policies = status.get("authPolicies", [])
 
-            log.info(f"AuthPolicy status: phase={phase}, authPolicies={auth_policies}")
-
-            assert phase == "Degraded", f"Expected phase 'Degraded', got '{phase}'"
+            log.info(f"AuthPolicy status: phase={status.get('phase')}, authPolicies={auth_policies}")
 
             # Should have at least one entry for the valid model
             if len(auth_policies) > 0:
@@ -2497,18 +2541,26 @@ class TestStatusReporting:
 
             # Delete the model
             _delete_cr("maasmodelref", model_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile(seconds=15)
 
-            # Verify status transitions to Failed
-            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
-            assert cr is not None
+            # Wait for subscription to transition to Failed phase with polling
+            # Use longer timeout to allow for cache invalidation
+            cr = _wait_for_subscription_phase(subscription_name, "Failed", timeout=120)
+
+            # Poll for modelRefStatuses to also reflect the deletion
+            # (cache may take additional time to invalidate)
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+                status = cr.get("status", {})
+                model_statuses = status.get("modelRefStatuses", [])
+                if len(model_statuses) > 0 and model_statuses[0].get("ready") is False:
+                    break
+                time.sleep(2)
+
             status = cr.get("status", {})
-            final_phase = status.get("phase")
             model_statuses = status.get("modelRefStatuses", [])
 
-            log.info(f"Final subscription status: phase={final_phase}, modelRefStatuses={model_statuses}")
-
-            assert final_phase == "Failed", f"Expected final phase 'Failed' after model deletion, got '{final_phase}'"
+            log.info(f"Final subscription status: phase={status.get('phase')}, modelRefStatuses={model_statuses}")
 
             # Check model ref status shows NotFound
             if len(model_statuses) > 0:

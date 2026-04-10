@@ -213,38 +213,55 @@ func deriveFinalPhase(modelStatuses []maasv1alpha1.ModelRefStatus, trlpStatuses 
 		return maasv1alpha1.PhaseFailed, "no model references specified"
 	}
 
+	// Build a set of models that validateModelRefs reported as valid
+	validModelSet := make(map[string]struct{})
 	var validModels, invalidModels int
 	for _, s := range modelStatuses {
 		if s.Ready {
 			validModels++
+			validModelSet[s.Name] = struct{}{}
 		} else {
 			invalidModels++
 		}
 	}
 
-	// All models invalid -> Failed
-	if validModels == 0 {
-		return maasv1alpha1.PhaseFailed, fmt.Sprintf("all %d model references are invalid", invalidModels)
-	}
-
-	// Check TRLP health for valid models
-	var healthyTRLPs, unhealthyTRLPs int
+	// Check TRLP health
+	// Also detect race condition: model reported as valid by validateModelRefs but
+	// deleted before checkTokenRateLimitHealth ran (TRLP reports BackendNotReady)
+	var healthyTRLPs, unhealthyTRLPs, modelsWithBackendIssues int
 	for _, s := range trlpStatuses {
 		if s.Ready {
 			healthyTRLPs++
 		} else {
 			unhealthyTRLPs++
+			// Only count as backend issue if the model was reported as valid
+			// (avoids double-counting models already marked as invalid)
+			if s.Reason == maasv1alpha1.ReasonBackendNotReady {
+				if _, wasValid := validModelSet[s.Model]; wasValid {
+					modelsWithBackendIssues++
+				}
+			}
 		}
 	}
 
-	// Partial model failure -> Degraded
-	if invalidModels > 0 {
-		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d model references are invalid", invalidModels, len(modelStatuses))
+	// Adjust counts for race condition: models thought to be valid but actually unavailable
+	effectiveValidModels := validModels - modelsWithBackendIssues
+	effectiveInvalidModels := invalidModels + modelsWithBackendIssues
+
+	// All models invalid -> Failed
+	if effectiveValidModels <= 0 {
+		return maasv1alpha1.PhaseFailed, fmt.Sprintf("all %d model references are invalid or unavailable", len(modelStatuses))
 	}
 
-	// All models valid but some TRLPs unhealthy -> Degraded
-	if unhealthyTRLPs > 0 {
-		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d TokenRateLimitPolicies not accepted", unhealthyTRLPs, len(trlpStatuses))
+	// Partial model failure -> Degraded
+	if effectiveInvalidModels > 0 {
+		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d model references are invalid or unavailable", effectiveInvalidModels, len(modelStatuses))
+	}
+
+	// All models valid but some TRLPs unhealthy (not due to backend issues) -> Degraded
+	trlpOnlyIssues := unhealthyTRLPs - modelsWithBackendIssues
+	if trlpOnlyIssues > 0 {
+		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d TokenRateLimitPolicies not accepted", trlpOnlyIssues, len(trlpStatuses))
 	}
 
 	return maasv1alpha1.PhaseActive, "successfully reconciled"
@@ -299,6 +316,13 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			log.Error(err, "failed to reconcile TokenRateLimitPolicies")
 			subscription.Status.Phase = maasv1alpha1.PhaseFailed
 			r.updateStatus(ctx, subscription, maasv1alpha1.PhaseFailed, fmt.Sprintf("failed to reconcile TokenRateLimitPolicies: %v", err), statusSnapshot)
+			return ctrl.Result{}, err
+		}
+	} else {
+		// No valid models - clean up any stale TRLPs from previous reconciliations
+		if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
+			log.Error(err, "failed to clean up stale TokenRateLimitPolicies")
+			r.updateStatus(ctx, subscription, maasv1alpha1.PhaseFailed, fmt.Sprintf("failed to clean up stale TokenRateLimitPolicies: %v", err), statusSnapshot)
 			return ctrl.Result{}, err
 		}
 	}

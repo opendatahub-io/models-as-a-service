@@ -113,6 +113,8 @@ type ModelRefStatus struct {
 type TokenRateLimitStatus struct {
 	ResourceRefStatus `json:",inline"`
 	// Model is the MaaSModelRef name this TokenRateLimitPolicy targets
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	Model string `json:"model"`
 }
 

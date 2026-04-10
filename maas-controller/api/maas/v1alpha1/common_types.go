@@ -81,8 +81,10 @@ const (
 // Embedded by specific status types for type safety (follows metav1.Condition pattern).
 type ResourceRefStatus struct {
 	// Name of the referenced resource
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 	// Namespace of the referenced resource
+	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`
 	// Ready indicates whether the resource is valid and healthy
 	Ready bool `json:"ready"`
@@ -90,6 +92,7 @@ type ResourceRefStatus struct {
 	// +optional
 	Reason ConditionReason `json:"reason,omitempty"`
 	// Message is a human-readable description of the status
+	// +kubebuilder:validation:MaxLength=1024
 	// +optional
 	Message string `json:"message,omitempty"`
 }

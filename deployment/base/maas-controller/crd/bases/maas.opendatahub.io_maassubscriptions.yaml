@@ -226,12 +226,15 @@ spec:
                     message:
                       description: Message is a human-readable description of the
                         status
+                      maxLength: 1024
                       type: string
                     name:
                       description: Name of the referenced resource
+                      maxLength: 253
                       type: string
                     namespace:
                       description: Namespace of the referenced resource
+                      maxLength: 63
                       type: string
                     ready:
                       description: Ready indicates whether the resource is valid and
@@ -264,16 +267,21 @@ spec:
                     message:
                       description: Message is a human-readable description of the
                         status
+                      maxLength: 1024
                       type: string
                     model:
                       description: Model is the MaaSModelRef name this TokenRateLimitPolicy
                         targets
+                      maxLength: 63
+                      minLength: 1
                       type: string
                     name:
                       description: Name of the referenced resource
+                      maxLength: 253
                       type: string
                     namespace:
                       description: Namespace of the referenced resource
+                      maxLength: 63
                       type: string
                     ready:
                       description: Ready indicates whether the resource is valid and
