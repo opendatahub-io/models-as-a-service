@@ -7,7 +7,7 @@ This page describes the RBAC permissions for MaaS custom resources in user names
 MaaS provides two aggregated ClusterRoles that extend the standard Kubernetes/OpenShift roles with permissions for MaaS resources:
 
 - **`maas-user-admin-role`** - Aggregates to `admin` and `edit` roles
-- **`maas-user-view-role`** - Aggregates to `view` role
+- **`maas-user-view-role`** - Aggregates to `view`, `admin`, and `edit` roles
 
 This allows namespace admins and contributors to create and manage MaaS resources without requiring cluster-admin intervention.
 
@@ -47,7 +47,7 @@ kubectl auth can-i list maasmodelref -n my-models
 
 ### For Platform Administrators
 
-To verify the ClusterRoles are correctly installed and aggregated, run the [RBAC verification script](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/verify-rbac-aggregation.sh):
+To verify the ClusterRoles are correctly installed and aggregated, run the RBAC verification script at `scripts/verify-rbac-aggregation.sh` in the repository root:
 
 ```bash
 ./scripts/verify-rbac-aggregation.sh

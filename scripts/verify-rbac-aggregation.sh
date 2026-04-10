@@ -85,15 +85,15 @@ echo ""
 # Check 2: Verify aggregation labels on maas-user-admin-role
 log_info "Checking aggregation labels on maas-user-admin-role..."
 
-ADMIN_LABELS=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels}' 2>/dev/null || echo "{}")
-
-if echo "$ADMIN_LABELS" | grep -q "aggregate-to-admin.*true"; then
+AGGREGATE_TO_ADMIN=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-admin}' 2>/dev/null)
+if [ "$AGGREGATE_TO_ADMIN" = "true" ]; then
     log_success "maas-user-admin-role has 'aggregate-to-admin: true' label"
 else
     log_error "maas-user-admin-role missing 'aggregate-to-admin: true' label"
 fi
 
-if echo "$ADMIN_LABELS" | grep -q "aggregate-to-edit.*true"; then
+AGGREGATE_TO_EDIT=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-edit}' 2>/dev/null)
+if [ "$AGGREGATE_TO_EDIT" = "true" ]; then
     log_success "maas-user-admin-role has 'aggregate-to-edit: true' label"
 else
     log_error "maas-user-admin-role missing 'aggregate-to-edit: true' label"
@@ -104,21 +104,22 @@ echo ""
 # Check 3: Verify aggregation labels on maas-user-view-role
 log_info "Checking aggregation labels on maas-user-view-role..."
 
-VIEW_LABELS=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels}' 2>/dev/null || echo "{}")
-
-if echo "$VIEW_LABELS" | grep -q "aggregate-to-view.*true"; then
+AGGREGATE_TO_VIEW=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-view}' 2>/dev/null)
+if [ "$AGGREGATE_TO_VIEW" = "true" ]; then
     log_success "maas-user-view-role has 'aggregate-to-view: true' label"
 else
     log_error "maas-user-view-role missing 'aggregate-to-view: true' label"
 fi
 
-if echo "$VIEW_LABELS" | grep -q "aggregate-to-admin.*true"; then
+AGGREGATE_TO_ADMIN=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-admin}' 2>/dev/null)
+if [ "$AGGREGATE_TO_ADMIN" = "true" ]; then
     log_success "maas-user-view-role has 'aggregate-to-admin: true' label"
 else
     log_error "maas-user-view-role missing 'aggregate-to-admin: true' label"
 fi
 
-if echo "$VIEW_LABELS" | grep -q "aggregate-to-edit.*true"; then
+AGGREGATE_TO_EDIT=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-edit}' 2>/dev/null)
+if [ "$AGGREGATE_TO_EDIT" = "true" ]; then
     log_success "maas-user-view-role has 'aggregate-to-edit: true' label"
 else
     log_error "maas-user-view-role missing 'aggregate-to-edit: true' label"
@@ -134,17 +135,17 @@ ADMIN_RULES=$(kubectl get clusterrole admin -o yaml 2>/dev/null || echo "")
 if echo "$ADMIN_RULES" | grep -q "maas.opendatahub.io"; then
     log_success "'admin' ClusterRole includes maas.opendatahub.io API group"
 
-    # Check for specific resources
+    # Check for specific resources - fail if missing
     if echo "$ADMIN_RULES" | grep -A5 "maas.opendatahub.io" | grep -q "maasmodelrefs"; then
         log_success "'admin' ClusterRole includes maasmodelrefs resource"
     else
-        log_warning "'admin' ClusterRole may not include maasmodelrefs resource"
+        log_error "'admin' ClusterRole missing required maasmodelrefs resource"
     fi
 
     if echo "$ADMIN_RULES" | grep -A5 "maas.opendatahub.io" | grep -q "externalmodels"; then
         log_success "'admin' ClusterRole includes externalmodels resource"
     else
-        log_warning "'admin' ClusterRole may not include externalmodels resource"
+        log_error "'admin' ClusterRole missing required externalmodels resource"
     fi
 else
     log_error "'admin' ClusterRole does not include maas.opendatahub.io API group"
@@ -160,6 +161,19 @@ EDIT_RULES=$(kubectl get clusterrole edit -o yaml 2>/dev/null || echo "")
 
 if echo "$EDIT_RULES" | grep -q "maas.opendatahub.io"; then
     log_success "'edit' ClusterRole includes maas.opendatahub.io API group"
+
+    # Check for specific resources - fail if missing
+    if echo "$EDIT_RULES" | grep -A5 "maas.opendatahub.io" | grep -q "maasmodelrefs"; then
+        log_success "'edit' ClusterRole includes maasmodelrefs resource"
+    else
+        log_error "'edit' ClusterRole missing required maasmodelrefs resource"
+    fi
+
+    if echo "$EDIT_RULES" | grep -A5 "maas.opendatahub.io" | grep -q "externalmodels"; then
+        log_success "'edit' ClusterRole includes externalmodels resource"
+    else
+        log_error "'edit' ClusterRole missing required externalmodels resource"
+    fi
 else
     log_error "'edit' ClusterRole does not include maas.opendatahub.io API group"
     log_warning "RBAC aggregation may take a few seconds after ClusterRole creation"
@@ -174,6 +188,19 @@ VIEW_RULES=$(kubectl get clusterrole view -o yaml 2>/dev/null || echo "")
 
 if echo "$VIEW_RULES" | grep -q "maas.opendatahub.io"; then
     log_success "'view' ClusterRole includes maas.opendatahub.io API group"
+
+    # Check for specific resources - fail if missing
+    if echo "$VIEW_RULES" | grep -A5 "maas.opendatahub.io" | grep -q "maasmodelrefs"; then
+        log_success "'view' ClusterRole includes maasmodelrefs resource"
+    else
+        log_error "'view' ClusterRole missing required maasmodelrefs resource"
+    fi
+
+    if echo "$VIEW_RULES" | grep -A5 "maas.opendatahub.io" | grep -q "externalmodels"; then
+        log_success "'view' ClusterRole includes externalmodels resource"
+    else
+        log_error "'view' ClusterRole missing required externalmodels resource"
+    fi
 else
     log_error "'view' ClusterRole does not include maas.opendatahub.io API group"
     log_warning "RBAC aggregation may take a few seconds after ClusterRole creation"
@@ -191,7 +218,7 @@ for verb in "${EXPECTED_VERBS[@]}"; do
     if echo "$ADMIN_VERBS" | grep -q -- "- $verb"; then
         log_success "'admin' role has '$verb' verb for MaaS resources"
     else
-        log_warning "'admin' role may be missing '$verb' verb for MaaS resources"
+        log_error "'admin' role missing required '$verb' verb for MaaS resources"
     fi
 done
 
@@ -207,7 +234,7 @@ for verb in "${READ_VERBS[@]}"; do
     if echo "$VIEW_VERBS" | grep -q -- "- $verb"; then
         log_success "'view' role has '$verb' verb for MaaS resources"
     else
-        log_warning "'view' role may be missing '$verb' verb for MaaS resources"
+        log_error "'view' role missing required '$verb' verb for MaaS resources"
     fi
 done
 
