@@ -137,11 +137,11 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
 ```
 
 !!! warning "Multiple model references on one HTTPRoute"
-    **This limitation affects v3.4 deployments.** More than one **MaaSModelRef** on the same route can break independent per-subscription limits—only one TokenRateLimitPolicy is fully effective while others may show **Overridden**.
-    
-    **Planning guidance:** Prefer **one HTTPRoute per model** when different subscriptions need separate limits. Tier-based route sharing does **not** help if **multiple subscriptions** each need their own limits on that **same** route.
-    
-    See [Subscription limitations and known issues](subscription-known-issues.md#token-rate-limits-when-multiple-model-references-share-one-httproute) for detection commands and workarounds.
+    **This limitation affects v3.4 deployments.** More than one **MaaSModelRef** on the same route can break independent per-subscription limits—only one **TokenRateLimitPolicy** is fully effective at the gateway. For **MaaSSubscription** readiness, the controller checks each TRLP’s **`Accepted`** condition; Kuadrant may still show **`Enforced`** and **`Overridden`** (or similar **`reason`**) when policies conflict on one route.
+
+    **Planning guidance:** Prefer **one HTTPRoute per model** when different subscriptions need separate limits. Putting models on a shared route “by tier” still implies **multiple TRLPs** if **multiple** **MaaSModelRef** resources target that route—it only aligns with this limitation when **every** model on the route is meant to share **one** **MaaSSubscription** (and access policy) story.
+
+    See [Subscription limitations and known issues](subscription-known-issues.md#token-rate-limits-when-multiple-model-references-share-one-httproute) for `kubectl`/`jq` examples and workarounds.
 
 !!! note "Namespace requirements"
     Both **MaaSAuthPolicy** and **MaaSSubscription** must be installed in the `models-as-a-service` namespace. Each `modelRefs` entry must specify the `namespace` where the MaaSModelRef lives (e.g. `llm`).
