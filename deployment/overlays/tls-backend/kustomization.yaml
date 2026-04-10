@@ -10,8 +10,7 @@ kind: Kustomization
 # - TLS-specific: Additional replacements for DestinationRule configuration
 #
 # SHARED CONFIGURATION (from components/shared-patches):
-# - ConfigMap with parameters (images, gateway, namespace)
-# - Environment variables for maas-api deployment
+# - Environment variables for maas-api deployment (maas-parameters from ../odh/params.env)
 # - Image replacements for maas-api and maas-controller
 # - Gateway configuration (namespace, name)
 # - AuthPolicy URL placeholder replacement (placehold → actual namespace)
@@ -22,12 +21,21 @@ kind: Kustomization
 # The AuthPolicy URL uses app-namespace for DNS resolution
 namespace: opendatahub
 
+# Reuse overlays/odh/params.env (single source of truth). Kustomize requires
+# --load-restrictor LoadRestrictionsNone when building this overlay (see deploy.sh).
+configMapGenerator:
+- envs:
+  - ../odh/params.env
+  name: maas-parameters
+generatorOptions:
+  disableNameSuffixHash: true
+
 resources:
   - ../../base/maas-api/overlays/tls  # Includes DestinationRule for TLS
   - ../../base/maas-controller/default
 
 # Include shared-patches component for common configuration
-# This provides: ConfigMap, env vars, image replacements, gateway config, URL placeholder fix
+# This provides: env vars, image replacements, gateway config, URL placeholder fix
 components:
   - ../../components/shared-patches
 

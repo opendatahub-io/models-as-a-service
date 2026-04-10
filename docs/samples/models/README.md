@@ -9,6 +9,7 @@ This directory contains `LLMInferenceService`s for deploying sample models. Plea
 - **facebook-opt-125m-cpu** - Facebook OPT 125M model (CPU-based)
 - **qwen3** - Qwen3 model (GPU-based with autoscaling)
 - **ibm-granite-2b-gpu** - IBM Granite 2B Instruct model (GPU-based, supports instructions)
+- **granite-3-1-8b-rhelai-modelcar** - Granite 3.1 8B Instruct via Red Hat model car OCI + `vllm-cpu-rhel9` (CPU; see comments in `model.yaml`)
 
 ## Deployment
 
@@ -23,7 +24,7 @@ kubectl create namespace llm
 Deploy any model using:
 
 ```bash
-MODEL_NAME=simulator # or simulator-premium, facebook-opt-125m-cpu, qwen3, or ibm-granite-2b-gpu
+MODEL_NAME=simulator # or simulator-premium, facebook-opt-125m-cpu, qwen3, ibm-granite-2b-gpu, granite-3-1-8b-rhelai-modelcar
 kustomize build docs/samples/models/$MODEL_NAME | kubectl apply -f -
 ```
 

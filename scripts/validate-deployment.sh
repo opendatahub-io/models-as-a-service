@@ -394,7 +394,7 @@ print_header "3️⃣ Policy Status"
 print_check "AuthPolicy"
 AUTHPOLICY_COUNT=$(kubectl get authpolicy -A --no-headers 2>/dev/null | wc -l || echo "0")
 if [ "$AUTHPOLICY_COUNT" -gt 0 ]; then
-    AUTHPOLICY_STATUS=$(kubectl get authpolicy -n openshift-ingress gateway-auth-policy -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
+    AUTHPOLICY_STATUS=$(kubectl get authpolicy -n openshift-ingress gateway-default-auth -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
     if [ "$AUTHPOLICY_STATUS" = "True" ]; then
         print_success "AuthPolicy is configured and accepted"
     else

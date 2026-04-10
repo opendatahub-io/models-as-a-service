@@ -113,8 +113,13 @@ def _delete_cr(kind: str, name: str, namespace: str):
     )
 
 
-def _create_external_model(name: str, namespace: str, provider: str = "test", endpoint: str = "test.example.com"):
-    """Create an ExternalModel CR with the given name and namespace."""
+def _create_external_model(name: str, 
+                           namespace: str, 
+                           provider: str = "openai",
+                           endpoint: str = "test.example.com", 
+                           target_model: Optional[str] = None):
+    """ Create an ExternalModel CR with the given name and namespace.
+    Note: targetModel is required by the ExternalModel CRD. """
     _apply_cr({
         "apiVersion": "maas.opendatahub.io/v1alpha1",
         "kind": "ExternalModel",
@@ -123,6 +128,7 @@ def _create_external_model(name: str, namespace: str, provider: str = "test", en
             "provider": provider,
             "endpoint": endpoint,
             "credentialRef": {"name": f"{name}-credentials"},
+            "targetModel": target_model or name
         },
     })
 
@@ -384,14 +390,14 @@ class TestModelRef:
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSModelRef",
                 "metadata": {"name": MODEL_REF, "namespace": other_ns},
-                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend", "provider": "test"}},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
             })
             # MaaSModelRef in MODEL_NAMESPACE with a different name (not referenced by policy)
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSModelRef",
                 "metadata": {"name": other_model_ref, "namespace": MODEL_NAMESPACE},
-                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend", "provider": "test"}},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
             })
 
             # MaaSAuthPolicy referencing only MODEL_REF in MODEL_NAMESPACE
@@ -460,14 +466,14 @@ class TestModelRef:
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSModelRef",
                 "metadata": {"name": MODEL_REF, "namespace": other_ns},
-                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend", "provider": "test"}},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
             })
             # MaaSModelRef in MODEL_NAMESPACE with a different name
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSModelRef",
                 "metadata": {"name": other_model_ref, "namespace": MODEL_NAMESPACE},
-                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend", "provider": "test"}},
+                "spec": {"modelRef": {"kind": "ExternalModel", "name": "test-backend"}},
             })
 
             # MaaSSubscription referencing only MODEL_REF in MODEL_NAMESPACE

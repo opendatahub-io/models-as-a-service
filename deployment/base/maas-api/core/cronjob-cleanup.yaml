@@ -22,7 +22,7 @@ spec:
             runAsNonRoot: true
           containers:
           - name: cleanup
-            image: curlimages/curl:8.19.0
+            image: curlimages/curl:8.18.0
             command:
             - /bin/sh
             - -c

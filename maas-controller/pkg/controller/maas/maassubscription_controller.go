@@ -72,6 +72,201 @@ const (
 // (API key mint and selector use deterministic tie-break; admins should set distinct priorities).
 const ConditionSpecPriorityDuplicate = "SpecPriorityDuplicate"
 
+// validateModelRefs checks each model reference and returns per-model status.
+func (r *MaaSSubscriptionReconciler) validateModelRefs(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription) []maasv1alpha1.ModelRefStatus {
+	statuses := make([]maasv1alpha1.ModelRefStatus, 0, len(subscription.Spec.ModelRefs))
+	seen := make(map[string]struct{})
+
+	for _, ref := range subscription.Spec.ModelRefs {
+		key := ref.Namespace + "/" + ref.Name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		status := maasv1alpha1.ModelRefStatus{
+			ResourceRefStatus: maasv1alpha1.ResourceRefStatus{
+				Name:      ref.Name,
+				Namespace: ref.Namespace,
+			},
+		}
+
+		model := &maasv1alpha1.MaaSModelRef{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, model); err != nil {
+			if apierrors.IsNotFound(err) {
+				status.Ready = false
+				status.Reason = maasv1alpha1.ReasonNotFound
+				status.Message = fmt.Sprintf("MaaSModelRef %s/%s not found", ref.Namespace, ref.Name)
+			} else {
+				status.Ready = false
+				status.Reason = maasv1alpha1.ReasonGetFailed
+				status.Message = fmt.Sprintf("failed to get MaaSModelRef: %v", err)
+			}
+		} else {
+			status.Ready = true
+			status.Reason = maasv1alpha1.ReasonValid
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses
+}
+
+// checkTokenRateLimitHealth checks the health of generated TokenRateLimitPolicies.
+func (r *MaaSSubscriptionReconciler) checkTokenRateLimitHealth(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription) []maasv1alpha1.TokenRateLimitStatus {
+	statuses := make([]maasv1alpha1.TokenRateLimitStatus, 0, len(subscription.Spec.ModelRefs))
+	seen := make(map[string]struct{})
+
+	for _, ref := range subscription.Spec.ModelRefs {
+		key := ref.Namespace + "/" + ref.Name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		policyName := fmt.Sprintf("maas-trlp-%s", ref.Name)
+		status := maasv1alpha1.TokenRateLimitStatus{
+			ResourceRefStatus: maasv1alpha1.ResourceRefStatus{
+				Name: policyName,
+			},
+			Model: ref.Name,
+		}
+
+		// Find the TRLP for this model (TRLP lives in HTTPRoute namespace)
+		_, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, ref.Namespace, ref.Name)
+		if err != nil {
+			// Record status even when HTTPRoute not found - makes diagnosing issues easier
+			status.Ready = false
+			if errors.Is(err, ErrHTTPRouteNotFound) || errors.Is(err, ErrModelNotFound) {
+				status.Reason = maasv1alpha1.ReasonBackendNotReady
+				status.Message = fmt.Sprintf("HTTPRoute not found yet; TokenRateLimitPolicy cannot be created: %v", err)
+			} else {
+				status.Reason = maasv1alpha1.ReasonGetFailed
+				status.Message = fmt.Sprintf("failed to find HTTPRoute for model: %v", err)
+			}
+			statuses = append(statuses, status)
+			continue
+		}
+		status.Namespace = httpRouteNS
+
+		trlp := &unstructured.Unstructured{}
+		trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+
+		if err := r.Get(ctx, types.NamespacedName{Name: policyName, Namespace: httpRouteNS}, trlp); err != nil {
+			if apierrors.IsNotFound(err) {
+				status.Ready = false
+				status.Reason = maasv1alpha1.ReasonNotFound
+				status.Message = "TokenRateLimitPolicy not created yet"
+			} else {
+				status.Ready = false
+				status.Reason = maasv1alpha1.ReasonGetFailed
+				status.Message = fmt.Sprintf("failed to get TokenRateLimitPolicy: %v", err)
+			}
+		} else {
+			// Check Accepted condition from TRLP status
+			accepted, message := getTRLPAcceptedCondition(trlp)
+			status.Ready = accepted
+			if accepted {
+				status.Reason = maasv1alpha1.ReasonAccepted
+			} else {
+				status.Reason = maasv1alpha1.ReasonNotAccepted
+				status.Message = message
+			}
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses
+}
+
+// getTRLPAcceptedCondition extracts the Accepted condition from a TokenRateLimitPolicy.
+func getTRLPAcceptedCondition(trlp *unstructured.Unstructured) (accepted bool, message string) {
+	status, found, err := unstructured.NestedMap(trlp.Object, "status")
+	if err != nil || !found {
+		return false, "status not available"
+	}
+
+	conditions, found, err := unstructured.NestedSlice(status, "conditions")
+	if err != nil || !found {
+		return false, "conditions not found"
+	}
+
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == "Accepted" {
+			if cond["status"] == "True" {
+				return true, ""
+			}
+			if msg, ok := cond["message"].(string); ok {
+				return false, msg
+			}
+			return false, "Accepted condition is False"
+		}
+	}
+	return false, "Accepted condition not found"
+}
+
+// deriveFinalPhase determines the subscription phase based on model and TRLP statuses.
+func deriveFinalPhase(modelStatuses []maasv1alpha1.ModelRefStatus, trlpStatuses []maasv1alpha1.TokenRateLimitStatus) (phase maasv1alpha1.Phase, message string) {
+	if len(modelStatuses) == 0 {
+		return maasv1alpha1.PhaseFailed, "no model references specified"
+	}
+
+	// Build a set of models that validateModelRefs reported as valid
+	validModelSet := make(map[string]struct{})
+	var validModels, invalidModels int
+	for _, s := range modelStatuses {
+		if s.Ready {
+			validModels++
+			validModelSet[s.Name] = struct{}{}
+		} else {
+			invalidModels++
+		}
+	}
+
+	// Check TRLP health
+	// Also detect race condition: model reported as valid by validateModelRefs but
+	// deleted before checkTokenRateLimitHealth ran (TRLP reports BackendNotReady)
+	var healthyTRLPs, unhealthyTRLPs, modelsWithBackendIssues int
+	for _, s := range trlpStatuses {
+		if s.Ready {
+			healthyTRLPs++
+		} else {
+			unhealthyTRLPs++
+			// Only count as backend issue if the model was reported as valid
+			// (avoids double-counting models already marked as invalid)
+			if s.Reason == maasv1alpha1.ReasonBackendNotReady {
+				if _, wasValid := validModelSet[s.Model]; wasValid {
+					modelsWithBackendIssues++
+				}
+			}
+		}
+	}
+
+	// Adjust counts for race condition: models thought to be valid but actually unavailable
+	effectiveValidModels := validModels - modelsWithBackendIssues
+	effectiveInvalidModels := invalidModels + modelsWithBackendIssues
+
+	// All models invalid -> Failed
+	if effectiveValidModels <= 0 {
+		return maasv1alpha1.PhaseFailed, fmt.Sprintf("all %d model references are invalid or unavailable", len(modelStatuses))
+	}
+
+	// Partial model failure -> Degraded
+	if effectiveInvalidModels > 0 {
+		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d model references are invalid or unavailable", effectiveInvalidModels, len(modelStatuses))
+	}
+
+	// All models valid but some TRLPs unhealthy (not due to backend issues) -> Degraded
+	trlpOnlyIssues := unhealthyTRLPs - modelsWithBackendIssues
+	if trlpOnlyIssues > 0 {
+		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d TokenRateLimitPolicies not accepted", trlpOnlyIssues, len(trlpStatuses))
+	}
+
+	return maasv1alpha1.PhaseActive, "successfully reconciled"
+}
+
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSSubscription", req.NamespacedName)
@@ -100,15 +295,46 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	statusSnapshot := subscription.Status.DeepCopy()
 
-	// Reconcile TokenRateLimitPolicy for each model
-	// IMPORTANT: TokenRateLimitPolicy targets the HTTPRoute for each model
-	if err := r.reconcileTokenRateLimitPolicies(ctx, log, subscription); err != nil {
-		log.Error(err, "failed to reconcile TokenRateLimitPolicies")
-		r.updateStatus(ctx, subscription, "Failed", fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+	// Validate model references and populate per-model status
+	modelStatuses := r.validateModelRefs(ctx, subscription)
+	subscription.Status.ModelRefStatuses = modelStatuses
+
+	// Check if we have any valid models to proceed with TRLP reconciliation
+	hasValidModels := false
+	for _, s := range modelStatuses {
+		if s.Ready {
+			hasValidModels = true
+			break
+		}
 	}
 
-	r.updateStatus(ctx, subscription, "Active", "Successfully reconciled", statusSnapshot)
+	// Only reconcile TRLPs if we have valid models
+	if hasValidModels {
+		// Reconcile TokenRateLimitPolicy for each model
+		// IMPORTANT: TokenRateLimitPolicy targets the HTTPRoute for each model
+		if err := r.reconcileTokenRateLimitPolicies(ctx, log, subscription); err != nil {
+			log.Error(err, "failed to reconcile TokenRateLimitPolicies")
+			subscription.Status.Phase = maasv1alpha1.PhaseFailed
+			r.updateStatus(ctx, subscription, maasv1alpha1.PhaseFailed, fmt.Sprintf("failed to reconcile TokenRateLimitPolicies: %v", err), statusSnapshot)
+			return ctrl.Result{}, err
+		}
+	} else {
+		// No valid models - clean up any stale TRLPs from previous reconciliations
+		if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
+			log.Error(err, "failed to clean up stale TokenRateLimitPolicies")
+			r.updateStatus(ctx, subscription, maasv1alpha1.PhaseFailed, fmt.Sprintf("failed to clean up stale TokenRateLimitPolicies: %v", err), statusSnapshot)
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Check TRLP health and populate status
+	trlpStatuses := r.checkTokenRateLimitHealth(ctx, subscription)
+	subscription.Status.TokenRateLimitStatuses = trlpStatuses
+
+	// Derive final phase based on model and TRLP health
+	phase, message := deriveFinalPhase(modelStatuses, trlpStatuses)
+	r.updateStatus(ctx, subscription, phase, message, statusSnapshot)
+
 	return ctrl.Result{}, nil
 }
 
@@ -461,7 +687,7 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 	return ctrl.Result{}, nil
 }
 
-func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase, message string, statusSnapshot *maasv1alpha1.MaaSSubscriptionStatus) {
+func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSSubscriptionStatus) {
 	// Status-only updates do not bump metadata.generation, so this reconcile may not re-queue.
 	// Merge SpecPriorityDuplicate from the API server so we do not clobber the async duplicate-priority scan.
 	latest := &maasv1alpha1.MaaSSubscription{}
@@ -473,17 +699,27 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 
 	subscription.Status.Phase = phase
 
-	status := metav1.ConditionTrue
-	reason := "Reconciled"
-	if phase == "Failed" {
+	var status metav1.ConditionStatus
+	var reason maasv1alpha1.ConditionReason
+	switch phase {
+	case maasv1alpha1.PhaseActive:
+		status = metav1.ConditionTrue
+		reason = maasv1alpha1.ReasonReconciled
+	case maasv1alpha1.PhaseDegraded:
 		status = metav1.ConditionFalse
-		reason = "ReconcileFailed"
+		reason = maasv1alpha1.ReasonPartialFailure
+	case maasv1alpha1.PhaseFailed:
+		status = metav1.ConditionFalse
+		reason = maasv1alpha1.ReasonReconcileFailed
+	default:
+		status = metav1.ConditionUnknown
+		reason = maasv1alpha1.ReasonUnknown
 	}
 
 	apimeta.SetStatusCondition(&subscription.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             status,
-		Reason:             reason,
+		Reason:             string(reason),
 		Message:            message,
 		ObservedGeneration: subscription.GetGeneration(),
 	})

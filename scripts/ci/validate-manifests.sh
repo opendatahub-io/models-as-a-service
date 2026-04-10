@@ -26,7 +26,7 @@ validate_kustomization() {
     fi
     
     echo -n -e "⏳ ${message}"
-    if output=$(kustomize build --stack-trace "$dir" 2>&1); then
+    if output=$(kustomize build --stack-trace --load-restrictor LoadRestrictionsNone "$dir" 2>&1); then
         echo -e "\r✅ ${message}"
         return 0
     else
