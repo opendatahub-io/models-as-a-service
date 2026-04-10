@@ -279,7 +279,7 @@ class TestAuthPolicyRemoval:
             )
 
             # Verify inference works
-            r = _poll_status(api_key, 200, path=UNCONFIGURED_MODEL_PATH, timeout=90)
+            r = _poll_status(api_key, 200, path=UNCONFIGURED_MODEL_PATH, timeout=45)
             log.info("With AuthPolicy -> %s", r.status_code)
             assert r.status_code == 200, (
                 f"Setup: expected 200 with valid auth policy, got {r.status_code}"
