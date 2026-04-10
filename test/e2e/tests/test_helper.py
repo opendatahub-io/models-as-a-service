@@ -448,7 +448,7 @@ def _wait_reconcile(seconds=None):
     time.sleep(seconds or RECONCILE_WAIT)
 
 
-def _wait_for_subscription_phase(name, expected_phase, namespace=None, timeout=60):
+def _wait_for_subscription_phase(name, expected_phase="Active", namespace=None, timeout=60):
     """Wait for MaaSSubscription to reach a specific phase with populated status.
 
     Args:
@@ -490,7 +490,7 @@ def _wait_for_subscription_phase(name, expected_phase, namespace=None, timeout=6
     )
 
 
-def _wait_for_authpolicy_phase(name, expected_phase, namespace=None, timeout=60, require_auth_policies=True):
+def _wait_for_authpolicy_phase(name, expected_phase="Active", namespace=None, timeout=60, require_auth_policies=True):
     """Wait for MaaSAuthPolicy to reach a specific phase with populated status.
 
     Args:
@@ -546,14 +546,14 @@ def _wait_for_maas_auth_policy_ready(name, namespace=None, timeout=60):
         if cr:
             phase = cr.get("status", {}).get("phase")
             auth_policies = cr.get("status", {}).get("authPolicies", [])
-            all_enforced = all(
-                ap.get("accepted") == "True" and ap.get("enforced") == "True"
+            all_ready = all(
+                ap.get("ready") is True
                 for ap in auth_policies
             )
-            if phase == "Active" and auth_policies and all_enforced:
+            if phase == "Active" and auth_policies and all_ready:
                 log.info(f"MaaSAuthPolicy {name} is Active and enforced")
                 return
-            log.debug(f"MaaSAuthPolicy {name} phase: {phase}, authPolicies: {len(auth_policies)}, all_enforced: {all_enforced}")
+            log.debug(f"MaaSAuthPolicy {name} phase: {phase}, authPolicies: {len(auth_policies)}, all_ready: {all_ready}")
         time.sleep(2)
 
     cr = _get_cr("maasauthpolicy", name, namespace)
