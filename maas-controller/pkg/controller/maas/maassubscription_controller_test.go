@@ -778,7 +778,8 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 	}
 
 	// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
-	expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/%s@%s/%s"`, namespace, maasSubName, namespace, modelName)
+	// and exempts /v1/models endpoint from rate limiting
+	expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/%s@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, maasSubName, namespace, modelName)
 	if pred != expected {
 		t.Errorf("predicate = %q, want %q", pred, expected)
 	}
@@ -866,7 +867,8 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 			t.Fatalf("sub-a predicate not a string: %T", predMap["predicate"])
 		}
 		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
-		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-a@%s/%s"`, namespace, namespace, modelName)
+		// and exempts /v1/models endpoint from rate limiting
+		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-a@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-a predicate = %q, want %q", pred, expected)
 		}
@@ -901,7 +903,8 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 			t.Fatalf("sub-b predicate not a string: %T", predMap["predicate"])
 		}
 		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
-		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-b@%s/%s"`, namespace, namespace, modelName)
+		// and exempts /v1/models endpoint from rate limiting
+		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-b@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-b predicate = %q, want %q", pred, expected)
 		}
