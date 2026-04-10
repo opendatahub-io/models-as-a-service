@@ -1592,7 +1592,7 @@
   <span class="md-ellipsis">
     
   
-    Subscription Known Issues
+    Subscription limitations & known issues
   
 
     
@@ -2873,6 +2873,12 @@
 <a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="nv">TRLP</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>tokenratelimitpolicy<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span><span class="w"> </span>-l<span class="w"> </span>maas.opendatahub.io/model<span class="o">=</span><span class="si">${</span><span class="nv">MODEL_NAME</span><span class="si">}</span>-ref<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
 <a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="o">[[</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$TRLP</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]]</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span><span class="nv">Enforced</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>tokenratelimitpolicy/<span class="si">${</span><span class="nv">TRLP</span><span class="si">}</span><span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span><span class="w"> </span>--timeout<span class="o">=</span>120s
 </code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Multiple model references on one HTTPRoute</p>
+<p><strong>This limitation affects v3.4 deployments.</strong> More than one <strong>MaaSModelRef</strong> on the same route can break independent per-subscription limits—only one <strong>TokenRateLimitPolicy</strong> is fully effective at the gateway. For <strong>MaaSSubscription</strong> readiness, the controller checks each TRLP’s <strong><code>Accepted</code></strong> condition; Kuadrant may still show <strong><code>Enforced</code></strong> and <strong><code>Overridden</code></strong> (or similar <strong><code>reason</code></strong>) when policies conflict on one route.</p>
+<p><strong>Planning guidance:</strong> Prefer <strong>one HTTPRoute per model</strong> when different subscriptions need separate limits. Putting models on a shared route “by tier” still implies <strong>multiple TRLPs</strong> if <strong>multiple</strong> <strong>MaaSModelRef</strong> resources target that route—it only aligns with this limitation when <strong>every</strong> model on the route is meant to share <strong>one</strong> <strong>MaaSSubscription</strong> (and access policy) story.</p>
+<p>See <a href="../subscription-known-issues/#token-rate-limits-when-multiple-model-references-share-one-httproute">Subscription limitations and known issues</a> for <code>kubectl</code>/<code>jq</code> examples and workarounds.</p>
+</div>
 <div class="admonition note">
 <p class="admonition-title">Namespace requirements</p>
 <p>Both <strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong> must be installed in the <code>models-as-a-service</code> namespace. Each <code>modelRefs</code> entry must specify the <code>namespace</code> where the MaaSModelRef lives (e.g. <code>llm</code>).</p>
@@ -2991,7 +2997,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 20:23:34 UTC">March 25, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 10, 2026 16:16:59 UTC">April 10, 2026</span>
   </span>
 
     

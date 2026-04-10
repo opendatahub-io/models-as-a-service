@@ -25,7 +25,7 @@
     
     
       
-        <title>Subscription Known Issues - ODH Models-as-a-Service Documentation</title>
+        <title>Subscription limitations & known issues - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#subscription-known-issues" class="md-skip">
+        <a href="#subscription-limitations-and-known-issues" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Subscription Known Issues
+              Subscription limitations & known issues
             
           </span>
         </div>
@@ -1377,7 +1377,7 @@
   <span class="md-ellipsis">
     
   
-    Subscription Known Issues
+    Subscription limitations & known issues
   
 
     
@@ -1395,7 +1395,7 @@
   <span class="md-ellipsis">
     
   
-    Subscription Known Issues
+    Subscription limitations & known issues
   
 
     
@@ -1473,6 +1473,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#token-rate-limits-when-multiple-model-references-share-one-httproute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token rate limits when multiple model references share one HTTPRoute
+      
+    </span>
+  </a>
   
 </li>
       
@@ -2510,6 +2521,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#token-rate-limits-when-multiple-model-references-share-one-httproute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token rate limits when multiple model references share one HTTPRoute
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2540,7 +2562,7 @@
   
 
 
-<h1 id="subscription-known-issues">Subscription Known Issues</h1>
+<h1 id="subscription-limitations-and-known-issues">Subscription limitations and known issues</h1>
 <p>This document describes known issues and operational considerations for the subscription-based MaaS Platform.</p>
 <h2 id="subscription-selection-caching">Subscription Selection Caching</h2>
 <h3 id="cache-ttl-for-subscription-selection">Cache TTL for Subscription Selection</h3>
@@ -2572,11 +2594,47 @@
 <li>Revoke and recreate API keys when users change groups</li>
 <li>Use OpenShift tokens for interactive use when group membership changes frequently (tokens reflect live group membership)</li>
 </ul>
+<h2 id="token-rate-limits-when-multiple-model-references-share-one-httproute">Token rate limits when multiple model references share one HTTPRoute</h2>
+<p><strong>Impact:</strong> High</p>
+<p><strong>Description:</strong></p>
+<p>When more than one <strong>MaaSModelRef</strong> resolves to the <strong>same</strong> <strong>HTTPRoute</strong>, the controller creates multiple <strong>TokenRateLimitPolicy</strong> resources targeting that route. Kuadrant then <strong>enforces only one</strong> of them in practice, so <strong>per-subscription token limits may not all apply</strong> even though CRs look valid.</p>
+<p>The <strong>MaaS controller</strong> treats a TRLP as healthy for <strong>MaaSSubscription</strong> status using the Kuadrant <strong><code>Accepted</code></strong> condition on each <code>TokenRateLimitPolicy</code>. Kuadrant also publishes runtime conditions such as <strong><code>Enforced</code></strong>; when multiple TRLPs conflict on one route you may see <strong><code>Enforced</code></strong> = True on one policy and <strong><code>Overridden</code></strong> (or similar) on others—check <strong><code>status.conditions</code></strong> (and <strong><code>reason</code></strong> / <strong><code>message</code></strong>) on each TRLP.</p>
+<p><strong>Detection:</strong></p>
+<p>List TRLPs that target an HTTPRoute, then inspect <strong><code>Accepted</code></strong> (controller readiness) and <strong><code>Enforced</code></strong> (gateway application):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># List TRLPs that target an HTTPRoute (namespace/name → route name)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tokenratelimitpolicy<span class="w"> </span>-A<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.items[] | select(.spec.targetRef.kind==&quot;HTTPRoute&quot;) | &quot;\(.metadata.namespace)/\(.metadata.name) → \(.spec.targetRef.name)&quot;&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sort
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Accepted + Enforced condition status per TRLP (needs jq; if this fails, use kubectl describe on each TRLP)</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tokenratelimitpolicy<span class="w"> </span>-A<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="s1">  .items[] | select(.spec.targetRef.kind == &quot;HTTPRoute&quot;)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="s1">  | . as $i</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="s1">  | (($i.status.conditions // []) | map(select(.type == &quot;Accepted&quot;)) | .[0]) as $a</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="s1">  | (($i.status.conditions // []) | map(select(.type == &quot;Enforced&quot;)) | .[0]) as $e</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="s1">  | [</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="s1">      $i.metadata.namespace,</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="s1">      $i.metadata.name,</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="s1">      $i.spec.targetRef.name,</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="s1">      (($a // {}) | .status // &quot;?&quot;),</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="s1">      (($e // {}) | .status // &quot;?&quot;),</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="s1">      (($e // {}) | .reason // &quot;&quot;)</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="s1">    ] | @tsv&#39;</span>
+</code></pre></div>
+<p><strong>How to recognize it:</strong> Several TRLPs share the same <code>spec.targetRef.name</code>. Compare <strong><code>Accepted</code></strong> (what the MaaS controller uses for subscription readiness) and <strong><code>Enforced</code></strong> / <strong><code>reason</code></strong> (for example <strong><code>Overridden</code></strong>) on each policy—one route may show one TRLP fully effective and others superseded.</p>
+<p><strong>Workarounds:</strong></p>
+<ol>
+<li><strong>Dedicated routes per model</strong> — Deploy each model with its own HTTPRoute to ensure independent rate limiting</li>
+<li><strong>Shared subscription design</strong> — If models share an <strong>HTTPRoute</strong>, use <strong>one</strong> <strong>MaaSSubscription</strong> that lists every <strong>MaaSModelRef</strong> on that route so you are not applying <strong>different</strong> subscription limits to the same route. The controller may still create <strong>one TRLP per model ref</strong>; <strong>prefer (1)</strong> when each subscription must enforce limits independently until <strong>Tracking</strong> below ships.</li>
+<li><strong>Route consolidation by tier</strong> — <strong>Yes:</strong> if <strong>multiple</strong> <strong>MaaSModelRef</strong> resources still target the <strong>same</strong> <strong>HTTPRoute</strong>, you still get <strong>multiple TRLPs</strong>; grouping models by tier on shared routes does <strong>not</strong> change that by itself. Treat “premium” vs “free” as an operational label only. This pattern is <strong>only</strong> appropriate when <strong>every</strong> model on that shared route is meant to share <strong>one</strong> <strong>MaaSSubscription</strong> and a consistent <strong>MaaSAuthPolicy</strong> access story—<strong>not</strong> when different teams or subscriptions each register their own model refs on one route. If you need <strong>separate</strong> subscriptions with <strong>separate</strong> limits on the same route, use <strong>dedicated routes per model</strong> (1).</li>
+</ol>
+<p><strong>Status in v3.4:</strong></p>
+<p>This limitation <strong>remains in Models-as-a-Service v3.4</strong>. The fix requiring merge strategy support for TokenRateLimitPolicy is not included. Plan your model deployment topology accordingly.</p>
+<p><strong>Tracking:</strong> <a href="https://github.com/opendatahub-io/models-as-a-service/pull/585">opendatahub-io/models-as-a-service#585</a> proposes the controller change for coexisting token rate limit policies on a shared route.</p>
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
 <li><a href="../token-management/">Understanding Token Management</a></li>
 <li><a href="../subscription-overview/">Access and Quota Overview</a></li>
 <li><a href="../quota-and-access-configuration/">Quota and Access Configuration</a></li>
+<li><a href="../maas-controller-overview/">MaaS Controller Overview</a></li>
 </ul>
 
 
@@ -2600,7 +2658,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 18:05:47 UTC">March 25, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 10, 2026 16:16:59 UTC">April 10, 2026</span>
   </span>
 
     
