@@ -24,6 +24,11 @@ from typing import Optional
 import pytest
 import requests
 
+from test_helper import (
+    _wait_for_authpolicy_phase,
+    _wait_for_subscription_phase,
+)
+
 log = logging.getLogger(__name__)
 
 # ─── Configuration ──────────────────────────────────────────────────────────
@@ -195,8 +200,9 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         },
     })
 
-    # Wait for reconciler + auth propagation
-    time.sleep(RECONCILE_WAIT * 2)
+    # Wait for CRs to reconcile
+    _wait_for_authpolicy_phase(EXTERNAL_AUTH_POLICY, namespace=SUBSCRIPTION_NAMESPACE)
+    _wait_for_subscription_phase(EXTERNAL_SUBSCRIPTION, namespace=SUBSCRIPTION_NAMESPACE)
 
     # Create API key for tests
     log.info("Creating API key for external model tests...")
