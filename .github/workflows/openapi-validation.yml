@@ -1,0 +1,212 @@
+name: OpenAPI Validation
+
+on:
+  pull_request:
+    paths:
+      - 'maas-api/openapi3.yaml'
+      - '.spectral.yml'
+      - '.github/workflows/openapi-validation.yml'
+  push:
+    branches: [main, master]
+    paths:
+      - 'maas-api/openapi3.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-spec:
+    name: Validate OpenAPI Specification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
+        with:
+          node-version: '20'
+
+      - name: Install Spectral
+        run: npm install -g @stoplight/spectral-cli@6.13.1
+
+      - name: Validate OpenAPI Spec
+        # NOTE: continue-on-error is temporary until existing errors are fixed in PR #694
+        # Once #694 merges, remove this line to enforce strict validation
+        continue-on-error: true
+        run: |
+          echo "🔍 Validating OpenAPI specification..."
+          spectral lint maas-api/openapi3.yaml --format stylish --verbose
+
+      - name: Generate Validation Report
+        if: always()
+        run: |
+          echo "📊 Generating detailed validation report..."
+          spectral lint maas-api/openapi3.yaml --format json > openapi-validation-report.json || true
+
+          # Show summary
+          if [ -f openapi-validation-report.json ]; then
+            echo "## OpenAPI Validation Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            ERROR_COUNT=$(jq '[.[] | select(.severity == 0)] | length' openapi-validation-report.json)
+            WARN_COUNT=$(jq '[.[] | select(.severity == 1)] | length' openapi-validation-report.json)
+            INFO_COUNT=$(jq '[.[] | select(.severity == 2)] | length' openapi-validation-report.json)
+            HINT_COUNT=$(jq '[.[] | select(.severity == 3)] | length' openapi-validation-report.json)
+
+            echo "- ❌ Errors: $ERROR_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- ⚠️  Warnings: $WARN_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- ℹ️  Info: $INFO_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- 💡 Hints: $HINT_COUNT" >> $GITHUB_STEP_SUMMARY
+
+            if [ "$ERROR_COUNT" -eq 0 ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "✅ **No errors found!** Spec is valid." >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: Upload Validation Report
+        if: always()
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+        with:
+          name: openapi-validation-report
+          path: openapi-validation-report.json
+          retention-days: 30
+
+  breaking-changes:
+    name: Detect Breaking Changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0  # Need full history for comparison
+
+      - name: Setup Node.js
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
+        with:
+          node-version: '20'
+
+      - name: Install oasdiff
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/oasdiff/oasdiff/main/install.sh | sh
+          oasdiff --version
+
+      - name: Check for Breaking Changes
+        id: breaking_changes
+        # NOTE: continue-on-error allows PR to proceed even with breaking changes
+        # Review breaking-changes-report artifact and document intentional changes in PR
+        continue-on-error: true
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Validate base ref to prevent script injection
+          if [[ ! "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "❌ Invalid base ref format"
+            exit 1
+          fi
+
+          echo "🔍 Checking for API breaking changes..."
+
+          # Get base branch spec
+          git fetch origin "$BASE_REF"
+          git show "origin/$BASE_REF:maas-api/openapi3.yaml" > base-spec.yaml
+
+          # Run breaking change detection
+          oasdiff breaking base-spec.yaml maas-api/openapi3.yaml > breaking-changes.txt || true
+
+          if [ -s breaking-changes.txt ]; then
+            echo "has_breaking_changes=true" >> $GITHUB_OUTPUT
+            echo "## ⚠️  Breaking Changes Detected" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat breaking-changes.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "has_breaking_changes=false" >> $GITHUB_OUTPUT
+            echo "## ✅ No Breaking Changes" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "This PR does not introduce any breaking API changes." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Breaking Changes Report
+        if: always()
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+        with:
+          name: breaking-changes-report
+          path: breaking-changes.txt
+          retention-days: 30
+
+      - name: Fail on Breaking Changes
+        if: steps.breaking_changes.outputs.has_breaking_changes == 'true'
+        # NOTE: continue-on-error is temporary to allow PR #693 to merge
+        # This establishes the validation infrastructure. Once #694 fixes existing issues,
+        # remove this line to enforce strict breaking change checks
+        continue-on-error: true
+        run: |
+          echo "❌ Breaking changes detected. If intentional, document in PR and get approval."
+          echo "   Consider:"
+          echo "   - Is this a major version bump?"
+          echo "   - Are clients given migration time?"
+          echo "   - Is there a deprecation notice?"
+          exit 1
+
+  changelog-check:
+    name: Check API Changelog
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0  # Need full history for git diff
+
+      - name: Check if API changed
+        id: api_changed
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Validate base ref to prevent script injection
+          if [[ ! "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "❌ Invalid base ref format"
+            exit 1
+          fi
+
+          if git diff --name-only "origin/$BASE_REF...HEAD" | grep -q "maas-api/openapi3.yaml"; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify Changelog Entry
+        if: steps.api_changed.outputs.changed == 'true'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Validate base ref to prevent script injection
+          if [[ ! "$BASE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "❌ Invalid base ref format"
+            exit 1
+          fi
+
+          echo "📝 Checking for API changelog entry..."
+
+          # Check if there's an API changelog file
+          if [ ! -f docs/content/release-notes/api-changelog.md ]; then
+            echo "⚠️  No API changelog found at docs/content/release-notes/api-changelog.md" >> $GITHUB_STEP_SUMMARY
+            echo "   Consider creating one to track API changes over time." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Check if changelog was updated in this PR
+          if git diff --name-only "origin/$BASE_REF...HEAD" | grep -q "docs/content/release-notes/api-changelog.md"; then
+            echo "✅ API changelog updated" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️  API spec changed but changelog not updated" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Consider adding an entry to docs/content/release-notes/api-changelog.md" >> $GITHUB_STEP_SUMMARY
+          fi

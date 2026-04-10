@@ -528,7 +528,7 @@ run_e2e_tests() {
         "$test_dir/tests/test_negative_security.py" \
         "$test_dir/tests/test_subscription.py" \
         "$test_dir/tests/test_models_endpoint.py" \
-        "$test_dir/tests/test_external_oidc.py" ; then 
+        "$test_dir/tests/test_external_models.py" ; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi

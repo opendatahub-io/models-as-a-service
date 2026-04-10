@@ -22,7 +22,7 @@ spec:
             runAsNonRoot: true
           containers:
           - name: cleanup
-            image: curlimages/curl:8.18.0
+            image: registry.redhat.io/ubi9/ubi-minimal:9.7
             command:
             - /bin/sh
             - -c
