@@ -56,7 +56,7 @@ if [[ -z "${MAAS_API_BASE_URL}" ]]; then
     echo "[smoke] Using HTTP (INSECURE_HTTP=true)"
   else
     SCHEME="https"
-    if ! curl -skS -m 5 "${SCHEME}://${HOST}/maas-api/healthz" -o /dev/null; then
+    if ! curl -skS -m 5 "${SCHEME}://${HOST}/maas-api/health" -o /dev/null; then
       SCHEME="http"
       echo "[smoke] HTTPS not available, falling back to HTTP"
     fi

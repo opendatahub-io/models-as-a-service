@@ -1,0 +1,73 @@
+# LLMInferenceService — Granite 3.1 8B: Red Hat *model car* (weights) + Red Hat *vLLM runtime* (server).
+#
+# ## Why you saw: `vllm: command not found` (often around “line 129” of a generated script)
+# KServe / OpenShift AI generates a launcher script that runs `vllm ...`. That only works when
+# the **predictor container image** is a vLLM runtime (e.g. rhaiis/vllm-*-rhel9) where `vllm`
+# is on PATH.
+#
+# The image `registry.redhat.io/rhelai1/modelcar-granite-3-1-8b-starter-v1:1.4` is a **ModelCar**:
+# it carries model artifacts (typically under `/models`). It is **not** a substitute for the
+# vLLM ServingRuntime image. Using the modelcar as `template.containers[].image` leaves no
+# `vllm` binary where the script expects it → `vllm: command not found`.
+#
+# **Correct split:** `spec.model.uri` = `oci://…` modelcar (weights) + `template.containers[].image`
+# = Red Hat AI Inference Server vLLM image (CPU or CUDA tag per your cluster).
+#
+# Pin `rhaiis/vllm-cpu-rhel9` / `vllm-cuda-rhel9` tags to what your OpenShift AI / subscription documents.
+# GPU: add nodeSelector/tolerations and `nvidia.com/gpu` limits; switch image to vllm-cuda-rhel9.
+#
+# Requires: registry.redhat.io pull secret, AVX2 for CPU inference (see RHAIIS docs).
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  # With namePrefix in kustomization.yaml → LLMIS name granite-3-1-8b-rhelai-modelcar-single-node-cpu
+  name: single-node-cpu
+spec:
+  model:
+    # Model weights (ModelCar OCI) — mounted/consumed by the platform; not the predictor image.
+    uri: oci://registry.redhat.io/rhelai1/modelcar-granite-3-1-8b-starter-v1:1.4
+    name: ibm-granite/granite-3.1-8b-instruct
+  replicas: 1
+  router:
+    route: {}
+    gateway:
+      refs:
+        - name: maas-default-gateway
+          namespace: openshift-ingress
+  template:
+    containers:
+      - name: main
+        # vLLM runtime (has `vllm` on PATH for the KServe launcher). NOT the modelcar image.
+        image: registry.redhat.io/rhaiis/vllm-cpu-rhel9:3.3.0
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: VLLM_CPU_KVCACHE_SPACE
+            value: "3"
+          # Omit --trust-remote-code: vLLM warns it only applies to HF AutoModel paths; no effect for mounted/OCI weights.
+          - name: VLLM_ADDITIONAL_ARGS
+            value: "--max-model-len 4096"
+        resources:
+          requests:
+            cpu: "3"
+            memory: 16Gi
+          limits:
+            cpu: "6"
+            memory: 24Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTPS
+          initialDelaySeconds: 300
+          periodSeconds: 30
+          timeoutSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+            scheme: HTTPS
+          initialDelaySeconds: 300
+          periodSeconds: 15
+          timeoutSeconds: 15
+          failureThreshold: 30

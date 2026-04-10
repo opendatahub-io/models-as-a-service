@@ -10,8 +10,10 @@ This overlay deploys the MaaS API with HTTP (no TLS) and includes all gateway-le
 ## Usage
 
 ```bash
-kustomize build deployment/overlays/http-backend | kubectl apply -f -
+kustomize build --load-restrictor LoadRestrictionsNone deployment/overlays/http-backend | kubectl apply -f -
 ```
+
+`LoadRestrictionsNone` is required because this overlay references `../odh/params.env` outside the overlay root.
 
 ## When to Use
 

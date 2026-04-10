@@ -165,16 +165,75 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	statusSnapshot := policy.Status.DeepCopy()
 
+	// Track missing models to include in status even when reconciliation skips them
+	missingModels := r.findMissingModelRefs(ctx, policy)
+
 	refs, err := r.reconcileModelAuthPolicies(ctx, log, policy)
 	if err != nil {
 		log.Error(err, "failed to reconcile model AuthPolicies")
-		r.updateStatus(ctx, policy, "Failed", fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot)
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
 	}
 
+	// Update per-AuthPolicy status
 	r.updateAuthPolicyRefStatus(ctx, log, policy, refs)
-	r.updateStatus(ctx, policy, "Active", "Successfully reconciled", statusSnapshot)
+
+	// Derive final phase based on model and AuthPolicy health
+	phase, message := r.deriveAuthPolicyPhase(policy, missingModels)
+	r.updateStatus(ctx, policy, phase, message, statusSnapshot)
 	return ctrl.Result{}, nil
+}
+
+// findMissingModelRefs returns a list of model refs that don't exist or couldn't be fetched.
+// Treats both NotFound and transient errors as "missing" to fail-safe (avoid falsely reporting Active).
+func (r *MaaSAuthPolicyReconciler) findMissingModelRefs(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy) []maasv1alpha1.ModelRef {
+	log := logr.FromContextOrDiscard(ctx)
+	var missing []maasv1alpha1.ModelRef
+	for _, ref := range policy.Spec.ModelRefs {
+		model := &maasv1alpha1.MaaSModelRef{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, model); err != nil {
+			// Treat both NotFound and transient errors as missing to fail-safe
+			if !apierrors.IsNotFound(err) {
+				log.Error(err, "transient error fetching MaaSModelRef, treating as missing", "model", ref.Namespace+"/"+ref.Name)
+			}
+			missing = append(missing, ref)
+		}
+	}
+	return missing
+}
+
+// deriveAuthPolicyPhase determines the MaaSAuthPolicy phase based on model and AuthPolicy health.
+func (r *MaaSAuthPolicyReconciler) deriveAuthPolicyPhase(policy *maasv1alpha1.MaaSAuthPolicy, missingModels []maasv1alpha1.ModelRef) (phase maasv1alpha1.Phase, message string) {
+	totalModels := len(policy.Spec.ModelRefs)
+	missingCount := len(missingModels)
+	validModels := totalModels - missingCount
+
+	// All models missing -> Failed
+	if validModels == 0 {
+		return maasv1alpha1.PhaseFailed, fmt.Sprintf("all %d model references are invalid or missing", totalModels)
+	}
+
+	// Check AuthPolicy health for valid models
+	var healthyPolicies, unhealthyPolicies int
+	for _, ap := range policy.Status.AuthPolicies {
+		if ap.Ready {
+			healthyPolicies++
+		} else {
+			unhealthyPolicies++
+		}
+	}
+
+	// Some models missing -> Degraded
+	if missingCount > 0 {
+		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d model references are missing", missingCount, totalModels)
+	}
+
+	// All models valid but some AuthPolicies unhealthy -> Degraded
+	if unhealthyPolicies > 0 {
+		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d AuthPolicies not accepted/enforced", unhealthyPolicies, len(policy.Status.AuthPolicies))
+	}
+
+	return maasv1alpha1.PhaseActive, "successfully reconciled"
 }
 
 type authPolicyRef struct {
@@ -773,26 +832,49 @@ func (r *MaaSAuthPolicyReconciler) updateAuthPolicyRefStatus(ctx context.Context
 		ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 		ap.SetNamespace(ref.Namespace)
 		ap.SetName(ref.Name)
+
+		status := maasv1alpha1.AuthPolicyRefStatus{
+			ResourceRefStatus: maasv1alpha1.ResourceRefStatus{
+				Name:      ref.Name,
+				Namespace: ref.Namespace,
+			},
+			Model:          ref.Model,
+			ModelNamespace: ref.ModelNamespace,
+		}
+
 		if err := r.Get(ctx, client.ObjectKeyFromObject(ap), ap); err != nil {
 			log.Info("could not get AuthPolicy for status", "name", ref.Name, "namespace", ref.Namespace, "error", err)
-			policy.Status.AuthPolicies = append(policy.Status.AuthPolicies, maasv1alpha1.AuthPolicyRefStatus{
-				Name: ref.Name, Namespace: ref.Namespace, Model: ref.Model, ModelNamespace: ref.ModelNamespace, Accepted: "Unknown", Enforced: "Unknown",
-			})
+			status.Ready = false
+			if apierrors.IsNotFound(err) {
+				status.Reason = maasv1alpha1.ReasonNotFound
+				status.Message = "AuthPolicy not created yet"
+			} else {
+				status.Reason = maasv1alpha1.ReasonGetFailed
+				status.Message = fmt.Sprintf("failed to get AuthPolicy: %v", err)
+			}
+			policy.Status.AuthPolicies = append(policy.Status.AuthPolicies, status)
 			continue
 		}
-		accepted, enforced := getAuthPolicyConditionState(ap)
-		policy.Status.AuthPolicies = append(policy.Status.AuthPolicies, maasv1alpha1.AuthPolicyRefStatus{
-			Name: ref.Name, Namespace: ref.Namespace, Model: ref.Model, ModelNamespace: ref.ModelNamespace, Accepted: accepted, Enforced: enforced,
-		})
+
+		ready, reason, message := getAuthPolicyReadyState(ap)
+		status.Ready = ready
+		status.Reason = reason
+		status.Message = message
+		policy.Status.AuthPolicies = append(policy.Status.AuthPolicies, status)
 	}
 }
 
-func getAuthPolicyConditionState(ap *unstructured.Unstructured) (accepted, enforced string) {
-	accepted, enforced = "Unknown", "Unknown"
+// getAuthPolicyReadyState checks if an AuthPolicy is accepted and enforced.
+// Returns ready=true only if both Accepted and Enforced conditions are True.
+func getAuthPolicyReadyState(ap *unstructured.Unstructured) (ready bool, reason maasv1alpha1.ConditionReason, message string) {
 	conditions, found, err := unstructured.NestedSlice(ap.Object, "status", "conditions")
 	if err != nil || !found || len(conditions) == 0 {
-		return accepted, enforced
+		return false, maasv1alpha1.ReasonConditionsNotFound, "status conditions not available"
 	}
+
+	var accepted, enforced bool
+	var acceptedMsg, enforcedMsg string
+
 	for _, c := range conditions {
 		cond, ok := c.(map[string]any)
 		if !ok {
@@ -800,30 +882,55 @@ func getAuthPolicyConditionState(ap *unstructured.Unstructured) (accepted, enfor
 		}
 		typ, _ := cond["type"].(string)
 		status, _ := cond["status"].(string)
+		msg, _ := cond["message"].(string)
+
 		switch typ {
 		case "Accepted":
-			accepted = status
+			accepted = status == "True"
+			if !accepted {
+				acceptedMsg = msg
+			}
 		case "Enforced":
-			enforced = status
+			enforced = status == "True"
+			if !enforced {
+				enforcedMsg = msg
+			}
 		}
 	}
-	return accepted, enforced
+
+	if accepted && enforced {
+		return true, maasv1alpha1.ReasonAcceptedEnforced, ""
+	}
+	if !accepted {
+		return false, maasv1alpha1.ReasonNotAccepted, acceptedMsg
+	}
+	return false, maasv1alpha1.ReasonNotEnforced, enforcedMsg
 }
 
-func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, phase, message string, statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus) {
+func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus) {
 	policy.Status.Phase = phase
 
-	status := metav1.ConditionTrue
-	reason := "Reconciled"
-	if phase == "Failed" {
+	var status metav1.ConditionStatus
+	var reason maasv1alpha1.ConditionReason
+	switch phase {
+	case maasv1alpha1.PhaseActive:
+		status = metav1.ConditionTrue
+		reason = maasv1alpha1.ReasonReconciled
+	case maasv1alpha1.PhaseDegraded:
 		status = metav1.ConditionFalse
-		reason = "ReconcileFailed"
+		reason = maasv1alpha1.ReasonPartialFailure
+	case maasv1alpha1.PhaseFailed:
+		status = metav1.ConditionFalse
+		reason = maasv1alpha1.ReasonReconcileFailed
+	default:
+		status = metav1.ConditionUnknown
+		reason = maasv1alpha1.ReasonUnknown
 	}
 
 	apimeta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             status,
-		Reason:             reason,
+		Reason:             string(reason),
 		Message:            message,
 		ObservedGeneration: policy.GetGeneration(),
 	})
