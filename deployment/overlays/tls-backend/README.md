@@ -45,8 +45,8 @@ The deployment script automatically:
 ### Manual Deployment (Advanced)
 
 ```bash
-# Apply Kustomize overlay
-kustomize build deployment/overlays/tls-backend | kubectl apply -f -
+# Apply Kustomize overlay (LoadRestrictionsNone: overlay uses ../odh/params.env)
+kustomize build --load-restrictor LoadRestrictionsNone deployment/overlays/tls-backend | kubectl apply -f -
 
 # Configure Authorino for TLS (operator-managed, can't be patched via Kustomize)
 ./scripts/setup-authorino-tls.sh

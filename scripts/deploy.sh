@@ -721,8 +721,9 @@ deploy_via_kustomize() {
 
   log_info "Applying kustomize manifests..."
   # Patch MAAS_SUBSCRIPTION_NAMESPACE env var with the configured subscription namespace
+  # tls/http overlays reference ../odh/params.env outside the overlay root.
   kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
-    kustomize build "$overlay" | \
+    kustomize build --load-restrictor LoadRestrictionsNone "$overlay" | \
     perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}'"$subscription_namespace"'"/smg'
   )
 
@@ -1202,7 +1203,7 @@ apply_custom_resources() {
 
   local webhook_deployment
   if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
-    webhook_deployment="rhods-operator-controller-manager"
+    webhook_deployment="rhods-operator"
   else
     webhook_deployment="opendatahub-operator-controller-manager"
   fi
