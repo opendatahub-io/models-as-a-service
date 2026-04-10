@@ -2143,10 +2143,12 @@ class TestModelsEndpoint:
         auth_policy_name = "e2e-central-models-exempt-auth"
         subscription_name = "e2e-central-models-exempt-sub"
 
-        # Very low limit for fast test: 15 tokens/min with max_tokens=3 per request
-        token_limit = 15
+        # Very low limit for fast, deterministic test
+        # With 3 token limit and max_tokens=1, we're guaranteed to exhaust quota within 5 requests
+        # (each successful request consumes ≥1 token, so 5 requests > 3 token limit)
+        token_limit = 3
         window = "1m"
-        max_tokens = 3
+        max_tokens = 1
 
         try:
             # 1. Create auth policy allowing system:authenticated
@@ -2157,6 +2159,7 @@ class TestModelsEndpoint:
                 groups=["system:authenticated"]
             )
             _wait_reconcile()
+            _wait_for_maas_auth_policy_ready(auth_policy_name, timeout=90)
 
             # 2. Create subscription with low token limit
             log.info(f"Creating subscription with {token_limit} token limit")
@@ -2168,6 +2171,7 @@ class TestModelsEndpoint:
                 window=window
             )
             _wait_reconcile()
+            _wait_for_maas_subscription_ready(subscription_name, timeout=90)
 
             # Wait for TRLP to be created and enforced
             _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)
@@ -2181,11 +2185,14 @@ class TestModelsEndpoint:
             )
 
             # 4. Exhaust the token limit
-            expected_success = token_limit // max_tokens  # 5 requests
+            # With 3 token limit and 5 requests, we're guaranteed to hit the limit
+            # (each successful request consumes ≥1 token, so 5 requests > 3 token limit)
+            max_requests = 5
             success_count = 0
+            rate_limited = False
 
-            log.info(f"Exhausting token quota: sending {expected_success + 1} requests")
-            for i in range(expected_success + 1):
+            log.info(f"Exhausting token quota: sending up to {max_requests} requests")
+            for i in range(max_requests):
                 r = _inference(api_key, path=model_path)
                 request_num = i + 1
                 log.info(f"Request {request_num}: {r.status_code}")
@@ -2194,7 +2201,13 @@ class TestModelsEndpoint:
                     success_count += 1
                 elif r.status_code == 429:
                     log.info(f"Rate limit hit after {success_count} successful requests")
+                    rate_limited = True
                     break
+
+            # Verify we hit rate limit (otherwise test setup is broken)
+            assert rate_limited, \
+                f"Expected to hit rate limit within {max_requests} requests with {token_limit} token limit, " \
+                f"but got {success_count} successful requests without hitting limit"
 
             # 5. Verify inference is blocked
             log.info("Verifying inference endpoint is blocked...")

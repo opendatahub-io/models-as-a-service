@@ -1234,14 +1234,12 @@ class TestSubscriptionEnforcement:
         auth_policy_name = "e2e-models-exempt-test-auth"
         subscription_name = "e2e-models-exempt-test-subscription"
 
-        # Very low limit for fast test: 15 tokens/min with max_tokens=3 per request
-        # Expected behavior:
-        #   - Requests 1-5 succeed (use 15 tokens total)
-        #   - Request 6 gets 429 (would need 18 tokens total)
-        #   - /v1/models endpoint still works (not token-based)
-        token_limit = 15
+        # Very low limit for fast, deterministic test
+        # With 3 token limit and max_tokens=1, we're guaranteed to exhaust quota within 5 requests
+        # (even if each request uses exactly 1 token: 5 requests > 3 token limit)
+        token_limit = 3
         window = "1m"
-        max_tokens = 3
+        max_tokens = 1
 
         try:
             # 1. Create auth policy allowing system:authenticated
@@ -1251,6 +1249,7 @@ class TestSubscriptionEnforcement:
                 groups=["system:authenticated"]
             )
             _wait_reconcile()
+            _wait_for_maas_auth_policy_ready(auth_policy_name, timeout=90)
 
             # 2. Create subscription with low token limit
             _create_test_subscription(
@@ -1261,6 +1260,7 @@ class TestSubscriptionEnforcement:
                 window=window
             )
             _wait_reconcile()
+            _wait_for_maas_subscription_ready(subscription_name, timeout=90)
 
             # Wait for TRLP to be created AND enforced by Kuadrant/Limitador
             _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)
@@ -1274,24 +1274,32 @@ class TestSubscriptionEnforcement:
             )
 
             # 4. Exhaust the token limit
-            # Calculate expected successful requests: token_limit / max_tokens = 15 / 3 = 5
-            expected_success = token_limit // max_tokens
+            # With 3 token limit and 5 requests, we're guaranteed to hit the limit
+            # (each successful request consumes ≥1 token, so 5 requests > 3 token limit)
+            max_requests = 5
             success_count = 0
+            rate_limited = False
 
-            log.info(f"Exhausting token quota: sending {expected_success + 1} requests to use {token_limit} tokens")
-            for i in range(expected_success + 1):
+            log.info(f"Exhausting token quota: sending up to {max_requests} requests")
+            for i in range(max_requests):
                 r = _inference(api_key, path=model_path)
                 request_num = i + 1
-                log.info(f"Exhausting quota: Request {request_num}, status {r.status_code}")
+                log.info(f"Request {request_num}: status {r.status_code}")
 
                 if r.status_code == 200:
                     success_count += 1
                 elif r.status_code == 429:
                     log.info(f"Rate limit hit after {success_count} successful requests")
+                    rate_limited = True
                     break
                 else:
                     # Unexpected status during exhaustion
                     log.warning(f"Unexpected status during quota exhaustion: {r.status_code}")
+
+            # Verify we hit rate limit (otherwise test setup is broken)
+            assert rate_limited, \
+                f"Expected to hit rate limit within {max_requests} requests with {token_limit} token limit, " \
+                f"but got {success_count} successful requests without hitting limit"
 
             # 5. Verify inference is now blocked with 429
             log.info("Verifying inference endpoint is blocked...")
@@ -1315,12 +1323,14 @@ class TestSubscriptionEnforcement:
             # Verify it returns valid model metadata (sanity check)
             try:
                 models_data = r_models.json()
+            except (json.JSONDecodeError, ValueError) as e:
+                # Non-JSON response is acceptable for some vLLM versions
+                log.info(f"✓ /v1/models endpoint accessible (200), non-JSON response: {r_models.text[:200]}")
+            else:
+                # JSON response - validate structure
                 assert "data" in models_data or "object" in models_data, \
                     f"Expected valid models response with 'data' or 'object' field, got: {models_data}"
                 log.info(f"✓ /v1/models endpoint accessible (200) despite exhausted quota. Response keys: {list(models_data.keys())}")
-            except Exception as e:
-                # Non-JSON response is also acceptable for some vLLM versions
-                log.info(f"✓ /v1/models endpoint accessible (200), response: {r_models.text[:200]}")
 
         finally:
             # Clean up
