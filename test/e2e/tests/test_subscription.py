@@ -1477,13 +1477,43 @@ class TestCascadeDeletion:
             _apply_cr(original)
             _wait_reconcile()
 
-    # TODO: Uncomment this test once we validated unconfigured models
-    # def test_unconfigured_model_denied_by_gateway_auth(self):
-    #     """New model with no MaaSAuthPolicy/MaaSSubscription -> gateway default auth denies (403)."""
-    #     api_key = _get_default_api_key()
-    #     r = _inference(api_key, path=UNCONFIGURED_MODEL_PATH)
-    #     log.info(f"Unconfigured model (no auth policy) -> {r.status_code}")
-    #     assert r.status_code == 403, f"Expected 403 (gateway default deny), got {r.status_code}"
+    def test_unconfigured_model_denied_by_gateway_auth(self):
+        """New model with no MaaSAuthPolicy/MaaSSubscription -> gateway default auth denies (403)."""
+        # Precondition: unconfigured model fixture is deployed
+        model = _get_cr("maasmodelref", UNCONFIGURED_MODEL_REF, namespace=MODEL_NAMESPACE)
+        assert model is not None, (
+            f"MaaSModelRef {UNCONFIGURED_MODEL_REF} must exist in {MODEL_NAMESPACE} "
+            f"(deploy test/e2e/fixtures/unconfigured first)"
+        )
+
+        # Precondition: no per-route auth policy exists for this model
+        assert not _cr_exists("maasauthpolicy", UNCONFIGURED_MODEL_REF, namespace=MODEL_NAMESPACE), (
+            f"MaaSAuthPolicy for {UNCONFIGURED_MODEL_REF} must NOT exist — "
+            f"this test validates gateway-level deny-by-default"
+        )
+
+        # Precondition: no subscription exists for this model
+        assert not _cr_exists("maassubscription", UNCONFIGURED_MODEL_REF, namespace=MODEL_NAMESPACE), (
+            f"MaaSSubscription for {UNCONFIGURED_MODEL_REF} must NOT exist — "
+            f"this test validates gateway-level deny-by-default"
+        )
+
+        # Precondition: gateway-default-auth is in place and accepted
+        gw_auth = _get_cr("authpolicy", "gateway-default-auth", namespace="openshift-ingress")
+        assert gw_auth is not None, (
+            "gateway-default-auth AuthPolicy must exist in openshift-ingress"
+        )
+        conditions = gw_auth.get("status", {}).get("conditions", [])
+        accepted = [c for c in conditions if c.get("type") == "Accepted"]
+        assert accepted and accepted[0].get("status") == "True", (
+            f"gateway-default-auth must be Accepted, got: {accepted}"
+        )
+
+        # Verify deny-by-default: inference to unconfigured model should be denied
+        api_key = _get_default_api_key()
+        r = _inference(api_key, path=UNCONFIGURED_MODEL_PATH)
+        log.info(f"Unconfigured model (no auth policy) -> {r.status_code}")
+        assert r.status_code == 403, f"Expected 403 (gateway default deny), got {r.status_code}"
 
 
 class TestOrderingEdgeCases:
