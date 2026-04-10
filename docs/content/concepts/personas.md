@@ -1,28 +1,27 @@
 # Personas and responsibilities
 
-To understand how MaaS fits into Open Data Hub (ODH), it helps to know **who** owns **which** objects. The diagram below is the resource model: personas on the left, deployable stack on the right (top to bottom).
+This page follows the same idea as the [Gateway API personas](https://gateway-api.sigs.k8s.io/#personas): short **who** and **what they own**, focused on **MaaS day-to-day operation** (not cluster install). Anything not listed as in scope is out of scope for that persona.
 
 ## Resource model
+
 
 ![Personas resource model](../assets/concepts/personas-resource-model-light.png#only-light)
 ![Personas resource model](../assets/concepts/personas-resource-model-dark.png#only-dark)
 
 **How to read it**
 
-- **Cluster operators** install and lifecycle the **ODH Operator** (platform install/upgrade).
-- **ODH administrators** configure **MaaSAuthPolicy** and **MaaSSubscription** (who may use which models and how much).
-- **Data scientists** (model owners) work with **MaaSModelRef** and the **model server** workload in their namespace—typically one stack per model line in the diagram.
-- **MaaSSubscription** ties subscriptions to model references; two parallel **MaaSModelRef → ModelServer** branches illustrate multiple models under the same subscription pattern.
+- **Model owners** deploy **`MaaSModelRef`** and the **model server** workload in their namespace (often one stack per model line).
+- **ODH administrators** configure **`MaaSAuthPolicy`** and **`MaaSSubscription`** so the right callers and quotas apply to those models.
+- **`MaaSSubscription`** ties subscriptions to model references; parallel **MaaSModelRef → model server** branches can represent multiple models under one subscription pattern.
+- **API consumers** call inference through the **Gateway** with an **`sk-oai-*`** key and use **maas-api** for self-service key minting—they do not manage **`MaaSAuthPolicy`**, **`MaaSSubscription`**, or **`MaaSModelRef`** (those sit with administrators and model owners).
 
 ---
 
-## Cluster operators
+## Model owners
 
-**Who:** Platform engineers who install and maintain the **ODH Operator** on the cluster (and related catalog/subscriptions).
+**Who:** Teams that ship and operate a model in their namespace—often **model owners**, ML engineers, or project admins (not a special “data scientist” role required by MaaS).
 
-**Owns:** Operator install, upgrades, and health of the operator that reconciles ODH / MaaS components—not day-to-day MaaS CR content.
-
-**Does not usually own:** Individual `MaaSAuthPolicy`, `MaaSSubscription`, or `MaaSModelRef` objects (those fall to administrators and model owners).
+**Owns:** **`MaaSModelRef`** in the same namespace as the **model server** (for example KServe `LLMInferenceService` or your inference `Deployment`)—the serving workload the reference points at.
 
 ---
 
@@ -30,28 +29,14 @@ To understand how MaaS fits into Open Data Hub (ODH), it helps to know **who** o
 
 **Who:** OpenShift or ODH **administrators** who govern access and quota for MaaS.
 
-**Owns:** **`MaaSAuthPolicy`** and **`MaaSSubscription`**, shared **Gateway** and routes, and the policy stack (**Authorino**, **Limitador**, **maas-api** integration). RBAC for who may create or edit MaaS CRs in which namespaces.
-
-**Does not usually own:** Inference server images, model weights, or **`MaaSModelRef`** content in application namespaces (that stays with model owners).
+**Owns:** **`MaaSAuthPolicy`**, **`MaaSSubscription`**, and the **Gateway** / **HTTPRoute** surface that exposes MaaS to users—at the level of **MaaS and Gateway API resources**, not the inference images or weights in application namespaces.
 
 ---
 
-## Data scientists / model service owners
-
-**Who:** ML engineers, data scientists, or service owners for a model namespace.
-
-**Owns:** **`MaaSModelRef`** (same namespace as the backend) and the **model server** (for example KServe `LLMInferenceService` or your inference Deployment)—the “ModelServer” box in the diagram.
-
-**Does not usually own:** Cluster-wide **`MaaSAuthPolicy`** or **`MaaSSubscription`** CRs, or end-user **API keys** (unless your org merges roles).
-
----
-
-## API consumers (end users)
+## API consumers
 
 **Who:** Application developers, automation, or anyone calling inference with an **`sk-oai-*`** key.
 
-**Owns:** **Self-service** access—authenticate to **`maas-api`**, mint keys, and call model routes within subscription limits.
-
-**Does not usually own:** The CRs in the diagram above; this persona is **not** drawn on the resource-model figure, which focuses on install and configuration roles.
+**Owns:** **Self-service** use of **maas-api** (mint and manage keys within policy) and **inference** through the **Gateway**, subject to **`MaaSSubscription`** limits—shown on the **inference** arc in the diagram above.
 
 ---
