@@ -13,10 +13,10 @@
 #   - Kubernetes cluster with MaaS deployed
 #   - kubectl configured with cluster-admin permissions
 #   - jq command-line JSON processor
-#   - ClusterRoles must be created (maas-user-admin-role, maas-user-view-role)
+#   - ClusterRoles must be created (maas-owner-role, maas-user-view-role)
 #
 # WHAT IT CHECKS:
-#   1. Aggregated ClusterRoles exist (maas-user-admin-role, maas-user-view-role)
+#   1. Aggregated ClusterRoles exist (maas-owner-role, maas-user-view-role)
 #   2. ClusterRoles have correct aggregation labels
 #   3. Built-in admin/edit/view roles include MaaS permissions via aggregation
 #   4. Correct verbs are assigned to each role (create/delete for admin, read-only for view)
@@ -76,10 +76,10 @@ fi
 # Check 1: Verify aggregated ClusterRoles exist
 log_info "Checking for aggregated ClusterRoles..."
 
-if kubectl get clusterrole maas-user-admin-role &>/dev/null; then
-    log_success "ClusterRole 'maas-user-admin-role' exists"
+if kubectl get clusterrole maas-owner-role &>/dev/null; then
+    log_success "ClusterRole 'maas-owner-role' exists"
 else
-    log_error "ClusterRole 'maas-user-admin-role' not found"
+    log_error "ClusterRole 'maas-owner-role' not found"
 fi
 
 if kubectl get clusterrole maas-user-view-role &>/dev/null; then
@@ -90,21 +90,21 @@ fi
 
 echo ""
 
-# Check 2: Verify aggregation labels on maas-user-admin-role
-log_info "Checking aggregation labels on maas-user-admin-role..."
+# Check 2: Verify aggregation labels on maas-owner-role
+log_info "Checking aggregation labels on maas-owner-role..."
 
-AGGREGATE_TO_ADMIN=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-admin}' 2>/dev/null || echo "")
+AGGREGATE_TO_ADMIN=$(kubectl get clusterrole maas-owner-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-admin}' 2>/dev/null || echo "")
 if [ "$AGGREGATE_TO_ADMIN" = "true" ]; then
-    log_success "maas-user-admin-role has 'aggregate-to-admin: true' label"
+    log_success "maas-owner-role has 'aggregate-to-admin: true' label"
 else
-    log_error "maas-user-admin-role missing 'aggregate-to-admin: true' label"
+    log_error "maas-owner-role missing 'aggregate-to-admin: true' label"
 fi
 
-AGGREGATE_TO_EDIT=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-edit}' 2>/dev/null || echo "")
+AGGREGATE_TO_EDIT=$(kubectl get clusterrole maas-owner-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-edit}' 2>/dev/null || echo "")
 if [ "$AGGREGATE_TO_EDIT" = "true" ]; then
-    log_success "maas-user-admin-role has 'aggregate-to-edit: true' label"
+    log_success "maas-owner-role has 'aggregate-to-edit: true' label"
 else
-    log_error "maas-user-admin-role missing 'aggregate-to-edit: true' label"
+    log_error "maas-owner-role missing 'aggregate-to-edit: true' label"
 fi
 
 echo ""

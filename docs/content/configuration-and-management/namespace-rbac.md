@@ -6,8 +6,8 @@ This page describes the RBAC permissions for MaaS custom resources in user names
 
 MaaS provides two aggregated ClusterRoles that extend the standard Kubernetes/OpenShift roles with permissions for MaaS resources:
 
-- **`maas-user-admin-role`** - Aggregates to `admin` and `edit` roles
-- **`maas-user-view-role`** - Aggregates to `view`, `admin`, and `edit` roles
+- **`maas-owner-role`** - Aggregates to `admin` and `edit` roles
+- **`maas-viewer-role`** - Aggregates to `view`, `admin`, and `edit` roles
 
 This allows namespace admins and contributors to create and manage MaaS resources without requiring cluster-admin intervention.
 
