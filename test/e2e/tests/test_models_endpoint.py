@@ -2237,13 +2237,25 @@ class TestModelsEndpoint:
                 models = models_data["data"]
                 assert isinstance(models, list), "Expected 'data' to be a list"
 
-                # Should include our unconfigured model
+                # Verify at least one model is tied to our test subscription
                 model_ids = [m.get("id") for m in models]
                 log.info(f"✅ Central /v1/models returned {len(models)} models: {model_ids}")
 
-                # Verify at least one model is present (should be our unconfigured model)
-                assert len(models) >= 1, \
-                    f"Expected at least 1 model in response (our unconfigured model), got {len(models)}"
+                # Check that at least one model belongs to our test subscription
+                models_in_our_subscription = []
+                for model in models:
+                    # Models have a subscriptions array with subscription info
+                    model_subs = model.get("subscriptions", [])
+                    for sub in model_subs:
+                        if sub.get("name") == subscription_name:
+                            models_in_our_subscription.append(model.get("id"))
+                            break
+
+                assert len(models_in_our_subscription) >= 1, \
+                    f"Expected at least 1 model tied to subscription '{subscription_name}', " \
+                    f"but found none. Returned models: {model_ids}, subscription: {subscription_name}"
+
+                log.info(f"✓ Found {len(models_in_our_subscription)} model(s) in our subscription: {models_in_our_subscription}")
 
             except json.JSONDecodeError as e:
                 pytest.fail(f"Central /v1/models response is not valid JSON: {e}. Response: {r_models.text[:500]}")
