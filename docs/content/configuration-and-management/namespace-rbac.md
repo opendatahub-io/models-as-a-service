@@ -30,63 +30,12 @@ The following platform-managed resources are **not** included:
 - **MaaSSubscription** - Managed in the `models-as-a-service` namespace by platform admins
 - **MaaSAuthPolicy** - Managed in the `models-as-a-service` namespace by platform admins
 
-## Usage
-
-### Creating a MaaSModelRef
-
-Users with `admin` or `edit` role in their namespace can create MaaSModelRef resources:
-
-```bash
-kubectl create -f - <<EOF
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSModelRef
-metadata:
-  name: my-llm-model
-  namespace: my-models
-spec:
-  modelRef:
-    name: llama-3-8b-instruct
-    kind: LLMInferenceService
-EOF
-```
-
-### Creating an ExternalModel
-
-```bash
-kubectl create -f - <<EOF
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: ExternalModel
-metadata:
-  name: openai-gpt-4
-  namespace: my-models
-spec:
-  provider: openai
-  endpoint: api.openai.com
-  targetModel: gpt-4
-  credentialRef:
-    name: openai-credentials
-EOF
-```
-
-### View-Only Access
-
-Users with `view` role can list and inspect resources but cannot create or modify them:
-
-```bash
-# List MaaSModelRefs (allowed)
-kubectl get maasmodelref -n my-models
-
-# Get details (allowed)
-kubectl describe maasmodelref my-llm-model -n my-models
-
-# Delete (forbidden)
-kubectl delete maasmodelref my-llm-model -n my-models
-# Error: forbidden
-```
 
 ## Verification
 
-To verify your permissions:
+### For Namespace Users
+
+To verify your permissions in a namespace:
 
 ```bash
 # Check if you can create MaaSModelRef
@@ -96,14 +45,12 @@ kubectl auth can-i create maasmodelref -n my-models
 kubectl auth can-i list maasmodelref -n my-models
 ```
 
-To verify the ClusterRoles are installed:
+### For Platform Administrators
+
+To verify the ClusterRoles are correctly installed and aggregated, run the [RBAC verification script](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/verify-rbac-aggregation.sh):
 
 ```bash
-# Check that admin role includes MaaS permissions
-kubectl get clusterrole admin -o yaml | grep -A 5 "maas.opendatahub.io"
-
-# Check that view role includes MaaS permissions
-kubectl get clusterrole view -o yaml | grep -A 5 "maas.opendatahub.io"
+./scripts/verify-rbac-aggregation.sh
 ```
 
 ## Troubleshooting

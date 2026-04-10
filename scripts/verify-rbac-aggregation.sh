@@ -1,9 +1,33 @@
 #!/usr/bin/env bash
 
 # verify-rbac-aggregation.sh
-# Verifies that MaaS RBAC aggregation is correctly configured
-# This script checks that the aggregated ClusterRoles exist and that
-# the built-in admin/edit/view roles include MaaS resource permissions
+#
+# PURPOSE:
+#   Manual validation helper for platform administrators to verify that MaaS RBAC
+#   aggregation is correctly configured after deployment.
+#
+# USAGE:
+#   ./scripts/verify-rbac-aggregation.sh
+#
+# REQUIREMENTS:
+#   - Kubernetes cluster with MaaS deployed
+#   - kubectl configured with cluster-admin permissions
+#   - ClusterRoles must be created (maas-user-admin-role, maas-user-view-role)
+#
+# WHAT IT CHECKS:
+#   1. Aggregated ClusterRoles exist (maas-user-admin-role, maas-user-view-role)
+#   2. ClusterRoles have correct aggregation labels
+#   3. Built-in admin/edit/view roles include MaaS permissions via aggregation
+#   4. Correct verbs are assigned to each role (create/delete for admin, read-only for view)
+#
+# WHEN TO USE:
+#   - After initial MaaS deployment
+#   - When troubleshooting namespace user permission issues
+#   - After MaaS upgrades to verify RBAC configuration
+#
+# NOT USED IN CI/CD:
+#   This is a manual diagnostic tool. CI validates manifests via validate-manifests.sh,
+#   but runtime cluster state validation requires a live deployment and is done manually.
 
 set -euo pipefail
 
@@ -24,12 +48,12 @@ log_info() {
 
 log_success() {
     echo -e "${GREEN}✓${NC} $*"
-    ((PASSED++))
+    ((PASSED++)) || true
 }
 
 log_error() {
     echo -e "${RED}✗${NC} $*"
-    ((FAILED++))
+    ((FAILED++)) || true
 }
 
 log_warning() {
