@@ -206,7 +206,7 @@ The `tls` base overlay includes:
 Deploy using:
 
 ```bash
-kustomize build deployment/overlays/tls-backend | kubectl apply -f -
+kustomize build --load-restrictor LoadRestrictionsNone deployment/overlays/tls-backend | kubectl apply -f -
 ```
 
 ## Verifying TLS Configuration

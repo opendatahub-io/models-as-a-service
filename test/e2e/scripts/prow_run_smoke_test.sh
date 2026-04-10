@@ -500,7 +500,7 @@ run_e2e_tests() {
     # Wait for gateway to be reachable (DNS propagation + route readiness)
     local scheme="https"
     [[ "$INSECURE_HTTP" == "true" ]] && scheme="http"
-    local gw_url="${scheme}://${GATEWAY_HOST}/maas-api/healthz"
+    local gw_url="${scheme}://${GATEWAY_HOST}/maas-api/health"
     local gw_timeout=120
     local gw_deadline=$((SECONDS + gw_timeout))
     echo "Waiting for gateway to be reachable: ${gw_url} (timeout: ${gw_timeout}s)..."
@@ -527,7 +527,7 @@ run_e2e_tests() {
         "$test_dir/tests/test_namespace_scoping.py" \
         "$test_dir/tests/test_subscription.py" \
         "$test_dir/tests/test_models_endpoint.py" \
-        "$test_dir/tests/test_external_oidc.py" ; then 
+        "$test_dir/tests/test_external_models.py" ; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi

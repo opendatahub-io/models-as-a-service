@@ -3,7 +3,7 @@
 This guide explains the authentication and credential management used to access models in the MaaS Platform.
 
 !!! tip "API keys (current)"
-    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time (optional `subscription` in the request body; if omitted, the **highest `spec.priority`** subscription you can access is chosen). See [Quota and Access Configuration](quota-and-access-configuration.md) and [Subscription Known Issues](subscription-known-issues.md).
+    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time (optional `subscription` in the request body; if omitted, the **highest `spec.priority`** subscription you can access is chosen). See [Quota and Access Configuration](quota-and-access-configuration.md) and [Subscription limitations and known issues](subscription-known-issues.md).
 
 !!! note "Prerequisites"
     This document assumes you have configured subscriptions (MaaSAuthPolicy, MaaSSubscription).

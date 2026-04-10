@@ -14,8 +14,7 @@ metadata:
 # - ODH-specific: Additional replacements for gateway policies and DestinationRule
 #
 # SHARED CONFIGURATION (from components/shared-patches):
-# - ConfigMap with parameters (images, gateway, namespace)
-# - Environment variables for maas-api deployment
+# - Environment variables for maas-api deployment (maas-parameters from params.env)
 # - Image replacements for maas-api and maas-controller
 # - Gateway configuration (namespace, name)
 # - AuthPolicy URL placeholder replacement (placehold → actual namespace)
@@ -30,6 +29,15 @@ metadata:
 # The AuthPolicy URL uses app-namespace for DNS resolution
 namespace: opendatahub
 
+# maas-parameters ConfigMap (same directory as params.env — required for Kustomize load
+# restrictions and for Open Data Hub operator ApplyParams on overlays/odh/params.env).
+configMapGenerator:
+- envs:
+  - params.env
+  name: maas-parameters
+generatorOptions:
+  disableNameSuffixHash: true
+
 resources:
   - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule + NetworkPolicy)
   - ../../base/maas-controller/default
@@ -37,7 +45,7 @@ resources:
   - ../../base/payload-processing/default  # BBR ext_proc for external model payload processing
 
 # Include shared-patches component for common configuration
-# This provides: ConfigMap, env vars, image replacements, gateway config, URL placeholder fix
+# This provides: env vars, image replacements, gateway config, URL placeholder fix
 components:
   - ../../components/shared-patches
 

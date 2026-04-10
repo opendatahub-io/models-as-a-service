@@ -104,15 +104,36 @@ type TokenMetadata struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
+// ModelRefStatus reports the status of a referenced MaaSModelRef.
+type ModelRefStatus struct {
+	ResourceRefStatus `json:",inline"`
+}
+
+// TokenRateLimitStatus reports the status of a generated TokenRateLimitPolicy.
+type TokenRateLimitStatus struct {
+	ResourceRefStatus `json:",inline"`
+	// Model is the MaaSModelRef name this TokenRateLimitPolicy targets
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Model string `json:"model"`
+}
+
 // MaaSSubscriptionStatus defines the observed state of MaaSSubscription
 type MaaSSubscriptionStatus struct {
 	// Phase represents the current phase of the subscription
-	// +kubebuilder:validation:Enum=Pending;Active;Failed
-	Phase string `json:"phase,omitempty"`
+	Phase Phase `json:"phase,omitempty"`
 
 	// Conditions represent the latest available observations of the subscription's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ModelRefStatuses reports the status of each referenced MaaSModelRef
+	// +optional
+	ModelRefStatuses []ModelRefStatus `json:"modelRefStatuses,omitempty"`
+
+	// TokenRateLimitStatuses reports the status of each generated TokenRateLimitPolicy
+	// +optional
+	TokenRateLimitStatuses []TokenRateLimitStatus `json:"tokenRateLimitStatuses,omitempty"`
 }
 
 //+kubebuilder:object:root=true

@@ -123,37 +123,49 @@ spec:
             properties:
               authPolicies:
                 description: AuthPolicies lists the underlying Kuadrant AuthPolicies
-                  and their Accepted/Enforced state.
+                  and their status.
                 items:
-                  description: AuthPolicyRefStatus reports the status of one underlying
-                    Kuadrant AuthPolicy created by this MaaSAuthPolicy.
+                  description: |-
+                    AuthPolicyRefStatus reports the status of a generated Kuadrant AuthPolicy.
+                    Embeds ResourceRefStatus for common fields (Ready, Reason, Message).
                   properties:
-                    accepted:
-                      description: Accepted reports whether the AuthPolicy has been
-                        accepted (e.g. status.conditions type=Accepted).
-                      type: string
-                    enforced:
-                      description: Enforced reports whether the AuthPolicy is enforced
-                        (e.g. status.conditions type=Enforced).
+                    message:
+                      description: Message is a human-readable description of the
+                        status
+                      maxLength: 1024
                       type: string
                     model:
                       description: Model is the MaaSModelRef name this AuthPolicy
                         targets.
+                      maxLength: 63
+                      minLength: 1
                       type: string
                     modelNamespace:
                       description: ModelNamespace is the namespace of the MaaSModelRef.
+                      maxLength: 63
+                      minLength: 1
                       type: string
                     name:
-                      description: Name is the name of the AuthPolicy resource.
+                      description: Name of the referenced resource
+                      maxLength: 253
                       type: string
                     namespace:
-                      description: Namespace is the namespace of the AuthPolicy resource.
+                      description: Namespace of the referenced resource
+                      maxLength: 63
+                      type: string
+                    ready:
+                      description: Ready indicates whether the resource is valid and
+                        healthy
+                      type: boolean
+                    reason:
+                      description: Reason is a machine-readable reason code
                       type: string
                   required:
                   - model
                   - modelNamespace
                   - name
                   - namespace
+                  - ready
                   type: object
                 type: array
               conditions:
@@ -219,6 +231,7 @@ spec:
                 enum:
                 - Pending
                 - Active
+                - Degraded
                 - Failed
                 type: string
             type: object

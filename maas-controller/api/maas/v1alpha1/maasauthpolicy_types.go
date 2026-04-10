@@ -80,35 +80,30 @@ type MeteringMetadata struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
-// AuthPolicyRefStatus reports the status of one underlying Kuadrant AuthPolicy created by this MaaSAuthPolicy.
+// AuthPolicyRefStatus reports the status of a generated Kuadrant AuthPolicy.
+// Embeds ResourceRefStatus for common fields (Ready, Reason, Message).
 type AuthPolicyRefStatus struct {
-	// Name is the name of the AuthPolicy resource.
-	Name string `json:"name"`
-	// Namespace is the namespace of the AuthPolicy resource.
-	Namespace string `json:"namespace"`
+	ResourceRefStatus `json:",inline"`
 	// Model is the MaaSModelRef name this AuthPolicy targets.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	Model string `json:"model"`
 	// ModelNamespace is the namespace of the MaaSModelRef.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	ModelNamespace string `json:"modelNamespace"`
-	// Accepted reports whether the AuthPolicy has been accepted (e.g. status.conditions type=Accepted).
-	// +optional
-	Accepted string `json:"accepted,omitempty"`
-	// Enforced reports whether the AuthPolicy is enforced (e.g. status.conditions type=Enforced).
-	// +optional
-	Enforced string `json:"enforced,omitempty"`
 }
 
 // MaaSAuthPolicyStatus defines the observed state of MaaSAuthPolicy
 type MaaSAuthPolicyStatus struct {
 	// Phase represents the current phase of the policy
-	// +kubebuilder:validation:Enum=Pending;Active;Failed
-	Phase string `json:"phase,omitempty"`
+	Phase Phase `json:"phase,omitempty"`
 
 	// Conditions represent the latest available observations of the policy's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// AuthPolicies lists the underlying Kuadrant AuthPolicies and their Accepted/Enforced state.
+	// AuthPolicies lists the underlying Kuadrant AuthPolicies and their status.
 	// +optional
 	AuthPolicies []AuthPolicyRefStatus `json:"authPolicies,omitempty"`
 }
