@@ -151,6 +151,7 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         "metadata": {"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
         "spec": {
             "provider": "openai",
+            "targetModel": "gpt-3.5-turbo",
             "endpoint": EXTERNAL_ENDPOINT,
             "credentialRef": {
                 "name": f"{EXTERNAL_MODEL_NAME}-api-key",
@@ -195,7 +196,11 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         "spec": {
             "owner": {"groups": [{"name": "system:authenticated"}]},
             "modelRefs": [
-                {"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
+                {
+                    "name": EXTERNAL_MODEL_NAME,
+                    "namespace": MODEL_NAMESPACE,
+                    "tokenRateLimits": [{"limit": 10000, "window": "1h"}],
+                },
             ],
         },
     })
@@ -333,6 +338,7 @@ class TestExternalModelCleanup:
             "metadata": {"name": temp_name, "namespace": MODEL_NAMESPACE},
             "spec": {
                 "provider": "openai",
+                "targetModel": "gpt-3.5-turbo",
                 "endpoint": EXTERNAL_ENDPOINT,
                 "credentialRef": {
                     "name": f"{EXTERNAL_MODEL_NAME}-api-key",
