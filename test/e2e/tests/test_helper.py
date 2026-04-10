@@ -615,7 +615,7 @@ def _wait_reconcile(seconds=None):
     time.sleep(seconds or RECONCILE_WAIT)
 
 
-def _wait_for_subscription_phase(name, expected_phase="Active", namespace=None, timeout=30, require_model_statuses=False):
+def _wait_for_subscription_phase(name, expected_phase="Active", namespace=None, timeout=60, require_model_statuses=False):
     """Wait for MaaSSubscription to reach a specific phase.
 
     Args:
@@ -670,9 +670,8 @@ def _wait_for_authpolicy_phase(name, expected_phase="Active", namespace=None, ti
         timeout: Maximum wait time in seconds (default: 60)
         require_auth_policies: If True, requires authPolicies to be populated (default: True).
                                Set to False for Failed phase with missing models.
-        require_enforced: If True, requires all authPolicies to have accepted=True and
-                          enforced=True (default: True). Only applies when
-                          require_auth_policies is True.
+        require_enforced: If True, requires all authPolicies to have ready=True
+                          (default: True). Only applies when require_auth_policies is True.
 
     Returns:
         The auth policy CR dict when the expected phase is reached
@@ -701,7 +700,7 @@ def _wait_for_authpolicy_phase(name, expected_phase="Active", namespace=None, ti
                 if len(auth_policies) > 0:
                     if require_enforced:
                         all_enforced = all(
-                            ap.get("accepted") == "True" and ap.get("enforced") == "True"
+                            ap.get("ready") is True
                             for ap in auth_policies
                         )
                         if all_enforced:

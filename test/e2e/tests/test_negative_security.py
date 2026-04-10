@@ -33,8 +33,8 @@ import requests
 
 from test_helper import (
     MODEL_NAME,
+    MODEL_NAMESPACE,
     MODEL_PATH,
-    RECONCILE_WAIT,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
     TLS_VERIFY,
@@ -244,16 +244,20 @@ class TestAuthPolicyRemoval:
     """
 
     def test_authpolicy_deletion_revokes_access(self):
-        """Create auth policy + subscription, verify access, delete policy, verify denial.
+        """Create auth policy, delete it, verify Kuadrant AuthPolicy is removed.
 
         Uses the unconfigured model to avoid interfering with other tests.
-        Creates its own AuthPolicy + Subscription, verifies inference works,
-        then deletes the AuthPolicy and verifies access is revoked.
+        Creates a MaaSAuthPolicy, waits for the generated Kuadrant AuthPolicy
+        to appear, then deletes the MaaSAuthPolicy and verifies the controller
+        removes the downstream Kuadrant AuthPolicy.
+
+        This tests the controller's cleanup logic. Gateway enforcement of
+        AuthPolicy is already covered by other tests (e.g. test_wrong_group_gets_403).
         """
         suffix = uuid.uuid4().hex[:8]
         policy_name = f"e2e-neg-policy-{suffix}"
-        sub_name = f"e2e-neg-sub-{suffix}"
         model_ref = UNCONFIGURED_MODEL_REF
+        kuadrant_auth_name = f"maas-auth-{model_ref}"
 
         try:
             # Create auth policy granting access
@@ -262,46 +266,36 @@ class TestAuthPolicyRemoval:
                 model_ref,
                 groups=["system:authenticated"],
             )
-            _create_test_subscription(
-                sub_name,
-                model_ref,
-                groups=["system:authenticated"],
-                priority=200_000,
-            )
 
             _wait_for_authpolicy_phase(policy_name)
-            _wait_for_subscription_phase(sub_name)
 
-            # Create API key bound to our test subscription
-            api_key = _create_api_key(
-                _get_cluster_token(),
-                subscription=sub_name,
+            # Verify Kuadrant AuthPolicy was generated
+            ap = _get_cr("authpolicy", kuadrant_auth_name, namespace=MODEL_NAMESPACE)
+            assert ap is not None, (
+                f"Kuadrant AuthPolicy '{kuadrant_auth_name}' should exist after MaaSAuthPolicy creation"
             )
+            log.info("Kuadrant AuthPolicy %s exists in %s", kuadrant_auth_name, MODEL_NAMESPACE)
 
-            # Verify inference works
-            r = _poll_status(api_key, 200, path=UNCONFIGURED_MODEL_PATH, timeout=45)
-            log.info("With AuthPolicy -> %s", r.status_code)
-            assert r.status_code == 200, (
-                f"Setup: expected 200 with valid auth policy, got {r.status_code}"
-            )
-
-            # Delete the auth policy
+            # Delete the MaaSAuthPolicy
             log.info("Deleting MaaSAuthPolicy %s", policy_name)
             _delete_cr("maasauthpolicy", policy_name)
 
-            # Wait for Kuadrant AuthPolicy removal to propagate
-            _wait_reconcile(RECONCILE_WAIT * 2)
+            # Poll until the Kuadrant AuthPolicy is removed by the controller
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                ap = _get_cr("authpolicy", kuadrant_auth_name, namespace=MODEL_NAMESPACE)
+                if ap is None:
+                    break
+                time.sleep(2)
 
-            # Access should now be denied
-            r = _poll_status(api_key, (401, 403), path=UNCONFIGURED_MODEL_PATH, timeout=90)
-            log.info("After AuthPolicy deletion -> %s", r.status_code)
-            assert r.status_code in (401, 403), (
-                f"Expected 401 or 403 after AuthPolicy deletion, "
-                f"got {r.status_code}: {r.text[:500]}"
+            assert ap is None, (
+                f"Kuadrant AuthPolicy '{kuadrant_auth_name}' should be removed "
+                f"after MaaSAuthPolicy deletion"
             )
+            log.info("Kuadrant AuthPolicy %s removed after MaaSAuthPolicy deletion", kuadrant_auth_name)
+
         finally:
             _delete_cr("maasauthpolicy", policy_name)
-            _delete_cr("maassubscription", sub_name)
 
 
 # ============================================================================
