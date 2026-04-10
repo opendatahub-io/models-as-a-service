@@ -306,40 +306,27 @@ class TestAuthPolicyRemoval:
 # ============================================================================
 
 class TestMissingModelRef:
-    """Verify CRs referencing non-existent MaaSModelRefs report errors."""
+    """Verify CRs referencing non-existent MaaSModelRefs don't generate gateway resources.
 
-    @staticmethod
-    def _poll_for_terminal_non_active(kind, name, timeout=30):
-        """Poll a CR until it reaches a terminal non-Active phase or timeout.
+    The MaaS controller uses optimistic reconciliation: CRs referencing models
+    that don't exist yet are accepted and set to Active phase (the model could
+    be created later). However, the controller should NOT generate downstream
+    Kuadrant resources (AuthPolicy, TokenRateLimitPolicy) until the referenced
+    MaaSModelRef actually exists.
 
-        Returns the final phase string. Fails immediately if phase becomes Active.
-        Terminal phases: any non-empty phase that isn't Pending (e.g., Failed).
-        """
-        deadline = time.time() + timeout
-        last_phase = ""
-        while time.time() < deadline:
-            cr = _get_cr(kind, name)
-            assert cr is not None, f"{kind} CR '{name}' should exist"
-
-            phase = cr.get("status", {}).get("phase", "")
-            last_phase = phase
-
-            if phase == "Active":
-                raise AssertionError(
-                    f"{kind} '{name}' referencing non-existent model should not be Active"
-                )
-
-            # A non-empty phase other than Pending is terminal
-            if phase and phase != "Pending":
-                return phase
-
-            time.sleep(2)
-
-        # Timeout — the CR never settled to a terminal phase, but it's not Active
-        return last_phase
+    These tests create CRs pointing at a non-existent model, confirm the CR
+    reaches Active, then verify that no Kuadrant gateway resources were generated.
+    """
 
     def test_subscription_with_nonexistent_model_ref(self):
-        """MaaSSubscription referencing non-existent model does not reach Active."""
+        """MaaSSubscription with ghost model goes Active but no TRLP is generated.
+
+        Creates a MaaSSubscription referencing a model that doesn't exist,
+        waits for the CR to reach Active phase (optimistic reconciliation),
+        then asserts that no TokenRateLimitPolicy was created in the model
+        namespace — proving the controller doesn't create rate-limit
+        enforcement for non-existent models.
+        """
         suffix = uuid.uuid4().hex[:8]
         sub_name = f"e2e-neg-ghost-sub-{suffix}"
         ghost_model = f"nonexistent-model-{suffix}"
@@ -351,13 +338,32 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            phase = self._poll_for_terminal_non_active("maassubscription", sub_name)
-            log.info("MaaSSubscription with ghost model -> phase: %s", phase)
+            _wait_for_maas_subscription_ready(sub_name)
+
+            # CR becomes Active, but no TRLP should exist for the ghost model
+            trlp_name = f"maas-trlp-{ghost_model}"
+            trlp = _get_cr("tokenratelimitpolicy", trlp_name, namespace="llm")
+            log.info("MaaSSubscription with ghost model -> TRLP exists: %s", trlp is not None)
+            assert trlp is None, (
+                f"TokenRateLimitPolicy '{trlp_name}' should not exist for non-existent model"
+            )
         finally:
             _delete_cr("maassubscription", sub_name)
 
     def test_authpolicy_with_nonexistent_model_ref(self):
-        """MaaSAuthPolicy referencing non-existent model does not reach Active."""
+        """MaaSAuthPolicy with ghost model goes Active but no AuthPolicy is generated.
+
+        Creates a MaaSAuthPolicy referencing a model that doesn't exist,
+        waits for the CR to reach Active phase (optimistic reconciliation),
+        then asserts that no Kuadrant AuthPolicy was created in the model
+        namespace — proving the controller doesn't create auth enforcement
+        for non-existent models.
+
+        Note: we poll for phase==Active directly instead of using
+        _wait_for_maas_auth_policy_ready(), because that helper also
+        requires authPolicies status entries to be enforced — which won't
+        happen when the referenced model doesn't exist.
+        """
         suffix = uuid.uuid4().hex[:8]
         policy_name = f"e2e-neg-ghost-policy-{suffix}"
         ghost_model = f"nonexistent-model-{suffix}"
@@ -369,8 +375,23 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            phase = self._poll_for_terminal_non_active("maasauthpolicy", policy_name)
-            log.info("MaaSAuthPolicy with ghost model -> phase: %s", phase)
+            # Wait for phase==Active only (not enforced authPolicies — there are
+            # none for a ghost model ref, so _wait_for_maas_auth_policy_ready
+            # would timeout).
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                cr = _get_cr("maasauthpolicy", policy_name)
+                if cr and cr.get("status", {}).get("phase") == "Active":
+                    break
+                time.sleep(2)
+
+            # CR becomes Active, but no Kuadrant AuthPolicy should exist for the ghost model
+            auth_name = f"maas-auth-{ghost_model}"
+            ap = _get_cr("authpolicy", auth_name, namespace="llm")
+            log.info("MaaSAuthPolicy with ghost model -> AuthPolicy exists: %s", ap is not None)
+            assert ap is None, (
+                f"AuthPolicy '{auth_name}' should not exist for non-existent model"
+            )
         finally:
             _delete_cr("maasauthpolicy", policy_name)
 
