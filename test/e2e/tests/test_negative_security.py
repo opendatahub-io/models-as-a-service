@@ -1,16 +1,19 @@
 """
 Negative-path and security-oriented E2E tests for MaaS.
+
 Validates that the platform correctly rejects abuse scenarios:
 - Header spoofing: client-supplied identity headers are stripped
 - Expired API keys: rejected at gateway level
 - Cross-model access: subscription-model binding enforced
 - AuthPolicy removal: access revoked when policy deleted
 - Missing resources: CRs referencing non-existent models
+
 Requires:
   - GATEWAY_HOST env var
   - MAAS_API_BASE_URL env var (for API key creation)
   - oc/kubectl access to manage CRs
   - Pre-deployed test models (free-tier simulator)
+
 Environment variables:
   - See test_subscription.py docstring for shared variables
   - E2E_UNCONFIGURED_MODEL_PATH: Path to a model with no subscription (for cross-model tests)
