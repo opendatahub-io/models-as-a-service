@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -1231,4 +1232,203 @@ func contains(s, substr string) bool {
 			}
 			return false
 		}())
+}
+
+// TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase verifies that an auth policy
+// with all missing model refs gets Failed phase.
+func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
+	const (
+		namespace    = "default"
+		maasAuthName = "auth-missing"
+		missingModel = "non-existent-model"
+	)
+
+	// Create auth policy referencing a non-existent model
+	maasAuth := newMaaSAuthPolicy(maasAuthName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: missingModel, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(maasAuth).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: namespace,
+		GatewayName:      "openshift-ingress/maas-default-gateway",
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	// Fetch updated auth policy
+	var policy maasv1alpha1.MaaSAuthPolicy
+	if err := c.Get(context.Background(), req.NamespacedName, &policy); err != nil {
+		t.Fatalf("Get MaaSAuthPolicy: %v", err)
+	}
+
+	// Verify phase is Failed (all models missing)
+	if policy.Status.Phase != maasv1alpha1.PhaseFailed {
+		t.Errorf("expected phase Failed, got %q", policy.Status.Phase)
+	}
+
+	// Verify Ready condition is False
+	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
+	if readyCond == nil {
+		t.Fatal("Ready condition not found")
+	}
+	if readyCond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %v", readyCond.Status)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase verifies that an auth policy
+// with some valid and some invalid model refs gets Degraded phase.
+func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
+	const (
+		namespace     = "default"
+		maasAuthName  = "auth-partial"
+		validModel    = "valid-model"
+		missingModel  = "missing-model"
+		httpRouteName = "maas-model-" + validModel
+	)
+
+	// Create valid model and route
+	model := newMaaSModelRef(validModel, namespace, "ExternalModel", validModel)
+	route := newHTTPRoute(httpRouteName, namespace)
+
+	// Create auth policy referencing both valid and invalid models
+	maasAuth := newMaaSAuthPolicy(maasAuthName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: validModel, Namespace: namespace},
+		maasv1alpha1.ModelRef{Name: missingModel, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasAuth).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: namespace,
+		GatewayName:      "openshift-ingress/maas-default-gateway",
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	var policy maasv1alpha1.MaaSAuthPolicy
+	if err := c.Get(context.Background(), req.NamespacedName, &policy); err != nil {
+		t.Fatalf("Get MaaSAuthPolicy: %v", err)
+	}
+
+	// Verify phase is Degraded (partial functionality)
+	if policy.Status.Phase != maasv1alpha1.PhaseDegraded {
+		t.Errorf("expected phase Degraded, got %q", policy.Status.Phase)
+	}
+
+	// Verify Ready condition is False with PartialFailure reason
+	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
+	if readyCond == nil {
+		t.Fatal("Ready condition not found")
+	}
+	if readyCond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %v", readyCond.Status)
+	}
+	if readyCond.Reason != "PartialFailure" {
+		t.Errorf("expected reason PartialFailure, got %q", readyCond.Reason)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase verifies that an auth policy
+// with all valid model refs and accepted/enforced AuthPolicy gets Active phase.
+func TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
+	const (
+		namespace      = "default"
+		maasAuthName   = "auth-valid"
+		modelName      = "valid-model"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasAuth := newMaaSAuthPolicy(maasAuthName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	// Pre-create AuthPolicy with Accepted=True and Enforced=True (simulates Kuadrant accepting)
+	existingAP := newPreexistingAuthPolicy(authPolicyName, namespace, modelName, map[string]string{
+		"maas.opendatahub.io/auth-policies": maasAuthName,
+	})
+	if err := unstructured.SetNestedSlice(existingAP.Object, []any{
+		map[string]any{
+			"type":   "Accepted",
+			"status": "True",
+		},
+		map[string]any{
+			"type":   "Enforced",
+			"status": "True",
+		},
+	}, "status", "conditions"); err != nil {
+		t.Fatalf("SetNestedSlice status.conditions: %v", err)
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasAuth, existingAP).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: namespace,
+		GatewayName:      "openshift-ingress/maas-default-gateway",
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	var policy maasv1alpha1.MaaSAuthPolicy
+	if err := c.Get(context.Background(), req.NamespacedName, &policy); err != nil {
+		t.Fatalf("Get MaaSAuthPolicy: %v", err)
+	}
+
+	// Verify phase is Active
+	if policy.Status.Phase != maasv1alpha1.PhaseActive {
+		t.Errorf("expected phase Active, got %q", policy.Status.Phase)
+	}
+
+	// Verify Ready condition is True
+	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
+	if readyCond == nil {
+		t.Fatal("Ready condition not found")
+	}
+	if readyCond.Status != metav1.ConditionTrue {
+		t.Errorf("expected Ready=True, got %v", readyCond.Status)
+	}
+
+	// Verify authPolicies status is populated with Ready=true
+	if len(policy.Status.AuthPolicies) != 1 {
+		t.Fatalf("expected 1 authPolicy status, got %d", len(policy.Status.AuthPolicies))
+	}
+	apStatus := policy.Status.AuthPolicies[0]
+	if apStatus.Model != modelName {
+		t.Errorf("expected model %q, got %q", modelName, apStatus.Model)
+	}
+	if !apStatus.Ready {
+		t.Error("expected authPolicies[0].Ready=true")
+	}
+	if apStatus.Reason != maasv1alpha1.ReasonAcceptedEnforced {
+		t.Errorf("expected reason %q, got %q", maasv1alpha1.ReasonAcceptedEnforced, apStatus.Reason)
+	}
 }

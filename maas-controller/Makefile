@@ -54,14 +54,17 @@ CONTROLLER_GEN = $(BUILD_DIR)/controller-gen
 ##@ Development
 
 .PHONY: build
-build: tidy $(BUILD_DIR) ##	build manager binary to bin/manager
+build: tidy generate manifests lint test binary ##	run full build: tidy, generate, manifests, lint, test, binary
+
+.PHONY: binary
+binary: $(BUILD_DIR) ##	build manager binary to bin/manager (skip checks)
 	$(GO_ENV) go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/manager
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 .PHONY: run
-run: build ##	build and run manager locally
+run: binary ##	build and run manager locally
 	$(BUILD_DIR)/$(BINARY_NAME)
 
 TEST_FLAGS ?= -race -coverprofile=coverage.out
