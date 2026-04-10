@@ -533,6 +533,9 @@ def _wait_reconcile(seconds=None):
 def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
     """Wait for MaaSModelRef to reach Ready phase.
 
+    Uses ``oc wait`` (server-side watch) instead of polling, so it reacts
+    immediately when the phase transitions to Ready.
+
     Args:
         name: Name of the MaaSModelRef
         namespace: Namespace (defaults to MODEL_NAMESPACE where models are deployed)
@@ -545,30 +548,32 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
         TimeoutError: If MaaSModelRef doesn't become Ready within timeout
     """
     namespace = namespace or MODEL_NAMESPACE
-    deadline = time.time() + timeout
     log.info(f"Waiting for MaaSModelRef {name} to become Ready (timeout: {timeout}s)...")
 
-    while time.time() < deadline:
-        cr = _get_cr("maasmodelref", name, namespace)
-        if cr:
-            phase = cr.get("status", {}).get("phase")
-            endpoint = cr.get("status", {}).get("endpoint")
-            if phase == "Ready" and endpoint:
-                log.info(f"✅ MaaSModelRef {name} is Ready (endpoint: {endpoint})")
-                return endpoint
-            log.debug(f"MaaSModelRef {name} phase: {phase}, endpoint: {endpoint or 'none'}")
-        time.sleep(5)
-
-    # Timeout - log current state for debugging
-    cr = _get_cr("maasmodelref", name, namespace)
-    current_phase = cr.get("status", {}).get("phase") if cr else "not found"
-    raise TimeoutError(
-        f"MaaSModelRef {name} did not become Ready within {timeout}s (current phase: {current_phase})"
+    result = subprocess.run(
+        ["oc", "wait", "maasmodelref", name, "-n", namespace,
+         "--for=jsonpath={.status.phase}=Ready", f"--timeout={timeout}s"],
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        cr = _get_cr("maasmodelref", name, namespace)
+        current_phase = cr.get("status", {}).get("phase") if cr else "not found"
+        raise TimeoutError(
+            f"MaaSModelRef {name} did not become Ready within {timeout}s (current phase: {current_phase})"
+        )
+
+    # Fetch the endpoint now that the resource is Ready
+    cr = _get_cr("maasmodelref", name, namespace)
+    endpoint = cr.get("status", {}).get("endpoint", "") if cr else ""
+    log.info(f"✅ MaaSModelRef {name} is Ready (endpoint: {endpoint})")
+    return endpoint
 
 
 def _wait_for_maas_auth_policy_ready(name, namespace=None, timeout=60):
     """Wait for MaaSAuthPolicy to reach Active phase with enforced AuthPolicies.
+
+    Uses ``oc wait`` (server-side watch) for the phase transition, then
+    verifies that all downstream AuthPolicies are actually enforced.
 
     Args:
         name: Name of the MaaSAuthPolicy
@@ -579,39 +584,30 @@ def _wait_for_maas_auth_policy_ready(name, namespace=None, timeout=60):
         TimeoutError: If MaaSAuthPolicy doesn't become Active/enforced within timeout
     """
     namespace = namespace or _ns()
-    deadline = time.time() + timeout
     log.info(f"Waiting for MaaSAuthPolicy {name} to become Active (timeout: {timeout}s)...")
 
-    while time.time() < deadline:
-        cr = _get_cr("maasauthpolicy", name, namespace)
-        if cr:
-            phase = cr.get("status", {}).get("phase")
-            auth_policies = cr.get("status", {}).get("authPolicies", [])
-
-            # Check if all auth policies are accepted and enforced
-            all_enforced = all(
-                ap.get("accepted") == "True" and ap.get("enforced") == "True"
-                for ap in auth_policies
-            )
-
-            if phase == "Active" and auth_policies and all_enforced:
-                log.info(f"✅ MaaSAuthPolicy {name} is Active and enforced")
-                return
-            log.debug(f"MaaSAuthPolicy {name} phase: {phase}, authPolicies: {len(auth_policies)}, all_enforced: {all_enforced}")
-        time.sleep(2)
-
-    # Timeout - log current state for debugging
-    cr = _get_cr("maasauthpolicy", name, namespace)
-    current_phase = cr.get("status", {}).get("phase") if cr else "not found"
-    auth_policies = cr.get("status", {}).get("authPolicies", []) if cr else []
-    raise TimeoutError(
-        f"MaaSAuthPolicy {name} did not become Active/enforced within {timeout}s "
-        f"(current phase: {current_phase}, authPolicies: {len(auth_policies)})"
+    result = subprocess.run(
+        ["oc", "wait", "maasauthpolicy", name, "-n", namespace,
+         "--for=jsonpath={.status.phase}=Active", f"--timeout={timeout}s"],
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        cr = _get_cr("maasauthpolicy", name, namespace)
+        current_phase = cr.get("status", {}).get("phase") if cr else "not found"
+        auth_policies = cr.get("status", {}).get("authPolicies", []) if cr else []
+        raise TimeoutError(
+            f"MaaSAuthPolicy {name} did not become Active/enforced within {timeout}s "
+            f"(current phase: {current_phase}, authPolicies: {len(auth_policies)})"
+        )
+
+    log.info(f"✅ MaaSAuthPolicy {name} is Active and enforced")
 
 
 def _wait_for_maas_subscription_ready(name, namespace=None, timeout=30):
     """Wait for MaaSSubscription to reach Active phase.
+
+    Uses ``oc wait`` (server-side watch) instead of polling, so it reacts
+    immediately when the phase transitions to Active.
 
     Args:
         name: Name of the MaaSSubscription
@@ -622,29 +618,28 @@ def _wait_for_maas_subscription_ready(name, namespace=None, timeout=30):
         TimeoutError: If MaaSSubscription doesn't become Active within timeout
     """
     namespace = namespace or _ns()
-    deadline = time.time() + timeout
     log.info(f"Waiting for MaaSSubscription {name} to become Active (timeout: {timeout}s)...")
 
-    while time.time() < deadline:
-        cr = _get_cr("maassubscription", name, namespace)
-        if cr:
-            phase = cr.get("status", {}).get("phase")
-            if phase == "Active":
-                log.info(f"✅ MaaSSubscription {name} is Active")
-                return
-            log.debug(f"MaaSSubscription {name} phase: {phase}")
-        time.sleep(2)
-
-    # Timeout - log current state for debugging
-    cr = _get_cr("maassubscription", name, namespace)
-    current_phase = cr.get("status", {}).get("phase") if cr else "not found"
-    raise TimeoutError(
-        f"MaaSSubscription {name} did not become Active within {timeout}s (current phase: {current_phase})"
+    result = subprocess.run(
+        ["oc", "wait", "maassubscription", name, "-n", namespace,
+         "--for=jsonpath={.status.phase}=Active", f"--timeout={timeout}s"],
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        cr = _get_cr("maassubscription", name, namespace)
+        current_phase = cr.get("status", {}).get("phase") if cr else "not found"
+        raise TimeoutError(
+            f"MaaSSubscription {name} did not become Active within {timeout}s (current phase: {current_phase})"
+        )
+
+    log.info(f"✅ MaaSSubscription {name} is Active")
 
 
 def _wait_for_token_rate_limit_policy(model_ref, model_namespace="llm", timeout=60):
     """Wait for TokenRateLimitPolicy to be created and enforced for a model.
+
+    Polls for resource existence (``oc wait`` fails on missing resources),
+    then uses ``oc wait --for=condition=Enforced`` for the enforcement check.
 
     Args:
         model_ref: Name of the model (e.g., "e2e-distinct-simulated")
@@ -658,30 +653,34 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace="llm", timeout=
     deadline = time.time() + timeout
     log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} in {model_namespace} (timeout: {timeout}s)...")
 
+    # Phase 1: Wait for the TRLP to exist (oc wait fails on missing resources)
     while time.time() < deadline:
         result = subprocess.run(
-            ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace, "-o", "json"],
-            capture_output=True, text=True
+            ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace],
+            capture_output=True, text=True,
         )
         if result.returncode == 0:
-            try:
-                trlp = json.loads(result.stdout)
-                conditions = trlp.get("status", {}).get("conditions", [])
-                # Check if TRLP is enforced
-                enforced = next((c for c in conditions if c.get("type") in ["Enforced", "Ready"]), None)
-                if enforced and enforced.get("status") == "True":
-                    log.info(f"✅ TokenRateLimitPolicy {trlp_name} is enforced")
-                    return
-                log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
-            except (json.JSONDecodeError, KeyError) as e:
-                log.debug(f"Failed to parse TRLP status: {e}")
-        else:
-            log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
+            break
+        log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
         time.sleep(3)
+    else:
+        raise TimeoutError(
+            f"TokenRateLimitPolicy {trlp_name} was not created in {model_namespace} within {timeout}s"
+        )
 
-    raise TimeoutError(
-        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s"
+    # Phase 2: Use oc wait for the Enforced condition (server-side watch)
+    remaining = max(1, int(deadline - time.time()))
+    result = subprocess.run(
+        ["oc", "wait", "tokenratelimitpolicy", trlp_name, "-n", model_namespace,
+         "--for=condition=Enforced", f"--timeout={remaining}s"],
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        raise TimeoutError(
+            f"TokenRateLimitPolicy {trlp_name} was not enforced in {model_namespace} within {timeout}s"
+        )
+
+    log.info(f"✅ TokenRateLimitPolicy {trlp_name} is enforced")
 
 
 def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2):
