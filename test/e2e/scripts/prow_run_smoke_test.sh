@@ -275,14 +275,12 @@ deploy_models() {
     echo "Waiting for models to be ready (timeout: ${LLMIS_TIMEOUT}s)..."
     if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
         echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for free simulator to be ready"
-        oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
-        oc get events -n llm --sort-by='.lastTimestamp' || true
+        dump_llmis_diagnostics "facebook-opt-125m-simulated" "llm"
         exit 1
     fi
     if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
         echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for premium simulator to be ready"
-        oc get llminferenceservice/premium-simulated-simulated-premium -n llm -o yaml || true
-        oc get events -n llm --sort-by='.lastTimestamp' || true
+        dump_llmis_diagnostics "premium-simulated-simulated-premium" "llm"
         exit 1
     fi
     echo "✅ Simulator models ready"
