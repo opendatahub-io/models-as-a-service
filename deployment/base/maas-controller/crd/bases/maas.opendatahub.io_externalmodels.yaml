@@ -101,6 +101,18 @@ spec:
                 maxLength: 253
                 minLength: 1
                 type: string
+              tlsInsecureSkipVerify:
+                description: |-
+                  TLSInsecureSkipVerify disables TLS certificate verification on the
+                  DestinationRule created for this external model. When true, the generated
+                  Istio DestinationRule includes insecureSkipVerify: true under
+                  trafficPolicy.tls, allowing connections to endpoints with self-signed or
+                  untrusted certificates (e.g., simulators, dev environments).
+
+                  WARNING: Do not enable in production. This is intended for testing only.
+
+                  Default: false (certificates are verified).
+                type: boolean
             required:
             - credentialRef
             - endpoint
