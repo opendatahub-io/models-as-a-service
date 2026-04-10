@@ -12,6 +12,7 @@
 # REQUIREMENTS:
 #   - Kubernetes cluster with MaaS deployed
 #   - kubectl configured with cluster-admin permissions
+#   - jq command-line JSON processor
 #   - ClusterRoles must be created (maas-user-admin-role, maas-user-view-role)
 #
 # WHAT IT CHECKS:
@@ -65,6 +66,13 @@ echo "MaaS RBAC Aggregation Verification"
 echo "=========================================="
 echo ""
 
+# Verify jq is installed
+if ! command -v jq &>/dev/null; then
+    echo -e "${RED}✗${NC} jq is not installed. This script requires jq for precise RBAC verification."
+    echo "  Install jq: https://jqlang.github.io/jq/download/"
+    exit 1
+fi
+
 # Check 1: Verify aggregated ClusterRoles exist
 log_info "Checking for aggregated ClusterRoles..."
 
@@ -85,14 +93,14 @@ echo ""
 # Check 2: Verify aggregation labels on maas-user-admin-role
 log_info "Checking aggregation labels on maas-user-admin-role..."
 
-AGGREGATE_TO_ADMIN=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-admin}' 2>/dev/null)
+AGGREGATE_TO_ADMIN=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-admin}' 2>/dev/null || echo "")
 if [ "$AGGREGATE_TO_ADMIN" = "true" ]; then
     log_success "maas-user-admin-role has 'aggregate-to-admin: true' label"
 else
     log_error "maas-user-admin-role missing 'aggregate-to-admin: true' label"
 fi
 
-AGGREGATE_TO_EDIT=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-edit}' 2>/dev/null)
+AGGREGATE_TO_EDIT=$(kubectl get clusterrole maas-user-admin-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-edit}' 2>/dev/null || echo "")
 if [ "$AGGREGATE_TO_EDIT" = "true" ]; then
     log_success "maas-user-admin-role has 'aggregate-to-edit: true' label"
 else
@@ -104,21 +112,21 @@ echo ""
 # Check 3: Verify aggregation labels on maas-user-view-role
 log_info "Checking aggregation labels on maas-user-view-role..."
 
-AGGREGATE_TO_VIEW=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-view}' 2>/dev/null)
+AGGREGATE_TO_VIEW=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-view}' 2>/dev/null || echo "")
 if [ "$AGGREGATE_TO_VIEW" = "true" ]; then
     log_success "maas-user-view-role has 'aggregate-to-view: true' label"
 else
     log_error "maas-user-view-role missing 'aggregate-to-view: true' label"
 fi
 
-AGGREGATE_TO_ADMIN=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-admin}' 2>/dev/null)
+AGGREGATE_TO_ADMIN=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-admin}' 2>/dev/null || echo "")
 if [ "$AGGREGATE_TO_ADMIN" = "true" ]; then
     log_success "maas-user-view-role has 'aggregate-to-admin: true' label"
 else
     log_error "maas-user-view-role missing 'aggregate-to-admin: true' label"
 fi
 
-AGGREGATE_TO_EDIT=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-edit}' 2>/dev/null)
+AGGREGATE_TO_EDIT=$(kubectl get clusterrole maas-user-view-role -o jsonpath='{.metadata.labels.rbac\.authorization\.k8s\.io/aggregate-to-edit}' 2>/dev/null || echo "")
 if [ "$AGGREGATE_TO_EDIT" = "true" ]; then
     log_success "maas-user-view-role has 'aggregate-to-edit: true' label"
 else
@@ -211,11 +219,12 @@ echo ""
 # Check 7: Verify correct verbs for admin role
 log_info "Checking verbs for 'admin' ClusterRole MaaS permissions..."
 
-ADMIN_VERBS=$(kubectl get clusterrole admin -o yaml 2>/dev/null | grep -A20 "maas.opendatahub.io" | grep "verbs:" -A10 || echo "")
+# Extract verbs only from the MaaS rule using jq
+ADMIN_VERBS=$(kubectl get clusterrole admin -o json 2>/dev/null | jq -r '.rules[] | select(.apiGroups[]? == "maas.opendatahub.io") | .verbs[]' 2>/dev/null || echo "")
 
 EXPECTED_VERBS=("create" "delete" "get" "list" "patch" "update" "watch")
 for verb in "${EXPECTED_VERBS[@]}"; do
-    if echo "$ADMIN_VERBS" | grep -q -- "- $verb"; then
+    if echo "$ADMIN_VERBS" | grep -Fx "$verb" >/dev/null; then
         log_success "'admin' role has '$verb' verb for MaaS resources"
     else
         log_error "'admin' role missing required '$verb' verb for MaaS resources"
@@ -227,11 +236,12 @@ echo ""
 # Check 8: Verify correct verbs for view role (read-only)
 log_info "Checking verbs for 'view' ClusterRole MaaS permissions..."
 
-VIEW_VERBS=$(kubectl get clusterrole view -o yaml 2>/dev/null | grep -A20 "maas.opendatahub.io" | grep "verbs:" -A10 || echo "")
+# Extract verbs only from the MaaS rule using jq
+VIEW_VERBS=$(kubectl get clusterrole view -o json 2>/dev/null | jq -r '.rules[] | select(.apiGroups[]? == "maas.opendatahub.io") | .verbs[]' 2>/dev/null || echo "")
 
 READ_VERBS=("get" "list" "watch")
 for verb in "${READ_VERBS[@]}"; do
-    if echo "$VIEW_VERBS" | grep -q -- "- $verb"; then
+    if echo "$VIEW_VERBS" | grep -Fx "$verb" >/dev/null; then
         log_success "'view' role has '$verb' verb for MaaS resources"
     else
         log_error "'view' role missing required '$verb' verb for MaaS resources"
@@ -241,7 +251,7 @@ done
 # Ensure view role doesn't have write verbs
 WRITE_VERBS=("create" "delete" "patch" "update")
 for verb in "${WRITE_VERBS[@]}"; do
-    if echo "$VIEW_VERBS" | grep -q -- "- $verb"; then
+    if echo "$VIEW_VERBS" | grep -Fx "$verb" >/dev/null; then
         log_error "'view' role incorrectly has '$verb' verb (should be read-only)"
     fi
 done
