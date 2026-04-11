@@ -739,6 +739,29 @@ find_project_root() {
   fi
 }
 
+# _patch_params_env key value project_root
+#   Patches a key=value line in params.env. Creates a backup on first call.
+_patch_params_env() {
+  local key="$1" value="$2" project_root="$3"
+  export _MAAS_PARAMS_ENV="$project_root/deployment/overlays/odh/params.env"
+  [ -f "$_MAAS_PARAMS_ENV" ] || return 0
+  export _MAAS_PARAMS_ENV_BACKUP="${_MAAS_PARAMS_ENV}.backup"
+  if [ ! -f "$_MAAS_PARAMS_ENV_BACKUP" ]; then
+    cp "$_MAAS_PARAMS_ENV" "$_MAAS_PARAMS_ENV_BACKUP"
+  fi
+  local sed_cmd="sed"
+  [[ "$(uname -s)" == "Darwin" ]] && sed_cmd="gsed"
+  $sed_cmd -i "s|^${key}=.*|${key}=${value}|" "$_MAAS_PARAMS_ENV"
+}
+
+# _cleanup_params_env
+#   Restores params.env from backup. Safe to call multiple times.
+_cleanup_params_env() {
+  if [ -n "${_MAAS_PARAMS_ENV_BACKUP:-}" ] && [ -f "$_MAAS_PARAMS_ENV_BACKUP" ]; then
+    mv -f "$_MAAS_PARAMS_ENV_BACKUP" "$_MAAS_PARAMS_ENV" 2>/dev/null || true
+  fi
+}
+
 # set_maas_api_image
 #   Sets the MaaS API container image in base kustomization using MAAS_API_IMAGE env var.
 #   If MAAS_API_IMAGE is not set, does nothing.
@@ -774,15 +797,20 @@ set_maas_api_image() {
     mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
     return 1
   }
+
+  # Patch params.env — kustomize replacements in shared-patches read from this
+  # file and override the base images: transformer set above.
+  _patch_params_env "maas-api-image" "$MAAS_API_IMAGE" "$project_root"
 }
 
 # cleanup_maas_api_image
-#   Restores the original kustomization.yaml from backup.
+#   Restores the original kustomization.yaml and params.env from backup.
 #   Safe to call even if set_maas_api_image was not called or MAAS_API_IMAGE was not set.
 cleanup_maas_api_image() {
   if [ -n "${_MAAS_API_BACKUP:-}" ] && [ -f "$_MAAS_API_BACKUP" ]; then
     mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
   fi
+  _cleanup_params_env
 }
 
 # set_maas_controller_image
@@ -817,15 +845,20 @@ set_maas_controller_image() {
     mv -f "$_MAAS_CONTROLLER_BACKUP" "$_MAAS_CONTROLLER_KUSTOMIZATION" 2>/dev/null || true
     return 1
   }
+
+  # Patch params.env — kustomize replacements in shared-patches read from this
+  # file and override the base images: transformer set above.
+  _patch_params_env "maas-controller-image" "$MAAS_CONTROLLER_IMAGE" "$project_root"
 }
 
 # cleanup_maas_controller_image
-#   Restores the original controller kustomization.yaml from backup.
+#   Restores the original controller kustomization.yaml and params.env from backup.
 #   Safe to call even if set_maas_controller_image was not called or MAAS_CONTROLLER_IMAGE was not set.
 cleanup_maas_controller_image() {
   if [ -n "${_MAAS_CONTROLLER_BACKUP:-}" ] && [ -f "$_MAAS_CONTROLLER_BACKUP" ]; then
     mv -f "$_MAAS_CONTROLLER_BACKUP" "$_MAAS_CONTROLLER_KUSTOMIZATION" 2>/dev/null || true
   fi
+  _cleanup_params_env
 }
 
 # set_overlay_namespace overlay_dir namespace
