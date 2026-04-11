@@ -117,7 +117,6 @@ log = logging.getLogger(__name__)
 
 # Constants specific to test_subscription.py (not shared)
 PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simulated-simulated-premium")
-INVALID_SUBSCRIPTION = os.environ.get("E2E_INVALID_SUBSCRIPTION", "nonexistent-sub")
 
 # Generated resource names (for TestManagedAnnotation)
 AUTH_POLICY_NAME = f"maas-auth-{MODEL_REF}"

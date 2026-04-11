@@ -19,12 +19,16 @@ import logging
 import os
 import subprocess
 import time
-from typing import Optional
 
 import pytest
 import requests
 
 from test_helper import (
+    MODEL_NAMESPACE,
+    TLS_VERIFY,
+    _apply_cr,
+    _delete_cr,
+    _get_cr,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
 )
@@ -34,37 +38,15 @@ log = logging.getLogger(__name__)
 # ─── Configuration ──────────────────────────────────────────────────────────
 
 EXTERNAL_ENDPOINT = os.environ.get("E2E_EXTERNAL_ENDPOINT", os.environ.get("E2E_SIMULATOR_ENDPOINT", "httpbin.org"))
-MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
 SUBSCRIPTION_NAMESPACE = os.environ.get("E2E_SUBSCRIPTION_NAMESPACE", os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service"))
 EXTERNAL_SUBSCRIPTION = os.environ.get("E2E_EXTERNAL_SUBSCRIPTION", "e2e-external-subscription")
 EXTERNAL_AUTH_POLICY = os.environ.get("E2E_EXTERNAL_AUTH_POLICY", "e2e-external-access")
 RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
-TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
 
 EXTERNAL_MODEL_NAME = "e2e-external-model"
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def _apply_cr(cr_dict: dict):
-    """Apply a Kubernetes CR from a dict."""
-    result = subprocess.run(
-        ["oc", "apply", "-f", "-"],
-        input=json.dumps(cr_dict),
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        log.warning(f"oc apply failed: {result.stderr}")
-    return result.returncode == 0
-
-
-def _delete_cr(kind: str, name: str, namespace: str):
-    """Delete a Kubernetes resource (best effort)."""
-    subprocess.run(
-        ["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"],
-        capture_output=True, text=True,
-    )
-
 
 def _patch_cr(kind: str, name: str, namespace: str, patch: dict):
     """Patch a Kubernetes resource."""
@@ -72,17 +54,6 @@ def _patch_cr(kind: str, name: str, namespace: str, patch: dict):
         ["oc", "patch", kind, name, "-n", namespace, "--type=merge", "-p", json.dumps(patch)],
         capture_output=True, text=True,
     )
-
-
-def _get_cr(kind: str, name: str, namespace: str) -> Optional[dict]:
-    """Get a Kubernetes resource as dict, or None if not found."""
-    result = subprocess.run(
-        ["oc", "get", kind, name, "-n", namespace, "-o", "json"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        return None
-    return json.loads(result.stdout)
 
 
 
