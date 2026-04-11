@@ -991,6 +991,62 @@ func TestMaaSSubscriptionReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 	}
 }
 
+// TestMaaSSubscriptionReconciler_DeletingModelRef_FailedPhase verifies that when a model
+// has deletionTimestamp set (finalizer keeps it in the informer cache), the subscription
+// corrects modelRefStatuses to ready=false based on TRLP BackendNotReady health.
+func TestMaaSSubscriptionReconciler_DeletingModelRef_FailedPhase(t *testing.T) {
+	const (
+		namespace   = "default"
+		maasSubName = "sub-deleting"
+		modelName   = "deleting-model"
+	)
+
+	// Model exists but is being deleted (deletionTimestamp set, finalizer present).
+	now := metav1.Now()
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	model.DeletionTimestamp = &now
+	model.Finalizers = []string{"maas.opendatahub.io/model-cleanup"}
+
+	maasSub := newMaaSSubscription(maasSubName, namespace, "team-a", modelName, 100)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(maasSub, model).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	var sub maasv1alpha1.MaaSSubscription
+	if err := c.Get(context.Background(), req.NamespacedName, &sub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+
+	// Phase must be Failed — model backend is gone
+	if sub.Status.Phase != maasv1alpha1.PhaseFailed {
+		t.Errorf("expected phase Failed, got %q", sub.Status.Phase)
+	}
+
+	// modelRefStatuses must reflect the deletion even though the object is
+	// still in the cache (correction via TRLP BackendNotReady health).
+	if len(sub.Status.ModelRefStatuses) != 1 {
+		t.Fatalf("expected 1 modelRefStatus, got %d", len(sub.Status.ModelRefStatuses))
+	}
+	modelStatus := sub.Status.ModelRefStatuses[0]
+	if modelStatus.Ready {
+		t.Error("expected modelRefStatus.Ready=false for deleting model")
+	}
+	if modelStatus.Reason != maasv1alpha1.ReasonNotFound {
+		t.Errorf("expected reason %q, got %q", maasv1alpha1.ReasonNotFound, modelStatus.Reason)
+	}
+}
+
 // TestMaaSSubscriptionReconciler_PartialModelRefs_DegradedPhase verifies that a subscription
 // with some valid and some invalid model refs gets Degraded phase.
 func TestMaaSSubscriptionReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
