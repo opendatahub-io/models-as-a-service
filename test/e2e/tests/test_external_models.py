@@ -24,6 +24,11 @@ from typing import Optional
 import pytest
 import requests
 
+from test_helper import (
+    _wait_for_authpolicy_phase,
+    _wait_for_subscription_phase,
+)
+
 log = logging.getLogger(__name__)
 
 # ─── Configuration ──────────────────────────────────────────────────────────
@@ -146,6 +151,7 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         "metadata": {"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
         "spec": {
             "provider": "openai",
+            "targetModel": "gpt-3.5-turbo",
             "endpoint": EXTERNAL_ENDPOINT,
             "credentialRef": {
                 "name": f"{EXTERNAL_MODEL_NAME}-api-key",
@@ -190,13 +196,18 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         "spec": {
             "owner": {"groups": [{"name": "system:authenticated"}]},
             "modelRefs": [
-                {"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
+                {
+                    "name": EXTERNAL_MODEL_NAME,
+                    "namespace": MODEL_NAMESPACE,
+                    "tokenRateLimits": [{"limit": 10000, "window": "1h"}],
+                },
             ],
         },
     })
 
-    # Wait for reconciler + auth propagation
-    time.sleep(RECONCILE_WAIT * 2)
+    # Wait for CRs to reconcile
+    _wait_for_authpolicy_phase(EXTERNAL_AUTH_POLICY, namespace=SUBSCRIPTION_NAMESPACE)
+    _wait_for_subscription_phase(EXTERNAL_SUBSCRIPTION, namespace=SUBSCRIPTION_NAMESPACE)
 
     # Create API key for tests
     log.info("Creating API key for external model tests...")
@@ -327,6 +338,7 @@ class TestExternalModelCleanup:
             "metadata": {"name": temp_name, "namespace": MODEL_NAMESPACE},
             "spec": {
                 "provider": "openai",
+                "targetModel": "gpt-3.5-turbo",
                 "endpoint": EXTERNAL_ENDPOINT,
                 "credentialRef": {
                     "name": f"{EXTERNAL_MODEL_NAME}-api-key",
