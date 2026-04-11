@@ -90,6 +90,12 @@ func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 		map[string]any{"name": "premium-users"},
 	}, "spec", "owner", "groups")
 
+	// Set status.phase to Active (required for subscription filtering)
+	_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+	_ = unstructured.SetNestedSlice(sub.Object, []any{
+		map[string]any{"type": "Ready", "status": "True"},
+	}, "status", "conditions")
+
 	return []*unstructured.Unstructured{sub}, nil
 }
 
@@ -114,6 +120,12 @@ func (f fakeMultiSubscriptionLister) List() ([]*unstructured.Unstructured, error
 			groupSlice[i] = map[string]any{"name": g}
 		}
 		_ = unstructured.SetNestedSlice(sub.Object, groupSlice, "spec", "owner", "groups")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
 
 		result = append(result, sub)
 	}
@@ -647,6 +659,12 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 			sub.SetAnnotations(annotations)
 		}
 
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
@@ -829,6 +847,13 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 				"groups": groupSlice,
 			},
 		}, "spec")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
@@ -941,6 +966,13 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 				"groups": groupSlice,
 			},
 		}, "spec")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
@@ -1041,6 +1073,13 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 				"groups": groupSlice,
 			},
 		}, "spec")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
@@ -1139,6 +1178,13 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 				"groups": groupSlice,
 			},
 		}, "spec")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
