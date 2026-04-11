@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go/v2/packages/pagination"
@@ -260,6 +261,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 
 	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null
 	modelList := []models.Model{}
+	accessCheckedAt := time.Now().UTC()
 	if h.maasModelRefLister != nil {
 		h.logger.Debug("Listing models from MaaSModelRef cache (all namespaces)")
 		list, err := models.ListFromMaaSModelRefLister(h.maasModelRefLister)
@@ -361,10 +363,17 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			}
 		}
 
+		accessCheckedAt = time.Now().UTC()
 		h.logger.Debug("Access validation complete", "listed", len(list), "accessible", len(modelList), "subscriptions", len(subscriptionsToUse))
 	} else {
 		h.logger.Debug("MaaSModelRef lister not configured, returning empty model list")
 	}
+
+	// Prevent clients and proxies from caching authorization-checked model listings.
+	// The access check is a point-in-time snapshot; auth policies may change at any moment.
+	// X-Access-Checked-At lets clients assess the freshness of the authorization decision.
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Access-Checked-At", accessCheckedAt.Format(time.RFC3339))
 
 	h.logger.Debug("GET /v1/models returning models", "count", len(modelList))
 	c.JSON(http.StatusOK, pagination.Page[models.Model]{

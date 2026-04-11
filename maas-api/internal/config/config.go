@@ -46,6 +46,12 @@ type Config struct {
 	// Default: 30 days. Minimum: 1 day.
 	APIKeyMaxExpirationDays int
 
+	// AccessCheckTimeoutSeconds bounds the total duration of model access validation.
+	// This limits the staleness window between when access is checked and when the
+	// response reaches the client. Models whose probes don't complete within this
+	// window are excluded (fail-closed). Default: 15 seconds. Minimum: 1 second.
+	AccessCheckTimeoutSeconds int
+
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
 }
@@ -56,6 +62,7 @@ func Load() *Config {
 	gatewayName := env.GetString("GATEWAY_NAME", constant.DefaultGatewayName)
 	secure, _ := env.GetBool("SECURE", false)
 	maxExpirationDays, _ := env.GetInt("API_KEY_MAX_EXPIRATION_DAYS", constant.DefaultAPIKeyMaxExpirationDays)
+	accessCheckTimeoutSeconds, _ := env.GetInt("ACCESS_CHECK_TIMEOUT_SECONDS", 15)
 
 	c := &Config{
 		Name:                      env.GetString("INSTANCE_NAME", gatewayName),
@@ -69,6 +76,7 @@ func Load() *Config {
 		DebugMode:                 debugMode,
 		DBConnectionURL:           "", // Loaded from K8s secret via LoadDatabaseURL()
 		APIKeyMaxExpirationDays:   maxExpirationDays,
+		AccessCheckTimeoutSeconds: accessCheckTimeoutSeconds,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}
@@ -139,6 +147,10 @@ func (c *Config) Validate() error {
 	// Validate API key max expiration days
 	if c.APIKeyMaxExpirationDays < 1 {
 		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
+	}
+
+	if c.AccessCheckTimeoutSeconds < 1 {
+		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
 	}
 
 	return nil
