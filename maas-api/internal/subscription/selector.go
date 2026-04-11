@@ -92,9 +92,8 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 		}
 
 		// Allowlist: only include Active and Degraded subscriptions
-		// Empty phase ("") is treated as Active (backward compatible - subscription without status)
-		// Exclude Failed, Pending, unknown phases, and deleting subscriptions
-		if sub.Phase != "" && sub.Phase != PhaseActive && sub.Phase != PhaseDegraded {
+		// Exclude Failed, Pending, empty (unreconciled), unknown phases, and deleting subscriptions
+		if sub.Phase != PhaseActive && sub.Phase != PhaseDegraded {
 			continue
 		}
 
@@ -501,13 +500,17 @@ func subscriptionIncludesModel(sub *subscription, requestedModel string) bool {
 // Returns error if subscription is not in Active/Degraded phase or if model is unhealthy in Degraded subscriptions.
 func checkModelHealth(sub *subscription, requestedModel string) error {
 	// Allowlist: only Active and Degraded subscriptions are allowed
-	// Empty phase is treated as Active (backward compatible)
-	// Any other phase (Failed, Pending, or future phases) is rejected
-	if sub.Phase != "" && sub.Phase != PhaseActive && sub.Phase != PhaseDegraded {
+	// Empty phase means unreconciled - reject it
+	// Any other phase (Failed, Pending, or future phases) is also rejected
+	if sub.Phase != PhaseActive && sub.Phase != PhaseDegraded {
+		phaseDisplay := sub.Phase
+		if phaseDisplay == "" {
+			phaseDisplay = "unreconciled"
+		}
 		return &ModelUnhealthyError{
 			Subscription: sub.Name,
 			Reason:       "SubscriptionNotReady",
-			Message:      fmt.Sprintf("subscription is in %s phase (allowed: Active, Degraded)", sub.Phase),
+			Message:      fmt.Sprintf("subscription is in %s phase (allowed: Active, Degraded)", phaseDisplay),
 		}
 	}
 

@@ -78,12 +78,24 @@ func createSubscription(name string, groups []string, users []string, priority i
 		metadata["annotations"] = annotations
 	}
 
+	// Add Active status by default (real subscriptions are reconciled)
+	status := map[string]any{
+		"phase": phaseActive,
+		"conditions": []any{
+			map[string]any{
+				"type":   "Ready",
+				"status": "True",
+			},
+		},
+	}
+
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "maas.opendatahub.io/v1alpha1",
 			"kind":       "MaaSSubscription",
 			"metadata":   metadata,
 			"spec":       spec,
+			"status":     status,
 		},
 	}
 }
@@ -574,12 +586,43 @@ func TestSelector_HealthFieldParsing(t *testing.T) {
 			expectError:      false,
 		},
 		{
-			name:             "Subscription without status",
-			subscription:     createSubscription("no-status-sub", []string{"g1"}, nil, 10, 1000, "", ""),
+			name: "Subscription without status - rejected (unreconciled)",
+			subscription: func() *unstructured.Unstructured {
+				// Create subscription without status (unreconciled)
+				return &unstructured.Unstructured{
+					Object: map[string]any{
+						"apiVersion": "maas.opendatahub.io/v1alpha1",
+						"kind":       "MaaSSubscription",
+						"metadata": map[string]any{
+							"name":      "no-status-sub",
+							"namespace": "test-ns",
+						},
+						"spec": map[string]any{
+							"owner": map[string]any{
+								"groups": []any{map[string]any{"name": "g1"}},
+								"users":  []any{},
+							},
+							"priority": int64(10),
+							"modelRefs": []any{
+								map[string]any{
+									"name": "test-model",
+									"tokenRateLimits": []any{
+										map[string]any{
+											"limit":  int64(1000),
+											"window": "1m",
+										},
+									},
+								},
+							},
+						},
+						// No status field - simulates unreconciled subscription
+					},
+				}
+			}(),
 			expectedPhase:    "",
 			expectedReady:    false,
 			expectedDeleting: false,
-			expectError:      false,
+			expectError:      true, // Empty phase means unreconciled - now rejected
 		},
 	}
 

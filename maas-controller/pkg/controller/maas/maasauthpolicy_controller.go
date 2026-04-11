@@ -463,7 +463,7 @@ allow {
 
 		// Fail-close: require successful subscription selection AND health checks
 		// Allowlist approach: only Active and Degraded phases are permitted
-		// Rejects Failed, Pending, unknown phases, and deleting subscriptions
+		// Rejects Failed, Pending, empty (unreconciled), unknown phases, and deleting subscriptions
 		authRules["subscription-valid"] = map[string]any{
 			"metrics":  false,
 			"priority": int64(0),
@@ -471,7 +471,7 @@ allow {
 				"rego": `allow {
 	# Subscription name must be present (selector succeeded)
 	object.get(input.auth.metadata["subscription-info"], "name", "") != ""
-	# Allowlist: phase must be exactly "Active" or "Degraded"
+	# Allowlist: phase must be exactly "Active" or "Degraded" (reject empty/unreconciled)
 	phase := object.get(input.auth.metadata["subscription-info"], "phase", "")
 	any([phase == "Active", phase == "Degraded"])
 	# Subscription must not be deleting

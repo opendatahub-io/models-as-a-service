@@ -36,6 +36,10 @@ rules:
 - apiGroups: ["maas.opendatahub.io"]
   resources: ["maasmodelrefs", "maassubscriptions"]
   verbs: ["get", "list", "watch"]
+# Status subresource access for subscription health checks (phase, ready, deletionTimestamp)
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maassubscriptions/status"]
+  verbs: ["get", "list", "watch"]
 
 # HTTPRoutes (for future use, e.g. listing or resolving model routes)
 - apiGroups: ["gateway.networking.k8s.io"]

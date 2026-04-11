@@ -29,7 +29,7 @@ type SelectResponse struct {
 	Labels         map[string]string `json:"labels,omitempty"`         // Additional tracking labels
 
 	// Health fields (populated from status and metadata)
-	Phase             string `json:"phase,omitempty"`             // Subscription phase: "Active", "Degraded", "Failed", "Pending", or ""
+	Phase             string `json:"phase"`                       // Subscription phase: "Active", "Degraded", "Failed", "Pending", or "" (always serialized for Authorino OPA rules)
 	Ready             bool   `json:"ready"`                       // Whether subscription is ready (from Ready condition)
 	DeletionTimestamp string `json:"deletionTimestamp,omitempty"` // Set when subscription is being deleted
 
