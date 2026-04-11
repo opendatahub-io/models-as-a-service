@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/maas-models/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/namespace-rbac/">
       
       
-        <link rel="prev" href="../subscription-overview/">
+        <link rel="prev" href="../token-management/">
       
       
-        <link rel="next" href="../../quickstart/">
+        <link rel="next" href="../tls-configuration/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>MaaS Models - ODH Models-as-a-Service Documentation</title>
+        <title>Namespace User Permissions (RBAC) - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#maas-models" class="md-skip">
+        <a href="#namespace-user-permissions" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              MaaS Models
+              Namespace User Permissions (RBAC)
             
           </span>
         </div>
@@ -249,12 +249,10 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../../architecture/" class="md-tabs__link">
           
   
@@ -291,6 +289,8 @@
   
   
   
+    
+  
   
     
     
@@ -298,10 +298,12 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
+      <li class="md-tabs__item md-tabs__item--active">
         <a href="../quota-and-access-configuration/" class="md-tabs__link">
           
   
@@ -632,31 +634,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -674,7 +673,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -745,37 +744,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    MaaS Models
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../maas-models/" class="md-nav__link">
         
   
   
@@ -791,59 +763,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#the-model-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The Model Reference
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-model-information-is-used" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How Model Information Is Used
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#summary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Summary
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1241,28 +1160,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
-        
-          
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   
@@ -1280,7 +1202,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1295,28 +1217,31 @@
                 
   
   
+    
   
   
+  
     
     
     
     
       
       
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
         
           
+          
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" checked>
         
           
-          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
             
   
   
@@ -1334,7 +1259,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4_1">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1405,10 +1330,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../namespace-rbac/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Namespace User Permissions (RBAC)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1424,6 +1376,165 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#clusterroles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClusterRoles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#permission-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permission Matrix
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Permission Matrix">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#included-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Included Resources
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#excluded-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Excluded Resources
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#for-namespace-users" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        For Namespace Users
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#for-platform-administrators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        For Platform Administrators
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#forbidden-error-when-creating-maasmodelref" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "Forbidden" Error When Creating MaaSModelRef
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cannot-create-maassubscription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cannot Create MaaSSubscription
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1506,10 +1617,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -1518,7 +1632,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
         
           
-          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
             
   
   
@@ -1652,10 +1766,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -1664,7 +1781,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_3" >
         
           
-          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
             
   
   
@@ -1770,10 +1887,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -1782,7 +1902,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
         
           
-          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="">
             
   
   
@@ -2434,10 +2554,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#the-model-reference" class="md-nav__link">
+  <a href="#clusterroles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The Model Reference
+        ClusterRoles
       
     </span>
   </a>
@@ -2445,21 +2565,127 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-model-information-is-used" class="md-nav__link">
+  <a href="#permission-matrix" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How Model Information Is Used
+        Permission Matrix
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Permission Matrix">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#included-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Included Resources
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#summary" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#excluded-resources" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Summary
+        Excluded Resources
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#for-namespace-users" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        For Namespace Users
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#for-platform-administrators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        For Platform Administrators
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#forbidden-error-when-creating-maasmodelref" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        "Forbidden" Error When Creating MaaSModelRef
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cannot-create-maassubscription" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cannot Create MaaSSubscription
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
       
     </span>
   </a>
@@ -2486,48 +2712,84 @@
   
 
 
-<h1 id="maas-models">MaaS Models</h1>
-<p>MaaS uses <strong>MaaSModelRef</strong> to identify model servers that live on the cluster. Each MaaSModelRef is a reference to a model server—it holds the information MaaS needs to perform authentication, authorization, and rate limiting.</p>
-<p>By using a single unified object (MaaSModelRef) for all model types, MaaS can handle different kinds of model servers—each with its own backend and lifecycle—through one consistent interface. The controller uses a <strong>provider paradigm</strong> to distinguish between types: each model type (for example, LLMInferenceService, external APIs) has a provider that knows how to reconcile and resolve that type.</p>
-<p><strong>Supported LLMs:</strong> Most model families should work; an official validated list is in progress.</p>
-<p><strong>Supported inference services:</strong> vLLM through LLMInferenceService (KServe) is the initial supported release for on-cluster models; additional backends are planned for future releases.</p>
-<h2 id="the-model-reference">The Model Reference</h2>
-<p>A MaaS model is a reference to a model server (for example, an LLMInferenceService or external API). The MaaS controller, running in the <strong>control plane</strong>, reconciles these references and gathers the information needed to route requests and enforce policies—such as the model's endpoint URL and readiness status.</p>
-<p>That information is then used by MaaSSubscription and MaaSAuthPolicy to complete their logic: validating access, selecting subscriptions, and enforcing rate limits.</p>
-<h2 id="how-model-information-is-used">How Model Information Is Used</h2>
-<p>Both <strong>MaaSAuthPolicy</strong> (access) and <strong>MaaSSubscription</strong> (quota) reference models by their <strong>MaaSModelRef</strong> name. They rely on the information that MaaSModelRef provides—gathered at the control plane—to:</p>
+<h1 id="namespace-user-permissions">Namespace User Permissions</h1>
+<p>This page describes the RBAC permissions for MaaS custom resources in user namespaces.</p>
+<h2 id="clusterroles">ClusterRoles</h2>
+<p>MaaS provides two aggregated ClusterRoles that extend the standard Kubernetes/OpenShift roles with permissions for MaaS resources:</p>
 <ul>
-<li>Route requests to the correct model endpoint</li>
-<li>Validate that the user has access to the requested model</li>
-<li>Apply the correct rate limits for that model</li>
+<li><strong><code>maas-owner-role</code></strong> - Aggregates to <code>admin</code> and <code>edit</code> roles</li>
+<li><strong><code>maas-viewer-role</code></strong> - Aggregates to <code>view</code>, <code>admin</code>, and <code>edit</code> roles</li>
 </ul>
-<pre class="mermaid"><code>flowchart LR
-    subgraph Downstream ["Downstream (cluster)"]
-        ModelServer["Model Server&lt;br/&gt;(e.g. LLMInferenceService)"]
-    end
-
-    MaaSModelRef["MaaSModelRef"]
-
-    subgraph Policies ["Policies"]
-        MaaSAuthPolicy["MaaSAuthPolicy"]
-        MaaSSubscription["MaaSSubscription"]
-    end
-
-    ModelServer --&gt;|"1. Fetches endpoint,&lt;br/&gt;status, etc."| MaaSModelRef
-    MaaSModelRef --&gt;|"2. Feeds model info"| MaaSAuthPolicy
-    MaaSModelRef --&gt;|"2. Feeds model info"| MaaSSubscription
-
-    style MaaSModelRef fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
-    style MaaSAuthPolicy fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
-    style MaaSSubscription fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
-    style ModelServer fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff</code></pre>
-<h2 id="summary">Summary</h2>
+<p>This allows namespace admins and contributors to create and manage MaaS resources without requiring cluster-admin intervention.</p>
+<h2 id="permission-matrix">Permission Matrix</h2>
+<table>
+<thead>
+<tr>
+<th>User Role</th>
+<th>Resources</th>
+<th>Permissions</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>admin</strong></td>
+<td><code>MaaSModelRef</code>, <code>ExternalModel</code></td>
+<td><code>create</code>, <code>delete</code>, <code>get</code>, <code>list</code>, <code>patch</code>, <code>update</code>, <code>watch</code></td>
+</tr>
+<tr>
+<td><strong>edit</strong></td>
+<td><code>MaaSModelRef</code>, <code>ExternalModel</code></td>
+<td><code>create</code>, <code>delete</code>, <code>get</code>, <code>list</code>, <code>patch</code>, <code>update</code>, <code>watch</code></td>
+</tr>
+<tr>
+<td><strong>view</strong></td>
+<td><code>MaaSModelRef</code>, <code>ExternalModel</code></td>
+<td><code>get</code>, <code>list</code>, <code>watch</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="included-resources">Included Resources</h3>
 <ul>
-<li><strong>MaaSModelRef</strong> — Stores the reference to a model server; the controller gathers the information needed for auth and routing.</li>
-<li><strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong> — Reference models by name and use that information to enforce access and quota.</li>
-<li><strong>Control plane</strong> — The MaaS controller reconciles model references and populates the data that policies and subscriptions depend on.</li>
+<li><strong>MaaSModelRef</strong> - References to model backends (LLMInferenceService or ExternalModel backend)</li>
+<li><strong>ExternalModel</strong> - External LLM provider definitions (OpenAI, Anthropic, etc.)</li>
 </ul>
-<p>For configuration details and how to create and use MaaSModelRef, see <a href="../quota-and-access-configuration/">Quota and Access Configuration</a> in the Administration Guide.</p>
+<h3 id="excluded-resources">Excluded Resources</h3>
+<p>The following platform-managed resources are <strong>not</strong> included:
+- <strong>MaaSSubscription</strong> - Managed in the <code>models-as-a-service</code> namespace by platform admins
+- <strong>MaaSAuthPolicy</strong> - Managed in the <code>models-as-a-service</code> namespace by platform admins</p>
+<h2 id="verification">Verification</h2>
+<h3 id="for-namespace-users">For Namespace Users</h3>
+<p>To verify your permissions in a namespace:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Check if you can create MaaSModelRef</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>kubectl<span class="w"> </span>auth<span class="w"> </span>can-i<span class="w"> </span>create<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>my-models
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Check if you can list MaaSModelRef</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>kubectl<span class="w"> </span>auth<span class="w"> </span>can-i<span class="w"> </span>list<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>my-models
+</code></pre></div>
+<h3 id="for-platform-administrators">For Platform Administrators</h3>
+<p>To verify the ClusterRoles are correctly installed and aggregated, run the RBAC verification script at <code>scripts/verify-rbac-aggregation.sh</code> in the repository root:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./scripts/verify-rbac-aggregation.sh
+</code></pre></div>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="forbidden-error-when-creating-maasmodelref">"Forbidden" Error When Creating MaaSModelRef</h3>
+<p><strong>Problem:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Error from server (Forbidden): maasmodelrefs.maas.opendatahub.io is forbidden: 
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>User &quot;user@example.com&quot; cannot create resource &quot;maasmodelrefs&quot; in API group 
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>&quot;maas.opendatahub.io&quot; in the namespace &quot;my-models&quot;
+</code></pre></div></p>
+<p><strong>Solution:</strong></p>
+<p>You need the <code>admin</code> or <code>edit</code> role in the namespace. Ask your platform administrator to grant you access:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>create<span class="w"> </span>rolebinding<span class="w"> </span>my-models-admin<span class="w"> </span>--clusterrole<span class="o">=</span>admin<span class="w"> </span>--user<span class="o">=</span>user@example.com<span class="w"> </span>-n<span class="w"> </span>my-models
+</code></pre></div>
+<h3 id="cannot-create-maassubscription">Cannot Create MaaSSubscription</h3>
+<p><strong>Problem:</strong> You get a "Forbidden" error when trying to create a MaaSSubscription.</p>
+<p><strong>Solution:</strong> This is expected. <code>MaaSSubscription</code> and <code>MaaSAuthPolicy</code> are platform-managed resources and can only be created by cluster administrators. Contact your platform administrator if you need a new subscription.</p>
+<h2 id="related-documentation">Related Documentation</h2>
+<ul>
+<li><a href="../model-setup/">Model Setup Guide</a> - How to configure models for MaaS</li>
+<li><a href="../quota-and-access-configuration/">Quota and Access Configuration</a> - Platform admin guide for subscriptions</li>
+<li><a href="../../user-guide/self-service-model-access/">Self-Service Model Access</a> - End user guide for using models via API</li>
+</ul>
 
 
 
@@ -2550,7 +2812,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 27, 2026 16:04:28 UTC">March 27, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 11, 2026 15:10:21 UTC">April 11, 2026</span>
   </span>
 
     
@@ -2560,7 +2822,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 11, 2026 15:10:21 UTC">April 11, 2026</span>
   </span>
 
     
