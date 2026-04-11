@@ -102,10 +102,6 @@ func (r *MaaSSubscriptionReconciler) validateModelRefs(ctx context.Context, subs
 				status.Reason = maasv1alpha1.ReasonGetFailed
 				status.Message = fmt.Sprintf("failed to get MaaSModelRef: %v", err)
 			}
-		} else if !model.GetDeletionTimestamp().IsZero() {
-			status.Ready = false
-			status.Reason = maasv1alpha1.ReasonNotFound
-			status.Message = fmt.Sprintf("MaaSModelRef %s/%s is being deleted", ref.Namespace, ref.Name)
 		} else {
 			status.Ready = true
 			status.Reason = maasv1alpha1.ReasonValid
