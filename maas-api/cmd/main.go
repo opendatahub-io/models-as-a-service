@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
@@ -142,6 +143,25 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
 		return errors.New("failed to sync informer caches")
+	}
+	log.Info("Informer caches synced successfully")
+
+	// Log sample subscription data to verify status fields are loaded
+	subs, err := cluster.MaaSSubscriptionLister.List()
+	if err != nil {
+		log.Warn("Failed to list subscriptions after sync", "error", err)
+	} else {
+		log.Info("Subscription cache populated", "count", len(subs))
+		for _, sub := range subs {
+			phase, found, _ := unstructured.NestedString(sub.Object, "status", "phase")
+			log.Info("Cached subscription",
+				"name", sub.GetName(),
+				"namespace", sub.GetNamespace(),
+				"phase", phase,
+				"hasPhase", found && phase != "",
+				"hasStatus", sub.Object["status"] != nil,
+			)
+		}
 	}
 
 	v1Routes := router.Group("/v1")
