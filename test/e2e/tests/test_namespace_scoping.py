@@ -27,7 +27,6 @@ import json
 import logging
 import os
 import subprocess
-import time
 import uuid
 from typing import Optional
 
@@ -45,6 +44,7 @@ from test_helper import (
     _maas_api_url,
     _ns,
     _revoke_api_key,
+    _wait_for_subscription_phase,
     _wait_reconcile,
 )
 
@@ -141,43 +141,6 @@ def _call_subscriptions_select(api_key: str, username: str, groups: list, reques
         json=payload,
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
-    )
-
-
-def _wait_reconcile(seconds=None):
-    """Wait for controller reconciliation."""
-    time.sleep(seconds or RECONCILE_WAIT)
-
-
-def _wait_for_subscription_phase(name: str, expected_phase: str, namespace: str, timeout: int = 60):
-    """Wait for MaaSSubscription to reach a specific phase.
-
-    Args:
-        name: Name of the MaaSSubscription
-        expected_phase: Expected phase (e.g., "Active", "Degraded")
-        namespace: Namespace where the subscription exists
-        timeout: Maximum wait time in seconds (default: 60)
-
-    Returns:
-        The subscription CR dict when the expected phase is reached
-
-    Raises:
-        TimeoutError: If subscription doesn't reach expected phase within timeout
-    """
-    deadline = time.time() + timeout
-    log.info(f"Waiting for MaaSSubscription {namespace}/{name} to reach phase '{expected_phase}'...")
-
-    while time.time() < deadline:
-        cr = _get_cr("maassubscription", name, namespace)
-        if cr:
-            phase = cr.get("status", {}).get("phase")
-            if phase == expected_phase:
-                log.info(f"✅ MaaSSubscription {namespace}/{name} reached phase '{expected_phase}'")
-                return cr
-        time.sleep(2)
-
-    raise TimeoutError(
-        f"MaaSSubscription {namespace}/{name} did not reach phase '{expected_phase}' within {timeout}s"
     )
 
 
