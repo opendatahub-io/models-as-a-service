@@ -240,6 +240,9 @@ class TestModelsEndpoint:
             _create_test_auth_policy(auth_policy_name, DISTINCT_MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, DISTINCT_MODEL_REF, users=[sa_user])
 
+            # Wait for subscription to reconcile before creating API key
+            _wait_for_maas_subscription_ready(subscription_name, maas_ns)
+
             # Create API key for inference
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
@@ -1250,6 +1253,9 @@ class TestModelsEndpoint:
             log.info(f"Creating subscription with {UNCONFIGURED_MODEL_REF} (no auth policy = no access)")
             _create_test_subscription(subscription_name, UNCONFIGURED_MODEL_REF, users=[sa_user])
 
+            # Wait for subscription to reconcile before creating API key
+            _wait_for_maas_subscription_ready(subscription_name, maas_ns)
+
             # Create API key bound to test subscription
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key", subscription=subscription_name)
 
@@ -1451,6 +1457,9 @@ class TestModelsEndpoint:
             _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
 
+            # Wait for subscription to reconcile before creating API key
+            _wait_for_maas_subscription_ready(subscription_name, ns)
+
             # Create API key bound to subscription_name
             api_key = _create_api_key(oc_token, name=f"{sa_name}-key", subscription=subscription_name)
 
@@ -1514,6 +1523,9 @@ class TestModelsEndpoint:
             # Create test resources
             _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
+
+            # Wait for subscription to reconcile before creating API key
+            _wait_for_maas_subscription_ready(subscription_name, ns)
 
             # Create API key bound to subscription
             api_key = _create_api_key(oc_token, name=f"{sa_name}-key", subscription=subscription_name)
@@ -1782,7 +1794,9 @@ class TestModelsEndpoint:
             _create_test_auth_policy(auth2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
             _create_test_subscription(sub2_name, DISTINCT_MODEL_2_REF, users=[sa_user], priority=5)
 
-            _wait_reconcile()
+            # Wait for both subscriptions to reconcile before creating API key
+            _wait_for_maas_subscription_ready(sub1_name, maas_ns)
+            _wait_for_maas_subscription_ready(sub2_name, maas_ns)
 
             # Create API key - will be bound to highest priority subscription (sub1)
             log.info(f"Creating API key (will bind to {sub1_name} - highest priority)")
@@ -1864,7 +1878,9 @@ class TestModelsEndpoint:
             _create_test_auth_policy(auth2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
             _create_test_subscription(sub2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
 
-            _wait_reconcile()
+            # Wait for both subscriptions to reconcile before creating API keys
+            _wait_for_maas_subscription_ready(sub1_name, maas_ns)
+            _wait_for_maas_subscription_ready(sub2_name, maas_ns)
 
             # Create two API keys, each bound to a different subscription
             log.info(f"Creating API key 1 bound to {sub1_name}")
