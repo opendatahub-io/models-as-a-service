@@ -126,7 +126,8 @@ func (r *MaaSSubscriptionReconciler) checkTokenRateLimitHealth(ctx context.Conte
 		policyName := fmt.Sprintf("maas-trlp-%s", ref.Name)
 		status := maasv1alpha1.TokenRateLimitStatus{
 			ResourceRefStatus: maasv1alpha1.ResourceRefStatus{
-				Name: policyName,
+				Name:      policyName,
+				Namespace: ref.Namespace,
 			},
 			Model: ref.Name,
 		}
@@ -330,6 +331,29 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Check TRLP health and populate status
 	trlpStatuses := r.checkTokenRateLimitHealth(ctx, subscription)
 	subscription.Status.TokenRateLimitStatuses = trlpStatuses
+
+	// Correct stale modelRefStatuses: validateModelRefs may have reported a model
+	// as valid (informer cache still had it) while the model is actually being
+	// deleted (finalizer present). checkTokenRateLimitHealth detects this via
+	// findHTTPRouteForModel's deletionTimestamp check and reports BackendNotReady.
+	// Propagate that information back into modelRefStatuses so the status is
+	// consistent with the derived phase.
+	backendNotReady := make(map[string]string, len(trlpStatuses))
+	for _, ts := range trlpStatuses {
+		if ts.Reason == maasv1alpha1.ReasonBackendNotReady {
+			backendNotReady[ts.Namespace+"/"+ts.Model] = ts.Message
+		}
+	}
+	for i := range modelStatuses {
+		if modelStatuses[i].Ready {
+			if msg, found := backendNotReady[modelStatuses[i].Namespace+"/"+modelStatuses[i].Name]; found {
+				modelStatuses[i].Ready = false
+				modelStatuses[i].Reason = maasv1alpha1.ReasonNotFound
+				modelStatuses[i].Message = msg
+			}
+		}
+	}
+	subscription.Status.ModelRefStatuses = modelStatuses
 
 	// Derive final phase based on model and TRLP health
 	phase, message := deriveFinalPhase(modelStatuses, trlpStatuses)

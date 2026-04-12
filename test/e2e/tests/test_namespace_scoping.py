@@ -27,38 +27,27 @@ import json
 import logging
 import os
 import subprocess
-import time
 import uuid
 from typing import Optional
 
 import pytest
 import requests
 
+from test_helper import (
+    MODEL_NAMESPACE,
+    MODEL_REF,
+    TIMEOUT,
+    TLS_VERIFY,
+    _apply_cr,
+    _delete_cr,
+    _get_cr,
+    _maas_api_url,
+    _ns,
+    _revoke_api_key,
+    _wait_reconcile,
+)
+
 log = logging.getLogger(__name__)
-
-# Constants
-TIMEOUT = int(os.environ.get("E2E_TIMEOUT", "30"))
-RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "8"))
-TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
-MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
-MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
-
-
-def _ns():
-    """Default MaaS subscription namespace."""
-    return os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
-
-
-def _maas_api_url():
-    """MaaS API base URL."""
-    url = os.environ.get("MAAS_API_BASE_URL", "")
-    if not url:
-        host = os.environ.get("GATEWAY_HOST", "")
-        if not host:
-            raise RuntimeError("MAAS_API_BASE_URL or GATEWAY_HOST env var is required")
-        scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
-        url = f"{scheme}://{host}/maas-api"
-    return url
 
 
 def _get_token():
@@ -73,8 +62,13 @@ def _get_token():
     return token
 
 
-def _create_api_key(name: str = None) -> tuple[str, str]:
-    """Create an API key and return (key_id, plaintext_key)."""
+def _create_ns_api_key(name: str = None) -> tuple[str, str]:
+    """Create an API key and return (key_id, plaintext_key).
+
+    Note: This differs from test_helper._create_api_key which takes an oc_token
+    and returns only the key string. This version manages its own token and
+    returns (key_id, plaintext_key) tuple for namespace scoping tests.
+    """
     token = _get_token()
     url = f"{_maas_api_url()}/v1/api-keys"
     key_name = name or f"e2e-ns-test-{uuid.uuid4().hex[:8]}"
@@ -93,30 +87,10 @@ def _create_api_key(name: str = None) -> tuple[str, str]:
     return data.get("id"), data.get("key")
 
 
-def _apply_cr(cr_dict: dict):
-    """Apply CR from dict."""
-    subprocess.run(
-        ["oc", "apply", "-f", "-"],
-        input=json.dumps(cr_dict),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-
-def _delete_cr(kind: str, name: str, namespace: str):
-    """Delete CR (best effort)."""
-    subprocess.run(
-        ["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"],
-        capture_output=True,
-        text=True,
-    )
-
-
-def _create_external_model(name: str, 
-                           namespace: str, 
+def _create_external_model(name: str,
+                           namespace: str,
                            provider: str = "openai",
-                           endpoint: str = "test.example.com", 
+                           endpoint: str = "test.example.com",
                            target_model: Optional[str] = None):
     """ Create an ExternalModel CR with the given name and namespace.
     Note: targetModel is required by the ExternalModel CRD. """
@@ -131,18 +105,6 @@ def _create_external_model(name: str,
             "targetModel": target_model or name
         },
     })
-
-
-def _get_cr(kind: str, name: str, namespace: str) -> Optional[dict]:
-    """Get CR as dict, or None if not found."""
-    result = subprocess.run(
-        ["oc", "get", kind, name, "-n", namespace, "-o", "json"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return None
-    return json.loads(result.stdout)
 
 
 def _create_namespace(name: str):
@@ -181,11 +143,6 @@ def _call_subscriptions_select(api_key: str, username: str, groups: list, reques
     )
 
 
-def _wait_reconcile(seconds=None):
-    """Wait for controller reconciliation."""
-    time.sleep(seconds or RECONCILE_WAIT)
-
-
 def _get_cr_annotation(kind: str, name: str, namespace: str, key: str):
     """Return the annotation value for key on the CR, or \"\" if not found."""
     result = subprocess.run(
@@ -203,8 +160,12 @@ def _get_cr_annotation(kind: str, name: str, namespace: str, key: str):
 @pytest.fixture(scope="module")
 def api_key():
     """Create an API key for tests."""
-    _, key = _create_api_key("e2e-ns-scoping-key")
-    return key
+    key_id, key = _create_ns_api_key("e2e-ns-scoping-key")
+    try:
+        yield key
+    finally:
+        if key_id:
+            _revoke_api_key(_get_token(), key_id)
 
 
 class TestMaaSAPIWatchNamespace:

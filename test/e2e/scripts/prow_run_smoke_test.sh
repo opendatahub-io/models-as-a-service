@@ -517,7 +517,7 @@ run_e2e_tests() {
         echo "⚠️  WARNING: Gateway not reachable after ${gw_timeout}s, proceeding anyway (tests may fail)"
     fi
 
-    # Run all e2e tests: API keys, subscription, models endpoint, and namespace scoping tests
+    # Run all e2e tests: API keys, namespace scoping, negative security, subscription, models endpoint
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
@@ -525,6 +525,7 @@ run_e2e_tests() {
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_namespace_scoping.py" \
+        "$test_dir/tests/test_negative_security.py" \
         "$test_dir/tests/test_subscription.py" \
         "$test_dir/tests/test_models_endpoint.py" \
         "$test_dir/tests/test_external_models.py" ; then
