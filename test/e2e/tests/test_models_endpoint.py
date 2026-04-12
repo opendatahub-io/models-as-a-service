@@ -664,6 +664,9 @@ class TestModelsEndpoint:
                 check=True,
             )
 
+            # Wait for subscription to reconcile before creating API key
+            _wait_for_maas_subscription_ready(subscription_name, maas_ns)
+
             # Create API key bound to our test subscription
             api_key_response = requests.post(
                 f"{_maas_api_url()}/v1/api-keys",
@@ -828,6 +831,9 @@ class TestModelsEndpoint:
                 text=True,
                 check=True,
             )
+
+            # Wait for subscription to reconcile before creating API key
+            _wait_for_maas_subscription_ready(subscription_name, maas_ns)
 
             # Create API key bound to our test subscription
             api_key_response = requests.post(
@@ -995,6 +1001,9 @@ class TestModelsEndpoint:
                 text=True,
                 check=True,
             )
+
+            # Wait for subscription to reconcile before creating API key
+            _wait_for_maas_subscription_ready(subscription_name, maas_ns)
 
             # Create API key bound to our test subscription
             api_key_response = requests.post(
