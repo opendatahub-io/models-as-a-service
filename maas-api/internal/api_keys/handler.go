@@ -136,7 +136,7 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 // If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (or 1hr for ephemeral).
 // Users can only create keys for themselves - the key inherits the user's groups.
 type CreateAPIKeyRequest struct {
-	Name         string          `json:"name,omitempty"`        // Required for regular keys, optional for ephemeral
+	Name         string          `json:"name,omitempty"` // Required for regular keys, optional for ephemeral
 	Description  string          `json:"description,omitempty"`
 	Subscription string          `json:"subscription,omitempty"` // Optional MaaSSubscription name; when omitted, highest-priority accessible subscription is used
 	ExpiresIn    *token.Duration `json:"expiresIn,omitempty"`    // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral)
@@ -194,10 +194,18 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		var notFound *subscription.SubscriptionNotFoundError
 		var accessDenied *subscription.AccessDeniedError
 		var noSub *subscription.NoSubscriptionError
+		var modelUnhealthy *subscription.ModelUnhealthyError
 		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": apiKeySubscriptionResolutionErrMsg,
 				"code":  apiKeySubscriptionResolutionErrCode,
+			})
+			return
+		}
+		if errors.As(err, &modelUnhealthy) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+				"code":  "subscription_not_ready",
 			})
 			return
 		}

@@ -507,9 +507,25 @@ func subscriptionIncludesModel(sub *subscription, requestedModel string) bool {
 // checkModelHealth validates subscription phase and model health.
 // Returns error if subscription is not in Active/Degraded phase or if model is unhealthy in Degraded subscriptions.
 func checkModelHealth(sub *subscription, requestedModel string) error {
-	// Allowlist: only Active and Degraded subscriptions are allowed
-	// Empty phase means unreconciled - reject it
-	// Any other phase (Failed, Pending, or future phases) is also rejected
+	// Only enforce health checks during inference (when model is specified by Authorino).
+	// API key creation and /v1/models listing pass empty requestedModel and should allow
+	// any reconciled phase (Active, Degraded, Failed, Pending) but reject unreconciled.
+	if requestedModel == "" {
+		// For API key creation: only reject unreconciled subscriptions (empty phase)
+		// Allow Failed/Pending phases - inference will be blocked by Authorino OPA rules
+		if sub.Phase == "" {
+			return &ModelUnhealthyError{
+				Subscription: sub.Name,
+				Reason:       "SubscriptionNotReady",
+				Message:      "subscription is unreconciled (no status.phase set)",
+			}
+		}
+		return nil // Allow any reconciled phase for API key creation
+	}
+
+	// Inference path: Enforce strict phase and per-model health validation
+	// Allowlist: only Active and Degraded subscriptions are allowed for inference
+	// Reject Failed, Pending, unreconciled, and unknown phases
 	if sub.Phase != PhaseActive && sub.Phase != PhaseDegraded {
 		phaseDisplay := sub.Phase
 		if phaseDisplay == "" {

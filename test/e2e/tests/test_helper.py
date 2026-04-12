@@ -586,3 +586,76 @@ def _wait_for_maas_subscription_ready(name, namespace=None, timeout=30):
     raise TimeoutError(
         f"MaaSSubscription {name} did not become Active within {timeout}s (current phase: {current_phase})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Controller scaling utilities
+# ---------------------------------------------------------------------------
+
+def _scale_controller(replicas, namespace=None, timeout=60):
+    """
+    Scale the maas-controller deployment.
+
+    Args:
+        replicas: Target replica count (0 to disable, 1+ to enable)
+        namespace: Deployment namespace (defaults to DEPLOYMENT_NAMESPACE env or 'opendatahub')
+        timeout: Max seconds to wait for scaling operation (default: 60)
+
+    Raises:
+        subprocess.CalledProcessError: If kubectl scale fails
+        TimeoutError: If pods don't reach desired state within timeout
+    """
+    namespace = namespace or os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+
+    log.info(f"Scaling maas-controller to {replicas} replicas in namespace {namespace}...")
+
+    # Scale the deployment
+    result = subprocess.run(
+        ["kubectl", "scale", "deployment", "maas-controller",
+         f"--replicas={replicas}", "-n", namespace],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout
+    )
+
+    # Wait for pods to reach desired state
+    if replicas == 0:
+        # Wait for all pods to terminate
+        log.debug(f"Waiting for maas-controller pods to terminate (timeout: {timeout}s)...")
+        subprocess.run(
+            ["kubectl", "wait", "--for=delete", "pod",
+             "-l", "app=maas-controller", "-n", namespace,
+             f"--timeout={timeout}s"],
+            check=False,  # Don't fail if no pods exist
+            capture_output=True,
+            text=True
+        )
+        log.info("✓ maas-controller scaled down to 0 replicas")
+    else:
+        # Wait for pods to become ready
+        log.debug(f"Waiting for maas-controller pods to become ready (timeout: {timeout}s)...")
+        try:
+            subprocess.run(
+                ["kubectl", "wait", "--for=condition=ready", "pod",
+                 "-l", "app=maas-controller", "-n", namespace,
+                 f"--timeout={timeout}s"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            log.info(f"✓ maas-controller scaled to {replicas} replica(s)")
+        except subprocess.CalledProcessError as e:
+            # Log but don't fail - sometimes pods need extra time
+            log.warning(f"Pods may not be ready yet: {e.stderr}")
+            time.sleep(5)  # Give it a bit more time
+
+
+def _scale_controller_down(namespace=None, timeout=60):
+    """Scale maas-controller to 0 replicas (convenience wrapper)."""
+    _scale_controller(0, namespace, timeout)
+
+
+def _scale_controller_up(namespace=None, timeout=60):
+    """Scale maas-controller to 1 replica (convenience wrapper)."""
+    _scale_controller(1, namespace, timeout)

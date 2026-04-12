@@ -554,20 +554,20 @@ func TestSelector_HealthFieldParsing(t *testing.T) {
 			expectError:      false,
 		},
 		{
-			name:             "Failed subscription with Ready=False - rejected",
+			name:             "Failed subscription with Ready=False - allowed for API key creation",
 			subscription:     createSubscriptionWithHealth("failed-sub", []string{"g1"}, nil, 10, 1000, phaseFailed, false, false),
 			expectedPhase:    phaseFailed,
 			expectedReady:    false,
 			expectedDeleting: false,
-			expectError:      true, // Failed subscriptions are rejected
+			expectError:      false, // Failed subscriptions allowed for API key creation (inference blocked by OPA)
 		},
 		{
-			name:             "Pending subscription with Ready=False - rejected",
+			name:             "Pending subscription with Ready=False - allowed for API key creation",
 			subscription:     createSubscriptionWithHealth("pending-sub", []string{"g1"}, nil, 10, 1000, phasePending, false, false),
 			expectedPhase:    phasePending,
 			expectedReady:    false,
 			expectedDeleting: false,
-			expectError:      true, // Pending subscriptions are rejected
+			expectError:      false, // Pending subscriptions allowed for API key creation (inference blocked by OPA)
 		},
 		{
 			name:             "Degraded subscription with Ready=False",
