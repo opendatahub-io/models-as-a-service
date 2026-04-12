@@ -367,7 +367,7 @@ def _create_test_subscription(
 # Inference Helpers
 # ---------------------------------------------------------------------------
 
-def _inference(api_key, path=None, extra_headers=None, model_name=None):
+def _inference(api_key, path=None, extra_headers=None, model_name=None, max_tokens=3):
     """POST completions using an API key only (subscription is bound at mint)."""
     path = path or MODEL_PATH
     url = f"{_gateway_url()}{path}/v1/completions"
@@ -376,7 +376,7 @@ def _inference(api_key, path=None, extra_headers=None, model_name=None):
         headers.update(extra_headers)
     return requests.post(
         url, headers=headers,
-        json={"model": model_name or MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
+        json={"model": model_name or MODEL_NAME, "prompt": "Hello", "max_tokens": max_tokens},
         timeout=TIMEOUT, verify=TLS_VERIFY,
     )
 
