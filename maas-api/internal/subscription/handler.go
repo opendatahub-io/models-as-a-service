@@ -170,6 +170,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		"phase", response.Phase,
 		"ready", response.Ready,
 		"organizationId", response.OrganizationID,
+		"requestedModel", req.RequestedModel,
 	)
 	c.JSON(http.StatusOK, response)
 }
