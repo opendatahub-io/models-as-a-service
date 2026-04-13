@@ -500,13 +500,13 @@ main() {
       set_maas_controller_image
       if [[ "$NAMESPACE" != "opendatahub" ]]; then
         (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
-          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
+          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f - || {
           cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
           return 1
         }
       else
-        kubectl apply -k "$config_dir" || {
+        kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -k "$config_dir" || {
           cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
           return 1
@@ -966,7 +966,7 @@ deploy_via_kustomize() {
 
       kubectl create secret generic maas-db-config -n "$NAMESPACE" \
         --from-literal=DB_CONNECTION_URL="postgresql://${pg_user}:${pg_password}@postgres:5432/${pg_db}?sslmode=disable" \
-        --dry-run=client -o yaml | kubectl apply -f -
+        --dry-run=client -o yaml | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
       log_info "  ✓ Database Secret recreated"
     fi
     log_info ""
@@ -997,7 +997,7 @@ deploy_via_kustomize() {
   log_info "  → Applying kustomize manifests ($(basename "$overlay") overlay)..."
   # Patch the maas-api URL placeholder with actual namespace
   # Patch MAAS_SUBSCRIPTION_NAMESPACE env var with the configured subscription namespace
-  kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
+  kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
     kustomize build "$overlay" | \
     sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g" | \
     MAAS_SUB_NS="$subscription_namespace" perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}$ENV{MAAS_SUB_NS}"/smg'
@@ -1009,7 +1009,7 @@ deploy_via_kustomize() {
   local policies_dir="$project_root/deployment/base/maas-controller/policies"
   if [[ -d "$policies_dir" ]]; then
     log_info "  → Applying gateway policies (openshift-ingress)..."
-    kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$policies_dir")
+    kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$policies_dir")
     log_info "  ✓ Gateway policies applied"
   fi
 
@@ -1133,11 +1133,31 @@ install_optional_operators() {
   # Apply available subscriptions
   if [[ "$cert_manager_available" == "true" ]]; then
     log_info "Applying cert-manager subscription..."
-    kubectl apply -f "${data_dir}/cert-manager-subscription.yaml"
+    kubectl create namespace cert-manager-operator 2>/dev/null || true
+    local og_count
+    og_count=$(kubectl get operatorgroup -n cert-manager-operator --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$og_count" -eq 0 ]]; then
+      kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/cert-manager-subscription.yaml"
+    else
+      log_info "OperatorGroup already exists in cert-manager-operator, applying subscription only..."
+      kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f <(
+        awk '/kind: Subscription/,0' "${data_dir}/cert-manager-subscription.yaml"
+      )
+    fi
   fi
   if [[ "$lws_available" == "true" ]]; then
     log_info "Applying LeaderWorkerSet subscription..."
-    kubectl apply -f "${data_dir}/lws-subscription.yaml"
+    kubectl create namespace openshift-lws-operator 2>/dev/null || true
+    local lws_og_count
+    lws_og_count=$(kubectl get operatorgroup -n openshift-lws-operator --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$lws_og_count" -eq 0 ]]; then
+      kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/lws-subscription.yaml"
+    else
+      log_info "OperatorGroup already exists in openshift-lws-operator, applying subscription only..."
+      kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f <(
+        awk '/kind: Subscription/,0' "${data_dir}/lws-subscription.yaml"
+      )
+    fi
   fi
 
   # Wait for subscriptions to be installed (in parallel where possible)
@@ -1177,7 +1197,7 @@ install_optional_operators() {
   # See: https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/ai_workloads/leader-worker-set-operator
   if [[ "$lws_available" == "true" && $lws_wait_rc -eq 0 ]]; then
     log_info "Activating LeaderWorkerSet API..."
-    kubectl apply -f "${data_dir}/lws-operator-cr.yaml"
+    kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/lws-operator-cr.yaml"
   fi
 
   log_info "Optional operators step complete"
@@ -1286,6 +1306,46 @@ patch_kuadrant_csv_for_gateway() {
   fi
 }
 
+# cleanup_previous_policy_engine
+#   Removes OLM artifacts from a previously installed policy engine so a
+#   different one can be installed without conflicts (intersecting
+#   OperatorGroups, incompatible AuthConfig CRDs, etc.).
+cleanup_previous_policy_engine() {
+  local old_engine=$1
+  local old_namespace
+
+  case "$old_engine" in
+    kuadrant) old_namespace="kuadrant-system" ;;
+    rhcl)    old_namespace="rh-connectivity-link" ;;
+    *)       log_warn "  Unknown engine '$old_engine', skipping cleanup"; return 0 ;;
+  esac
+
+  log_warn "  Cleaning up previous policy engine ($old_engine) before installing $POLICY_ENGINE..."
+
+  # Delete AuthConfig CRs cluster-wide — old CRs may not pass the new CRD's
+  # stricter schema validation, causing the InstallPlan to fail
+  log_info "  → Removing AuthConfig CRs..."
+  kubectl delete authconfig --all --all-namespaces --ignore-not-found 2>/dev/null || true
+
+  # Delete Kuadrant CR (triggers cleanup of managed Limitador/Authorino)
+  log_info "  → Removing Kuadrant CR..."
+  kubectl delete kuadrant --all -n "$old_namespace" --ignore-not-found --timeout=60s 2>/dev/null || true
+
+  # Delete OLM artifacts — subscriptions, CSVs, CatalogSources, OperatorGroups
+  log_info "  → Removing OLM artifacts from $old_namespace..."
+  kubectl delete subscription --all -n "$old_namespace" --ignore-not-found 2>/dev/null || true
+
+  # Delete CSVs by prefix (community kuadrant has multiple: kuadrant-operator, limitador-operator, etc.)
+  for csv in $(kubectl get csv -n "$old_namespace" --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null || true); do
+    kubectl delete csv "$csv" -n "$old_namespace" --ignore-not-found 2>/dev/null || true
+  done
+
+  kubectl delete catalogsource --all -n "$old_namespace" --ignore-not-found 2>/dev/null || true
+  kubectl delete operatorgroup --all -n "$old_namespace" --ignore-not-found 2>/dev/null || true
+
+  log_info "  ✓ Previous policy engine cleanup complete"
+}
+
 install_policy_engine() {
   # Check if policy engine is already installed
   local existing_engine
@@ -1336,9 +1396,9 @@ install_policy_engine() {
 
     return 0
   elif [[ -n "$existing_engine" && "$existing_engine" != "$POLICY_ENGINE" ]]; then
-    log_error "  ✗ Conflicting policy engine installed: $existing_engine (expected: $POLICY_ENGINE)"
-    log_error "    Cannot proceed - remove $existing_engine first or use --policy-engine $existing_engine"
-    return 1
+    log_warn "  ⚠ Different policy engine detected: $existing_engine (requested: $POLICY_ENGINE)"
+    cleanup_previous_policy_engine "$existing_engine"
+    # Fall through to fresh installation below
   fi
 
   # Policy engine not installed - proceed with installation
@@ -1378,7 +1438,7 @@ install_policy_engine() {
       log_info "  → Creating Kuadrant v1.3.1 catalog source..."
       kubectl create namespace "$kuadrant_ns" 2>/dev/null || true
 
-      cat <<EOF | kubectl apply -f -
+      cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
@@ -1399,7 +1459,7 @@ EOF
       sleep 10
 
       # Create OperatorGroup for Kuadrant
-      cat <<EOF | kubectl apply -f -
+      cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
@@ -1626,7 +1686,7 @@ apply_dsci() {
   local max_attempts=5
   local wait_seconds=15
   for attempt in $(seq 1 $max_attempts); do
-    if cat <<EOF | kubectl apply -f -
+    if cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
 apiVersion: dscinitialization.opendatahub.io/v1
 kind: DSCInitialization
 metadata:
@@ -1714,7 +1774,7 @@ apply_dsc() {
   #
   # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
   #       Only ODH currently supports this feature
-  kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
+  kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/datasciencecluster.yaml"
 }
 
 #──────────────────────────────────────────────────────────────
@@ -1731,7 +1791,7 @@ setup_gateway_api() {
 
   # Create GatewayClass for OpenShift Gateway API controller
   # This enables the built-in Gateway API implementation (OpenShift 4.14+)
-  kubectl apply -f "${data_dir}/gatewayclass.yaml"
+  kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/gatewayclass.yaml"
 }
 
 # setup_maas_gateway
@@ -1824,11 +1884,11 @@ setup_maas_gateway() {
   local maas_networking_dir="${SCRIPT_DIR}/../deployment/base/networking/maas"
   if [[ -d "$maas_networking_dir" ]]; then
     # Use local kustomize manifest with envsubst for variable substitution
-    kustomize build "$maas_networking_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME' | kubectl apply --server-side=true -f -
+    kustomize build "$maas_networking_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME' | kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
   else
     # Fallback: fetch from GitHub (for standalone script usage)
     log_debug "  Local manifest not found, fetching from GitHub..."
-    kubectl apply --server-side=true \
+    kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" \
       -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/networking/maas?ref=main" | \
            envsubst '$CLUSTER_DOMAIN $CERT_NAME')
   fi
@@ -1856,10 +1916,19 @@ apply_kuadrant_cr() {
     log_warn "Gateway not yet Programmed after 120s - Kuadrant may take longer to become ready"
   fi
 
+  # RHCL creates managed resources (Limitador, Authorino, AuthConfig) in kuadrant-system
+  # regardless of the operator namespace. Ensure it exists.
+  if [[ "$namespace" != "kuadrant-system" ]]; then
+    if ! kubectl get namespace kuadrant-system &>/dev/null; then
+      log_info "Creating kuadrant-system namespace (required for managed resources)..."
+      kubectl create namespace kuadrant-system
+    fi
+  fi
+
   log_info "Applying Kuadrant custom resource in $namespace..."
 
   local data_dir="${SCRIPT_DIR}/data"
-  kubectl apply -f "${data_dir}/kuadrant.yaml" -n "$namespace"
+  kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/kuadrant.yaml" -n "$namespace"
 
   # Wait for Kuadrant to be ready (initial attempt - 60s)
   # If it fails with MissingDependency, restart the operator and retry

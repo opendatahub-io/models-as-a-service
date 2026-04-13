@@ -109,6 +109,7 @@ get_cluster_audience() {
 
 # Timeout values (seconds) - used by deploy.sh and related scripts
 readonly CUSTOM_RESOURCE_TIMEOUT=600  # Used for DataScienceCluster wait
+readonly KUBECTL_REQUEST_TIMEOUT="${KUBECTL_REQUEST_TIMEOUT:-60s}"  # Used for kubectl apply/create on slow clusters
 
 # Logging levels
 readonly LOG_LEVEL_DEBUG=0
@@ -428,7 +429,7 @@ install_olm_operator() {
     # If operatorgroup_target is "AllNamespaces", omit targetNamespaces field
     if [ "$operatorgroup_target" = "AllNamespaces" ]; then
       log_info "Creating OperatorGroup in $namespace for AllNamespaces mode"
-      cat <<EOF | kubectl apply -f -
+      cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
@@ -439,7 +440,7 @@ EOF
     else
       local og_target_ns="${operatorgroup_target:-$namespace}"
       log_info "Creating OperatorGroup in $namespace targeting $og_target_ns"
-      cat <<EOF | kubectl apply -f -
+      cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
@@ -481,7 +482,7 @@ spec:
 "
   fi
 
-  echo "$subscription_yaml" | kubectl apply -f -
+  echo "$subscription_yaml" | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
 
   if [[ "$install_plan_approval" == "Manual" ]]; then
     log_info "Manual Subscription: approving initial InstallPlan so first install can proceed..."
@@ -674,7 +675,7 @@ create_gateway_route() {
   if [[ -n "$dest_ca_cert" ]]; then
     # Use reencrypt: Router terminates TLS with trusted cert, re-encrypts to Gateway
     # This gives clients a trusted certificate instead of our self-signed one
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -696,7 +697,7 @@ EOF
   else
     # Fallback to passthrough if we can't get the certificate
     echo "  WARNING: Could not retrieve TLS certificate from $tls_secret, using passthrough"
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -1184,7 +1185,7 @@ create_custom_catalogsource() {
     sleep 5
   fi
 
-  cat <<EOF | kubectl apply -f -
+  cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
