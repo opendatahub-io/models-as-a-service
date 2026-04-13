@@ -231,6 +231,34 @@ The Kuadrant AuthPolicy validates API keys via the MaaS API and validates user t
 
 ---
 
+## 9.1. Identity Headers and Defense-in-Depth
+
+**For model inference routes** (HTTPRoutes targeting model workloads):
+
+The controller-generated AuthPolicies do **not** inject most identity-related HTTP headers (`X-MaaS-Username`, `X-MaaS-Group`, `X-MaaS-Key-Id`) into requests forwarded to upstream model pods. This is a defense-in-depth security measure to prevent accidental disclosure of user identity, group membership, and key identifiers in:
+
+- Model runtime logs
+- Upstream debug dumps
+- Misconfigured proxies or sidecars
+
+**Exception:** `X-MaaS-Subscription` **is** injected for Istio Telemetry to enable per-subscription latency tracking. Istio runs in the Envoy gateway and cannot access Authorino's `auth.identity` context—it can only read request headers. The injected subscription value is server-controlled (resolved by Authorino from validated subscriptions), not client-provided.
+
+All identity information remains available to **gateway-level features** through Authorino's `auth.identity` and `auth.metadata` contexts, which are consumed by:
+
+- **TokenRateLimitPolicy (TRLP)**: Uses `selected_subscription_key`, `userid`, `groups`, and `subscription_info` from `filters.identity` (access `subscription_info.labels` for tier-based rate limiting)
+- **Gateway telemetry/metrics**: Accesses identity fields with `metrics: true` enabled on `filters.identity`
+- **Authorization policies**: OPA/Rego rules evaluate `auth.identity` and `auth.metadata` directly
+
+**For maas-api routes**:
+
+The static AuthPolicy for maas-api (`deployment/base/maas-api/policies/auth-policy.yaml`) still injects `X-MaaS-Username` and `X-MaaS-Group` headers, as maas-api's `ExtractUserInfo` middleware requires them. This is separate from model inference routes and follows a different security model (maas-api is a trusted internal service).
+
+**Security motivation:**
+
+Model workloads (vLLM, Llama.cpp, etc.) do not require strong identity claims in cleartext headers. By keeping identity at the gateway layer, we reduce the attack surface and limit the blast radius of potential log leaks or upstream vulnerabilities.
+
+---
+
 ## 10. Summary
 
 | Topic | Summary |

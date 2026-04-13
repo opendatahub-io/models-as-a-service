@@ -121,6 +121,9 @@ linters:
           - ireturn
         path: pkg/controller/maas/maassubscription_controller\.go
       - linters:
+          - ireturn
+        path: pkg/reconciler/externalmodel/reconciler\.go
+      - linters:
           - modernize
         text: "(omitzero|mapsloop|rangeint):"
 formatters:

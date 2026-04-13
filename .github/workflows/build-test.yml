@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'maas-controller/api/**'
+      - 'maas-controller/cmd/**'
+      - 'maas-controller/pkg/**'
       - 'maas-controller/Makefile'
       - 'deployment/base/maas-controller/crd/**'
       - 'deployment/**'
@@ -39,7 +41,7 @@ jobs:
         ./scripts/ci/validate-manifests.sh
 
   verify-codegen:
-    name: Verify generated CRDs and deepcopy
+    name: Verify generated CRDs, RBAC, and deepcopy
     timeout-minutes: 10
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-verify-codegen

@@ -20,8 +20,8 @@ import (
 	"context"
 	"testing"
 
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -29,6 +29,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // newPreexistingAuthPolicy builds a Kuadrant AuthPolicy as an unstructured object
@@ -1062,6 +1064,163 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	}
 }
 
+// TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream verifies that identity headers
+// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Key-Id) are NOT injected into requests forwarded
+// to upstream model workloads (defense-in-depth). Exception: X-MaaS-Subscription IS injected
+// for Istio Telemetry (per-subscription latency tracking).
+// All identity information remains available to TRLP and telemetry via filters.identity.
+func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+	}
+
+	// Test 1: Verify identity headers (except X-MaaS-Subscription) are not forwarded upstream
+	t.Run("identity headers not forwarded to upstream", func(t *testing.T) {
+		headers, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "headers")
+		if err != nil {
+			t.Fatalf("Error checking headers: %v", err)
+		}
+
+		if !found {
+			t.Fatalf("response.success.headers should exist (X-MaaS-Subscription for Istio)")
+		}
+
+		// Verify X-MaaS-Subscription IS present (required for Istio Telemetry)
+		if _, exists := headers["X-MaaS-Subscription"]; !exists {
+			t.Errorf("X-MaaS-Subscription header should be present for Istio Telemetry")
+		}
+
+		// Verify identity headers are NOT present (defense-in-depth)
+		forbiddenHeaders := []string{"X-MaaS-Username", "X-MaaS-Group", "X-MaaS-Key-Id"}
+		for _, header := range forbiddenHeaders {
+			if _, exists := headers[header]; exists {
+				t.Errorf("Identity header %q should NOT be forwarded to upstream workloads (defense-in-depth)", header)
+			}
+		}
+	})
+
+	// Test 2: Verify filters.identity exists and contains all necessary data for TRLP and telemetry
+	t.Run("identity data available for TRLP and telemetry", func(t *testing.T) {
+		identity, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "filters", "identity", "json", "properties")
+		if err != nil || !found {
+			t.Fatalf("filters.identity.json.properties missing: found=%v err=%v", found, err)
+		}
+
+		// Verify essential fields for TRLP
+		requiredFields := []string{
+			"userid",                    // User identification
+			"groups",                    // User groups
+			"selected_subscription_key", // Model-scoped subscription key for TRLP
+			"selected_subscription",     // Subscription name
+			"subscription_info",         // Full subscription object (includes labels, organizationId, costCenter, etc.)
+		}
+
+		for _, field := range requiredFields {
+			if _, exists := identity[field]; !exists {
+				t.Errorf("filters.identity must include %q for TRLP/telemetry, but it's missing", field)
+			}
+		}
+
+		// Verify telemetry/observability fields
+		observabilityFields := []string{
+			"keyId", // API key tracking
+		}
+
+		for _, field := range observabilityFields {
+			if _, exists := identity[field]; !exists {
+				t.Errorf("filters.identity should include %q for observability, but it's missing", field)
+			}
+		}
+
+		// Verify subscription_info contains full object (not just individual fields)
+		// This object should contain: name, namespace, labels, organizationId, costCenter
+		// Consumers should access nested fields like:
+		//   - subscription_info.organizationId (for billing/cost attribution)
+		//   - subscription_info.costCenter (for chargeback)
+		//   - subscription_info.labels (for tier-based rate limiting)
+		subscriptionInfoField, exists := identity["subscription_info"]
+		if !exists {
+			t.Error("filters.identity must include 'subscription_info' field (full object from subscription-select)")
+		} else {
+			// Verify it's an expression that returns the full object
+			subscriptionInfoMap, ok := subscriptionInfoField.(map[string]any)
+			if !ok {
+				t.Errorf("subscription_info should be a map, got %T", subscriptionInfoField)
+			} else {
+				expr, hasExpr := subscriptionInfoMap["expression"]
+				if !hasExpr {
+					t.Error("subscription_info should have an 'expression' field")
+				} else {
+					exprStr, ok := expr.(string)
+					if !ok {
+						t.Errorf("subscription_info expression should be a string, got %T", expr)
+					} else {
+						// Verify it returns the full object, not just a sub-field
+						if !contains(exprStr, `auth.metadata["subscription-info"]`) {
+							t.Errorf("subscription_info expression should reference full subscription-info object, got: %s", exprStr)
+						}
+						// Verify it doesn't extract only labels (old behavior)
+						if contains(exprStr, ".labels") && !contains(exprStr, "?") {
+							t.Errorf("subscription_info expression should return full object, not just .labels, got: %s", exprStr)
+						}
+						// Note: We can't verify organizationId and costCenter exist at runtime here
+						// (they're optional fields that depend on MaaSSubscription configuration)
+						// but the full object is passed, so consumers can access them via:
+						// auth.identity.subscription_info.organizationId
+						// auth.identity.subscription_info.costCenter
+					}
+				}
+			}
+		}
+	})
+
+	// Test 3: Verify metrics are enabled on identity filter
+	t.Run("identity filter has metrics enabled", func(t *testing.T) {
+		metricsEnabled, found, err := unstructured.NestedBool(got.Object, "spec", "rules", "response", "success", "filters", "identity", "metrics")
+		if err != nil || !found {
+			t.Fatalf("filters.identity.metrics missing: found=%v err=%v", found, err)
+		}
+
+		if !metricsEnabled {
+			t.Error("filters.identity.metrics must be true for telemetry to access identity data")
+		}
+	})
+}
+
 // contains is a helper to check if a string contains a substring (case-sensitive).
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
@@ -1075,3 +1234,201 @@ func contains(s, substr string) bool {
 		}())
 }
 
+// TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase verifies that an auth policy
+// with all missing model refs gets Failed phase.
+func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
+	const (
+		namespace    = "default"
+		maasAuthName = "auth-missing"
+		missingModel = "non-existent-model"
+	)
+
+	// Create auth policy referencing a non-existent model
+	maasAuth := newMaaSAuthPolicy(maasAuthName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: missingModel, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(maasAuth).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: namespace,
+		GatewayName:      "openshift-ingress/maas-default-gateway",
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	// Fetch updated auth policy
+	var policy maasv1alpha1.MaaSAuthPolicy
+	if err := c.Get(context.Background(), req.NamespacedName, &policy); err != nil {
+		t.Fatalf("Get MaaSAuthPolicy: %v", err)
+	}
+
+	// Verify phase is Failed (all models missing)
+	if policy.Status.Phase != maasv1alpha1.PhaseFailed {
+		t.Errorf("expected phase Failed, got %q", policy.Status.Phase)
+	}
+
+	// Verify Ready condition is False
+	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
+	if readyCond == nil {
+		t.Fatal("Ready condition not found")
+	}
+	if readyCond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %v", readyCond.Status)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase verifies that an auth policy
+// with some valid and some invalid model refs gets Degraded phase.
+func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
+	const (
+		namespace     = "default"
+		maasAuthName  = "auth-partial"
+		validModel    = "valid-model"
+		missingModel  = "missing-model"
+		httpRouteName = "maas-model-" + validModel
+	)
+
+	// Create valid model and route
+	model := newMaaSModelRef(validModel, namespace, "ExternalModel", validModel)
+	route := newHTTPRoute(httpRouteName, namespace)
+
+	// Create auth policy referencing both valid and invalid models
+	maasAuth := newMaaSAuthPolicy(maasAuthName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: validModel, Namespace: namespace},
+		maasv1alpha1.ModelRef{Name: missingModel, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasAuth).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: namespace,
+		GatewayName:      "openshift-ingress/maas-default-gateway",
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	var policy maasv1alpha1.MaaSAuthPolicy
+	if err := c.Get(context.Background(), req.NamespacedName, &policy); err != nil {
+		t.Fatalf("Get MaaSAuthPolicy: %v", err)
+	}
+
+	// Verify phase is Degraded (partial functionality)
+	if policy.Status.Phase != maasv1alpha1.PhaseDegraded {
+		t.Errorf("expected phase Degraded, got %q", policy.Status.Phase)
+	}
+
+	// Verify Ready condition is False with PartialFailure reason
+	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
+	if readyCond == nil {
+		t.Fatal("Ready condition not found")
+	}
+	if readyCond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %v", readyCond.Status)
+	}
+	if readyCond.Reason != "PartialFailure" {
+		t.Errorf("expected reason PartialFailure, got %q", readyCond.Reason)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase verifies that an auth policy
+// with all valid model refs and accepted/enforced AuthPolicy gets Active phase.
+func TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
+	const (
+		namespace      = "default"
+		maasAuthName   = "auth-valid"
+		modelName      = "valid-model"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasAuth := newMaaSAuthPolicy(maasAuthName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	// Pre-create AuthPolicy with Accepted=True and Enforced=True (simulates Kuadrant accepting)
+	existingAP := newPreexistingAuthPolicy(authPolicyName, namespace, modelName, map[string]string{
+		"maas.opendatahub.io/auth-policies": maasAuthName,
+	})
+	if err := unstructured.SetNestedSlice(existingAP.Object, []any{
+		map[string]any{
+			"type":   "Accepted",
+			"status": "True",
+		},
+		map[string]any{
+			"type":   "Enforced",
+			"status": "True",
+		},
+	}, "status", "conditions"); err != nil {
+		t.Fatalf("SetNestedSlice status.conditions: %v", err)
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasAuth, existingAP).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: namespace,
+		GatewayName:      "openshift-ingress/maas-default-gateway",
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	var policy maasv1alpha1.MaaSAuthPolicy
+	if err := c.Get(context.Background(), req.NamespacedName, &policy); err != nil {
+		t.Fatalf("Get MaaSAuthPolicy: %v", err)
+	}
+
+	// Verify phase is Active
+	if policy.Status.Phase != maasv1alpha1.PhaseActive {
+		t.Errorf("expected phase Active, got %q", policy.Status.Phase)
+	}
+
+	// Verify Ready condition is True
+	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
+	if readyCond == nil {
+		t.Fatal("Ready condition not found")
+	}
+	if readyCond.Status != metav1.ConditionTrue {
+		t.Errorf("expected Ready=True, got %v", readyCond.Status)
+	}
+
+	// Verify authPolicies status is populated with Ready=true
+	if len(policy.Status.AuthPolicies) != 1 {
+		t.Fatalf("expected 1 authPolicy status, got %d", len(policy.Status.AuthPolicies))
+	}
+	apStatus := policy.Status.AuthPolicies[0]
+	if apStatus.Model != modelName {
+		t.Errorf("expected model %q, got %q", modelName, apStatus.Model)
+	}
+	if !apStatus.Ready {
+		t.Error("expected authPolicies[0].Ready=true")
+	}
+	if apStatus.Reason != maasv1alpha1.ReasonAcceptedEnforced {
+		t.Errorf("expected reason %q, got %q", maasv1alpha1.ReasonAcceptedEnforced, apStatus.Reason)
+	}
+}

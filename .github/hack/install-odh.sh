@@ -87,7 +87,7 @@ plan_approval="${OPERATOR_INSTALL_PLAN_APPROVAL:-Manual}"
 
 # 2. Install ODH operator via OLM
 echo "2. Installing ODH operator..."
-install_olm_operator \
+if ! install_olm_operator \
   "opendatahub-operator" \
   "$NAMESPACE" \
   "$catalog_source" \
@@ -95,7 +95,10 @@ install_olm_operator \
   "$starting_csv" \
   "AllNamespaces" \
   "openshift-marketplace" \
-  "$plan_approval"
+  "$plan_approval"; then
+  log_error "ODH operator installation failed"
+  exit 1
+fi
 
 # 3. Patch CSV with custom image if specified
 if [[ -n "$OPERATOR_IMAGE" ]]; then

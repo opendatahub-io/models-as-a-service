@@ -48,6 +48,16 @@
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
+#
+# TIMEOUT CONFIGURATION (all in seconds, sourced from deployment-helpers.sh):
+#   Customize for CI/CD environments or slow clusters:
+#   CUSTOM_RESOURCE_TIMEOUT=600   DataScienceCluster wait
+#   LLMIS_TIMEOUT=300            LLMInferenceService ready
+#   MAASMODELREF_TIMEOUT=300     MaaSModelRef ready
+#   AUTHPOLICY_TIMEOUT=180       AuthPolicy enforced
+#   AUTHORINO_TIMEOUT=120        Authorino ready
+#   ROLLOUT_TIMEOUT=120          Deployment rollout
+#   See deployment-helpers.sh for complete list
 # =============================================================================
 
 set -euo pipefail
@@ -204,8 +214,8 @@ deploy_maas_platform() {
     fi
 
     # Wait for DataScienceCluster (install-odh already waited; deploy may have updated)
-    if ! wait_datasciencecluster_ready "default-dsc" 300; then
-        echo "⚠️  WARNING: DataScienceCluster readiness check had issues, continuing anyway"
+    if ! wait_datasciencecluster_ready "default-dsc" "$CUSTOM_RESOURCE_TIMEOUT"; then
+        echo "⚠️  WARNING: DataScienceCluster readiness check had issues (timeout: ${CUSTOM_RESOURCE_TIMEOUT}s), continuing anyway"
     fi
 
     # Wait for Authorino to be ready and auth service cluster to be healthy
@@ -217,10 +227,10 @@ deploy_maas_platform() {
         echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"
         echo "   This is a temporary workaround for the gateway→Authorino TLS chicken-egg problem"
     else
-        # Using 300s timeout to fit within Prow's 15m job limit
+        # Using configurable timeout (default suitable for Prow's 15m job limit)
         echo "Waiting for Authorino and auth service to be ready (namespace: ${AUTHORINO_NAMESPACE})..."
-        if ! wait_authorino_ready "$AUTHORINO_NAMESPACE" 300; then
-            echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+        if ! wait_authorino_ready "$AUTHORINO_NAMESPACE" "$AUTHORINO_TIMEOUT"; then
+            echo "⚠️  WARNING: Authorino readiness check had issues (timeout: ${AUTHORINO_TIMEOUT}s), continuing anyway"
         fi
     fi
 
@@ -262,17 +272,15 @@ deploy_models() {
     fi
     echo "✅ MaaS system deployed (free + premium + e2e test fixtures)"
 
-    echo "Waiting for models to be ready..."
-    if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for free simulator to be ready"
-        oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
-        oc get events -n llm --sort-by='.lastTimestamp' || true
+    echo "Waiting for models to be ready (timeout: ${LLMIS_TIMEOUT}s)..."
+    if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
+        echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for free simulator to be ready"
+        dump_llmis_diagnostics "facebook-opt-125m-simulated" "llm"
         exit 1
     fi
-    if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout=300s; then
-        echo "❌ ERROR: Timed out waiting for premium simulator to be ready"
-        oc get llminferenceservice/premium-simulated-simulated-premium -n llm -o yaml || true
-        oc get events -n llm --sort-by='.lastTimestamp' || true
+    if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
+        echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for premium simulator to be ready"
+        dump_llmis_diagnostics "premium-simulated-simulated-premium" "llm"
         exit 1
     fi
     echo "✅ Simulator models ready"
@@ -280,9 +288,8 @@ deploy_models() {
     # Wait for MaaSModelRefs to transition to Ready phase.
     # The controller now properly handles the race condition where MaaSModelRef is created
     # before KServe creates the HTTPRoute (sets Pending, then Ready when HTTPRoute watch triggers).
-    echo "Waiting for MaaSModelRefs to be Ready..."
-    local timeout=300  # 5 minutes - sufficient for KServe to create HTTPRoutes
-    local deadline=$((SECONDS + timeout))
+    echo "Waiting for MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s)..."
+    local deadline=$((SECONDS + MAASMODELREF_TIMEOUT))
     local all_ready=false
     local found_any=false
 
@@ -306,7 +313,7 @@ deploy_models() {
     done
 
     if ! $found_any || ! $all_ready; then
-        echo "❌ ERROR: MaaSModelRefs did not reach Ready state within ${timeout}s"
+        echo "❌ ERROR: MaaSModelRefs did not reach Ready state within ${MAASMODELREF_TIMEOUT}s"
         echo "Dumping MaaSModelRef status:"
         oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o yaml || true
         echo "Dumping controller logs:"
@@ -318,7 +325,7 @@ deploy_models() {
 }
 
 wait_for_auth_policies_enforced() {
-    local timeout=180
+    local timeout="$AUTHPOLICY_TIMEOUT"
     echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
 
     local namespaces
@@ -488,7 +495,27 @@ run_e2e_tests() {
     echo "  - ADMIN_OC_TOKEN: $(echo "${ADMIN_OC_TOKEN:-not set}" | cut -c1-20)..."
     echo "  - GATEWAY_HOST: ${GATEWAY_HOST}"
 
-    # Run all e2e tests: API keys, subscription, models endpoint, and namespace scoping tests
+    # Wait for gateway to be reachable (DNS propagation + route readiness)
+    local scheme="https"
+    [[ "$INSECURE_HTTP" == "true" ]] && scheme="http"
+    local gw_url="${scheme}://${GATEWAY_HOST}/maas-api/health"
+    local gw_timeout=120
+    local gw_deadline=$((SECONDS + gw_timeout))
+    echo "Waiting for gateway to be reachable: ${gw_url} (timeout: ${gw_timeout}s)..."
+    while [[ $SECONDS -lt $gw_deadline ]]; do
+        local http_code
+        http_code=$(curl -sk -o /dev/null -w '%{http_code}' -m 5 "$gw_url" 2>/dev/null || echo "000")
+        if [[ "$http_code" =~ ^2 ]]; then
+            echo "✅ Gateway is reachable (HTTP $http_code)"
+            break
+        fi
+        sleep 1
+    done
+    if [[ $SECONDS -ge $gw_deadline ]]; then
+        echo "⚠️  WARNING: Gateway not reachable after ${gw_timeout}s, proceeding anyway (tests may fail)"
+    fi
+
+    # Run all e2e tests: API keys, namespace scoping, negative security, subscription, models endpoint
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
@@ -496,9 +523,10 @@ run_e2e_tests() {
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_namespace_scoping.py" \
+        "$test_dir/tests/test_negative_security.py" \
         "$test_dir/tests/test_subscription.py" \
         "$test_dir/tests/test_models_endpoint.py" \
-        "$test_dir/tests/test_external_oidc.py" ; then 
+        "$test_dir/tests/test_external_models.py" ; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
@@ -741,14 +769,18 @@ RBAC_EOF
 # Main execution
 # On exit (success or failure): collect artifacts (authorino-debug.log, cluster state, pod logs) and auth report
 _run_exit_artifacts() {
+    local exit_code=$?
+    # Disable exit-on-error in trap to ensure we collect all artifacts even if some fail
+    set +e
     DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" ARTIFACTS_DIR="$ARTIFACTS_DIR" \
         collect_e2e_artifacts
     echo ""
     echo "========== Auth Debug Report =========="
     mkdir -p "$ARTIFACTS_DIR"
     DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" \
-        run_auth_debug_report 2>&1 | tee "$ARTIFACTS_DIR/auth-debug.log" || true
+        run_auth_debug_report 2>&1 | tee "$ARTIFACTS_DIR/auth-debug.log"
     echo "======================================"
+    exit $exit_code
 }
 trap '_run_exit_artifacts' EXIT
 

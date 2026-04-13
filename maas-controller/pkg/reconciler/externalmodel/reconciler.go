@@ -72,6 +72,13 @@ func (r *Reconciler) gatewayNamespace() string {
 	return defaultGatewayNamespace
 }
 
+//+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=externalmodels,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
+//+kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=get;list;watch;create;update
+//+kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;update;delete
+
 // Reconcile handles create/update/delete of MaaSModelRef CRs with kind=ExternalModel.
 // The ExternalModel kind filter is handled by the predicate in SetupWithManager.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -295,7 +302,7 @@ func specFromExternalModel(extModel *maasv1alpha1.ExternalModel, model *maasv1al
 	if portStr, ok := ann[AnnPort]; ok {
 		p, err := strconv.ParseInt(portStr, 10, 32)
 		if err != nil {
-			return spec, fmt.Errorf("invalid port %q: %v", portStr, err)
+			return spec, fmt.Errorf("invalid port %q: %w", portStr, err)
 		}
 		if p < 1 || p > 65535 {
 			return spec, fmt.Errorf("port %d out of range (1-65535)", p)
@@ -306,14 +313,14 @@ func specFromExternalModel(extModel *maasv1alpha1.ExternalModel, model *maasv1al
 	if tlsStr, ok := ann[AnnTLS]; ok {
 		parsed, err := strconv.ParseBool(tlsStr)
 		if err != nil {
-			return spec, fmt.Errorf("invalid tls value %q: %v", tlsStr, err)
+			return spec, fmt.Errorf("invalid tls value %q: %w", tlsStr, err)
 		}
 		spec.TLS = parsed
 	}
 
 	if extraStr, ok := ann[AnnExtraHeaders]; ok && extraStr != "" {
 		spec.ExtraHeaders = map[string]string{}
-		for _, pair := range strings.Split(extraStr, ",") {
+		for pair := range strings.SplitSeq(extraStr, ",") {
 			kv := strings.SplitN(pair, "=", 2)
 			if len(kv) == 2 {
 				spec.ExtraHeaders[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])

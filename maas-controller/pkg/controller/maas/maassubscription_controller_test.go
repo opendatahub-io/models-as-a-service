@@ -39,7 +39,10 @@ import (
 // subscriptionModelRefIndexer is the field indexer function for MaaSSubscription.
 // Extracted as a helper to be reused across tests with fake clients.
 func subscriptionModelRefIndexer(obj client.Object) []string {
-	sub := obj.(*maasv1alpha1.MaaSSubscription)
+	sub, ok := obj.(*maasv1alpha1.MaaSSubscription)
+	if !ok {
+		return nil
+	}
 	var refs []string
 	for _, modelRef := range sub.Spec.ModelRefs {
 		refs = append(refs, modelRef.Namespace+"/"+modelRef.Name)
@@ -775,7 +778,8 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 	}
 
 	// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
-	expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/%s@%s/%s"`, namespace, maasSubName, namespace, modelName)
+	// and exempts /v1/models endpoint from rate limiting
+	expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/%s@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, maasSubName, namespace, modelName)
 	if pred != expected {
 		t.Errorf("predicate = %q, want %q", pred, expected)
 	}
@@ -863,7 +867,8 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 			t.Fatalf("sub-a predicate not a string: %T", predMap["predicate"])
 		}
 		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
-		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-a@%s/%s"`, namespace, namespace, modelName)
+		// and exempts /v1/models endpoint from rate limiting
+		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-a@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-a predicate = %q, want %q", pred, expected)
 		}
@@ -898,7 +903,8 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 			t.Fatalf("sub-b predicate not a string: %T", predMap["predicate"])
 		}
 		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
-		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-b@%s/%s"`, namespace, namespace, modelName)
+		// and exempts /v1/models endpoint from rate limiting
+		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-b@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-b predicate = %q, want %q", pred, expected)
 		}
@@ -925,4 +931,300 @@ func getKeys(m map[string]any) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// TestMaaSSubscriptionReconciler_MissingModelRef_FailedPhase verifies that a subscription
+// with all missing model refs gets Failed phase and correct modelRefStatuses.
+func TestMaaSSubscriptionReconciler_MissingModelRef_FailedPhase(t *testing.T) {
+	const (
+		namespace   = "default"
+		maasSubName = "sub-missing"
+	)
+
+	// Create subscription referencing a non-existent model
+	maasSub := newMaaSSubscription(maasSubName, namespace, "team-a", "non-existent-model", 100)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(maasSub).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	// Fetch updated subscription
+	var sub maasv1alpha1.MaaSSubscription
+	if err := c.Get(context.Background(), req.NamespacedName, &sub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+
+	// Verify phase is Failed
+	if sub.Status.Phase != maasv1alpha1.PhaseFailed {
+		t.Errorf("expected phase Failed, got %q", sub.Status.Phase)
+	}
+
+	// Verify Ready condition is False with ReconcileFailed reason
+	readyCond := apimeta.FindStatusCondition(sub.Status.Conditions, "Ready")
+	if readyCond == nil {
+		t.Fatal("Ready condition not found")
+	}
+	if readyCond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %v", readyCond.Status)
+	}
+
+	// Verify modelRefStatuses contains the missing model with NotFound reason
+	if len(sub.Status.ModelRefStatuses) != 1 {
+		t.Fatalf("expected 1 modelRefStatus, got %d", len(sub.Status.ModelRefStatuses))
+	}
+	modelStatus := sub.Status.ModelRefStatuses[0]
+	if modelStatus.Name != "non-existent-model" {
+		t.Errorf("expected model name 'non-existent-model', got %q", modelStatus.Name)
+	}
+	if modelStatus.Ready {
+		t.Error("expected modelRefStatus.Ready=false")
+	}
+	if modelStatus.Reason != maasv1alpha1.ReasonNotFound {
+		t.Errorf("expected reason %q, got %q", maasv1alpha1.ReasonNotFound, modelStatus.Reason)
+	}
+}
+
+// TestMaaSSubscriptionReconciler_DeletingModelRef_FailedPhase verifies that when a model
+// has deletionTimestamp set (finalizer keeps it in the informer cache), the subscription
+// corrects modelRefStatuses to ready=false based on TRLP BackendNotReady health.
+func TestMaaSSubscriptionReconciler_DeletingModelRef_FailedPhase(t *testing.T) {
+	const (
+		namespace   = "default"
+		maasSubName = "sub-deleting"
+		modelName   = "deleting-model"
+	)
+
+	// Model exists but is being deleted (deletionTimestamp set, finalizer present).
+	now := metav1.Now()
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	model.DeletionTimestamp = &now
+	model.Finalizers = []string{"maas.opendatahub.io/model-cleanup"}
+
+	maasSub := newMaaSSubscription(maasSubName, namespace, "team-a", modelName, 100)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(maasSub, model).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	var sub maasv1alpha1.MaaSSubscription
+	if err := c.Get(context.Background(), req.NamespacedName, &sub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+
+	// Phase must be Failed — model backend is gone
+	if sub.Status.Phase != maasv1alpha1.PhaseFailed {
+		t.Errorf("expected phase Failed, got %q", sub.Status.Phase)
+	}
+
+	// modelRefStatuses must reflect the deletion even though the object is
+	// still in the cache (correction via TRLP BackendNotReady health).
+	if len(sub.Status.ModelRefStatuses) != 1 {
+		t.Fatalf("expected 1 modelRefStatus, got %d", len(sub.Status.ModelRefStatuses))
+	}
+	modelStatus := sub.Status.ModelRefStatuses[0]
+	if modelStatus.Ready {
+		t.Error("expected modelRefStatus.Ready=false for deleting model")
+	}
+	if modelStatus.Reason != maasv1alpha1.ReasonNotFound {
+		t.Errorf("expected reason %q, got %q", maasv1alpha1.ReasonNotFound, modelStatus.Reason)
+	}
+}
+
+// TestMaaSSubscriptionReconciler_PartialModelRefs_DegradedPhase verifies that a subscription
+// with some valid and some invalid model refs gets Degraded phase.
+func TestMaaSSubscriptionReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
+	const (
+		namespace     = "default"
+		maasSubName   = "sub-partial"
+		validModel    = "valid-model"
+		missingModel  = "missing-model"
+		httpRouteName = "maas-model-" + validModel
+	)
+
+	// Create valid model and route
+	model := newMaaSModelRef(validModel, namespace, "ExternalModel", validModel)
+	route := newHTTPRoute(httpRouteName, namespace)
+
+	// Create subscription referencing both valid and invalid models
+	maasSub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: maasSubName, Namespace: namespace},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			Owner: maasv1alpha1.OwnerSpec{
+				Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
+			},
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+				{Name: validModel, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+				{Name: missingModel, Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasSub).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	// Fetch updated subscription
+	var sub maasv1alpha1.MaaSSubscription
+	if err := c.Get(context.Background(), req.NamespacedName, &sub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+
+	// Verify phase is Degraded (partial functionality)
+	if sub.Status.Phase != maasv1alpha1.PhaseDegraded {
+		t.Errorf("expected phase Degraded, got %q", sub.Status.Phase)
+	}
+
+	// Verify Ready condition is False with PartialFailure reason
+	readyCond := apimeta.FindStatusCondition(sub.Status.Conditions, "Ready")
+	if readyCond == nil {
+		t.Fatal("Ready condition not found")
+	}
+	if readyCond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %v", readyCond.Status)
+	}
+	if readyCond.Reason != "PartialFailure" {
+		t.Errorf("expected reason PartialFailure, got %q", readyCond.Reason)
+	}
+
+	// Verify modelRefStatuses contains both models with correct status
+	if len(sub.Status.ModelRefStatuses) != 2 {
+		t.Fatalf("expected 2 modelRefStatuses, got %d", len(sub.Status.ModelRefStatuses))
+	}
+
+	// Find and verify each status
+	var foundValid, foundMissing bool
+	for _, status := range sub.Status.ModelRefStatuses {
+		switch status.Name {
+		case validModel:
+			foundValid = true
+			if !status.Ready {
+				t.Errorf("expected valid model Ready=true")
+			}
+			if status.Reason != maasv1alpha1.ReasonValid {
+				t.Errorf("expected valid model reason %q, got %q", maasv1alpha1.ReasonValid, status.Reason)
+			}
+		case missingModel:
+			foundMissing = true
+			if status.Ready {
+				t.Errorf("expected missing model Ready=false")
+			}
+			if status.Reason != maasv1alpha1.ReasonNotFound {
+				t.Errorf("expected missing model reason %q, got %q", maasv1alpha1.ReasonNotFound, status.Reason)
+			}
+		}
+	}
+	if !foundValid {
+		t.Error("valid model status not found")
+	}
+	if !foundMissing {
+		t.Error("missing model status not found")
+	}
+}
+
+// TestMaaSSubscriptionReconciler_AllValidModelRefs_ActivePhase verifies that a subscription
+// with all valid model refs and accepted TRLP gets Active phase.
+func TestMaaSSubscriptionReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
+	const (
+		namespace     = "default"
+		maasSubName   = "sub-valid"
+		modelName     = "valid-model"
+		httpRouteName = "maas-model-" + modelName
+		trlpName      = "maas-trlp-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasSub := newMaaSSubscription(maasSubName, namespace, "team-a", modelName, 100)
+
+	// Pre-create TRLP with Accepted=True status (simulates Kuadrant accepting the policy)
+	existingTRLP := newPreexistingTRLP(trlpName, namespace, modelName, map[string]string{
+		"maas.opendatahub.io/subscriptions": maasSubName,
+	})
+	if err := unstructured.SetNestedSlice(existingTRLP.Object, []any{
+		map[string]any{
+			"type":   "Accepted",
+			"status": "True",
+		},
+	}, "status", "conditions"); err != nil {
+		t.Fatalf("SetNestedSlice status.conditions: %v", err)
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasSub, existingTRLP).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	var sub maasv1alpha1.MaaSSubscription
+	if err := c.Get(context.Background(), req.NamespacedName, &sub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+
+	// Verify phase is Active
+	if sub.Status.Phase != maasv1alpha1.PhaseActive {
+		t.Errorf("expected phase Active, got %q", sub.Status.Phase)
+	}
+
+	// Verify Ready condition is True
+	readyCond := apimeta.FindStatusCondition(sub.Status.Conditions, "Ready")
+	if readyCond == nil {
+		t.Fatal("Ready condition not found")
+	}
+	if readyCond.Status != metav1.ConditionTrue {
+		t.Errorf("expected Ready=True, got %v", readyCond.Status)
+	}
+
+	// Verify modelRefStatuses shows valid model
+	if len(sub.Status.ModelRefStatuses) != 1 {
+		t.Fatalf("expected 1 modelRefStatus, got %d", len(sub.Status.ModelRefStatuses))
+	}
+	if !sub.Status.ModelRefStatuses[0].Ready {
+		t.Error("expected modelRefStatus.Ready=true")
+	}
+
+	// Verify tokenRateLimitStatuses shows accepted TRLP
+	if len(sub.Status.TokenRateLimitStatuses) != 1 {
+		t.Fatalf("expected 1 tokenRateLimitStatus, got %d", len(sub.Status.TokenRateLimitStatuses))
+	}
+	if !sub.Status.TokenRateLimitStatuses[0].Ready {
+		t.Error("expected tokenRateLimitStatus.Ready=true")
+	}
 }

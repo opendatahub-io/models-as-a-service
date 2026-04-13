@@ -19,7 +19,8 @@ for cmd in kubectl kustomize jq yq; do
 done
 
 # Parse arguments
-NAMESPACE="${MAAS_API_NAMESPACE:-maas-api}"
+# For RHOAI use --namespace redhat-ods-applications.
+NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"
 
 show_help() {
     echo "Usage: $0 [--namespace NAMESPACE]"
@@ -30,7 +31,7 @@ show_help() {
     echo "  - Configures Istio Gateway and LLM model metrics"
     echo ""
     echo "Options:"
-    echo "  -n, --namespace   Target namespace for observability (default: maas-api)"
+    echo "  -n, --namespace   Target namespace for observability (default: opendatahub)"
     echo ""
     echo "To install MaaS Grafana dashboards (separate step), run:"
     echo "  $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
@@ -160,7 +161,7 @@ echo ""
 echo "3️⃣ Deploying TelemetryPolicy and ServiceMonitors..."
 
 # Deploy base observability resources (TelemetryPolicy + Istio Telemetry)
-# TelemetryPolicy is CRITICAL - it extracts user/tier/model labels for Limitador metrics
+# TelemetryPolicy is CRITICAL - it extracts user/subscription/model labels for Limitador metrics
 BASE_OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/base/observability"
 if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     kustomize build "$BASE_OBSERVABILITY_DIR" | kubectl apply -f -

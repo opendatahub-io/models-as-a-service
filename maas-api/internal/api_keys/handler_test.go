@@ -1543,3 +1543,124 @@ func TestSearchExcludesEphemeralByDefault(t *testing.T) {
 		assert.Equal(t, 2, ephemeralCount, "should have 2 ephemeral keys")
 	})
 }
+
+// TestSearchAPIKeys_ExpiredStatusComputation verifies that keys past their expiration
+// date show "expired" status in search results, even if stored as "active" in the database.
+func TestSearchAPIKeys_ExpiredStatusComputation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+	testUser := &token.UserContext{
+		Username: "test-user",
+		Groups:   []string{"system:authenticated"},
+	}
+
+	// Create a key that expired yesterday (stored as active, but past expiration)
+	pastExpiry := time.Now().Add(-24 * time.Hour)
+	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key", "", []string{"system:authenticated"}, testSubscriptionName, &pastExpiry, false)
+	require.NoError(t, err)
+
+	// Create an active key with future expiration
+	futureExpiry := time.Now().Add(24 * time.Hour)
+	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName, &futureExpiry, false)
+	require.NoError(t, err)
+
+	// Create an active key with no expiration
+	err = store.AddKey(ctx, testUser.Username, "permanent-key", "permanent-hash", "Permanent Key", "", []string{"system:authenticated"}, testSubscriptionName, nil, false)
+	require.NoError(t, err)
+
+	t.Run("SearchReturnsExpiredStatusForPastExpirationKeys", func(t *testing.T) {
+		response := executeSearchRequest(t, handler, `{}`, testUser)
+		assert.Len(t, response.Data, 3)
+
+		statusByID := make(map[string]Status)
+		for _, key := range response.Data {
+			statusByID[key.ID] = key.Status
+		}
+
+		assert.Equal(t, StatusExpired, statusByID["expired-key"], "key past expiration should show expired status")
+		assert.Equal(t, StatusActive, statusByID["active-key"], "key with future expiration should show active status")
+		assert.Equal(t, StatusActive, statusByID["permanent-key"], "key with no expiration should show active status")
+	})
+
+	t.Run("ExpiredFilterIncludesComputedExpiredKeys", func(t *testing.T) {
+		response := executeSearchRequest(t, handler, `{"filters": {"status": ["expired"]}}`, testUser)
+		assert.Len(t, response.Data, 1, "should return only the expired key")
+		assert.Equal(t, "expired-key", response.Data[0].ID)
+		assert.Equal(t, StatusExpired, response.Data[0].Status)
+	})
+
+	t.Run("ActiveFilterExcludesExpiredKeys", func(t *testing.T) {
+		response := executeSearchRequest(t, handler, `{"filters": {"status": ["active"]}}`, testUser)
+		assert.Len(t, response.Data, 2, "should return only active keys (not the expired one)")
+
+		for _, key := range response.Data {
+			assert.Equal(t, StatusActive, key.Status)
+			assert.NotEqual(t, "expired-key", key.ID, "expired key should not appear in active filter")
+		}
+	})
+}
+
+// TestGetAPIKey_ExpiredStatusComputation verifies that getting a single key
+// returns "expired" status if the key is past its expiration date.
+func TestGetAPIKey_ExpiredStatusComputation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+	testUser := &token.UserContext{
+		Username: "test-user",
+		Groups:   []string{"system:authenticated"},
+	}
+
+	// Create a key that expired yesterday
+	pastExpiry := time.Now().Add(-24 * time.Hour)
+	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key", "", []string{"system:authenticated"}, testSubscriptionName, &pastExpiry, false)
+	require.NoError(t, err)
+
+	// Create an active key with future expiration
+	futureExpiry := time.Now().Add(24 * time.Hour)
+	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName, &futureExpiry, false)
+	require.NoError(t, err)
+
+	t.Run("GetExpiredKeyReturnsExpiredStatus", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/expired-key", nil)
+		c.Set("user", testUser)
+		c.Params = gin.Params{{Key: "id", Value: "expired-key"}}
+
+		handler.GetAPIKey(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response ApiKey
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "expired-key", response.ID)
+		assert.Equal(t, StatusExpired, response.Status, "key past expiration should return expired status")
+	})
+
+	t.Run("GetActiveKeyReturnsActiveStatus", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/active-key", nil)
+		c.Set("user", testUser)
+		c.Params = gin.Params{{Key: "id", Value: "active-key"}}
+
+		handler.GetAPIKey(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response ApiKey
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "active-key", response.ID)
+		assert.Equal(t, StatusActive, response.Status, "key with future expiration should return active status")
+	})
+}

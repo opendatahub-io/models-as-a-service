@@ -1,0 +1,66 @@
+name: MaaS Controller
+
+on:
+  pull_request:
+    paths:
+      - 'maas-controller/**'
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  PROJECT_DIR: maas-controller
+
+defaults:
+
+  run:
+    working-directory: maas-controller
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Align golangci-lint version with Makefile
+        id: golangci-version
+        run: |
+          VERSION=$(grep '^GOLANGCI_LINT_VERSION' tools.mk | cut -d'=' -f2 | tr -d ' ?')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: maas-controller/go.mod
+          cache: true
+          cache-dependency-path: maas-controller/go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9
+        with:
+          version: ${{ steps.golangci-version.outputs.version }}
+          working-directory: ${{ env.PROJECT_DIR }}
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: ${{ env.PROJECT_DIR }}/go.mod
+          cache: true
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/go.sum
+
+      - name: Run tests
+        run: make test
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: maas-controller-coverage
+          path: |
+            ${{ env.PROJECT_DIR }}/coverage.out
+            ${{ env.PROJECT_DIR }}/coverage.html
+          retention-days: 30

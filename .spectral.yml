@@ -1,0 +1,36 @@
+# Spectral OpenAPI Linting Rules
+# https://stoplight.io/open-source/spectral
+
+extends: [[spectral:oas, all]]
+
+rules:
+  # Require operation IDs for all endpoints
+  operation-operationId: error
+
+  # Require descriptions
+  info-description: error
+  operation-description: warn
+
+  # Require examples for request/response bodies
+  operation-success-response: error
+
+  # Security
+  oas3-api-servers: error
+
+  # Documentation quality
+  info-contact: warn
+  info-license: off  # May not have public license
+
+  # Schema quality
+  oas3-schema: error
+
+  # Custom rules for MaaS API
+  maas-subscription-header:
+    description: Endpoints should document X-MaaS-Subscription header behavior
+    severity: hint
+    given: $.paths[*][*]
+    then:
+      field: description
+      function: pattern
+      functionOptions:
+        match: ".*subscription.*|.*Subscription.*"

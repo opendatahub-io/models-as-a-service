@@ -60,6 +60,8 @@ func init() {
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
 }
 
+//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create
+
 // ensureSubscriptionNamespaceExists checks whether the subscription namespace exists
 // and creates it if missing. It checks for existence first so that the controller can
 // start even when the service account lacks namespace-create permission (common in
@@ -75,6 +77,12 @@ func ensureSubscriptionNamespaceExists(ctx context.Context, namespace string) er
 	_, err = clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
 	if err == nil {
 		setupLog.Info("subscription namespace already exists", "namespace", namespace)
+		return nil
+	}
+	if errors.IsForbidden(err) {
+		setupLog.Info("insufficient permissions to check namespace existence, assuming it exists — "+
+			"verify that the ClusterRoleBinding references the correct namespace for the controller ServiceAccount",
+			"namespace", namespace, "error", err)
 		return nil
 	}
 	if !errors.IsNotFound(err) {
@@ -218,13 +226,13 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&maas.MaaSAuthPolicyReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		MaaSAPINamespace:  maasAPINamespace,
-		GatewayName:       gatewayName,
-		ClusterAudience:   clusterAudience,
-		MetadataCacheTTL:  metadataCacheTTL,
-		AuthzCacheTTL:     authzCacheTTL,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		MaaSAPINamespace: maasAPINamespace,
+		GatewayName:      gatewayName,
+		ClusterAudience:  clusterAudience,
+		MetadataCacheTTL: metadataCacheTTL,
+		AuthzCacheTTL:    authzCacheTTL,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
 		os.Exit(1)

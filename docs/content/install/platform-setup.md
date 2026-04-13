@@ -366,6 +366,12 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
     kubectl wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/opendatahub-operator -n openshift-operators --timeout=300s
     ```
 
+    Wait for the operator webhook to be ready:
+
+    ```shell
+    kubectl wait --for=condition=Available --timeout=120s deployment/opendatahub-operator-controller-manager -n openshift-operators
+    ```
+
     Initialize the ODH platform with DSCInitialization:
 
     ```yaml
@@ -383,13 +389,6 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
       trustedCABundle:
         managementState: Managed
     EOF
-    ```
-
-    Wait for the operator webhook to be ready:
-
-    ```shell
-    
-    
     ```
 
 === "Red Hat OpenShift AI"

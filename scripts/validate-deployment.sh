@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Bash strict mode (without -e to continue validation even if some checks fail)
+# -u: treat unset variables as an error
+# -o pipefail: return value of a pipeline is the value of the last command to exit with a non-zero status
+set -uo pipefail
+
 # Source helper functions for JWT decoding
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/deployment-helpers.sh"
@@ -10,7 +15,8 @@ source "$SCRIPT_DIR/deployment-helpers.sh"
 # Usage: ./validate-deployment.sh [MODEL_NAME]
 #   MODEL_NAME: Optional. If provided, the script will validate using this specific model
 
-# Note: We don't use 'set -e' because we want to continue validation even if some checks fail
+# Note: We use 'set -uo pipefail' but NOT 'set -e' because we want to continue
+# validation even if some checks fail, while still catching undefined variables and pipe failures
 
 # Parse command line arguments
 REQUESTED_MODEL=""
@@ -19,10 +25,10 @@ INFERENCE_ENDPOINT="chat/completions"  # Default to chat completions
 CUSTOM_MODEL_PATH=""  # Custom path for model endpoint (overrides --endpoint)
 RATE_LIMIT_TEST_COUNT=10  # Default number of requests for rate limit testing
 MAX_TOKENS=50  # Default max_tokens for requests
-MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-}"  # Auto-detected or set via --namespace / MAAS_API_NAMESPACE env var
+MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"  # Default namespace for MaaS API (use --namespace to override)
 
 # Show help if requested
-if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "MaaS Platform Deployment Validation Script"
     echo ""
     echo "Usage: $0 [OPTIONS] [MODEL_NAME]"
@@ -48,11 +54,15 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  --max-tokens N            Maximum number of tokens to generate per request"
     echo "                            Default: 50"
     echo "  -n, --namespace NS        Namespace where MaaS API is deployed"
-    echo "                            Default: auto-detected from operator (RHOAI→redhat-ods-applications, ODH→opendatahub)"
+    echo "                            Default: opendatahub (or MAAS_API_NAMESPACE env var)"
     echo ""
-    echo "Environment (for non-admin users):"
+    echo "Environment Variables:"
     echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
     echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
+    echo "  MAAS_API_NAMESPACE        Namespace where MaaS API is deployed (default: opendatahub)"
+    echo ""
+    echo "Note: This script uses connection timeouts from curl (10s connect, 30s max)"
+    echo "      For cluster-level timeouts, see deployment-helpers.sh timeout constants"
     echo ""
     echo "Examples:"
     echo "  # Basic validation"
@@ -135,38 +145,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Auto-detect namespaces if not explicitly provided
-if [ -z "$MAAS_API_NAMESPACE" ]; then
-    detected_operator=$(detect_operator_type 2>/dev/null || echo "")
-    case "$detected_operator" in
-        rhoai)
-            MAAS_API_NAMESPACE="redhat-ods-applications"
-            ;;
-        *)
-            MAAS_API_NAMESPACE="opendatahub"
-            ;;
-    esac
-fi
-
-# Auto-detect policy engine namespace
-detected_engine=$(detect_policy_engine 2>/dev/null || echo "")
-case "$detected_engine" in
-    rhcl)
-        POLICY_ENGINE_NAMESPACE="rh-connectivity-link"
-        ;;
-    kuadrant)
-        POLICY_ENGINE_NAMESPACE="kuadrant-system"
-        ;;
-    *)
-        # Fall back: check both namespaces
-        if kubectl get namespace rh-connectivity-link &>/dev/null; then
-            POLICY_ENGINE_NAMESPACE="rh-connectivity-link"
-        else
-            POLICY_ENGINE_NAMESPACE="kuadrant-system"
-        fi
-        ;;
-esac
-
 # Set default request payload if not provided (OpenAI Chat Completions format)
 if [ -z "$CUSTOM_REQUEST_PAYLOAD" ]; then
     DEFAULT_REQUEST_PAYLOAD='{"model": "${MODEL_NAME}", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": '"$MAX_TOKENS"'}'
@@ -226,13 +204,13 @@ print_success() {
 
 print_fail() {
     echo -e "${RED}❌ FAIL: $1${NC}"
-    if [ -n "$2" ]; then
+    if [ -n "${2:-}" ]; then
         echo -e "${RED}   Reason: $2${NC}"
     fi
-    if [ -n "$3" ]; then
+    if [ -n "${3:-}" ]; then
         echo -e "${YELLOW}   Suggestion: $3${NC}"
     fi
-    if [ -n "$4" ]; then
+    if [ -n "${4:-}" ]; then
         echo -e "${YELLOW}   Suggestion: $4${NC}"
     fi
     ((FAILED++))
@@ -240,10 +218,10 @@ print_fail() {
 
 print_warning() {
     echo -e "${YELLOW}⚠️  WARNING: $1${NC}"
-    if [ -n "$2" ]; then
+    if [ -n "${2:-}" ]; then
         echo -e "${YELLOW}   Note: $2${NC}"
     fi
-    if [ -n "$3" ]; then
+    if [ -n "${3:-}" ]; then
         echo -e "${YELLOW}   $3${NC}"
     fi
     ((WARNINGS++))
@@ -254,7 +232,11 @@ print_info() {
 }
 
 # Check if running on OpenShift
-if ! kubectl api-resources | grep -q "route.openshift.io"; then
+# First check if kubectl is working, then check for OpenShift-specific API resources
+api_resources=$(kubectl api-resources 2>/dev/null)
+if [ $? -ne 0 ]; then
+    print_warning "Could not query API resources (kubectl may be slow to respond)" "Continuing validation anyway..."
+elif ! echo "$api_resources" | grep -q "route.openshift.io"; then
     print_fail "Not running on OpenShift" "This validation script is designed for OpenShift clusters" "Use a different validation approach for vanilla Kubernetes"
     exit 1
 fi
@@ -281,17 +263,17 @@ else
     print_fail "No MaaS API pods running" "Pods may be starting or failed" "Check: kubectl get pods -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api"
 fi
 
-# Check Kuadrant/RHCL pods
-print_check "Policy engine pods ($POLICY_ENGINE_NAMESPACE)"
-if kubectl get namespace "$POLICY_ENGINE_NAMESPACE" &>/dev/null; then
-    KUADRANT_PODS=$(kubectl get pods -n "$POLICY_ENGINE_NAMESPACE" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+# Check Kuadrant pods
+print_check "Kuadrant system pods"
+if kubectl get namespace kuadrant-system &>/dev/null; then
+    KUADRANT_PODS=$(kubectl get pods -n kuadrant-system --no-headers 2>/dev/null | grep -c "Running" || echo "0")
     if [ "$KUADRANT_PODS" -gt 0 ]; then
-        print_success "Policy engine has $KUADRANT_PODS running pod(s) in $POLICY_ENGINE_NAMESPACE"
+        print_success "Kuadrant has $KUADRANT_PODS running pod(s)"
     else
-        print_fail "No policy engine pods running" "Operators may not be installed" "Check: kubectl get pods -n $POLICY_ENGINE_NAMESPACE"
+        print_fail "No Kuadrant pods running" "Kuadrant operators may not be installed" "Check: kubectl get pods -n kuadrant-system"
     fi
 else
-    print_fail "Policy engine namespace '$POLICY_ENGINE_NAMESPACE' not found" "Policy engine may not be installed" "Run: ./scripts/deploy.sh --deployment-mode kustomize"
+    print_fail "Kuadrant namespace not found" "Kuadrant may not be installed" "Run: ./scripts/install-dependencies.sh --kuadrant"
 fi
 
 # Check OpenDataHub/KServe pods
@@ -412,12 +394,11 @@ print_header "3️⃣ Policy Status"
 print_check "AuthPolicy"
 AUTHPOLICY_COUNT=$(kubectl get authpolicy -A --no-headers 2>/dev/null | wc -l || echo "0")
 if [ "$AUTHPOLICY_COUNT" -gt 0 ]; then
-    # Check for any accepted AuthPolicy in openshift-ingress (name may vary: gateway-auth-policy or gateway-default-auth)
-    AUTHPOLICY_STATUS=$(kubectl get authpolicy -n openshift-ingress -o jsonpath='{.items[0].status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
+    AUTHPOLICY_STATUS=$(kubectl get authpolicy -n openshift-ingress gateway-default-auth -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
     if [ "$AUTHPOLICY_STATUS" = "True" ]; then
         print_success "AuthPolicy is configured and accepted"
     else
-        print_warning "AuthPolicy found but status: $AUTHPOLICY_STATUS" "Policy may still be reconciling. Try deleting the operator pod:" "kubectl delete pod -n $POLICY_ENGINE_NAMESPACE -l control-plane=controller-manager"
+        print_warning "AuthPolicy found but status: $AUTHPOLICY_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager"
     fi
 else
     print_fail "No AuthPolicy found" "Authentication may not be enforced" "Check: kubectl get authpolicy -A"
@@ -430,7 +411,7 @@ if [ "$RATELIMIT_COUNT" -gt 0 ]; then
     if [ "$RATELIMIT_STATUS" = "True" ]; then
         print_success "TokenRateLimitPolicy is configured and accepted"
     else
-        print_warning "TokenRateLimitPolicy found but status: $RATELIMIT_STATUS" "Policy may still be reconciling. Try deleting the operator pod:" "kubectl delete pod -n $POLICY_ENGINE_NAMESPACE -l control-plane=controller-manager"
+        print_warning "TokenRateLimitPolicy found but status: $RATELIMIT_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager"
     fi
 else
     print_fail "No TokenRateLimitPolicy found" "Rate limiting may not be enforced" "Check: kubectl get tokenratelimitpolicy -A"
@@ -665,7 +646,7 @@ else
         print_check "Rate limiting"
 
         # Log current user tier and attempt to fetch the configured rate limit from the cluster
-        if [ -n "$TIER" ]; then
+        if [ -n "${TIER:-}" ]; then
             print_info "Current user tier: $TIER"
             # Query the TokenRateLimitPolicy to show the configured limit for this tier
             TIER_LIMIT=$(kubectl get tokenratelimitpolicy -n openshift-ingress -o jsonpath="{.items[0].spec.limits.${TIER}-user-tokens.rates[0].limit}" 2>/dev/null || echo "")
@@ -711,7 +692,7 @@ else
         # Determine if the user tier has high rate limits (enterprise/premium users)
         # For high-tier users, all requests succeeding is expected and not a failure
         HIGH_TIER=false
-        if [ -n "$TIER" ]; then
+        if [ -n "${TIER:-}" ]; then
             case "$TIER" in
                 enterprise|premium)
                     HIGH_TIER=true
@@ -798,7 +779,7 @@ else
     echo ""
     echo "Common fixes:"
     echo "  - Wait for pods to start: kubectl get pods -A | grep -v Running"
-    echo "  - Check operator logs: kubectl logs -n $POLICY_ENGINE_NAMESPACE -l app.kubernetes.io/name=kuadrant-operator"
+    echo "  - Check operator logs: kubectl logs -n kuadrant-system -l app.kubernetes.io/name=kuadrant-operator"
     echo "  - Re-run deployment: ./scripts/deploy.sh"
     echo ""
     echo "Usage: ./scripts/validate-deployment.sh [MODEL_NAME]"

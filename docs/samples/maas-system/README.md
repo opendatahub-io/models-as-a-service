@@ -10,6 +10,7 @@ Bundled samples that deploy LLMInferenceService + MaaSModelRef + MaaSAuthPolicy 
 | **premium** | premium-user | premium-simulated-simulated-premium | 1000/min |
 | **facebook-opt-125m-cpu** | system:authenticated | facebook-opt-125m-cpu-single-node-no-scheduler-cpu | 100/min |
 | **qwen3** | system:authenticated | qwen3-single-node-no-scheduler-nvidia-gpu | 100/min |
+| **granite-3-1-8b-rhelai-modelcar** | system:authenticated | granite-3-1-8b-rhelai-modelcar-single-node-cpu (LLMIS in `llm`) | 10000/min |
 
 ## Usage
 
@@ -25,6 +26,7 @@ kustomize build docs/samples/maas-system/ | kubectl apply -f -
 # Or deploy a specific sample
 kustomize build docs/samples/maas-system/facebook-opt-125m-cpu/ | kubectl apply -f -
 kustomize build docs/samples/maas-system/qwen3/ | kubectl apply -f -
+kustomize build docs/samples/maas-system/granite-3-1-8b-rhelai-modelcar/ | kubectl apply -f -
 
 # Verify
 kubectl get maasmodelref -n llm

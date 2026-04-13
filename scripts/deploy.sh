@@ -11,7 +11,7 @@
 # OPTIONS:
 #   --operator-type <odh|rhoai>   Operator to install (default: odh)
 #                                 Policy engine is auto-selected:
-#                                   odh → kuadrant (community v1.3.1)
+#                                   odh → kuadrant (community v1.4.2)
 #                                   rhoai → rhcl (Red Hat Connectivity Link)
 #   --enable-tls-backend          Enable TLS for Authorino/MaaS API (default: on)
 #   --enable-keycloak             Deploy Keycloak for external OIDC (optional)
@@ -29,10 +29,23 @@
 # ENVIRONMENT VARIABLES:
 #   MAAS_API_IMAGE            Custom MaaS API container image
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
-#   MAAS_SUBSCRIPTION_NAMESPACE  Subscription namespace for MaaS CRs (default: models-as-a-service)
 #   OPERATOR_TYPE             Operator type (rhoai/odh)
 #   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #   KUSTOMIZE_FORCE_CONFLICTS When true, use --force-conflicts on kubectl apply in kustomize mode
+#
+# TIMEOUT CONFIGURATION (all in seconds, see deployment-helpers.sh for defaults):
+#   CUSTOM_RESOURCE_TIMEOUT   DataScienceCluster wait (default: 600)
+#   NAMESPACE_TIMEOUT         Namespace creation/ready (default: 300)
+#   RESOURCE_TIMEOUT          Generic resource wait (default: 300)
+#   CRD_TIMEOUT               CRD establishment (default: 180)
+#   CSV_TIMEOUT               CSV installation (default: 180)
+#   SUBSCRIPTION_TIMEOUT      Subscription install (default: 300)
+#   POD_TIMEOUT               Pod ready wait (default: 120)
+#   WEBHOOK_TIMEOUT           Webhook ready (default: 60)
+#   CUSTOM_CHECK_TIMEOUT      Generic check (default: 120)
+#   AUTHORINO_TIMEOUT         Authorino ready (default: 120)
+#   ROLLOUT_TIMEOUT           kubectl rollout status (default: 120)
+#   CATALOGSOURCE_TIMEOUT     CatalogSource ready (default: 120)
 #
 # EXAMPLES:
 #   # Deploy ODH (default, uses kuadrant policy engine)
@@ -46,6 +59,9 @@
 #
 #   # Test custom MaaS API image
 #   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 ./scripts/deploy.sh
+#
+#   # Use external PostgreSQL (production)
+#   ./scripts/deploy.sh --postgres-connection 'postgresql://user:pass@db.example.com:5432/maas?sslmode=require'
 #
 # For detailed documentation, see:
 # https://opendatahub-io.github.io/models-as-a-service/latest/install/maas-setup/
@@ -82,7 +98,6 @@ DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
 OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE=""  # Auto-determined: odh→kuadrant, rhoai→rhcl
 NAMESPACE="${DEPLOYMENT_NAMESPACE:-}"  # Auto-determined based on operator type
-NAMESPACE_EXPLICIT="${DEPLOYMENT_NAMESPACE:+true}"  # Track if user explicitly set namespace
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 ENABLE_KEYCLOAK="${ENABLE_KEYCLOAK:-false}"
 VERBOSE="${VERBOSE:-false}"
@@ -96,6 +111,7 @@ MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 KUSTOMIZE_FORCE_CONFLICTS="${KUSTOMIZE_FORCE_CONFLICTS:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
+POSTGRES_CONNECTION="${POSTGRES_CONNECTION:-}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -116,7 +132,7 @@ OPTIONS:
       Which operator to install (default: odh)
       Policy engine is auto-selected based on operator type:
       - rhoai → rhcl (Red Hat Connectivity Link)
-      - odh → kuadrant (community v1.3.1 with AuthPolicy v1)
+      - odh → kuadrant (community v1.4.2 with AuthPolicy v1)
       Only applies when --deployment-mode=operator
 
   --enable-tls-backend
@@ -131,6 +147,11 @@ OPTIONS:
       Deploy Keycloak identity provider for external OIDC support (optional)
       Creates keycloak-system namespace and deploys Keycloak operator
       See docs/samples/install/keycloak/ for configuration guide
+
+  --postgres-connection <connection-string>
+      Use an external PostgreSQL database instead of deploying a POC instance.
+      Format: postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require
+      When set, skips the built-in PostgreSQL deployment entirely.
 
   --namespace <namespace>
       Target namespace for deployment
@@ -174,7 +195,6 @@ ADVANCED OPTIONS (PR Testing):
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
-  MAAS_SUBSCRIPTION_NAMESPACE  Subscription namespace for MaaS CRs (default: models-as-a-service)
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
   OPERATOR_STARTING_CSV     ODH Subscription startingCSV (default: opendatahub-operator.v3.4.0-ea.1; "-" to omit)
@@ -184,6 +204,17 @@ ENVIRONMENT VARIABLES:
   OIDC_ISSUER_URL          External OIDC issuer URL for maas-api AuthPolicy patching
   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
   KUSTOMIZE_FORCE_CONFLICTS When true, pass --force-conflicts to kubectl apply in kustomize mode (default: false)
+  POSTGRES_CONNECTION       External PostgreSQL connection string (same as --postgres-connection)
+
+TIMEOUT CONFIGURATION (all values in seconds):
+  Customize timeouts for slow clusters or CI/CD environments:
+  - CUSTOM_RESOURCE_TIMEOUT=600   DataScienceCluster wait
+  - NAMESPACE_TIMEOUT=300         Namespace creation
+  - CRD_TIMEOUT=180              CRD establishment
+  - CSV_TIMEOUT=180              Operator CSV installation
+  - ROLLOUT_TIMEOUT=120          Deployment rollout
+  - AUTHORINO_TIMEOUT=120        Authorino ready
+  See deployment-helpers.sh for complete list and defaults
 
 EXAMPLES:
   # Deploy ODH (default, uses kuadrant policy engine)
@@ -207,6 +238,9 @@ EXAMPLES:
     --operator-type odh \\
     --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:pr-456 \\
     --operator-image quay.io/opendatahub/opendatahub-operator:pr-456
+
+  # Use an external PostgreSQL database
+  ./scripts/deploy.sh --postgres-connection 'postgresql://user:pass@rds.example.com:5432/maas?sslmode=require'
 
 For more information, see: https://github.com/opendatahub-io/models-as-a-service
 EOF
@@ -241,11 +275,6 @@ parse_arguments() {
         OPERATOR_TYPE="$2"
         shift 2
         ;;
-      --policy-engine)
-        require_flag_value "$1" "${2:-}"
-        POLICY_ENGINE="$2"
-        shift 2
-        ;;
       --enable-tls-backend)
         ENABLE_TLS_BACKEND="true"
         shift
@@ -261,7 +290,6 @@ parse_arguments() {
       --namespace)
         require_flag_value "$1" "${2:-}"
         NAMESPACE="$2"
-        NAMESPACE_EXPLICIT=true
         shift 2
         ;;
       --verbose)
@@ -297,6 +325,11 @@ parse_arguments() {
       --channel)
         require_flag_value "$1" "${2:-}"
         OPERATOR_CHANNEL="$2"
+        shift 2
+        ;;
+      --postgres-connection)
+        require_flag_value "$1" "${2:-}"
+        POSTGRES_CONNECTION="$2"
         shift 2
         ;;
       --external-oidc)
@@ -381,13 +414,13 @@ validate_configuration() {
   fi
 
   # Auto-determine policy engine based on operator type
-  # - ODH uses community Kuadrant (v1.3.1 from upstream catalog has AuthPolicy v1)
+  # - ODH uses community Kuadrant (v1.4.2 from upstream catalog has AuthPolicy v1)
   # - RHOAI uses RHCL (Red Hat Connectivity Link - downstream)
-  if [[ -z "$POLICY_ENGINE" && "$DEPLOYMENT_MODE" == "operator" ]]; then
+  if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
     case "$OPERATOR_TYPE" in
       odh)
         POLICY_ENGINE="kuadrant"
-        log_debug "Auto-selected policy engine for ODH: kuadrant (community v1.3.1)"
+        log_debug "Auto-selected policy engine for ODH: kuadrant (community v1.4.2)"
         ;;
       rhoai)
         POLICY_ENGINE="rhcl"
@@ -395,13 +428,9 @@ validate_configuration() {
         ;;
     esac
   else
-    # Kustomize mode: use specified engine or default to kuadrant (community)
-    if [[ -z "$POLICY_ENGINE" ]]; then
-      POLICY_ENGINE="kuadrant"
-      log_debug "Using default policy engine for kustomize mode: $POLICY_ENGINE"
-    else
-      log_debug "Using specified policy engine for kustomize mode: $POLICY_ENGINE"
-    fi
+    # Kustomize mode: default to kuadrant (community)
+    POLICY_ENGINE="kuadrant"
+    log_debug "Using auto-determined policy engine for kustomize mode: $POLICY_ENGINE"
   fi
 
   # Determine namespace based on deployment mode
@@ -500,13 +529,13 @@ main() {
       set_maas_controller_image
       if [[ "$NAMESPACE" != "opendatahub" ]]; then
         (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
-          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f - || {
+          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f - || {
           cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
           return 1
         }
       else
-        kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -k "$config_dir" || {
+        kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -k "$config_dir" || {
           cleanup_maas_controller_image
           log_error "Failed to apply maas-controller manifests"
           return 1
@@ -518,8 +547,8 @@ main() {
     fi
 
     log_info "  Waiting for maas-controller to be ready..."
-    if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
-      log_error "maas-controller deployment not ready"
+    if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
+      log_error "maas-controller deployment not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
       return 1
     fi
 
@@ -536,14 +565,21 @@ main() {
       log_info "  Non-standard cluster audience detected: $cluster_aud"
       log_info "  Patching maas-controller with correct CLUSTER_AUDIENCE..."
       kubectl set env deployment/maas-controller -n "$NAMESPACE" CLUSTER_AUDIENCE="$cluster_aud"
-      if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout=120s; then
-        log_warn "maas-controller rollout after audience patch did not complete in time"
+      if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
+        log_warn "maas-controller rollout after audience patch did not complete in time (timeout: ${ROLLOUT_TIMEOUT}s)"
       fi
     fi
   fi
 
+  log_info "MaaS API and MaaS Controller deployment completed successfully!"
+  local deployed_api_image deployed_ctrl_image
+  deployed_api_image=$(kubectl get deployment/maas-api -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+  deployed_ctrl_image=$(kubectl get deployment/maas-controller -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+  log_info "  maas-api image:        $deployed_api_image"
+  log_info "  maas-controller image: $deployed_ctrl_image"
+
   log_info "==================================================="
-  log_info "  Deployment completed successfully!"
+  log_info "  Models-as-a-Service Deployment completed successfully!"
   log_info "==================================================="
 }
 
@@ -564,7 +600,10 @@ deploy_via_operator() {
   install_policy_engine
 
   # Install primary operator (creates namespace)
-  install_primary_operator
+  if ! install_primary_operator; then
+    log_error "Primary operator installation failed"
+    exit 1
+  fi
 
   # Apply custom resources
   apply_custom_resources
@@ -605,307 +644,15 @@ deploy_via_kustomize() {
     exit 1
   }
 
-  #──────────────────────────────────────────────────────────────
-  # PRE-FLIGHT CHECKS
-  #──────────────────────────────────────────────────────────────
-
-  log_info ""
-  log_info "═══════════════════════════════════════════════════════════"
-  log_info "  🔍 CLUSTER DISCOVERY"
-  log_info "═══════════════════════════════════════════════════════════"
-  log_info ""
-  log_info "Scanning cluster for existing components..."
-  log_info ""
-
-  # Detect existing components
-  local detected_operator_type
-  detected_operator_type=$(detect_operator_type)
-
-  local detected_policy_engine
-  detected_policy_engine=$(detect_policy_engine)
-
-  local detected_dsc
-  detected_dsc=$(detect_dsc 2>/dev/null)
-
-  # Determine target namespace based on detected operator
-  local auto_namespace=""
-  if [[ -n "$detected_operator_type" ]]; then
-    case "$detected_operator_type" in
-      rhoai)
-        auto_namespace="redhat-ods-applications"
-        ;;
-      odh)
-        auto_namespace="opendatahub"
-        ;;
-    esac
-
-    # Validate namespace: fail if user explicitly set a conflicting value,
-    # otherwise auto-correct to match the detected operator
-    if [[ "$NAMESPACE_EXPLICIT" == "true" && "$NAMESPACE" != "$auto_namespace" ]]; then
-      log_error ""
-      log_error "╔═══════════════════════════════════════════════════════════╗"
-      log_error "║ ✗ DEPLOYMENT FAILED: Namespace Mismatch                  ║"
-      log_error "╚═══════════════════════════════════════════════════════════╝"
-      log_error ""
-      log_error "Detected operator: $detected_operator_type"
-      log_error "Expected namespace: $auto_namespace"
-      log_error "Specified namespace: $NAMESPACE"
-      log_error ""
-      log_error "To fix, choose one option:"
-      log_error ""
-      log_error "  Option 1: Use the correct namespace"
-      log_error "    ./scripts/deploy.sh --deployment-mode kustomize --namespace $auto_namespace"
-      log_error ""
-      log_error "  Option 2: Uninstall $detected_operator_type operator first"
-      if [[ "$detected_operator_type" == "rhoai" ]]; then
-        log_error "    kubectl delete subscription rhods-operator -n redhat-ods-operator"
-        log_error "    kubectl delete csv -n redhat-ods-operator -l operators.coreos.com/rhods-operator"
-      else
-        log_error "    kubectl delete subscription opendatahub-operator -n opendatahub"
-        log_error "    kubectl delete csv -n opendatahub -l operators.coreos.com/opendatahub-operator"
-      fi
-      log_error ""
-      exit 1
-    fi
-
-    # Auto-set namespace from detected operator
-    if [[ "$NAMESPACE" != "$auto_namespace" ]]; then
-      log_info "  Auto-correcting namespace: $NAMESPACE → $auto_namespace (detected $detected_operator_type)"
-    fi
-    NAMESPACE="$auto_namespace"
-  else
-    # No operator detected - use default or user-specified namespace
-    if [[ -z "$NAMESPACE" ]]; then
-      NAMESPACE="opendatahub"
-    fi
-  fi
-
-  # Update POLICY_ENGINE if one is already detected on cluster
-  # For kustomize mode, we prefer using what's already installed over the default
-  if [[ -n "$detected_policy_engine" ]]; then
-    if [[ "$POLICY_ENGINE" != "$detected_policy_engine" ]]; then
-      log_debug "Updating policy engine from $POLICY_ENGINE to detected $detected_policy_engine"
-      POLICY_ENGINE="$detected_policy_engine"
-    fi
-  fi
-
-  # Validate DSC if it exists
-  # In kustomize mode, use a reduced manifest that does NOT enable modelsAsService.
-  # Enabling modelsAsService causes the operator to manage the same resources
-  # that kustomize deploys, resulting in server-side apply conflicts.
-  local dsc_manifest="${project_root}/scripts/data/datasciencecluster-kustomize.yaml"
-  if [[ -n "$detected_dsc" ]]; then
-    local dsc_validation_errors
-    if ! dsc_validation_errors=$(validate_dsc_for_maas "$detected_dsc" "$dsc_manifest" 2>&1); then
-      log_warn ""
-      log_warn "┌─────────────────────────────────────────────────────────┐"
-      log_warn "│ ⚠ DataScienceCluster '$detected_dsc' needs changes for MaaS"
-      log_warn "└─────────────────────────────────────────────────────────┘"
-      log_warn ""
-      while IFS= read -r line || [[ -n "$line" ]]; do
-        log_warn "  • $line"
-      done <<< "$dsc_validation_errors"
-      log_warn ""
-
-      # Prompt user if running interactively, otherwise fail
-      if [[ -t 0 && "$DRY_RUN" != "true" ]]; then
-        printf "  Apply these patches automatically? [y/N] "
-        read -r answer
-        if [[ "$answer" =~ ^[Yy]$ ]]; then
-          log_info "  → Patching DataScienceCluster '$detected_dsc'..."
-          if patch_dsc_for_maas "$detected_dsc" "$dsc_manifest"; then
-            log_info "  ✓ DataScienceCluster patched and validated"
-          else
-            log_error "  ✗ Failed to patch DataScienceCluster"
-            exit 1
-          fi
-        else
-          log_error ""
-          log_error "Deployment cancelled. Fix the DSC manually:"
-          log_error "  kubectl edit datasciencecluster $detected_dsc"
-          exit 1
-        fi
-      else
-        # Non-interactive (CI): auto-patch without prompting
-        log_info "  → Auto-patching DataScienceCluster '$detected_dsc' (non-interactive mode)..."
-        if patch_dsc_for_maas "$detected_dsc" "$dsc_manifest"; then
-          log_info "  ✓ DataScienceCluster patched and validated"
-        else
-          log_error "  ✗ Failed to patch DataScienceCluster"
-          log_error "    Fix manually: kubectl edit datasciencecluster $detected_dsc"
-          exit 1
-        fi
-      fi
-    fi
-  fi
-
-  # Detect component status
-  local postgres_status
-  postgres_status=$(detect_postgresql "$NAMESPACE")
-
-  local gateway_status
-  gateway_status=$(detect_gateway)
-
-  local kuadrant_status="N/A"
-  local csv_gateway_patch="N/A"
-  if [[ -n "$detected_policy_engine" ]]; then
-    kuadrant_status=$(detect_kuadrant_cr "$detected_policy_engine")
-    if detect_csv_gateway_patch "$detected_policy_engine"; then
-      csv_gateway_patch="true"
-    else
-      csv_gateway_patch="false"
-    fi
-  fi
-
-  # Display discovered state
-  local operator_display="Not detected"
-  if [[ -n "$detected_operator_type" ]]; then
-    local operator_upper
-    operator_upper=$(echo "$detected_operator_type" | tr '[:lower:]' '[:upper:]')
-    operator_display="$operator_upper (detected)"
-  fi
-
-  local policy_display="Not detected"
-  if [[ -n "$detected_policy_engine" ]]; then
-    local policy_upper
-    policy_upper=$(echo "$detected_policy_engine" | tr '[:lower:]' '[:upper:]')
-    policy_display="$policy_upper (installed)"
-  fi
-
-  local dsc_display="Not detected"
-  if [[ -n "$detected_dsc" ]]; then
-    dsc_display="$detected_dsc (validated ✓)"
-  fi
-
-  printf "  %-32s → %s\n" "Operator Type" "$operator_display"
-  printf "  %-32s → %s\n" "Target Namespace" "$NAMESPACE"
-  printf "  %-32s → %s\n" "Policy Engine" "$policy_display"
-  if [[ -n "$detected_policy_engine" ]]; then
-    printf "  %-32s → %s\n" "  └─ Kuadrant CR" "$(echo "$kuadrant_status" | sed 's/ready/Ready ✓/;s/exists/Exists ⚠/;s/missing/Not found ✗/')"
-    printf "  %-32s → %s\n" "  └─ CSV Gateway Patch" "$(echo "$csv_gateway_patch" | sed 's/true/Applied ✓/;s/false/Missing ⚠/;s/N\/A/N\/A/')"
-  fi
-  printf "  %-32s → %s\n" "DataScienceCluster" "$dsc_display"
-  printf "  %-32s → %s\n" "PostgreSQL" "$(echo "$postgres_status" | sed 's/ready/Ready ✓/;s/exists/Exists ⚠/;s/missing/Not found ✗/')"
-  printf "  %-32s → %s\n" "Gateway" "$(echo "$gateway_status" | sed 's/programmed/Ready ✓/;s/exists/Exists ⚠/;s/missing/Not found ✗/')"
-
-  log_info ""
-  log_info "───────────────────────────────────────────────────────────"
-  log_info ""
-
-  #──────────────────────────────────────────────────────────────
-  # DEPLOYMENT PLAN
-  #──────────────────────────────────────────────────────────────
-
-  log_info "═══════════════════════════════════════════════════════════"
-  log_info "  📋 DEPLOYMENT PLAN"
-  log_info "═══════════════════════════════════════════════════════════"
-  log_info ""
-
-  # Determine actions for each component
-  local policy_action="APPLY"
-  local policy_reason="Installing policy engine"
-  if [[ -n "$detected_policy_engine" ]]; then
-    if [[ "$kuadrant_status" == "ready" && "$csv_gateway_patch" == "true" ]]; then
-      policy_action="SKIP"
-      policy_reason="Already installed and configured"
-    else
-      policy_action="VERIFY"
-      policy_reason="Checking configuration"
-    fi
-  fi
-
-  local postgres_action="APPLY"
-  local postgres_reason="Installing database"
-  if [[ "$postgres_status" == "ready" ]]; then
-    postgres_action="SKIP"
-    postgres_reason="Already deployed and ready"
-  elif [[ "$postgres_status" == "exists" ]]; then
-    postgres_action="VERIFY"
-    postgres_reason="Exists but not ready"
-  fi
-
-  local gateway_action="APPLY"
-  local gateway_reason="Creating gateway"
-  if [[ "$gateway_status" == "programmed" ]]; then
-    gateway_action="SKIP"
-    gateway_reason="Already configured"
-  elif [[ "$gateway_status" == "exists" ]]; then
-    gateway_action="VERIFY"
-    gateway_reason="Exists but not programmed"
-  fi
-
-  # Display plan
-  local action_emoji
-  case "$policy_action" in
-    SKIP) action_emoji="✓" ;;
-    VERIFY) action_emoji="⚠" ;;
-    APPLY) action_emoji="→" ;;
-  esac
-  printf "  %s %-30s %-8s %s\n" "$action_emoji" "Policy Engine ($POLICY_ENGINE)" "$policy_action" "$policy_reason"
-
-  case "$postgres_action" in
-    SKIP) action_emoji="✓" ;;
-    VERIFY) action_emoji="⚠" ;;
-    APPLY) action_emoji="→" ;;
-  esac
-  printf "  %s %-30s %-8s %s\n" "$action_emoji" "PostgreSQL" "$postgres_action" "$postgres_reason"
-
-  case "$gateway_action" in
-    SKIP) action_emoji="✓" ;;
-    VERIFY) action_emoji="⚠" ;;
-    APPLY) action_emoji="→" ;;
-  esac
-  printf "  %s %-30s %-8s %s\n" "$action_emoji" "Gateway" "$gateway_action" "$gateway_reason"
-
-  printf "  %s %-30s %-8s %s\n" "→" "MaaS Platform" "APPLY" "Deploying via kustomize"
-
-  log_info ""
-  log_info "───────────────────────────────────────────────────────────"
-  log_info ""
-
-  #──────────────────────────────────────────────────────────────
-  # POLICY ENGINE
-  #──────────────────────────────────────────────────────────────
-
-  log_info "┌─────────────────────────────────────────────────────────┐"
-  log_info "│ 🔧 Policy Engine ($POLICY_ENGINE)"
-  log_info "└─────────────────────────────────────────────────────────┘"
-  log_info ""
-
-  if [[ "$policy_action" == "SKIP" ]]; then
-    log_info "  ✓ Policy engine already installed and healthy"
-    log_info "  ✓ CSV Gateway controller patch applied"
-    log_info "  ✓ Kuadrant CR ready"
-    # Gateway might still need to be created (e.g., deleted between runs)
-    if [[ "$gateway_action" != "SKIP" ]]; then
-      log_info "  → Creating gateway..."
-      setup_gateway_api
-      setup_maas_gateway
-      log_info "  Waiting for Gateway to be Programmed..."
-      kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=120s 2>/dev/null || \
-        log_warn "  Gateway not yet Programmed after 120s"
-    fi
-    log_info ""
-  elif [[ "$policy_action" == "VERIFY" ]]; then
-    log_info "  → Verifying policy engine configuration..."
-    install_policy_engine
-    log_info ""
-  else
-    log_info "  → Installing policy engine..."
-    install_policy_engine
-    log_info ""
-  fi
-
-  #──────────────────────────────────────────────────────────────
-  # NAMESPACE AND OVERLAY SETUP
-  #──────────────────────────────────────────────────────────────
+  # Install rate limiter component (RHCL or Kuadrant)
+  install_policy_engine
 
   local overlay="$project_root/deployment/overlays/http-backend"
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
-    log_debug "Using TLS backend overlay"
+    log_info "Using TLS backend overlay"
     overlay="$project_root/deployment/overlays/tls-backend"
   else
-    log_debug "Using HTTP backend overlay"
+    log_info "Using HTTP backend overlay"
   fi
 
   # Set namespace and image from script (overlay kustomization is restored on exit)
@@ -914,119 +661,52 @@ deploy_via_kustomize() {
   set_maas_controller_image
   set_overlay_namespace "$overlay" "$NAMESPACE"
 
-  if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
-    log_info "┌─────────────────────────────────────────────────────────┐"
-    log_info "│ 🔧 Namespace"
-    log_info "└─────────────────────────────────────────────────────────┘"
-    log_info ""
-    log_info "  → Creating namespace: $NAMESPACE"
-    kubectl create namespace "$NAMESPACE"
-    log_info "  ✓ Namespace created"
-    log_info ""
+  # Create namespace (idempotent - treat AlreadyExists as success to avoid TOCTOU races)
+  log_info "Ensuring namespace exists: $NAMESPACE"
+  if ! kubectl create namespace "$NAMESPACE" 2>/dev/null; then
+    # Create failed - check if it's because namespace already exists
+    if kubectl get namespace "$NAMESPACE" &>/dev/null; then
+      log_debug "Namespace $NAMESPACE already exists"
+    else
+      log_error "Failed to create namespace $NAMESPACE"
+      return 1
+    fi
+  else
+    log_info "Created namespace: $NAMESPACE"
   fi
 
   # Note: The subscription namespace (default: models-as-a-service) is automatically
   # created by maas-controller when it starts (see maas-controller/cmd/manager/main.go).
   # We only set the variable here for use in manifest patching below.
   local subscription_namespace="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
-  # Validate namespace format (DNS-1123 label: 1-63 chars, lowercase alphanumeric and hyphens)
-  if [[ ! "$subscription_namespace" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]]; then
-    log_error "Invalid MAAS_SUBSCRIPTION_NAMESPACE: '$subscription_namespace' must be a valid Kubernetes namespace"
-    exit 1
-  fi
 
-  #──────────────────────────────────────────────────────────────
-  # POSTGRESQL
-  #──────────────────────────────────────────────────────────────
-
-  log_info "┌─────────────────────────────────────────────────────────┐"
-  log_info "│ 🔧 PostgreSQL"
-  log_info "└─────────────────────────────────────────────────────────┘"
-  log_info ""
-
-  if [[ "$postgres_action" == "SKIP" ]]; then
-    log_info "  ✓ PostgreSQL already deployed and ready"
-    # Verify Secret exists
-    if kubectl get secret maas-db-config -n "$NAMESPACE" &>/dev/null; then
-      log_info "  ✓ Database Secret exists"
-    else
-      log_warn "  ⚠ PostgreSQL running but Secret missing, recreating..."
-      # Cannot call deploy_postgresql - it exits early if deployment exists
-      # Extract credentials from existing postgres-creds secret and recreate maas-db-config
-      local pg_user pg_password pg_db
-      pg_user=$(kubectl get secret postgres-creds -n "$NAMESPACE" -o jsonpath='{.data.POSTGRES_USER}' 2>/dev/null | base64 -d || echo "maas")
-      pg_password=$(kubectl get secret postgres-creds -n "$NAMESPACE" -o jsonpath='{.data.POSTGRES_PASSWORD}' 2>/dev/null | base64 -d || echo "")
-      pg_db=$(kubectl get secret postgres-creds -n "$NAMESPACE" -o jsonpath='{.data.POSTGRES_DB}' 2>/dev/null | base64 -d || echo "maas")
-
-      if [[ -z "$pg_password" ]]; then
-        log_error "  ✗ Cannot retrieve PostgreSQL password from postgres-creds secret"
-        log_error "    Secret may be missing or corrupt. Run setup-database.sh manually."
-        exit 1
-      fi
-
-      kubectl create secret generic maas-db-config -n "$NAMESPACE" \
-        --from-literal=DB_CONNECTION_URL="postgresql://${pg_user}:${pg_password}@postgres:5432/${pg_db}?sslmode=disable" \
-        --dry-run=client -o yaml | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
-      log_info "  ✓ Database Secret recreated"
-    fi
-    log_info ""
-  else
-    log_info "  → Deploying PostgreSQL..."
-    deploy_postgresql
-    log_info ""
-  fi
-
-  #──────────────────────────────────────────────────────────────
-  # KEYCLOAK (optional)
-  #──────────────────────────────────────────────────────────────
+  # Deploy PostgreSQL for API key storage (requires namespace to exist)
+  deploy_postgresql
 
   # Deploy Keycloak identity provider (optional, if enabled)
   if [[ "$ENABLE_KEYCLOAK" == "true" ]]; then
     deploy_keycloak
   fi
 
-  #──────────────────────────────────────────────────────────────
-  # MAAS PLATFORM
-  #──────────────────────────────────────────────────────────────
-
-  log_info "┌─────────────────────────────────────────────────────────┐"
-  log_info "│ 🔧 MaaS Platform"
-  log_info "└─────────────────────────────────────────────────────────┘"
-  log_info ""
-
-  log_info "  → Applying kustomize manifests ($(basename "$overlay") overlay)..."
-  # Patch the maas-api URL placeholder with actual namespace
+  log_info "Applying kustomize manifests..."
   # Patch MAAS_SUBSCRIPTION_NAMESPACE env var with the configured subscription namespace
-  kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
-    kustomize build "$overlay" | \
-    sed "s/maas-api\.placehold\.svc/maas-api.$NAMESPACE.svc/g" | \
-    MAAS_SUB_NS="$subscription_namespace" perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}$ENV{MAAS_SUB_NS}"/smg'
+  # tls/http overlays reference ../odh/params.env outside the overlay root.
+  kubectl apply --server-side=true --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
+    kustomize build --load-restrictor LoadRestrictionsNone "$overlay" | \
+    perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}'"$subscription_namespace"'"/smg'
   )
-  log_info "  ✓ Kustomize manifests applied"
 
   # Apply gateway policies separately so they stay in openshift-ingress (overlay
   # namespace would otherwise overwrite them to $NAMESPACE)
   local policies_dir="$project_root/deployment/base/maas-controller/policies"
   if [[ -d "$policies_dir" ]]; then
-    log_info "  → Applying gateway policies (openshift-ingress)..."
-    kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$policies_dir")
-    log_info "  ✓ Gateway policies applied"
+    log_info "Applying gateway policies (openshift-ingress)..."
+    kubectl apply --server-side=true --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$policies_dir")
   fi
-
-  log_info ""
-
-  #──────────────────────────────────────────────────────────────
-  # POST-DEPLOYMENT CONFIGURATION
-  #──────────────────────────────────────────────────────────────
 
   # Configure TLS backend (if enabled)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
-    log_info "┌─────────────────────────────────────────────────────────┐"
-    log_info "│ 🔧 TLS Backend Configuration"
-    log_info "└─────────────────────────────────────────────────────────┘"
-    log_info ""
     configure_tls_backend
-    log_info ""
   fi
 
   # Patch the live AuthPolicy after kustomize apply so OIDC and API key
@@ -1036,60 +716,37 @@ deploy_via_kustomize() {
   # Configure audience for non-standard clusters (HyperShift/ROSA)
   configure_cluster_audience
 
-  #──────────────────────────────────────────────────────────────
-  # DEPLOYMENT SUMMARY
-  #──────────────────────────────────────────────────────────────
-
-  log_info ""
-  log_info "╔═══════════════════════════════════════════════════════════╗"
-  log_info "║ ✓ DEPLOYMENT COMPLETED SUCCESSFULLY                       ║"
-  log_info "╚═══════════════════════════════════════════════════════════╝"
-  log_info ""
-  log_info "Components deployed:"
-
-  # Show what was done for each component
-  case "$policy_action" in
-    SKIP)
-      log_info "  ✓ Policy Engine ($POLICY_ENGINE)     - Already installed"
-      ;;
-    VERIFY)
-      log_info "  ✓ Policy Engine ($POLICY_ENGINE)     - Verified and configured"
-      ;;
-    APPLY)
-      log_info "  ✓ Policy Engine ($POLICY_ENGINE)     - Installed"
-      ;;
-  esac
-
-  case "$postgres_action" in
-    SKIP)
-      log_info "  ✓ PostgreSQL                  - Already deployed"
-      ;;
-    *)
-      log_info "  ✓ PostgreSQL                  - Deployed"
-      ;;
-  esac
-
-  log_info "  ✓ MaaS API                    - Deployed"
-  log_info "  ✓ MaaS Controller             - Deployed"
-  log_info "  ✓ Gateway Policies            - Applied"
-
-  log_info ""
-  log_info "Next steps:"
-  log_info "  • Create MaaSModelRef resources to register models"
-  log_info "  • Create MaaSAuthPolicy to grant access to users/groups"
-  log_info "  • Create MaaSSubscription for rate limiting"
-  log_info ""
-  log_info "For documentation and examples, see:"
-  log_info "  https://opendatahub-io.github.io/models-as-a-service/"
-  log_info ""
+  log_info "Kustomize deployment completed"
 }
 
 #──────────────────────────────────────────────────────────────
 # POSTGRESQL DEPLOYMENT
 #──────────────────────────────────────────────────────────────
 
+validate_postgres_connection() {
+  local conn="$1"
+  if [[ ! "$conn" =~ ^postgres(ql)?:// ]]; then
+    log_error "Invalid PostgreSQL connection string format"
+    log_error "Expected: postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require"
+    return 1
+  fi
+}
+
 deploy_postgresql() {
-  NAMESPACE="$NAMESPACE" "${SCRIPT_DIR}/setup-database.sh"
+  if [[ -n "$POSTGRES_CONNECTION" ]]; then
+    validate_postgres_connection "$POSTGRES_CONNECTION" || exit 1
+    log_info "Using external PostgreSQL connection"
+    create_maas_db_config_secret "$NAMESPACE" "$POSTGRES_CONNECTION"
+    log_info "Created maas-db-config secret with external connection"
+  else
+    log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_warn "  DEPLOYING POC POSTGRESQL — NOT INTENDED FOR PRODUCTION USE"
+    log_warn "  Data is stored in ephemeral storage and will be lost on pod restart."
+    log_warn "  For production, use --postgres-connection with an external database"
+    log_warn "  (AWS RDS, Crunchy Operator, Azure Database, etc.)"
+    log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    NAMESPACE="$NAMESPACE" "${SCRIPT_DIR}/setup-database.sh"
+  fi
 }
 
 #──────────────────────────────────────────────────────────────
@@ -1110,97 +767,58 @@ install_optional_operators() {
 
   local data_dir="${SCRIPT_DIR}/data"
 
-  # Pre-flight: verify operator packages are available in the catalog
-  log_info "Checking operator package availability..."
-  local cert_manager_available=true
-  local lws_available=true
+  # Apply both subscriptions in parallel (they're independent)
+  log_info "Applying cert-manager and LeaderWorkerSet subscriptions..."
+  kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f "${data_dir}/cert-manager-subscription.yaml" &
+  local cert_manager_pid=$!
+  kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f "${data_dir}/lws-subscription.yaml" &
+  local lws_pid=$!
 
-  if ! check_package_available "openshift-cert-manager-operator" "redhat-operators" "openshift-marketplace"; then
-    log_warn "cert-manager operator not available in catalog — skipping"
-    cert_manager_available=false
+  # Wait for both apply commands to complete and capture individual exit codes
+  local cert_manager_apply_rc=0
+  local lws_apply_rc=0
+  wait $cert_manager_pid || cert_manager_apply_rc=$?
+  wait $lws_pid || lws_apply_rc=$?
+
+  if [[ $cert_manager_apply_rc -ne 0 ]]; then
+    log_error "Failed to apply cert-manager subscription (exit code: $cert_manager_apply_rc)"
+    return 1
+  fi
+  if [[ $lws_apply_rc -ne 0 ]]; then
+    log_error "Failed to apply LWS subscription (exit code: $lws_apply_rc)"
+    return 1
   fi
 
-  if ! check_package_available "leader-worker-set" "redhat-operators" "openshift-marketplace"; then
-    log_warn "LeaderWorkerSet operator not available in catalog — skipping"
-    lws_available=false
-  fi
-
-  if [[ "$cert_manager_available" == "false" && "$lws_available" == "false" ]]; then
-    log_warn "No optional operators available — continuing without them"
-    return 0
-  fi
-
-  # Apply available subscriptions
-  if [[ "$cert_manager_available" == "true" ]]; then
-    log_info "Applying cert-manager subscription..."
-    kubectl create namespace cert-manager-operator 2>/dev/null || true
-    local og_count
-    og_count=$(kubectl get operatorgroup -n cert-manager-operator --no-headers 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$og_count" -eq 0 ]]; then
-      kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/cert-manager-subscription.yaml"
-    else
-      log_info "OperatorGroup already exists in cert-manager-operator, applying subscription only..."
-      kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f <(
-        awk '/kind: Subscription/,0' "${data_dir}/cert-manager-subscription.yaml"
-      )
-    fi
-  fi
-  if [[ "$lws_available" == "true" ]]; then
-    log_info "Applying LeaderWorkerSet subscription..."
-    kubectl create namespace openshift-lws-operator 2>/dev/null || true
-    local lws_og_count
-    lws_og_count=$(kubectl get operatorgroup -n openshift-lws-operator --no-headers 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$lws_og_count" -eq 0 ]]; then
-      kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/lws-subscription.yaml"
-    else
-      log_info "OperatorGroup already exists in openshift-lws-operator, applying subscription only..."
-      kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f <(
-        awk '/kind: Subscription/,0' "${data_dir}/lws-subscription.yaml"
-      )
-    fi
-  fi
-
-  # Wait for subscriptions to be installed (in parallel where possible)
+  # Wait for both subscriptions to be installed (can run in parallel too)
   log_info "Waiting for operators to be installed..."
-  local cert_wait_pid="" lws_wait_pid=""
-  if [[ "$cert_manager_available" == "true" ]]; then
-    waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
-    cert_wait_pid=$!
-  fi
-  if [[ "$lws_available" == "true" ]]; then
-    waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
-    lws_wait_pid=$!
-  fi
+  waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
+  local cert_wait_pid=$!
+  waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
+  local lws_wait_pid=$!
 
-  # Wait for completions and capture exit codes
+  # Wait for both to complete and capture individual exit codes
   local cert_wait_rc=0
   local lws_wait_rc=0
-  if [[ -n "$cert_wait_pid" ]]; then
-    wait $cert_wait_pid || cert_wait_rc=$?
-  fi
-  if [[ -n "$lws_wait_pid" ]]; then
-    wait $lws_wait_pid || lws_wait_rc=$?
-  fi
+  wait $cert_wait_pid || cert_wait_rc=$?
+  wait $lws_wait_pid || lws_wait_rc=$?
 
-  # Report results (non-fatal for optional operators)
   if [[ $cert_wait_rc -ne 0 ]]; then
-    log_warn "cert-manager operator installation failed — continuing without it"
+    log_error "cert-manager operator installation failed"
+    return 1
   fi
   if [[ $lws_wait_rc -ne 0 ]]; then
-    log_warn "LWS operator installation failed — continuing without it"
+    log_error "LWS operator installation failed"
+    return 1
   fi
 
-  # Create LeaderWorkerSetOperator CR to activate the LWS controller-manager
-  # (only if LWS was successfully installed).
+  # Create LeaderWorkerSetOperator CR to activate the LWS controller-manager.
   # The operator subscription alone only installs the operator pod; the CR is
   # required to actually deploy the LWS API (controller-manager pods).
   # See: https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/ai_workloads/leader-worker-set-operator
-  if [[ "$lws_available" == "true" && $lws_wait_rc -eq 0 ]]; then
-    log_info "Activating LeaderWorkerSet API..."
-    kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/lws-operator-cr.yaml"
-  fi
+  log_info "Activating LeaderWorkerSet API..."
+  kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f "${data_dir}/lws-operator-cr.yaml"
 
-  log_info "Optional operators step complete"
+  log_info "Optional operators installed"
 }
 
 
@@ -1283,8 +901,8 @@ patch_kuadrant_csv_for_gateway() {
     # Wait for the new pod to be ready
     log_info "Waiting for operator pod to restart..."
     sleep 5
-    kubectl rollout status deployment/"$operator_deployment" -n "$namespace" --timeout=120s 2>/dev/null || \
-      log_warn "Operator rollout status check timed out"
+    kubectl rollout status deployment/"$operator_deployment" -n "$namespace" --timeout="${ROLLOUT_TIMEOUT}s" 2>/dev/null || \
+      log_warn "Operator rollout status check timed out (timeout: ${ROLLOUT_TIMEOUT}s)"
     
     # Verify the env var is in the RUNNING pod
     local pod_env
@@ -1335,7 +953,6 @@ cleanup_previous_policy_engine() {
   log_info "  → Removing OLM artifacts from $old_namespace..."
   kubectl delete subscription --all -n "$old_namespace" --ignore-not-found 2>/dev/null || true
 
-  # Delete CSVs by prefix (community kuadrant has multiple: kuadrant-operator, limitador-operator, etc.)
   for csv in $(kubectl get csv -n "$old_namespace" --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null || true); do
     kubectl delete csv "$csv" -n "$old_namespace" --ignore-not-found 2>/dev/null || true
   done
@@ -1347,67 +964,24 @@ cleanup_previous_policy_engine() {
 }
 
 install_policy_engine() {
-  # Check if policy engine is already installed
-  local existing_engine
-  existing_engine=$(detect_policy_engine)
+  log_info "Installing policy engine: $POLICY_ENGINE"
 
-  if [[ "$existing_engine" == "$POLICY_ENGINE" ]]; then
-    log_info "  ✓ $POLICY_ENGINE operator already installed"
-
-    # Verify and patch CSV if needed
-    local namespace
-    local operator_prefix
-    case "$POLICY_ENGINE" in
-      rhcl)
-        namespace="rh-connectivity-link"
-        operator_prefix="rhcl-operator"
-        ;;
-      kuadrant)
-        namespace="kuadrant-system"
-        operator_prefix="kuadrant-operator"
-        ;;
-    esac
-
-    # Check CSV Gateway patch
-    if detect_csv_gateway_patch "$POLICY_ENGINE"; then
-      log_info "  ✓ CSV Gateway controller patch already applied"
-    else
-      log_info "  → Applying CSV Gateway controller patch..."
-      patch_kuadrant_csv_for_gateway "$namespace" "$operator_prefix"
-      log_info "  ✓ CSV patched"
-    fi
-
-    # Check Kuadrant CR
-    local kuadrant_status
-    kuadrant_status=$(detect_kuadrant_cr "$POLICY_ENGINE")
-    if [[ "$kuadrant_status" == "ready" ]]; then
-      log_info "  ✓ Kuadrant CR already exists and ready"
-    elif [[ "$kuadrant_status" == "exists" ]]; then
-      log_warn "  ⚠ Kuadrant CR exists but not ready, waiting..."
-      # Wait for it to become ready
-      wait_for_custom_check "Kuadrant ready in $namespace" \
-        "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-        120 5 || log_warn "Kuadrant not ready yet"
-    else
-      log_info "  → Creating Kuadrant CR..."
-      apply_kuadrant_cr "$namespace"
-      log_info "  ✓ Kuadrant CR created"
-    fi
-
-    return 0
-  elif [[ -n "$existing_engine" && "$existing_engine" != "$POLICY_ENGINE" ]]; then
-    log_warn "  ⚠ Different policy engine detected: $existing_engine (requested: $POLICY_ENGINE)"
-    cleanup_previous_policy_engine "$existing_engine"
-    # Fall through to fresh installation below
+  # Check for a conflicting policy engine and clean it up if found
+  local conflicting_engine=""
+  if [[ "$POLICY_ENGINE" == "kuadrant" ]] && kubectl get subscription rhcl-operator -n rh-connectivity-link &>/dev/null; then
+    conflicting_engine="rhcl"
+  elif [[ "$POLICY_ENGINE" == "rhcl" ]] && kubectl get subscription kuadrant-operator -n kuadrant-system &>/dev/null; then
+    conflicting_engine="kuadrant"
   fi
-
-  # Policy engine not installed - proceed with installation
-  log_info "  → Installing $POLICY_ENGINE policy engine..."
+  if [[ -n "$conflicting_engine" ]]; then
+    log_warn "  ⚠ Different policy engine detected: $conflicting_engine (requested: $POLICY_ENGINE)"
+    cleanup_previous_policy_engine "$conflicting_engine"
+  fi
 
   case "$POLICY_ENGINE" in
     rhcl)
-      log_info "  → Installing RHCL (Red Hat Connectivity Link - downstream)"
-      install_olm_operator \
+      log_info "Installing RHCL (Red Hat Connectivity Link - downstream)"
+      if ! install_olm_operator \
         "rhcl-operator" \
         "rh-connectivity-link" \
         "redhat-operators" \
@@ -1415,30 +989,30 @@ install_policy_engine() {
         "" \
         "AllNamespaces" \
         "" \
-        ""
+        ""; then
+        log_error "RHCL operator installation failed"
+        return 1
+      fi
 
       # Patch RHCL CSV to recognize OpenShift Gateway controller
-      log_info "  → Patching RHCL CSV for OpenShift Gateway controller..."
       patch_kuadrant_csv_for_gateway "rh-connectivity-link" "rhcl-operator"
 
       # Apply RHCL/Kuadrant custom resource
-      log_info "  → Creating Kuadrant CR..."
       apply_kuadrant_cr "rh-connectivity-link"
-      log_info "  ✓ RHCL installed successfully"
       ;;
 
     kuadrant)
-      log_info "  → Installing Kuadrant v1.3.1 (upstream community)"
+      log_info "Installing Kuadrant v1.4.2 (upstream community)"
 
-      # Create custom catalog for upstream Kuadrant v1.3.1
-      # This version provides AuthPolicy v1 API required by ODH
+      # Create custom catalog for upstream Kuadrant v1.4.2
+      # This version provides AuthPolicy v1 API and Authorino v0.23.1
       local kuadrant_catalog="kuadrant-operator-catalog"
       local kuadrant_ns="kuadrant-system"
 
-      log_info "  → Creating Kuadrant v1.3.1 catalog source..."
+      log_info "Creating Kuadrant v1.4.2 catalog source..."
       kubectl create namespace "$kuadrant_ns" 2>/dev/null || true
 
-      cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
+      cat <<EOF | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
@@ -1446,7 +1020,7 @@ metadata:
   namespace: $kuadrant_ns
 spec:
   sourceType: grpc
-  image: quay.io/kuadrant/kuadrant-operator-catalog:v1.3.1
+  image: quay.io/kuadrant/kuadrant-operator-catalog:v1.4.2
   displayName: Kuadrant Operator Catalog
   publisher: Kuadrant
   updateStrategy:
@@ -1455,11 +1029,11 @@ spec:
 EOF
 
       # Wait for catalog to be ready
-      log_info "  → Waiting for Kuadrant catalog to be ready..."
+      log_info "Waiting for Kuadrant catalog to be ready..."
       sleep 10
 
       # Create OperatorGroup for Kuadrant
-      cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
+      cat <<EOF | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
@@ -1470,8 +1044,7 @@ EOF
 
       # Install Kuadrant operator from the custom catalog
       # IMPORTANT: source_namespace must match where CatalogSource was created (kuadrant_ns)
-      log_info "  → Installing Kuadrant operator..."
-      install_olm_operator \
+      if ! install_olm_operator \
         "kuadrant-operator" \
         "$kuadrant_ns" \
         "$kuadrant_catalog" \
@@ -1479,16 +1052,16 @@ EOF
         "" \
         "AllNamespaces" \
         "$kuadrant_ns" \
-        ""
+        ""; then
+        log_error "Kuadrant operator installation failed"
+        return 1
+      fi
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
-      log_info "  → Patching Kuadrant CSV for OpenShift Gateway controller..."
       patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
 
       # Apply Kuadrant custom resource
-      log_info "  → Creating Kuadrant CR..."
       apply_kuadrant_cr "$kuadrant_ns"
-      log_info "  ✓ Kuadrant installed successfully"
       ;;
   esac
 }
@@ -1559,7 +1132,7 @@ install_primary_operator() {
       log_info "Installing RHOAI v3 operator..."
       # RHOAI operator goes in redhat-ods-operator namespace (not redhat-ods-applications)
       local operator_namespace="redhat-ods-operator"
-      install_olm_operator \
+      if ! install_olm_operator \
         "rhods-operator" \
         "$operator_namespace" \
         "$catalog_source" \
@@ -1567,7 +1140,10 @@ install_primary_operator() {
         "" \
         "AllNamespaces" \
         "" \
-        ""
+        ""; then
+        log_error "RHOAI operator installation failed"
+        return 1
+      fi
 
       # Patch CSV with custom operator image if specified
       if [[ -n "$OPERATOR_IMAGE" ]]; then
@@ -1597,7 +1173,7 @@ install_primary_operator() {
       [[ "$odh_plan_approval" == "-" ]] && odh_plan_approval=""
 
       log_info "Installing ODH operator..."
-      install_olm_operator \
+      if ! install_olm_operator \
         "opendatahub-operator" \
         "$NAMESPACE" \
         "$catalog_source" \
@@ -1605,7 +1181,10 @@ install_primary_operator() {
         "$odh_starting_csv" \
         "AllNamespaces" \
         "openshift-marketplace" \
-        "$odh_plan_approval"
+        "$odh_plan_approval"; then
+        log_error "ODH operator installation failed"
+        return 1
+      fi
 
       # Patch CSV with custom operator image if specified
       if [[ -n "$OPERATOR_IMAGE" ]]; then
@@ -1626,8 +1205,8 @@ apply_custom_resources() {
   # The operator creates CRDs when its CSV becomes active, but there can be a delay.
   # Both CRDs are installed together, so waiting for DataScienceCluster is sufficient.
   log_info "Waiting for operator CRDs to be established..."
-  wait_for_crd "datascienceclusters.datasciencecluster.opendatahub.io" 180 || {
-    log_error "DataScienceCluster CRD not available - operator may not have installed correctly"
+  wait_for_crd "datascienceclusters.datasciencecluster.opendatahub.io" "$CRD_TIMEOUT" || {
+    log_error "DataScienceCluster CRD not available - operator may not have installed correctly (timeout: ${CRD_TIMEOUT}s)"
     return 1
   }
 
@@ -1644,21 +1223,23 @@ apply_custom_resources() {
 
   local webhook_deployment
   if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
-    webhook_deployment="rhods-operator-controller-manager"
+    webhook_deployment="rhods-operator"
   else
     webhook_deployment="opendatahub-operator-controller-manager"
   fi
 
   # Wait for webhook deployment to exist and be ready (ensures service + endpoints are ready)
-  wait_for_resource "deployment" "$webhook_deployment" "$webhook_namespace" 120 || {
-    log_warn "Webhook deployment not found after 120s, proceeding anyway..."
+  wait_for_resource "deployment" "$webhook_deployment" "$webhook_namespace" "$ROLLOUT_TIMEOUT" || {
+    log_error "Webhook deployment not found after ${ROLLOUT_TIMEOUT}s"
+    return 1
   }
 
   # Wait for deployment to be fully ready (replicas available)
   if kubectl get deployment "$webhook_deployment" -n "$webhook_namespace" >/dev/null 2>&1; then
-    kubectl wait --for=condition=Available --timeout=120s \
+    kubectl wait --for=condition=Available --timeout="${ROLLOUT_TIMEOUT}s" \
       deployment/"$webhook_deployment" -n "$webhook_namespace" 2>/dev/null || {
-      log_warn "Webhook deployment not fully ready, proceeding anyway..."
+      log_error "Webhook deployment not fully ready after ${ROLLOUT_TIMEOUT}s"
+      return 1
     }
   fi
 
@@ -1686,7 +1267,7 @@ apply_dsci() {
   local max_attempts=5
   local wait_seconds=15
   for attempt in $(seq 1 $max_attempts); do
-    if cat <<EOF | kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
+    if cat <<EOF | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
 apiVersion: dscinitialization.opendatahub.io/v1
 kind: DSCInitialization
 metadata:
@@ -1774,7 +1355,7 @@ apply_dsc() {
   #
   # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
   #       Only ODH currently supports this feature
-  kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/datasciencecluster.yaml"
+  kubectl apply --server-side=true --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f "${data_dir}/datasciencecluster.yaml"
 }
 
 #──────────────────────────────────────────────────────────────
@@ -1791,7 +1372,12 @@ setup_gateway_api() {
 
   # Create GatewayClass for OpenShift Gateway API controller
   # This enables the built-in Gateway API implementation (OpenShift 4.14+)
-  kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/gatewayclass.yaml"
+  if kubectl get gatewayclass openshift-default &>/dev/null; then
+    log_debug "GatewayClass openshift-default already exists, skipping creation"
+  else
+    log_info "Creating GatewayClass openshift-default..."
+    kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f "${data_dir}/gatewayclass.yaml"
+  fi
 }
 
 # setup_maas_gateway
@@ -1879,16 +1465,21 @@ setup_maas_gateway() {
 
   # Create the Gateway resource using the kustomize manifest
   # This includes both HTTP and HTTPS listeners, required annotations and labels
-  log_info "Creating maas-default-gateway resource (allowing routes from all namespaces)..."
+  if kubectl get gateway maas-default-gateway -n openshift-ingress &>/dev/null; then
+    log_info "Gateway maas-default-gateway already exists in openshift-ingress"
+    log_debug "  Updating Gateway configuration if needed..."
+  else
+    log_info "Creating maas-default-gateway resource (allowing routes from all namespaces)..."
+  fi
 
   local maas_networking_dir="${SCRIPT_DIR}/../deployment/base/networking/maas"
   if [[ -d "$maas_networking_dir" ]]; then
     # Use local kustomize manifest with envsubst for variable substitution
-    kustomize build "$maas_networking_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME' | kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f -
+    kustomize build "$maas_networking_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME' | kubectl apply --server-side=true --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
   else
     # Fallback: fetch from GitHub (for standalone script usage)
     log_debug "  Local manifest not found, fetching from GitHub..."
-    kubectl apply --server-side=true --request-timeout="$KUBECTL_REQUEST_TIMEOUT" \
+    kubectl apply --server-side=true --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" \
       -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/networking/maas?ref=main" | \
            envsubst '$CLUSTER_DOMAIN $CERT_NAME')
   fi
@@ -1912,47 +1503,40 @@ apply_kuadrant_cr() {
   # Wait for Gateway to be Programmed (required before Kuadrant can become ready)
   # This ensures Service Mesh is installed and Gateway API provider is operational
   log_info "Waiting for Gateway to be Programmed (Service Mesh initialization)..."
-  if ! kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=120s 2>/dev/null; then
-    log_warn "Gateway not yet Programmed after 120s - Kuadrant may take longer to become ready"
-  fi
-
-  # RHCL creates managed resources (Limitador, Authorino, AuthConfig) in kuadrant-system
-  # regardless of the operator namespace. Ensure it exists.
-  if [[ "$namespace" != "kuadrant-system" ]]; then
-    if ! kubectl get namespace kuadrant-system &>/dev/null; then
-      log_info "Creating kuadrant-system namespace (required for managed resources)..."
-      kubectl create namespace kuadrant-system
-    fi
+  if ! kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout="${CUSTOM_CHECK_TIMEOUT}s" 2>/dev/null; then
+    log_warn "Gateway not yet Programmed after ${CUSTOM_CHECK_TIMEOUT}s - Kuadrant may take longer to become ready"
   fi
 
   log_info "Applying Kuadrant custom resource in $namespace..."
 
   local data_dir="${SCRIPT_DIR}/data"
-  kubectl apply --request-timeout="$KUBECTL_REQUEST_TIMEOUT" -f "${data_dir}/kuadrant.yaml" -n "$namespace"
+  kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f "${data_dir}/kuadrant.yaml" -n "$namespace"
 
-  # Wait for Kuadrant to be ready (initial attempt - 60s)
+  # Wait for Kuadrant to be ready (initial attempt - configurable timeout)
   # If it fails with MissingDependency, restart the operator and retry
   log_info "Waiting for Kuadrant to become ready (initial check)..."
+  local kuadrant_initial_timeout=$((CUSTOM_CHECK_TIMEOUT / 2))  # Use half of standard timeout for initial check
   if ! wait_for_custom_check "Kuadrant ready in $namespace" \
-    "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-    60 \
-    5; then
-    
+    "$kuadrant_initial_timeout" \
+    5 -- \
+    bash -c "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True"; then
+
     # Check if it's a MissingDependency issue
     local kuadrant_reason
     kuadrant_reason=$(kubectl get kuadrant kuadrant -n "$namespace" -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}' 2>/dev/null || echo "")
-    
+
     if [[ "$kuadrant_reason" == "MissingDependency" ]]; then
       log_info "Kuadrant shows MissingDependency - restarting operator to re-register Gateway controller..."
       kubectl delete pod -n "$namespace" -l control-plane=controller-manager --force --grace-period=0 2>/dev/null || true
       sleep 15
-      
+
       # Retry waiting for Kuadrant
       log_info "Retrying Kuadrant readiness check after operator restart..."
       wait_for_custom_check "Kuadrant ready in $namespace" \
-        "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-        120 \
-        5 || log_warn "Kuadrant not ready yet - AuthPolicy enforcement may fail on model HTTPRoutes"
+        "$CUSTOM_CHECK_TIMEOUT" \
+        5 -- \
+        bash -c "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
+        || log_warn "Kuadrant not ready yet (timeout: ${CUSTOM_CHECK_TIMEOUT}s) - AuthPolicy enforcement may fail on model HTTPRoutes"
     else
       log_warn "Kuadrant not ready (reason: $kuadrant_reason) - AuthPolicy enforcement may fail"
     fi
@@ -2098,13 +1682,6 @@ configure_maas_api_authpolicy() {
   log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
   kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
     opendatahub.io/managed="false" --overwrite 2>/dev/null || true
-
-  local api_keys_patch="$project_root/scripts/data/maas-api-authpolicy-api-keys-patch.yaml"
-  log_info "  Patching AuthPolicy to ensure API key support..."
-  if ! patch_authpolicy_from_template "$authpolicy_name" "$api_keys_patch" "$NAMESPACE"; then
-    log_error "  Failed to patch AuthPolicy with API key configuration"
-    return 1
-  fi
 
   if [[ "$EXTERNAL_OIDC" != "true" ]]; then
     log_info "  External OIDC not enabled, leaving OpenShift auth as the only identity-token path"
@@ -2257,8 +1834,8 @@ configure_tls_backend() {
 
   # Wait for Authorino deployment to be created by Kuadrant operator
   # This is necessary because Kuadrant may not be fully ready yet (timing issue)
-  wait_for_resource "deployment" "authorino" "$authorino_namespace" 180 || {
-    log_warn "Authorino deployment not found, TLS configuration may fail"
+  wait_for_resource "deployment" "authorino" "$authorino_namespace" "$RESOURCE_TIMEOUT" || {
+    log_warn "Authorino deployment not found after ${RESOURCE_TIMEOUT}s, TLS configuration may fail"
   }
 
   # Call TLS configuration script
@@ -2273,13 +1850,7 @@ configure_tls_backend() {
   # (piping to while-read would check while's exit status, not the script's)
   local tls_output
   local tls_rc=0
-  # In kustomize mode, skip Authorino listener TLS — the Kuadrant operator's EnvoyFilter
-  # connects with plain gRPC and the ODH Model Controller (which adds TLS) doesn't run.
-  local skip_listener_tls="false"
-  if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
-    skip_listener_tls="true"
-  fi
-  tls_output=$(AUTHORINO_NAMESPACE="$authorino_namespace" SKIP_LISTENER_TLS="$skip_listener_tls" "$tls_script" 2>&1) || tls_rc=$?
+  tls_output=$(AUTHORINO_NAMESPACE="$authorino_namespace" "$tls_script" 2>&1) || tls_rc=$?
   
   # Log each line of output
   while read -r line; do log_debug "$line"; done <<< "$tls_output"
@@ -2300,7 +1871,7 @@ configure_tls_backend() {
   
   # Wait for Authorino to be ready after restart
   log_info "Waiting for Authorino deployment to be ready..."
-  kubectl rollout status deployment/authorino -n "$authorino_namespace" --timeout=120s 2>/dev/null || log_warn "Authorino rollout status check timed out"
+  kubectl rollout status deployment/authorino -n "$authorino_namespace" --timeout="${ROLLOUT_TIMEOUT}s" 2>/dev/null || log_warn "Authorino rollout status check timed out (timeout: ${ROLLOUT_TIMEOUT}s)"
 
   log_info "TLS backend configuration complete"
 }

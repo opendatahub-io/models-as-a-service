@@ -74,8 +74,9 @@ nav:
     - Configuration & Management:
       - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
       - Token Management: configuration-and-management/token-management.md
+      - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
-      - Subscription Known Issues: configuration-and-management/subscription-known-issues.md
+      - Subscription limitations & known issues: configuration-and-management/subscription-known-issues.md
     - Models:
       - Model Setup (On Cluster): configuration-and-management/model-setup.md
       - Model Listing Flow: configuration-and-management/model-listing-flow.md
@@ -87,8 +88,11 @@ nav:
       - Observability: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
       - Subscription Cardinality: advanced-administration/subscription-cardinality.md
+      - Authorino Caching: configuration-and-management/authorino-caching.md
   - User Guide:
     - Self Service Model Access: user-guide/self-service-model-access.md
+  - Contributing:
+    - MaaS Testing and Contribution Guide: contributing/testing-guide.md
   - API Reference:
     - MaaS API Overview: reference/maas-api-overview.md
     - MaaS API (Swagger): reference/api-reference.md

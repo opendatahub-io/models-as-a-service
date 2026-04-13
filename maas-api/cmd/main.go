@@ -148,7 +148,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister)
 
-	modelManager, err := models.NewManager(log)
+	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}

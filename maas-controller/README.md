@@ -392,12 +392,37 @@ CI will fail if the generated files are out of date.
 
 ## Troubleshooting
 
+### Understanding Status Phases
+
+MaaSSubscription and MaaSAuthPolicy use these phases:
+
+| Phase | Meaning |
+| ----- | ------- |
+| **Active** | All model references valid, all operands healthy |
+| **Degraded** | Partial functionality — some models valid, others missing/invalid |
+| **Failed** | No functionality — all model references invalid or missing |
+
+Check per-item status to identify specific issues:
+
+```bash
+# Find resources with issues
+kubectl get maassubscription -n models-as-a-service -o jsonpath='{range .items[?(@.status.phase!="Active")]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}'
+
+# Check which model refs are failing
+kubectl get maassubscription my-subscription -n models-as-a-service -o jsonpath='{.status.modelRefStatuses}' | jq .
+```
+
+### Common Issues
+
 **MaaS CRs stuck in `Failed` state:**
-The controller retries with exponential backoff. If the HTTPRoute doesn't exist yet (KServe still deploying), the CRs will auto-recover when it appears. If they stay stuck, check controller logs:
+The controller retries with exponential backoff. If the HTTPRoute doesn't exist yet (KServe still deploying), the CRs will auto-recover when it appears. If they stay stuck, check `status.modelRefStatuses` for `NotFound` reasons, or check controller logs:
 
 ```bash
 kubectl logs deployment/maas-controller -n opendatahub --tail=20
 ```
+
+**MaaS CRs in `Degraded` state:**
+Some model references are invalid. Check `status.modelRefStatuses` (subscription) or `status.authPolicies` (auth policy) to identify which models are failing and why (`NotFound`, `NotAccepted`, `NotEnforced`).
 
 **Auth returns 403 even though user is in the right group:**
 The groups in MaaSAuthPolicy must match your identity provider's groups, not OpenShift Group objects. Check your actual token groups (see Authentication section above).

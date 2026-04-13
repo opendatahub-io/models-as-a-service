@@ -360,7 +360,10 @@ func TestMaaSSubscriptionReconciler_CrossNamespace(t *testing.T) {
 		WithObjects(modelA, routeA, modelB, routeB, maasSub).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", func(obj client.Object) []string {
-			sub := obj.(*maasv1alpha1.MaaSSubscription)
+			sub, ok := obj.(*maasv1alpha1.MaaSSubscription)
+			if !ok {
+				return nil
+			}
 			var refs []string
 			for _, modelRef := range sub.Spec.ModelRefs {
 				refs = append(refs, modelRef.Namespace+"/"+modelRef.Name)
@@ -535,7 +538,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 			if !ok {
 				t.Fatal("predicate is not string")
 			}
-			expectedPredA := `auth.identity.selected_subscription_key == "` + namespaceA + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `"`
+			expectedPredA := `auth.identity.selected_subscription_key == "` + namespaceA + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `" && !request.path.endsWith("/v1/models")`
 			if pred != expectedPredA {
 				t.Errorf("Tenant-a predicate = %q, want %q", pred, expectedPredA)
 			}
@@ -561,7 +564,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 			if !ok {
 				t.Fatal("predicate is not string")
 			}
-			expectedPredB := `auth.identity.selected_subscription_key == "` + namespaceB + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `"`
+			expectedPredB := `auth.identity.selected_subscription_key == "` + namespaceB + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `" && !request.path.endsWith("/v1/models")`
 			if pred != expectedPredB {
 				t.Errorf("Tenant-b predicate = %q, want %q", pred, expectedPredB)
 			}

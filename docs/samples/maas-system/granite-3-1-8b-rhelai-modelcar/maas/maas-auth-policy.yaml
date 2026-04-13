@@ -1,0 +1,12 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: granite-3-1-8b-starter-access
+  namespace: models-as-a-service
+spec:
+  modelRefs:
+    - name: granite-3-1-8b-starter
+  subjects:
+    groups:
+      - name: system:authenticated
+    users: []
