@@ -626,6 +626,46 @@ def _wait_reconcile(seconds=None):
     time.sleep(seconds or RECONCILE_WAIT)
 
 
+def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=60):
+    """Wait for TokenRateLimitPolicy to be created and enforced for a model.
+
+    Args:
+        model_ref: Name of the model (e.g., "e2e-distinct-simulated")
+        model_namespace: Namespace where the TRLP should be created (default: MODEL_NAMESPACE)
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Raises:
+        TimeoutError: If TRLP isn't created and enforced within timeout
+    """
+    trlp_name = f"maas-trlp-{model_ref}"
+    deadline = time.time() + timeout
+    log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} in {model_namespace} (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        result = subprocess.run(
+            ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace, "-o", "json"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            try:
+                trlp = json.loads(result.stdout)
+                conditions = trlp.get("status", {}).get("conditions", [])
+                enforced = next((c for c in conditions if c.get("type") in ["Enforced", "Ready"]), None)
+                if enforced and enforced.get("status") == "True":
+                    log.info(f"TokenRateLimitPolicy {trlp_name} is enforced")
+                    return
+                log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
+            except (json.JSONDecodeError, KeyError) as e:
+                log.debug(f"Failed to parse TRLP status: {e}")
+        else:
+            log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
+        time.sleep(3)
+
+    raise TimeoutError(
+        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s"
+    )
+
+
 def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=None, timeout=60, require_model_statuses=False):
     """Wait for MaaSSubscription to reach a specific phase.
 

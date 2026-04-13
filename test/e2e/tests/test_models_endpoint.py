@@ -58,6 +58,7 @@ from test_helper import (
     _snapshot_cr,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
+    _wait_for_token_rate_limit_policy,
     _wait_reconcile,
 )
 
@@ -2161,7 +2162,7 @@ class TestModelsEndpoint:
                 groups=["system:authenticated"]
             )
             _wait_reconcile()
-            _wait_for_maas_auth_policy_ready(auth_policy_name, timeout=90)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
 
             # 2. Create subscription with low token limit
             log.info(f"Creating subscription with {token_limit} token limit")
@@ -2173,7 +2174,7 @@ class TestModelsEndpoint:
                 window=window
             )
             _wait_reconcile()
-            _wait_for_maas_subscription_ready(subscription_name, timeout=90)
+            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
 
             # Wait for TRLP to be created and enforced
             _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)

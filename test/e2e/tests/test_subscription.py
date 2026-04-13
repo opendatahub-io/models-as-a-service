@@ -109,6 +109,7 @@ from test_helper import (
     _snapshot_cr,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
+    _wait_for_token_rate_limit_policy,
     _wait_reconcile,
 )
 
@@ -225,46 +226,6 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
         f"MaaSModelRef {name} did not become Ready within {timeout}s (current phase: {current_phase})"
     )
 
-
-def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=60):
-    """Wait for TokenRateLimitPolicy to be created and enforced for a model.
-
-    Args:
-        model_ref: Name of the model (e.g., "e2e-distinct-simulated")
-        model_namespace: Namespace where the TRLP should be created (default: "llm")
-        timeout: Maximum wait time in seconds (default: 60)
-
-    Raises:
-        TimeoutError: If TRLP isn't created and enforced within timeout
-    """
-    trlp_name = f"maas-trlp-{model_ref}"
-    deadline = time.time() + timeout
-    log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} in {model_namespace} (timeout: {timeout}s)...")
-
-    while time.time() < deadline:
-        result = subprocess.run(
-            ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace, "-o", "json"],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            try:
-                trlp = json.loads(result.stdout)
-                conditions = trlp.get("status", {}).get("conditions", [])
-                # Check if TRLP is enforced
-                enforced = next((c for c in conditions if c.get("type") in ["Enforced", "Ready"]), None)
-                if enforced and enforced.get("status") == "True":
-                    log.info(f"✅ TokenRateLimitPolicy {trlp_name} is enforced")
-                    return
-                log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
-            except (json.JSONDecodeError, KeyError) as e:
-                log.debug(f"Failed to parse TRLP status: {e}")
-        else:
-            log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
-        time.sleep(3)
-
-    raise TimeoutError(
-        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -620,7 +581,7 @@ class TestSubscriptionEnforcement:
                 groups=["system:authenticated"]
             )
             _wait_reconcile()
-            _wait_for_maas_auth_policy_ready(auth_policy_name, timeout=90)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
 
             # 2. Create subscription with low token limit
             _create_test_subscription(
@@ -631,7 +592,7 @@ class TestSubscriptionEnforcement:
                 window=window
             )
             _wait_reconcile()
-            _wait_for_maas_subscription_ready(subscription_name, timeout=90)
+            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
 
             # Wait for TRLP to be created AND enforced by Kuadrant/Limitador
             _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)
