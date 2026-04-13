@@ -1812,7 +1812,7 @@ class TestStatusReporting:
             _wait_for_maas_auth_policy_phase(auth_name)
 
             # Wait for subscription to reach Active phase with populated status
-            cr = _wait_for_maas_subscription_phase(subscription_name, "Active", timeout=60)
+            cr = _wait_for_maas_subscription_phase(subscription_name, "Active", timeout=60, require_model_statuses=True)
 
             status = cr.get("status", {})
             model_statuses = status.get("modelRefStatuses", [])
@@ -1853,8 +1853,8 @@ class TestStatusReporting:
             # Create subscription with non-existent model
             _create_test_subscription(subscription_name, missing_model, users=[sa_user])
 
-            # Wait for subscription to reach Failed phase with polling
-            cr = _wait_for_maas_subscription_phase(subscription_name, "Failed", timeout=60)
+            # Wait for subscription to reach Failed phase with populated status
+            cr = _wait_for_maas_subscription_phase(subscription_name, "Failed", timeout=60, require_model_statuses=True)
 
             status = cr.get("status", {})
             model_statuses = status.get("modelRefStatuses", [])
