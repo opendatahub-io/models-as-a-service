@@ -39,6 +39,7 @@ from test_helper import (
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
     TLS_VERIFY,
+    UNCONFIGURED_MODEL_PATH,
     UNCONFIGURED_MODEL_REF,
     _apply_cr,
     _create_api_key,
