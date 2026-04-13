@@ -651,7 +651,7 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE
             try:
                 trlp = json.loads(result.stdout)
                 conditions = trlp.get("status", {}).get("conditions", [])
-                enforced = next((c for c in conditions if c.get("type") in ["Enforced", "Ready"]), None)
+                enforced = next((c for c in conditions if c.get("type") == "Enforced"), None)
                 if enforced and enforced.get("status") == "True":
                     log.info(f"TokenRateLimitPolicy {trlp_name} is enforced")
                     return
