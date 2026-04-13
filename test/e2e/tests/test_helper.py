@@ -137,7 +137,19 @@ def _create_sa_token(sa_name, namespace=None, duration="10m"):
 def _delete_sa(sa_name, namespace=None):
     """Delete a service account (best-effort, for cleanup)."""
     namespace = namespace or _ns()
-    subprocess.run(["oc", "delete", "sa", sa_name, "-n", namespace, "--ignore-not-found"], capture_output=True, text=True)
+    result = subprocess.run(
+        ["oc", "delete", "sa", sa_name, "-n", namespace, "--ignore-not-found"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        log.warning(
+            "Failed to delete serviceaccount/%s in %s: %s",
+            sa_name,
+            namespace,
+            result.stderr.strip(),
+        )
 
 
 def _sa_to_user(sa_name, namespace=None):
