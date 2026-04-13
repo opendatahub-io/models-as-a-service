@@ -13,7 +13,7 @@ import (
 
 func TestNewManager(t *testing.T) {
 	t.Run("returns error when logger is nil", func(t *testing.T) {
-		manager, err := models.NewManager(nil)
+		manager, err := models.NewManager(nil, 15)
 		require.Error(t, err)
 		assert.Nil(t, manager)
 		assert.Contains(t, err.Error(), "log is required")
@@ -22,7 +22,7 @@ func TestNewManager(t *testing.T) {
 	t.Run("creates manager successfully with valid logger", func(t *testing.T) {
 		log := logger.New(true)
 
-		manager, err := models.NewManager(log)
+		manager, err := models.NewManager(log, 15)
 		require.NoError(t, err)
 		assert.NotNil(t, manager)
 	})
