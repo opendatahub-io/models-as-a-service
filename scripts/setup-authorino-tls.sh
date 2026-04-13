@@ -82,6 +82,42 @@ kubectl -n "$NAMESPACE" set env deployment/authorino \
   SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
   REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt
 
+# Ensure the openshift-service-ca.crt ConfigMap exists (created by service-ca operator)
+# and mount it into the Authorino deployment so the env vars above resolve to a real file
+echo "📂 Mounting OpenShift service CA bundle into Authorino deployment..."
+if ! kubectl get configmap openshift-service-ca.crt -n "$NAMESPACE" &>/dev/null; then
+  echo "  Creating openshift-service-ca.crt ConfigMap with CA injection annotation..."
+  kubectl create configmap openshift-service-ca.crt -n "$NAMESPACE"
+  kubectl annotate configmap openshift-service-ca.crt -n "$NAMESPACE" \
+    service.beta.openshift.io/inject-cabundle=true --overwrite
+  echo "  Waiting for service-ca operator to populate the ConfigMap..."
+  sleep 5
+fi
+
+kubectl patch deployment authorino -n "$NAMESPACE" --type=strategic -p '{
+  "spec": {
+    "template": {
+      "spec": {
+        "volumes": [{
+          "name": "openshift-service-ca",
+          "configMap": {
+            "name": "openshift-service-ca.crt",
+            "items": [{"key": "service-ca.crt", "path": "service-ca-bundle.crt"}]
+          }
+        }],
+        "containers": [{
+          "name": "authorino",
+          "volumeMounts": [{
+            "name": "openshift-service-ca",
+            "mountPath": "/etc/ssl/certs/openshift-service-ca",
+            "readOnly": true
+          }]
+        }]
+      }
+    }
+  }
+}'
+
 echo "✅ Authorino TLS configuration complete"
 echo ""
 echo "  Restart maas-api and authorino deployments to pick up TLS configuration:"
