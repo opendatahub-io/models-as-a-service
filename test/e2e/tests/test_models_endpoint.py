@@ -30,6 +30,7 @@ from test_helper import (
     DISTINCT_MODEL_2_REF,
     DISTINCT_MODEL_ID,
     DISTINCT_MODEL_REF,
+    MODEL_NAME,
     MODEL_NAMESPACE,
     MODEL_REF,
     PREMIUM_MODEL_REF,
@@ -877,10 +878,10 @@ class TestModelsEndpoint:
 
             # Both modelRefs serve the same model ID
             assert len(unique_ids) == 1, \
-                f"Expected only 1 unique model ID (both modelRefs serve facebook/opt-125m), got {len(unique_ids)}: {unique_ids}"
+                f"Expected only 1 unique model ID (both modelRefs serve {MODEL_NAME}), got {len(unique_ids)}: {unique_ids}"
 
             # Verify it's the expected model ID
-            expected_id = "facebook/opt-125m"
+            expected_id = MODEL_NAME
             assert expected_id in unique_ids, \
                 f"Expected to find '{expected_id}', but got {unique_ids}"
 

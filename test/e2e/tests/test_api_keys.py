@@ -36,7 +36,7 @@ import requests
 import time
 
 from conftest import TLS_VERIFY
-from test_helper import SIMULATOR_SUBSCRIPTION
+from test_helper import MODEL_NAME, SIMULATOR_SUBSCRIPTION
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def model_completions_url(model_v1: str) -> str:
 @pytest.fixture
 def inference_model_name() -> str:
     """Model name for inference requests. Override with INFERENCE_MODEL_NAME env var."""
-    return os.environ.get("INFERENCE_MODEL_NAME", "facebook/opt-125m")
+    return os.environ.get("INFERENCE_MODEL_NAME", MODEL_NAME)
 
 
 class TestAPIKeyCRUD:

@@ -226,7 +226,7 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
     )
 
 
-def _wait_for_token_rate_limit_policy(model_ref, model_namespace="llm", timeout=60):
+def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=60):
     """Wait for TokenRateLimitPolicy to be created and enforced for a model.
 
     Args:
