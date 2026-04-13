@@ -555,44 +555,6 @@ main() {
     log_info "  Subscription controller ready."
     log_info "  Create MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
 
-    # When using a custom controller image, annotate deployment to prevent operator reconciliation
-    # and patch the deployment with the custom image
-    if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
-      # Log the current image before patching
-      local actual_image
-      actual_image=$(kubectl get deployment/maas-controller -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")
-      log_info "  Controller image before patch: $actual_image"
-      log_info "  Expected image: $MAAS_CONTROLLER_IMAGE"
-      
-      # Step 1: Annotate to prevent operator from reverting our changes
-      log_info "  Annotating maas-controller deployment to prevent operator reconciliation..."
-      kubectl annotate deployment/maas-controller -n "$NAMESPACE" \
-        opendatahub.io/managed="false" --overwrite 2>/dev/null || true
-      
-      # Step 2: Patch the deployment with the custom image
-      if [[ "$actual_image" != "$MAAS_CONTROLLER_IMAGE" ]]; then
-        log_info "  Patching maas-controller with custom image: $MAAS_CONTROLLER_IMAGE"
-        kubectl set image deployment/maas-controller -n "$NAMESPACE" \
-          manager="$MAAS_CONTROLLER_IMAGE"
-        
-        # Wait for rollout to complete
-        log_info "  Waiting for controller rollout..."
-        if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
-          log_warn "  Controller rollout did not complete in time (timeout: ${ROLLOUT_TIMEOUT}s)"
-        fi
-      fi
-      
-      # Step 3: Verify the controller is running the expected image
-      actual_image=$(kubectl get deployment/maas-controller -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")
-      if [[ "$actual_image" == "$MAAS_CONTROLLER_IMAGE" ]]; then
-        log_info "  ✓ Controller image verified: $actual_image"
-      else
-        log_warn "  WARNING: Controller may not be running the expected image!"
-        log_warn "    Expected: $MAAS_CONTROLLER_IMAGE"
-        log_warn "    Actual:   $actual_image"
-      fi
-    fi
-
     # Patch controller with correct audience for HyperShift/ROSA clusters.
     # The controller creates AuthPolicies with kubernetesTokenReview.audiences;
     # on non-standard clusters the default audience (https://kubernetes.default.svc)
@@ -609,8 +571,15 @@ main() {
     fi
   fi
 
+  log_info "MaaS API and MaaS Controller deployment completed successfully!"
+  local deployed_api_image deployed_ctrl_image
+  deployed_api_image=$(kubectl get deployment/maas-api -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+  deployed_ctrl_image=$(kubectl get deployment/maas-controller -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+  log_info "  maas-api image:        $deployed_api_image"
+  log_info "  maas-controller image: $deployed_ctrl_image"
+
   log_info "==================================================="
-  log_info "  Deployment completed successfully!"
+  log_info "  Models-as-a-Service Deployment completed successfully!"
   log_info "==================================================="
 }
 

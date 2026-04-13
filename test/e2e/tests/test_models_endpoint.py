@@ -16,6 +16,7 @@ import logging
 import os
 import subprocess
 import time
+import uuid
 
 import pytest
 import requests
@@ -30,14 +31,17 @@ from test_subscription import (
     _delete_cr,
     _delete_sa,
     _get_auth_policies_for_model,
+    _get_cluster_token,
     _get_cr,
     _get_subscriptions_for_model,
+    _inference,
     _maas_api_url,
     _ns,
     _sa_to_user,
     _snapshot_cr,
     _wait_for_maas_auth_policy_ready,
     _wait_for_maas_subscription_ready,
+    _wait_for_token_rate_limit_policy,
     _wait_reconcile,
     DISTINCT_MODEL_ID,
     DISTINCT_MODEL_REF,
@@ -48,6 +52,7 @@ from test_subscription import (
     PREMIUM_MODEL_REF,
     PREMIUM_SIMULATOR_SUBSCRIPTION,
     UNCONFIGURED_MODEL_REF,
+    UNCONFIGURED_MODEL_PATH,
     SIMULATOR_ACCESS_POLICY,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
@@ -2114,3 +2119,155 @@ class TestModelsEndpoint:
             pass
 
         log.info(f"✅ Unauthenticated request → {r.status_code}")
+
+    def test_central_models_endpoint_exempt_from_rate_limiting(self):
+        """
+        Test that the central /v1/models endpoint remains accessible when token quota is exhausted.
+
+        This test validates the end-to-end flow:
+        1. User exhausts token quota with inference requests (gets 429)
+        2. Central /v1/models endpoint is exempt at gateway level (gateway-default-deny TRLP)
+        3. Central endpoint calls model-specific /v1/models endpoints for discovery
+        4. Model-specific endpoints are also exempt (per-route TRLP fix)
+        5. Central endpoint successfully aggregates and returns model list
+
+        This ensures the entire discovery chain works when quota is exhausted.
+
+        Ref: https://issues.redhat.com/browse/RHOAIENG-46770
+        """
+        # Use unconfigured model to isolate this test
+        model_ref = UNCONFIGURED_MODEL_REF
+        model_path = UNCONFIGURED_MODEL_PATH
+
+        # Create unique subscription and auth policy names
+        auth_policy_name = "e2e-central-models-exempt-auth"
+        subscription_name = "e2e-central-models-exempt-sub"
+
+        # Very low limit for fast, deterministic test
+        # With 3 token limit and max_tokens=1, we're guaranteed to exhaust quota within 5 requests
+        # (each successful request consumes ≥1 token, so 5 requests > 3 token limit)
+        token_limit = 3
+        window = "1m"
+        max_tokens = 1
+
+        try:
+            # 1. Create auth policy allowing system:authenticated
+            log.info(f"Creating auth policy for {model_ref}")
+            _create_test_auth_policy(
+                name=auth_policy_name,
+                model_refs=[model_ref],
+                groups=["system:authenticated"]
+            )
+            _wait_reconcile()
+            _wait_for_maas_auth_policy_ready(auth_policy_name, timeout=90)
+
+            # 2. Create subscription with low token limit
+            log.info(f"Creating subscription with {token_limit} token limit")
+            _create_test_subscription(
+                name=subscription_name,
+                model_refs=[model_ref],
+                groups=["system:authenticated"],
+                token_limit=token_limit,
+                window=window
+            )
+            _wait_reconcile()
+            _wait_for_maas_subscription_ready(subscription_name, timeout=90)
+
+            # Wait for TRLP to be created and enforced
+            _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)
+
+            # 3. Create API key for this subscription
+            oc_token = _get_cluster_token()
+            api_key = _create_api_key(
+                oc_token,
+                name=f"e2e-central-exempt-{uuid.uuid4().hex[:8]}",
+                subscription=subscription_name,
+            )
+
+            # 4. Exhaust the token limit
+            # With 3 token limit and 5 requests, we're guaranteed to hit the limit
+            # (each successful request consumes ≥1 token, so 5 requests > 3 token limit)
+            max_requests = 5
+            success_count = 0
+            rate_limited = False
+
+            log.info(f"Exhausting token quota: sending up to {max_requests} requests")
+            for i in range(max_requests):
+                r = _inference(api_key, path=model_path)
+                request_num = i + 1
+                log.info(f"Request {request_num}: {r.status_code}")
+
+                if r.status_code == 200:
+                    success_count += 1
+                elif r.status_code == 429:
+                    log.info(f"Rate limit hit after {success_count} successful requests")
+                    rate_limited = True
+                    break
+
+            # Verify we hit rate limit (otherwise test setup is broken)
+            assert rate_limited, \
+                f"Expected to hit rate limit within {max_requests} requests with {token_limit} token limit, " \
+                f"but got {success_count} successful requests without hitting limit"
+
+            # 5. Verify inference is blocked
+            log.info("Verifying inference endpoint is blocked...")
+            r_inference = _inference(api_key, path=model_path)
+            assert r_inference.status_code == 429, \
+                f"Expected 429 for inference after exhausting tokens, got {r_inference.status_code}"
+            log.info("✓ Inference endpoint correctly blocked with 429")
+
+            # 6. Verify central /v1/models endpoint still works
+            log.info("Verifying central /v1/models endpoint is still accessible...")
+            url = f"{_maas_api_url()}/v1/models"
+            headers = {"Authorization": f"Bearer {api_key}"}
+            r_models = requests.get(url, headers=headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+            assert r_models.status_code == 200, \
+                f"Expected 200 for central /v1/models endpoint even when quota exhausted, got {r_models.status_code}. " \
+                f"The central /v1/models endpoint should be exempt from rate limiting (gateway-level) and " \
+                f"should be able to call model-specific /v1/models endpoints (per-route exemption). " \
+                f"Response: {r_models.text[:500]}"
+
+            # 7. Verify response structure and contains our model
+            try:
+                models_data = r_models.json()
+                assert "data" in models_data, \
+                    f"Expected 'data' field in response, got: {list(models_data.keys())}"
+
+                models = models_data["data"]
+                assert isinstance(models, list), "Expected 'data' to be a list"
+
+                # Verify at least one model is tied to our test subscription
+                model_ids = [m.get("id") for m in models]
+                log.info(f"✅ Central /v1/models returned {len(models)} models: {model_ids}")
+
+                # Check that at least one model belongs to our test subscription
+                models_in_our_subscription = []
+                for model in models:
+                    # Models have a subscriptions array with subscription info
+                    model_subs = model.get("subscriptions", [])
+                    for sub in model_subs:
+                        if sub.get("name") == subscription_name:
+                            models_in_our_subscription.append(model.get("id"))
+                            break
+
+                assert len(models_in_our_subscription) >= 1, \
+                    f"Expected at least 1 model tied to subscription '{subscription_name}', " \
+                    f"but found none. Returned models: {model_ids}, subscription: {subscription_name}"
+
+                log.info(f"✓ Found {len(models_in_our_subscription)} model(s) in our subscription: {models_in_our_subscription}")
+
+            except json.JSONDecodeError as e:
+                pytest.fail(f"Central /v1/models response is not valid JSON: {e}. Response: {r_models.text[:500]}")
+
+            log.info("✅ Central /v1/models endpoint works correctly when quota exhausted")
+            log.info("   - Gateway-level exemption: ✓")
+            log.info("   - Model-specific endpoint exemption: ✓")
+            log.info("   - End-to-end discovery flow: ✓")
+
+        finally:
+            # Clean up
+            _delete_cr("maassubscription", subscription_name)
+            _delete_cr("maasauthpolicy", auth_policy_name)
+            _wait_reconcile()
+            log.info("Cleaned up central models endpoint exemption test resources")
