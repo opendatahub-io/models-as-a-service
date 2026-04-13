@@ -645,7 +645,9 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE
     while time.time() < deadline:
         result = subprocess.run(
             ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace, "-o", "json"],
-            capture_output=True, text=True
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode == 0:
             try:
@@ -658,8 +660,17 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE
                 log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
             except (json.JSONDecodeError, KeyError) as e:
                 log.debug(f"Failed to parse TRLP status: {e}")
-        else:
+        elif _is_not_found_error(result.stderr):
             log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
+        elif _is_transient_kubectl_error(result.stderr):
+            log.debug(
+                f"Transient error while reading TokenRateLimitPolicy {trlp_name}: {result.stderr.strip()}"
+            )
+        else:
+            raise RuntimeError(
+                f"Failed to get TokenRateLimitPolicy {trlp_name} in namespace '{model_namespace}': "
+                f"{result.stderr.strip()}"
+            )
         time.sleep(3)
 
     raise TimeoutError(
