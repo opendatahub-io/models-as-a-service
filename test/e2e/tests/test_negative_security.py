@@ -338,7 +338,7 @@ class TestMissingModelRef:
 
             # CR becomes Active, but no TRLP should exist for the ghost model
             trlp_name = f"maas-trlp-{ghost_model}"
-            trlp = _get_cr("tokenratelimitpolicy", trlp_name, namespace="llm")
+            trlp = _get_cr("tokenratelimitpolicy", trlp_name, namespace=MODEL_NAMESPACE)
             log.info("MaaSSubscription with ghost model -> TRLP exists: %s", trlp is not None)
             assert trlp is None, (
                 f"TokenRateLimitPolicy '{trlp_name}' should not exist for non-existent model"
@@ -377,7 +377,7 @@ class TestMissingModelRef:
 
             # CR becomes Active, but no Kuadrant AuthPolicy should exist for the ghost model
             auth_name = f"maas-auth-{ghost_model}"
-            ap = _get_cr("authpolicy", auth_name, namespace="llm")
+            ap = _get_cr("authpolicy", auth_name, namespace=MODEL_NAMESPACE)
             log.info("MaaSAuthPolicy with ghost model -> AuthPolicy exists: %s", ap is not None)
             assert ap is None, (
                 f"AuthPolicy '{auth_name}' should not exist for non-existent model"

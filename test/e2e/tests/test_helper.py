@@ -387,51 +387,63 @@ def _list_crs(kind, namespace=None):
     return []
 
 
-def _get_auth_policies_for_model(model_ref, namespace=None):
+def _get_auth_policies_for_model(model_ref, namespace=None, model_namespace=None):
     """Get all MaaSAuthPolicies that reference a model.
 
     Args:
         model_ref: Name of the MaaSModelRef
-        namespace: Namespace to search (defaults to _ns())
+        namespace: Namespace to search for policies (defaults to _ns())
+        model_namespace: Expected namespace of the modelRef (defaults to MODEL_NAMESPACE)
 
     Returns:
         List of auth policy names that reference the model
     """
     namespace = namespace or _ns()
+    model_namespace = model_namespace or MODEL_NAMESPACE
     policies = _list_crs("maasauthpolicy", namespace)
 
     matching = []
     for policy in policies:
         model_refs = policy.get("spec", {}).get("modelRefs", [])
         for ref in model_refs:
-            # Handle both string refs and dict refs with 'name' field
-            ref_name = ref.get("name") if isinstance(ref, dict) else ref
-            if ref_name == model_ref:
+            if isinstance(ref, dict):
+                ref_name = ref.get("name")
+                ref_ns = ref.get("namespace", model_namespace)
+            else:
+                ref_name = ref
+                ref_ns = model_namespace
+            if ref_name == model_ref and ref_ns == model_namespace:
                 matching.append(policy["metadata"]["name"])
                 break
     return matching
 
 
-def _get_subscriptions_for_model(model_ref, namespace=None):
+def _get_subscriptions_for_model(model_ref, namespace=None, model_namespace=None):
     """Get all MaaSSubscriptions that reference a model.
 
     Args:
         model_ref: Name of the MaaSModelRef
-        namespace: Namespace to search (defaults to _ns())
+        namespace: Namespace to search for subscriptions (defaults to _ns())
+        model_namespace: Expected namespace of the modelRef (defaults to MODEL_NAMESPACE)
 
     Returns:
         List of subscription names that reference the model
     """
     namespace = namespace or _ns()
+    model_namespace = model_namespace or MODEL_NAMESPACE
     subs = _list_crs("maassubscription", namespace)
 
     matching = []
     for sub in subs:
         model_refs = sub.get("spec", {}).get("modelRefs", [])
         for ref in model_refs:
-            # Handle both string refs and dict refs with 'name' field
-            ref_name = ref.get("name") if isinstance(ref, dict) else ref
-            if ref_name == model_ref:
+            if isinstance(ref, dict):
+                ref_name = ref.get("name")
+                ref_ns = ref.get("namespace", model_namespace)
+            else:
+                ref_name = ref
+                ref_ns = model_namespace
+            if ref_name == model_ref and ref_ns == model_namespace:
                 matching.append(sub["metadata"]["name"])
                 break
     return matching
