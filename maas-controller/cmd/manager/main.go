@@ -22,10 +22,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -46,6 +48,7 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
 )
 
@@ -56,6 +59,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(extv1.AddToScheme(scheme))
 	utilruntime.Must(kservev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayapiv1.Install(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
@@ -447,9 +451,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
+	if manifestPath == "" {
+		manifestPath = tenantreconcile.DefaultManifestPath()
+	}
+	if abs, err := filepath.Abs(manifestPath); err == nil {
+		manifestPath = abs
+	}
+	setupLog.Info("MaaSTenant platform kustomize path", "path", manifestPath)
+
 	if err := (&maas.MaaSTenantReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		ManifestPath:   manifestPath,
+		AppNamespace:   maasAPINamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSTenant")
 		os.Exit(1)
