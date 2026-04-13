@@ -284,12 +284,12 @@ func specFromExternalModel(extModel *maasv1alpha1.ExternalModel, model *maasv1al
 	}
 
 	spec := ExternalModelSpec{
-		Provider:   extModel.Spec.Provider,
-		Endpoint:   extModel.Spec.Endpoint,
-		PathPrefix: ann[AnnPathPrefix],
-		TLS:        true,
-		Port:       443,
-		// TLSInsecureSkipVerify: extModel.Spec.TLSInsecureSkipVerify, // requires issue #627 CRD change
+		Provider:              extModel.Spec.Provider,
+		Endpoint:              extModel.Spec.Endpoint,
+		PathPrefix:            ann[AnnPathPrefix],
+		TLS:                   true,
+		Port:                  443,
+		TLSInsecureSkipVerify: extModel.Spec.TLSInsecureSkipVerify,
 	}
 
 	if spec.Provider == "" {

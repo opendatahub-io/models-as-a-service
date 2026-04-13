@@ -70,6 +70,18 @@ type ExternalModelSpec struct {
 	// The Secret must contain a data key "api-key" with the credential value.
 	// +kubebuilder:validation:Required
 	CredentialRef CredentialReference `json:"credentialRef"`
+
+	// TLSInsecureSkipVerify disables TLS certificate verification on the
+	// DestinationRule created for this external model. When true, the generated
+	// Istio DestinationRule includes insecureSkipVerify: true under
+	// trafficPolicy.tls, allowing connections to endpoints with self-signed or
+	// untrusted certificates (e.g., simulators, dev environments).
+	//
+	// WARNING: Do not enable in production. This is intended for testing only.
+	//
+	// Default: false (certificates are verified).
+	// +optional
+	TLSInsecureSkipVerify bool `json:"tlsInsecureSkipVerify,omitempty"`
 }
 
 // CredentialReference references a Kubernetes Secret with provider API credentials.
