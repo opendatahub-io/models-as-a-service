@@ -35,6 +35,7 @@ from test_helper import (
     MODEL_NAME,
     MODEL_NAMESPACE,
     MODEL_PATH,
+    MODEL_REF,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
     TLS_VERIFY,
@@ -302,63 +303,66 @@ class TestAuthPolicyRemoval:
 # ============================================================================
 
 class TestMissingModelRef:
-    """Verify CRs referencing non-existent MaaSModelRefs don't generate gateway resources.
+    """Verify CRs don't generate gateway resources for non-existent MaaSModelRefs.
 
-    The MaaS controller uses optimistic reconciliation: CRs referencing models
-    that don't exist yet are accepted and set to Active phase (the model could
-    be created later). However, the controller should NOT generate downstream
-    Kuadrant resources (AuthPolicy, TokenRateLimitPolicy) until the referenced
-    MaaSModelRef actually exists.
+    Uses a Degraded/partial approach: each CR references one valid model
+    (MODEL_REF) and one ghost model. The CR reaches Degraded phase, proving
+    the controller processed it successfully. We then verify that downstream
+    Kuadrant resources were created only for the valid model, not the ghost.
 
-    These tests create CRs pointing at a non-existent model, confirm the CR
-    reaches Active, then verify that no Kuadrant gateway resources were generated.
+    This is stronger than testing with all-ghost models (which just go Failed),
+    because it proves the controller selectively generates resources per model
+    rather than failing early before resource generation.
     """
 
     def test_subscription_with_nonexistent_model_ref(self):
-        """MaaSSubscription with ghost model goes Active but no TRLP is generated.
+        """MaaSSubscription generates TRLP only for valid model, not ghost model.
 
-        Creates a MaaSSubscription referencing a model that doesn't exist,
-        waits for the CR to reach Active phase (optimistic reconciliation),
-        then asserts that no TokenRateLimitPolicy was created in the model
-        namespace — proving the controller doesn't create rate-limit
-        enforcement for non-existent models.
+        Creates a subscription referencing one valid model and one ghost model,
+        waits for Degraded phase, then asserts that a TRLP exists for the valid
+        model but not for the ghost model.
         """
         suffix = uuid.uuid4().hex[:8]
         sub_name = f"e2e-neg-ghost-sub-{suffix}"
+        auth_name = f"e2e-neg-ghost-sub-auth-{suffix}"
         ghost_model = f"nonexistent-model-{suffix}"
 
         try:
+            _create_test_auth_policy(auth_name, MODEL_REF, groups=["system:authenticated"])
             _create_test_subscription(
                 sub_name,
-                ghost_model,
+                [MODEL_REF, ghost_model],
                 groups=["system:authenticated"],
             )
 
-            _wait_for_maas_subscription_phase(sub_name)
+            _wait_for_maas_subscription_phase(sub_name, "Degraded", timeout=60)
 
-            # CR becomes Active, but no TRLP should exist for the ghost model
-            trlp_name = f"maas-trlp-{ghost_model}"
-            trlp = _get_cr("tokenratelimitpolicy", trlp_name, namespace=MODEL_NAMESPACE)
-            log.info("MaaSSubscription with ghost model -> TRLP exists: %s", trlp is not None)
-            assert trlp is None, (
-                f"TokenRateLimitPolicy '{trlp_name}' should not exist for non-existent model"
+            # No TRLP should exist for the ghost model
+            ghost_trlp_name = f"maas-trlp-{ghost_model}"
+            ghost_trlp = _get_cr("tokenratelimitpolicy", ghost_trlp_name, namespace=MODEL_NAMESPACE)
+            log.info("Ghost model TRLP exists: %s", ghost_trlp is not None)
+            assert ghost_trlp is None, (
+                f"TokenRateLimitPolicy '{ghost_trlp_name}' should not exist for non-existent model"
             )
+
+            # TRLP should exist for the valid model
+            valid_trlp_name = f"maas-trlp-{MODEL_REF}"
+            valid_trlp = _get_cr("tokenratelimitpolicy", valid_trlp_name, namespace=MODEL_NAMESPACE)
+            log.info("Valid model TRLP exists: %s", valid_trlp is not None)
+            assert valid_trlp is not None, (
+                f"TokenRateLimitPolicy '{valid_trlp_name}' should exist for valid model"
+            )
+
         finally:
             _delete_cr("maassubscription", sub_name)
+            _delete_cr("maasauthpolicy", auth_name)
 
     def test_authpolicy_with_nonexistent_model_ref(self):
-        """MaaSAuthPolicy with ghost model goes Active but no AuthPolicy is generated.
+        """MaaSAuthPolicy generates AuthPolicy only for valid model, not ghost model.
 
-        Creates a MaaSAuthPolicy referencing a model that doesn't exist,
-        waits for the CR to reach Active phase (optimistic reconciliation),
-        then asserts that no Kuadrant AuthPolicy was created in the model
-        namespace — proving the controller doesn't create auth enforcement
-        for non-existent models.
-
-        Note: we use _wait_for_maas_auth_policy_phase with require_auth_policies=False
-        because the default (require_auth_policies=True, require_enforced=True)
-        would timeout — there are no authPolicies status entries when the
-        referenced model doesn't exist.
+        Creates an auth policy referencing one valid model and one ghost model,
+        waits for Degraded phase, then asserts that a Kuadrant AuthPolicy exists
+        for the valid model but not for the ghost model.
         """
         suffix = uuid.uuid4().hex[:8]
         policy_name = f"e2e-neg-ghost-policy-{suffix}"
@@ -367,21 +371,28 @@ class TestMissingModelRef:
         try:
             _create_test_auth_policy(
                 policy_name,
-                ghost_model,
+                [MODEL_REF, ghost_model],
                 groups=["system:authenticated"],
             )
 
-            # Wait for phase==Active only (not enforced authPolicies — there are
-            # none for a ghost model ref).
-            _wait_for_maas_auth_policy_phase(policy_name, "Active", timeout=30, require_auth_policies=False)
+            _wait_for_maas_auth_policy_phase(policy_name, "Degraded", timeout=60, require_auth_policies=False)
 
-            # CR becomes Active, but no Kuadrant AuthPolicy should exist for the ghost model
-            auth_name = f"maas-auth-{ghost_model}"
-            ap = _get_cr("authpolicy", auth_name, namespace=MODEL_NAMESPACE)
-            log.info("MaaSAuthPolicy with ghost model -> AuthPolicy exists: %s", ap is not None)
-            assert ap is None, (
-                f"AuthPolicy '{auth_name}' should not exist for non-existent model"
+            # No AuthPolicy should exist for the ghost model
+            ghost_auth_name = f"maas-auth-{ghost_model}"
+            ghost_ap = _get_cr("authpolicy", ghost_auth_name, namespace=MODEL_NAMESPACE)
+            log.info("Ghost model AuthPolicy exists: %s", ghost_ap is not None)
+            assert ghost_ap is None, (
+                f"AuthPolicy '{ghost_auth_name}' should not exist for non-existent model"
             )
+
+            # AuthPolicy should exist for the valid model
+            valid_auth_name = f"maas-auth-{MODEL_REF}"
+            valid_ap = _get_cr("authpolicy", valid_auth_name, namespace=MODEL_NAMESPACE)
+            log.info("Valid model AuthPolicy exists: %s", valid_ap is not None)
+            assert valid_ap is not None, (
+                f"AuthPolicy '{valid_auth_name}' should exist for valid model"
+            )
+
         finally:
             _delete_cr("maasauthpolicy", policy_name)
 
