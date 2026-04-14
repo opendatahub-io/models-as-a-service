@@ -160,7 +160,7 @@ class TestModelsEndpoint:
     ═══════════════════════════════════════════════════════════════════════════
     ERROR CASES (HTTP 401) - Authentication Errors
     ═══════════════════════════════════════════════════════════════════════════
-    18. test_unauthenticated_request_401
+    22. test_unauthenticated_request_401
         → No Authorization header → 401 authentication_error
     """
 
@@ -1294,11 +1294,11 @@ class TestModelsEndpoint:
 
     def test_response_schema_matches_openapi(self):
         """
-        Test 10: Response structure matches OpenAPI schema.
+        Test 16: Response structure matches OpenAPI schema.
 
         Validates all required fields and types match the API specification.
         """
-        log.info("Test 9: Response schema matches OpenAPI spec")
+        log.info("Test 16: Response schema matches OpenAPI spec")
 
         sa_name = "e2e-models-schema-test-sa"
         sa_ns = "default"
@@ -1367,11 +1367,11 @@ class TestModelsEndpoint:
 
     def test_model_metadata_preserved(self):
         """
-        Test 11: Model metadata is correctly preserved.
+        Test 17: Model metadata is correctly preserved.
 
         Validates that url, ready, created, owned_by fields are accurate.
         """
-        log.info("Test 10: Model metadata preserved")
+        log.info("Test 17: Model metadata preserved")
 
         sa_name = "e2e-models-metadata-sa"
         sa_ns = "default"

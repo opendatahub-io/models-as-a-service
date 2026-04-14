@@ -310,7 +310,7 @@ class TestAPIKeyExpiration:
     Environment Variables:
     - API_KEY_MAX_EXPIRATION_DAYS: The configured max expiration in days (set on maas-api deployment).
       Must be explicitly set by the e2e test harness to match the maas-api deployment configuration.
-      Default is 30 days. Minimum is 1 day.
+      Default is 90 days. Minimum is 1 day.
     """
 
     @pytest.fixture

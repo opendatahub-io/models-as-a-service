@@ -39,29 +39,6 @@ Environment variables:
 
   File-specific variables (all optional, with defaults):
   - E2E_PREMIUM_MODEL_PATH: Gateway path for premium model (default: /llm/premium-simulated-simulated-premium)
-  - E2E_DISTINCT_MODEL_PATH: Gateway path for distinct model (default: /llm/e2e-distinct-simulated)
-  - E2E_DISTINCT_MODEL_2_PATH: Gateway path for second distinct model (default: /llm/e2e-distinct-2-simulated)
-  - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for negative tests (default: nonexistent-sub)
-    instead of oc whoami -t (e.g. for Prow where oc whoami -t is unavailable)
-  - E2E_TIMEOUT: Request timeout in seconds (default: 30)
-  - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
-  - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
-  - E2E_PREMIUM_MODEL_PATH: Path to premium model (default: /llm/premium-simulated-simulated-premium)
-  - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
-  - E2E_MODEL_REF: Model ref for CRs (default: facebook-opt-125m-simulated)
-  - E2E_PREMIUM_MODEL_REF: Premium model ref for CRs (default: premium-simulated-simulated-premium)
-  - E2E_UNCONFIGURED_MODEL_REF: Unconfigured model ref (default: e2e-unconfigured-facebook-opt-125m-simulated)
-  - E2E_UNCONFIGURED_MODEL_PATH: Path to unconfigured model (default: /llm/e2e-unconfigured-facebook-opt-125m-simulated)
-  - E2E_DISTINCT_MODEL_REF: First distinct model ref for multi-model tests (default: e2e-distinct-simulated)
-  - E2E_DISTINCT_MODEL_PATH: Path to first distinct model (default: /llm/e2e-distinct-simulated)
-  - E2E_DISTINCT_MODEL_ID: Model ID served by first distinct model (default: test/e2e-distinct-model)
-  - E2E_DISTINCT_MODEL_2_REF: Second distinct model ref for multi-model tests (default: e2e-distinct-2-simulated)
-  - E2E_DISTINCT_MODEL_2_PATH: Path to second distinct model (default: /llm/e2e-distinct-2-simulated)
-  - E2E_DISTINCT_MODEL_2_ID: Model ID served by second distinct model (default: test/e2e-distinct-model-2)
-  - E2E_SIMULATOR_SUBSCRIPTION: Free-tier subscription (default: simulator-subscription)
-  - E2E_PREMIUM_SIMULATOR_SUBSCRIPTION: Premium-tier subscription (default: premium-simulator-subscription)
-  - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
-  - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 403 test (default: nonexistent-sub)
 """
 
 import copy

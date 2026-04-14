@@ -697,7 +697,7 @@ def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=N
         name: Name of the MaaSSubscription
         expected_phase: Phase to wait for (default: "Active")
         namespace: Namespace (defaults to _ns())
-        timeout: Maximum wait time in seconds (default: 30)
+        timeout: Maximum wait time in seconds (default: 60)
         require_model_statuses: If True, also requires modelRefStatuses to be populated
                                 (default: False). Set to True for status reporting tests.
 
