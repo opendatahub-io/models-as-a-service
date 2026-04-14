@@ -495,7 +495,10 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 			"rates": si.rates,
 			"when": []any{
 				map[string]any{
-					"predicate": fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, modelScopedRef),
+					// Exempt /v1/models endpoint from token rate limiting.
+					// This endpoint is used for model discovery/metadata and does not consume inference tokens.
+					// Users should be able to query model capabilities even when their token quota is exhausted.
+					"predicate": fmt.Sprintf(`auth.identity.selected_subscription_key == "%s" && !request.path.endsWith("/v1/models")`, modelScopedRef),
 				},
 			},
 			"counters": []any{
