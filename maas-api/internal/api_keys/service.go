@@ -135,23 +135,6 @@ func (s *Service) CreateAPIKey(
 		return nil, selectErr
 	}
 
-	// API keys can be created for subscriptions in any phase
-	// Authorization at inference time will enforce phase-based access control
-	// Log subscription health for awareness but don't block key creation
-	if subResp.Phase != "Active" {
-		s.logger.Info("Creating API key for subscription in non-Active phase",
-			"user", username,
-			"subscription", subResp.Name,
-			"phase", subResp.Phase,
-		)
-	}
-	if subResp.DeletionTimestamp != "" {
-		s.logger.Info("Creating API key for subscription being deleted",
-			"user", username,
-			"subscription", subResp.Name,
-		)
-	}
-
 	subscriptionName := subResp.Name
 
 	// Generate unique ID for this key

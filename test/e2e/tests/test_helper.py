@@ -137,6 +137,36 @@ def _get_cluster_token():
 # API Key Management
 # ---------------------------------------------------------------------------
 
+def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = None):
+    """Create an API key and return the raw response (for testing error cases).
+
+    Args:
+        oc_token: OC token for authentication with maas-api
+        name: Optional name for the key (auto-generated if not provided)
+        subscription: Optional MaaSSubscription name to bind (highest-priority auto-bind if omitted)
+
+    Returns:
+        requests.Response object
+    """
+    url = f"{_maas_api_url()}/v1/api-keys"
+    key_name = name or f"e2e-test-{uuid.uuid4().hex[:8]}"
+
+    body = {"name": key_name}
+    if subscription:
+        body["subscription"] = subscription
+
+    return requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {oc_token}",
+            "Content-Type": "application/json",
+        },
+        json=body,
+        timeout=TIMEOUT,
+        verify=TLS_VERIFY,
+    )
+
+
 def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -> str:
     """Create an API key using the MaaS API and return the plaintext key.
 
@@ -148,23 +178,7 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
     Returns:
         The plaintext API key (sk-oai-xxx format)
     """
-    url = f"{_maas_api_url()}/v1/api-keys"
-    key_name = name or f"e2e-test-{uuid.uuid4().hex[:8]}"
-
-    body = {"name": key_name}
-    if subscription:
-        body["subscription"] = subscription
-
-    r = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {oc_token}",
-            "Content-Type": "application/json",
-        },
-        json=body,
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
-    )
+    r = _create_api_key_raw(oc_token, name, subscription)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Failed to create API key: {r.status_code} {r.text}")
 
@@ -173,7 +187,7 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
     if not api_key:
         raise RuntimeError(f"API key response missing 'key' field: {data}")
 
-    log.info("Created API key '%s' bound to subscription '%s'", key_name, subscription)
+    log.info("Created API key '%s' bound to subscription '%s'", name, subscription)
     return api_key
 
 

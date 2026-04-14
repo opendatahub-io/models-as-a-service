@@ -44,15 +44,6 @@ func NewSelector(log *logger.Logger, lister Lister) *Selector {
 	}
 }
 
-// ModelRefStatus represents the health status of a model reference.
-type ModelRefStatus struct {
-	Name      string
-	Namespace string
-	Ready     bool
-	Reason    string
-	Message   string
-}
-
 // subscription represents a parsed MaaSSubscription for selection.
 type subscription struct {
 	Name                   string
@@ -70,7 +61,6 @@ type subscription struct {
 	Phase                  string                 // status.phase: "Active", "Failed", "Pending", or ""
 	Ready                  bool                   // computed from status.conditions Ready condition
 	DeletionTimestamp      *string                // metadata.deletionTimestamp (set when being deleted)
-	ModelRefStatuses       []ModelRefStatus       // per-model health status from status.modelRefStatuses
 	TokenRateLimitStatuses []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
 }
 
@@ -261,14 +251,6 @@ func (s *Selector) loadSubscriptions() ([]subscription, error) {
 			)
 			continue
 		}
-		s.logger.Debug("Parsed subscription from informer cache",
-			"name", sub.Name,
-			"namespace", sub.Namespace,
-			"phase", sub.Phase,
-			"ready", sub.Ready,
-			"numModelRefs", len(sub.ModelRefStatuses),
-			"deleting", sub.DeletionTimestamp != nil,
-		)
 		subscriptions = append(subscriptions, sub)
 	}
 
@@ -363,31 +345,6 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 						sub.Ready = condStatus == "True"
 						break
 					}
-				}
-			}
-		}
-
-		// Parse status.modelRefStatuses to extract per-model health
-		if modelRefStatuses, found, _ := unstructured.NestedSlice(status, "modelRefStatuses"); found {
-			for _, statusRaw := range modelRefStatuses {
-				if statusMap, ok := statusRaw.(map[string]any); ok {
-					refStatus := ModelRefStatus{}
-					if name, ok := statusMap["name"].(string); ok {
-						refStatus.Name = name
-					}
-					if namespace, ok := statusMap["namespace"].(string); ok {
-						refStatus.Namespace = namespace
-					}
-					if ready, ok := statusMap["ready"].(bool); ok {
-						refStatus.Ready = ready
-					}
-					if reason, ok := statusMap["reason"].(string); ok {
-						refStatus.Reason = reason
-					}
-					if message, ok := statusMap["message"].(string); ok {
-						refStatus.Message = message
-					}
-					sub.ModelRefStatuses = append(sub.ModelRefStatuses, refStatus)
 				}
 			}
 		}
@@ -536,12 +493,10 @@ func subscriptionIncludesModel(sub *subscription, requestedModel string) bool {
 // checkModelHealth validates subscription phase and model health.
 // Returns error if subscription is not in Active/Degraded phase or if model is unhealthy in Degraded subscriptions.
 func checkModelHealth(sub *subscription, requestedModel string) error {
-	// Only enforce health checks during inference (when model is specified by Authorino).
-	// API key creation and /v1/models listing pass empty requestedModel and should allow
-	// any reconciled phase (Active, Degraded, Failed, Pending) but reject unreconciled.
+	// API key creation path: Allow Active, Degraded, Pending
+	// Block Failed (prevents key spam on permanently broken subscriptions)
+	// Block unreconciled (empty phase)
 	if requestedModel == "" {
-		// For API key creation: only reject unreconciled subscriptions (empty phase)
-		// Allow Failed/Pending phases - inference will be blocked by Authorino OPA rules
 		if sub.Phase == "" {
 			return &ModelUnhealthyError{
 				Subscription: sub.Name,
@@ -550,11 +505,18 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 				Message:      "subscription is unreconciled (no status.phase set)",
 			}
 		}
-		return nil // Allow any reconciled phase for API key creation
+		if sub.Phase == PhaseFailed {
+			return &ModelUnhealthyError{
+				Subscription: sub.Name,
+				Phase:        sub.Phase,
+				Reason:       "SubscriptionNotReady",
+				Message:      "subscription is in Failed phase (cannot create API keys)",
+			}
+		}
+		return nil // Allow Active, Degraded, Pending for API key creation
 	}
 
-	// Inference path: Enforce strict phase and per-model health validation
-	// Allowlist: only Active and Degraded subscriptions are allowed for inference
+	// Inference path: Allowlist only Active and Degraded subscriptions
 	// Reject Failed, Pending, unreconciled, and unknown phases
 	if sub.Phase != PhaseActive && sub.Phase != PhaseDegraded {
 		phaseDisplay := sub.Phase
@@ -569,16 +531,12 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 		}
 	}
 
-	// Active subscriptions are allowed without health checks
+	// Active subscriptions are allowed without TRLP checks (already validated above)
 	if sub.Phase != PhaseDegraded {
 		return nil
 	}
 
-	// If no model requested, can't check health
-	if requestedModel == "" {
-		return nil
-	}
-
+	// For Degraded subscriptions, verify rate limits can be enforced (if defined)
 	// Parse the requested model (format: "namespace/name")
 	parts := strings.SplitN(requestedModel, "/", 2)
 	if len(parts) != 2 {
@@ -587,55 +545,44 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 	requestedNS := parts[0]
 	requestedName := parts[1]
 
-	// Check modelRefStatuses for the requested model
-	for _, status := range sub.ModelRefStatuses {
-		if status.Namespace == requestedNS && status.Name == requestedName {
-			if !status.Ready {
+	// Check if this model has tokenRateLimits defined in the subscription spec
+	hasRateLimits := false
+	for _, ref := range sub.ModelRefs {
+		if ref.Namespace == requestedNS && ref.Name == requestedName {
+			if len(ref.TokenRateLimits) > 0 {
+				hasRateLimits = true
+			}
+			break
+		}
+	}
+
+	// If model doesn't have rate limits defined, allow inference (no TRLP to check)
+	if !hasRateLimits {
+		return nil
+	}
+
+	// Model has rate limits defined - verify TRLP is ready
+	for _, trlp := range sub.TokenRateLimitStatuses {
+		if trlp.Model == requestedName {
+			if !trlp.Ready {
 				return &ModelUnhealthyError{
 					Subscription: sub.Name,
 					Phase:        sub.Phase,
-					Reason:       status.Reason,
-					Message:      status.Message,
+					Reason:       "RateLimitNotEnforced",
+					Message:      "subscription rate limiting policies are not ready",
 				}
 			}
-			// Model found and ready - now check if its TRLP is ready
-			// For Degraded subscriptions, we must verify rate limits can be enforced
-			for _, trlp := range sub.TokenRateLimitStatuses {
-				if trlp.Model == requestedName {
-					if !trlp.Ready {
-						return &ModelUnhealthyError{
-							Subscription: sub.Name,
-							Phase:        sub.Phase,
-							Reason:       "RateLimitNotEnforced",
-							Message:      "subscription rate limiting policies are not ready",
-						}
-					}
-					break
-				}
-			}
-			// Model and TRLP are both ready
+			// TRLP is ready - allow inference
 			return nil
 		}
 	}
 
-	// Model not found in modelRefStatuses
-	if len(sub.ModelRefStatuses) == 0 {
-		// Empty modelRefStatuses for Degraded subscription is fail-closed
-		// (subscription is Degraded for a reason - should have status)
-		return &ModelUnhealthyError{
-			Subscription: sub.Name,
-			Phase:        sub.Phase,
-			Reason:       "ModelStatusMissing",
-			Message:      "subscription is Degraded but model status not reported",
-		}
-	}
-
-	// Model found in modelRefs but not in modelRefStatuses - unhealthy (fail-closed)
+	// Model has rate limits defined but TRLP status missing - fail closed
 	return &ModelUnhealthyError{
 		Subscription: sub.Name,
 		Phase:        sub.Phase,
-		Reason:       "ModelStatusMissing",
-		Message:      "model status not reported",
+		Reason:       "RateLimitNotEnforced",
+		Message:      "subscription rate limiting policies are not ready",
 	}
 }
 
@@ -707,11 +654,6 @@ func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
 		OrganizationID:          sub.OrganizationID,
 		CostCenter:              sub.CostCenter,
 		Labels:                  sub.Labels,
-		Phase:                   sub.Phase,
-		Ready:                   sub.Ready,
-	}
-	if sub.DeletionTimestamp != nil {
-		info.DeletionTimestamp = *sub.DeletionTimestamp
 	}
 	return info
 }
@@ -738,9 +680,6 @@ func ResponseToSubscriptionInfo(sub *SelectResponse) SubscriptionInfo {
 		OrganizationID:          sub.OrganizationID,
 		CostCenter:              sub.CostCenter,
 		Labels:                  sub.Labels,
-		Phase:                   sub.Phase,
-		Ready:                   sub.Ready,
-		DeletionTimestamp:       sub.DeletionTimestamp,
 	}
 }
 

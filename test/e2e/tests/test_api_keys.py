@@ -49,6 +49,7 @@ from test_helper import (
     _ns,
     _create_sa_token,
     _create_api_key,
+    _create_api_key_raw,
     _get_cr,
     _create_test_auth_policy,
     _create_test_subscription,
@@ -1172,7 +1173,7 @@ class TestAPIKeySubscriptionPhases:
             _wait_reconcile()
 
     def test_create_key_for_failed_subscription(self):
-        """API key creation succeeds for Failed subscription."""
+        """API key creation is rejected for Failed subscription to prevent key spam."""
         ns = _ns()
         subscription_name = "e2e-apikey-failed-sub"
         auth_name = "e2e-apikey-failed-auth"
@@ -1219,15 +1220,15 @@ class TestAPIKeySubscriptionPhases:
             phase = cr.get("status", {}).get("phase")
             assert phase == "Failed", f"Expected Failed, got {phase}"
 
-            # Create API key (should succeed even when Failed)
-            api_key = _create_api_key(
+            # Create API key (should be rejected for Failed subscriptions)
+            resp = _create_api_key_raw(
                 oc_token,
                 name="failed-sub-test",
                 subscription=subscription_name
             )
-            assert api_key is not None and api_key.startswith("sk-"), \
-                f"Expected valid API key, got: {api_key[:20] if api_key else None}"
-            log.info("✅ API key created successfully for Failed subscription")
+            assert resp.status_code == 403, \
+                f"Expected 403 Forbidden for Failed subscription, got {resp.status_code}: {resp.text}"
+            log.info("✅ API key creation rejected for Failed subscription (prevents key spam)")
 
         finally:
             _delete_cr("maassubscription", subscription_name, namespace=ns)

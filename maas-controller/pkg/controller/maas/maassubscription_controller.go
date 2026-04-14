@@ -758,13 +758,9 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 		return
 	}
 
-	log := logr.FromContextOrDiscard(ctx)
-	log.Info("Updating MaaSSubscription status", "name", subscription.Name, "namespace", subscription.Namespace, "phase", phase, "ready", status, "numModelRefs", len(subscription.Status.ModelRefStatuses))
-
 	if err := r.Status().Update(ctx, subscription); err != nil {
-		log.Error(err, "Failed to update MaaSSubscription status", "name", subscription.Name, "phase", phase)
-	} else {
-		log.Info("Successfully updated MaaSSubscription status", "name", subscription.Name, "namespace", subscription.Namespace, "phase", phase)
+		log := logr.FromContextOrDiscard(ctx)
+		log.Error(err, "failed to update MaaSSubscription status", "name", subscription.Name)
 	}
 }
 

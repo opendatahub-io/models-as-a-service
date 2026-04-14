@@ -106,48 +106,6 @@ curl -H "Authorization: Bearer $(oc whoami -t)" \
 !!! tip "User token filtering"
     The `X-MaaS-Subscription` header allows user token requests to filter results to a specific subscription. This is useful when you have access to many subscriptions but only want to see models from one.
 
-### Subscription Health Filtering
-
-The `/v1/models` endpoint automatically filters subscriptions based on their health status to ensure you only see models from healthy subscriptions.
-
-**Subscription Phases:**
-MaaSSubscription resources have a `status.phase` field that indicates their health:
-- **Active**: Subscription is healthy and all models are available
-- **Degraded**: Subscription has some unhealthy models (per-model health checks apply)
-- **Failed**: Subscription is not operational
-- **Pending**: Subscription is being provisioned
-
-**Filtering Behavior:**
-
-For **user token authentication** (OpenShift/OIDC tokens):
-- Only subscriptions in **Active** or **Degraded** phase are included
-- Subscriptions in **Failed** or **Pending** phase are excluded
-- Subscriptions marked for deletion are excluded
-- For **Degraded** subscriptions, only models with `ready: true` in `status.modelRefStatuses` are accessible
-
-For **API key authentication**:
-- If the bound subscription is **Active** or **Degraded**, models are accessible (with per-model health checks for Degraded)
-- If the bound subscription is **Failed** or **Pending**, all requests return **403 Forbidden**
-
-**Example:**
-```bash
-# User with access to 3 subscriptions:
-# - basic-subscription (Active)
-# - premium-subscription (Degraded, 1 unhealthy model)
-# - experimental-subscription (Failed)
-
-curl -H "Authorization: Bearer $(oc whoami -t)" \
-     https://maas.example.com/maas-api/v1/models
-
-# Returns:
-# - All models from basic-subscription
-# - Only healthy models from premium-subscription (unhealthy models excluded)
-# - No models from experimental-subscription (Failed phase excluded)
-```
-
-!!! note "Health check efficiency"
-    The phase filtering prevents unnecessary HTTP probes to models in Failed or Pending subscriptions. For Degraded subscriptions, per-model health status is checked via gateway authorization, ensuring only accessible models are returned.
-
 ### Subscription Metadata
 
 All models in the response include a `subscriptions` array with metadata for each subscription providing access to that model:

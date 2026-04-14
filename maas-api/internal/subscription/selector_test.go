@@ -458,82 +458,6 @@ func createSubscriptionWithHealth(
 	return sub
 }
 
-// createSubscriptionWithModelHealth creates a subscription with per-model health status.
-func createSubscriptionWithModelHealth(name string, groups []string, phase string, modelStatuses []map[string]any) *unstructured.Unstructured {
-	// Create base subscription
-	groupsSlice := make([]any, len(groups))
-	for i, g := range groups {
-		groupsSlice[i] = map[string]any{"name": g}
-	}
-
-	// Build modelRefs from modelStatuses
-	modelRefs := make([]any, len(modelStatuses))
-	for i, modelStatus := range modelStatuses {
-		modelRefs[i] = map[string]any{
-			"name":      modelStatus["name"],
-			"namespace": modelStatus["namespace"],
-			"tokenRateLimits": []any{
-				map[string]any{
-					"limit":  int64(1000),
-					"window": "1m",
-				},
-			},
-		}
-	}
-
-	spec := map[string]any{
-		"owner": map[string]any{
-			"groups": groupsSlice,
-		},
-		"priority":  int64(10),
-		"modelRefs": modelRefs,
-	}
-
-	metadata := map[string]any{
-		"name":      name,
-		"namespace": "test-ns",
-	}
-
-	sub := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "maas.opendatahub.io/v1alpha1",
-			"kind":       "MaaSSubscription",
-			"metadata":   metadata,
-			"spec":       spec,
-		},
-	}
-
-	// Add status
-	status := map[string]any{
-		"phase": phase,
-		"conditions": []any{
-			map[string]any{
-				"type": "Ready",
-				"status": func() string {
-					if phase == phaseActive {
-						return "True"
-					}
-					return "False"
-				}(),
-				"reason":  "Test",
-				"message": "Test condition",
-			},
-		},
-	}
-
-	if len(modelStatuses) > 0 {
-		// Convert to []any to avoid deep copy issues
-		anyStatuses := make([]any, len(modelStatuses))
-		for i, modelStatus := range modelStatuses {
-			anyStatuses[i] = modelStatus
-		}
-		status["modelRefStatuses"] = anyStatuses
-	}
-
-	sub.Object["status"] = status
-	return sub
-}
-
 func TestSelector_HealthFieldParsing(t *testing.T) {
 	log := logger.New(false)
 
@@ -554,12 +478,12 @@ func TestSelector_HealthFieldParsing(t *testing.T) {
 			expectError:      false,
 		},
 		{
-			name:             "Failed subscription with Ready=False - allowed for API key creation",
+			name:             "Failed subscription with Ready=False - rejected for API key creation",
 			subscription:     createSubscriptionWithHealth("failed-sub", []string{"g1"}, nil, 10, 1000, phaseFailed, false, false),
 			expectedPhase:    phaseFailed,
 			expectedReady:    false,
 			expectedDeleting: false,
-			expectError:      false, // Failed subscriptions allowed for API key creation (inference blocked by OPA)
+			expectError:      true, // Failed subscriptions rejected to prevent key spam
 		},
 		{
 			name:             "Pending subscription with Ready=False - allowed for API key creation",
@@ -567,7 +491,7 @@ func TestSelector_HealthFieldParsing(t *testing.T) {
 			expectedPhase:    phasePending,
 			expectedReady:    false,
 			expectedDeleting: false,
-			expectError:      false, // Pending subscriptions allowed for API key creation (inference blocked by OPA)
+			expectError:      false, // Pending subscriptions allowed (optimistic - might become Active)
 		},
 		{
 			name:             "Degraded subscription with Ready=False",
@@ -631,7 +555,7 @@ func TestSelector_HealthFieldParsing(t *testing.T) {
 			lister := &fakeLister{subscriptions: []*unstructured.Unstructured{tt.subscription}}
 			selector := subscription.NewSelector(log, lister)
 
-			//nolint:unqueryvet // False positive - not a SQL query
+			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
 			result, err := selector.Select([]string{"g1"}, "", "", "")
 
 			if tt.expectError {
@@ -703,184 +627,6 @@ func TestSelector_ListAccessibleWithHealth(t *testing.T) {
 		case "deleting-sub":
 			t.Errorf("deleting-sub should have been filtered out")
 		}
-	}
-}
-
-func TestSelector_DegradedSubscriptionActiveFiltering(t *testing.T) {
-	log := logger.New(false)
-
-	tests := []struct {
-		name              string
-		subscription      *unstructured.Unstructured
-		requestedModel    string
-		expectError       bool
-		expectedErrorType string
-	}{
-		{
-			name: "Degraded subscription with healthy model - allows access",
-			subscription: createSubscriptionWithModelHealth("degraded-sub", []string{"g1"}, phaseDegraded, []map[string]any{
-				{
-					"name":      "test-model",
-					"namespace": "test-ns",
-					"ready":     true,
-					"reason":    "Available",
-					"message":   "Model is healthy",
-				},
-			}),
-			requestedModel: "test-ns/test-model",
-			expectError:    false,
-		},
-		{
-			name: "Degraded subscription with unhealthy model - rejects access",
-			subscription: createSubscriptionWithModelHealth("degraded-sub", []string{"g1"}, phaseDegraded, []map[string]any{
-				{
-					"name":      "test-model",
-					"namespace": "test-ns",
-					"ready":     false,
-					"reason":    "ModelNotReady",
-					"message":   "Model deployment failed",
-				},
-			}),
-			requestedModel:    "test-ns/test-model",
-			expectError:       true,
-			expectedErrorType: "ModelUnhealthyError",
-		},
-		{
-			name: "Degraded subscription with missing model status - rejects access (fail-closed)",
-			subscription: func() *unstructured.Unstructured {
-				sub := createSubscriptionWithModelHealth("degraded-sub", []string{"g1"}, phaseDegraded, []map[string]any{
-					{
-						"name":      "other-model",
-						"namespace": "test-ns",
-						"ready":     true,
-						"reason":    "Available",
-						"message":   "Other model is healthy",
-					},
-				})
-				// Add test-model to modelRefs but not in status
-				spec, ok := sub.Object["spec"].(map[string]any)
-				if !ok {
-					panic("spec should be map[string]any")
-				}
-				modelRefs, ok := spec["modelRefs"].([]any)
-				if !ok {
-					panic("modelRefs should be []any")
-				}
-				modelRefs = append(modelRefs, map[string]any{
-					"name":      "test-model",
-					"namespace": "test-ns",
-					"tokenRateLimits": []any{
-						map[string]any{
-							"limit":  int64(1000),
-							"window": "1m",
-						},
-					},
-				})
-				spec["modelRefs"] = modelRefs
-				return sub
-			}(),
-			requestedModel:    "test-ns/test-model",
-			expectError:       true,
-			expectedErrorType: "ModelUnhealthyError",
-		},
-		{
-			name: "Degraded subscription with empty modelRefStatuses - rejects access (fail-closed)",
-			subscription: func() *unstructured.Unstructured {
-				// Create a subscription with test-model in modelRefs but empty modelRefStatuses
-				sub := createSubscription("degraded-sub", []string{"g1"}, nil, 10, 1000, "", "")
-				// Update the modelRefs to include namespace
-				spec, ok := sub.Object["spec"].(map[string]any)
-				if !ok {
-					panic("spec should be map[string]any")
-				}
-				spec["modelRefs"] = []any{
-					map[string]any{
-						"name":      "test-model",
-						"namespace": "test-ns",
-						"tokenRateLimits": []any{
-							map[string]any{
-								"limit":  int64(1000),
-								"window": "1m",
-							},
-						},
-					},
-				}
-				// Add Degraded phase status with empty modelRefStatuses
-				sub.Object["status"] = map[string]any{
-					"phase": phaseDegraded,
-					"conditions": []any{
-						map[string]any{
-							"type":    "Ready",
-							"status":  "False",
-							"reason":  phaseDegraded,
-							"message": "Some models unhealthy",
-						},
-					},
-					// Empty modelRefStatuses - should be rejected for Degraded subscription
-				}
-				return sub
-			}(),
-			requestedModel:    "test-ns/test-model",
-			expectError:       true,
-			expectedErrorType: "ModelUnhealthyError",
-		},
-		{
-			name: "Active subscription - always allows access regardless of model health",
-			subscription: createSubscriptionWithModelHealth("active-sub", []string{"g1"}, phaseActive, []map[string]any{
-				{
-					"name":      "test-model",
-					"namespace": "test-ns",
-					"ready":     false,
-					"reason":    "ModelNotReady",
-					"message":   "Model is broken",
-				},
-			}),
-			requestedModel: "test-ns/test-model",
-			expectError:    false,
-		},
-		{
-			name: "Degraded subscription without model specified - allows access",
-			subscription: createSubscriptionWithModelHealth("degraded-sub", []string{"g1"}, phaseDegraded, []map[string]any{
-				{
-					"name":      "test-model",
-					"namespace": "test-ns",
-					"ready":     false,
-					"reason":    "ModelNotReady",
-					"message":   "Model is broken",
-				},
-			}),
-			requestedModel: "",
-			expectError:    false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lister := &fakeLister{subscriptions: []*unstructured.Unstructured{tt.subscription}}
-			selector := subscription.NewSelector(log, lister)
-
-			//nolint:unqueryvet // False positive - not a SQL query
-			result, err := selector.Select([]string{"g1"}, "", "", tt.requestedModel)
-
-			if tt.expectError {
-				if err == nil {
-					t.Fatalf("Expected error but got none")
-				}
-				if tt.expectedErrorType == "ModelUnhealthyError" {
-					var modelUnhealthyErr *subscription.ModelUnhealthyError
-					if !errors.As(err, &modelUnhealthyErr) {
-						t.Fatalf("Expected ModelUnhealthyError, got %T: %v", err, err)
-					}
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("Expected no error but got: %v", err)
-				}
-				if result == nil {
-					t.Fatal("Expected result but got nil")
-				}
-			}
-		})
 	}
 }
 
@@ -1044,7 +790,7 @@ func TestSelector_DegradedSubscriptionTRLPFiltering(t *testing.T) {
 			lister := &fakeLister{subscriptions: []*unstructured.Unstructured{tt.subscription}}
 			selector := subscription.NewSelector(log, lister)
 
-			//nolint:unqueryvet // False positive - not a SQL query
+			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
 			result, err := selector.Select([]string{"g1"}, "", "", tt.requestedModel)
 
 			if tt.expectError {

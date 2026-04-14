@@ -203,7 +203,13 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 			return
 		}
 		if errors.As(err, &modelUnhealthy) {
-			c.JSON(http.StatusBadRequest, gin.H{
+			// Unreconciled (empty phase): 400 - temporary state, retry later
+			// Failed phase: 403 - authorization denied, subscription broken
+			statusCode := http.StatusBadRequest
+			if modelUnhealthy.Phase == "Failed" {
+				statusCode = http.StatusForbidden
+			}
+			c.JSON(statusCode, gin.H{
 				"error": modelUnhealthy.Message,
 				"code":  "subscription_not_ready",
 			})

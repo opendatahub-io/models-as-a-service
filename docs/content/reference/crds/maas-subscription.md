@@ -33,35 +33,3 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 |-------|------|----------|-------------|
 | limit | int64 | Yes | Maximum number of tokens allowed |
 | window | string | Yes | Time window (e.g., `1m`, `1h`, `24h`). Pattern: `^(\d+)(s|m|h|d)$` |
-
-## MaaSSubscriptionStatus
-
-The controller populates the `status` field with operational state. These fields are read-only.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| phase | string | Subscription health phase: `Active` (healthy), `Degraded` (some models unhealthy), `Failed` (not operational), or `Pending` (provisioning) |
-| conditions | []Condition | Standard Kubernetes conditions (e.g., Ready) |
-| modelRefStatuses | []ModelRefStatus | Per-model health status for each referenced MaaSModelRef |
-
-### ModelRefStatus
-
-| Field | Type | Description |
-|-------|------|-------------|
-| name | string | Name of the MaaSModelRef |
-| namespace | string | Namespace of the MaaSModelRef |
-| ready | bool | Whether this model is healthy and accessible |
-| reason | string | Short reason code if not ready (e.g., `ModelNotFound`, `EndpointUnavailable`) |
-| message | string | Human-readable message if not ready |
-
-### Phase Behavior
-
-The `status.phase` field affects subscription behavior:
-
-- **Active**: All models in the subscription are accessible. No per-model health checks required.
-- **Degraded**: Some models may be unhealthy. The controller populates `status.modelRefStatuses` with per-model health. Only models with `ready: true` are accessible for inference and model listing.
-- **Failed**: Subscription is not operational. All inference requests return **403 Forbidden**. Subscription is excluded from `/v1/models` listing.
-- **Pending**: Subscription is being provisioned. All inference requests return **403 Forbidden**. Subscription is excluded from `/v1/models` listing.
-
-!!! note "Health-based filtering"
-    The `/v1/models` endpoint and inference authorization only include subscriptions in Active or Degraded phase. For Degraded subscriptions, only models with `ready: true` in `status.modelRefStatuses` are accessible. See [Model Listing Flow](../../configuration-and-management/model-listing-flow.md#subscription-health-filtering) for details.

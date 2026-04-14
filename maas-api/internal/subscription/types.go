@@ -49,9 +49,6 @@ type SubscriptionInfo struct {
 	OrganizationID          string            `json:"organization_id,omitempty"`
 	CostCenter              string            `json:"cost_center,omitempty"`
 	Labels                  map[string]string `json:"labels,omitempty"`
-	Phase                   string            `json:"phase,omitempty"`              // Subscription phase from status
-	Ready                   bool              `json:"ready"`                        // Whether subscription is ready
-	DeletionTimestamp       string            `json:"deletion_timestamp,omitempty"` // Set when being deleted
 }
 
 // ModelRefInfo represents a model reference with its rate limits.

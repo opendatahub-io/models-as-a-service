@@ -517,11 +517,7 @@ paths:
             tags:
                 - subscriptions
             summary: List all subscriptions the authenticated user has access to
-            description: |
-                Returns all MaaSSubscription resources the user has access to based on group membership or username.
-                Only subscriptions in Active or Degraded phase are returned (Failed and Pending are excluded).
-                Subscriptions marked for deletion are also excluded.
-                Useful for UIs that need to show all user subscriptions.
+            description: Returns all MaaSSubscription resources the user has access to based on group membership or username. Useful for UIs that need to show all user subscriptions.
             operationId: subscriptions#list
             responses:
                 "200":
@@ -535,18 +531,8 @@ paths:
                             example:
                                 - subscription_id_header: free-tier
                                   subscription_description: Free Tier
-                                  display_name: Free Tier
-                                  priority: 0
-                                  model_refs: []
-                                  phase: Active
-                                  ready: true
                                 - subscription_id_header: premium
                                   subscription_description: Premium Plan
-                                  display_name: Premium
-                                  priority: 10
-                                  model_refs: []
-                                  phase: Degraded
-                                  ready: false
                 "500":
                     description: Internal Server Error response.
                     content:
@@ -558,12 +544,7 @@ paths:
             tags:
                 - subscriptions
             summary: List subscriptions the user has access to for a specific model
-            description: |
-                Returns MaaSSubscription resources the user has access to that include the specified model in their modelRefs.
-                Only subscriptions in Active or Degraded phase are returned (Failed and Pending are excluded).
-                The model-id parameter must be the MaaSModelRef resource name (e.g. "facebook-opt-125m-simulated"),
-                not the served model name (e.g. "facebook/opt-125m") or the route path.
-                Useful for populating a subscription dropdown when the user must specify X-MaaS-Subscription.
+            description: Returns MaaSSubscription resources the user has access to that include the specified model in their modelRefs. The model-id parameter must be the MaaSModelRef resource name (e.g. "facebook-opt-125m-simulated"), not the served model name (e.g. "facebook/opt-125m") or the route path. Useful for populating a subscription dropdown when the user must specify X-MaaS-Subscription.
             operationId: subscriptions#list_for_model
             parameters:
                 - in: path
@@ -584,11 +565,6 @@ paths:
                             example:
                                 - subscription_id_header: premium
                                   subscription_description: Premium Plan
-                                  display_name: Premium
-                                  priority: 10
-                                  model_refs: []
-                                  phase: Active
-                                  ready: true
                 "400":
                     description: Bad Request. Missing model-id parameter.
                     content:
@@ -829,26 +805,11 @@ components:
                     description: Additional labels for tracking and metrics
                     example:
                         env: production
-                phase:
-                    type: string
-                    description: "Subscription health phase: Active (healthy), Degraded (some models unhealthy), Failed (not operational), or Pending (provisioning). Only Active and Degraded subscriptions appear in model listings."
-                    example: Active
-                    enum: [Active, Degraded, Failed, Pending]
-                ready:
-                    type: boolean
-                    description: Whether the subscription is ready (from Ready condition in status)
-                    example: true
-                deletion_timestamp:
-                    type: string
-                    format: date-time
-                    description: Set when subscription is marked for deletion (RFC3339)
-                    example: "2024-04-15T14:30:00Z"
             required:
                 - subscription_id_header
                 - subscription_description
                 - priority
                 - model_refs
-                - ready
 
         ModelRefInfo:
             type: object
