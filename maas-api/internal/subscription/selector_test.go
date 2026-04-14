@@ -913,9 +913,9 @@ func TestSelector_DegradedSubscriptionTRLPFiltering(t *testing.T) {
 					"message":   "status not available",
 				},
 			}),
-			requestedModel:      "ns/model-a",
-			expectError:         true,
-			expectedErrorReason: "RateLimitNotEnforced",
+			requestedModel:        "ns/model-a",
+			expectError:           true,
+			expectedErrorReason:   "RateLimitNotEnforced",
 		},
 		{
 			name: "Degraded subscription with all TRLPs ready - allows inference (partial model failure)",
@@ -942,8 +942,8 @@ func TestSelector_DegradedSubscriptionTRLPFiltering(t *testing.T) {
 					"reason":    "Accepted",
 				},
 			}),
-			requestedModel:      "ns/model-a",
-			expectError:         false,
+			requestedModel:        "ns/model-a",
+			expectError:           false,
 		},
 		{
 			name: "Active subscription - TRLP status doesn't matter",
@@ -963,8 +963,8 @@ func TestSelector_DegradedSubscriptionTRLPFiltering(t *testing.T) {
 					"reason":    "NotAccepted",
 				},
 			}),
-			requestedModel:      "ns/model-a",
-			expectError:         false,
+			requestedModel:        "ns/model-a",
+			expectError:           false,
 		},
 		{
 			name: "Degraded subscription with multiple TRLPs - requested model TRLP ready allows inference",
@@ -998,8 +998,8 @@ func TestSelector_DegradedSubscriptionTRLPFiltering(t *testing.T) {
 					"message":   "policy not accepted",
 				},
 			}),
-			requestedModel: "ns/model-a",
-			expectError:    false,
+			requestedModel:        "ns/model-a",
+			expectError:           false,
 		},
 		{
 			name: "Degraded subscription with multiple TRLPs - requested model TRLP not ready blocks inference",
@@ -1033,9 +1033,9 @@ func TestSelector_DegradedSubscriptionTRLPFiltering(t *testing.T) {
 					"message":   "policy not accepted",
 				},
 			}),
-			requestedModel:      "ns/model-b",
-			expectError:         true,
-			expectedErrorReason: "RateLimitNotEnforced",
+			requestedModel:        "ns/model-b",
+			expectError:           true,
+			expectedErrorReason:   "RateLimitNotEnforced",
 		},
 	}
 
