@@ -403,6 +403,7 @@ class TestSubscriptionEnforcement:
     def test_rate_limit_exhaustion_gets_429(self):
         """
         Test that a user gets 429 when they actually exceed their token rate limit.
+
         This test creates a dedicated subscription with a very low token limit,
         sends enough requests to exhaust it, and verifies a 429 response.
 
