@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -18,38 +17,30 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 const (
-	// AnnExtraHeaders allows setting additional headers on the HTTPRoute.
-	// Format: "key1=value1,key2=value2"
-	AnnExtraHeaders = "maas.opendatahub.io/extra-headers"
+	// annotationPort overrides the default port (443).
+	annotationPort = "maas.opendatahub.io/port"
 
-	// AnnPort overrides the default port (443).
-	AnnPort = "maas.opendatahub.io/port"
-
-	// AnnTLS controls TLS origination (default "true").
-	AnnTLS = "maas.opendatahub.io/tls"
-
-	// AnnPathPrefix overrides the default path prefix (/external/<provider>/).
-	AnnPathPrefix = "maas.opendatahub.io/path-prefix"
+	// annotationTLS controls TLS origination (default "true").
+	annotationTLS = "maas.opendatahub.io/tls"
 
 	// Default gateway (matches MaaS controller defaults)
 	defaultGatewayName      = "maas-default-gateway"
 	defaultGatewayNamespace = "openshift-ingress"
 )
 
-// Reconciler watches MaaSModelRef CRs with kind=ExternalModel and creates
-// the Istio resources needed to route to the external provider.
+// Reconciler watches ExternalModel CRs and creates the Istio resources
+// needed to route to the external provider.
 //
-// All resources are created in the model's namespace (same as the MaaSModelRef).
-// OwnerReferences on each resource ensure Kubernetes garbage collection handles
-// cleanup when the MaaSModelRef is deleted — no finalizer needed.
+// All resources are created in the ExternalModel's namespace.
+// OwnerReferences on each resource ensure Kubernetes garbage collection
+// handles cleanup when the ExternalModel is deleted — no finalizer needed.
 type Reconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
@@ -72,20 +63,60 @@ func (r *Reconciler) gatewayNamespace() string {
 	return defaultGatewayNamespace
 }
 
+// commonLabels returns labels applied to all managed resources.
+func commonLabels(modelName string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/managed-by":       "maas-external-model-reconciler",
+		"maas.opendatahub.io/external-model": modelName,
+	}
+}
+
+// getTLSInfo reads optional TLS overrides from ExternalModel annotations.
+// Returns tls enabled (default true) and port (default 443).
+func getTLSInfo(extModel *maasv1alpha1.ExternalModel) (tls bool, port int32, err error) {
+	tls = true
+	port = 443
+
+	annotations := extModel.GetAnnotations()
+	if annotations == nil {
+		return
+	}
+
+	if portStr, ok := annotations[annotationPort]; ok {
+		p, parseErr := strconv.ParseInt(portStr, 10, 32)
+		if parseErr != nil {
+			return false, 0, fmt.Errorf("invalid port %q: %w", portStr, parseErr)
+		}
+		if p < 1 || p > 65535 {
+			return false, 0, fmt.Errorf("port %d out of range (1-65535)", p)
+		}
+		port = int32(p)
+	}
+
+	if tlsStr, ok := annotations[annotationTLS]; ok {
+		parsed, parseErr := strconv.ParseBool(tlsStr)
+		if parseErr != nil {
+			return false, 0, fmt.Errorf("invalid tls value %q: %w", tlsStr, parseErr)
+		}
+		tls = parsed
+	}
+
+	return
+}
+
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=externalmodels,verbs=get;list;watch
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
-//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=externalmodels/finalizers,verbs=update
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
 //+kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=get;list;watch;create;update
 //+kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;update;delete
 
-// Reconcile handles create/update/delete of MaaSModelRef CRs with kind=ExternalModel.
-// The ExternalModel kind filter is handled by the predicate in SetupWithManager.
+// Reconcile handles create/update/delete of ExternalModel CRs.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.Log.WithValues("maasmodelref", req.NamespacedName)
+	log.FromContext(ctx).Info("Reconciling ExternalModel", "namespace", req.Namespace, "name", req.Name)
 
-	model := &maasv1alpha1.MaaSModelRef{}
-	if err := r.Get(ctx, req.NamespacedName, model); err != nil {
+	extModel := &maasv1alpha1.ExternalModel{}
+	if err := r.Get(ctx, req.NamespacedName, extModel); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
@@ -93,87 +124,73 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Nothing to do on deletion — OwnerReferences handle cleanup
-	if !model.GetDeletionTimestamp().IsZero() {
+	if !extModel.GetDeletionTimestamp().IsZero() {
 		return ctrl.Result{}, nil
 	}
 
-	// Fetch the referenced ExternalModel CR to get provider configuration
-	extModel := &maasv1alpha1.ExternalModel{}
-	extModelKey := types.NamespacedName{
-		Name:      model.Spec.ModelRef.Name,
-		Namespace: model.Namespace,
-	}
-	if err := r.Get(ctx, extModelKey, extModel); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Info("ExternalModel CR not found, waiting", "name", model.Spec.ModelRef.Name)
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
-	}
-
-	spec, err := specFromExternalModel(extModel, model)
+	tls, port, err := getTLSInfo(extModel)
 	if err != nil {
-		log.Error(err, "Failed to parse ExternalModel spec")
-		return ctrl.Result{}, fmt.Errorf("invalid ExternalModel spec: %w", err)
+		return ctrl.Result{}, fmt.Errorf("invalid ExternalModel annotations: %w", err)
 	}
 
-	log.Info("Reconciling ExternalModel",
-		"provider", spec.Provider,
-		"endpoint", spec.Endpoint,
-		"tls", spec.TLS,
+	logger := r.Log.WithValues("externalmodel", req.NamespacedName)
+	logger.Info("Reconciling ExternalModel",
+		"provider", extModel.Spec.Provider,
+		"endpoint", extModel.Spec.Endpoint,
+		"tls", tls,
 	)
 
-	ns := model.Namespace
+	ns := extModel.Namespace
+	name := extModel.Name
 	gwName := r.gatewayName()
 	gwNamespace := r.gatewayNamespace()
-	labels := commonLabels(model.GetName())
+	labels := commonLabels(name)
 
 	// 1. ExternalName Service (backend for HTTPRoute)
-	svc := BuildService(spec, model.Name, ns, labels)
-	if err := controllerutil.SetControllerReference(model, svc, r.Scheme); err != nil {
+	svc := buildService(extModel.Spec.Endpoint, name, ns, port, labels)
+	if err := controllerutil.SetControllerReference(extModel, svc, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on Service: %w", err)
 	}
-	if err := r.applyService(ctx, log, svc); err != nil {
+	if err := r.applyService(ctx, logger, svc); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create Service: %w", err)
 	}
 
 	// 2. ServiceEntry (registers external host in mesh)
-	se := BuildServiceEntry(spec, model.Name, ns, labels)
-	if err := r.setUnstructuredOwner(model, se); err != nil {
+	se := buildServiceEntry(extModel.Spec.Endpoint, name, ns, port, tls, labels)
+	if err := r.setUnstructuredOwner(extModel, se); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on ServiceEntry: %w", err)
 	}
-	if err := r.applyUnstructured(ctx, log, se); err != nil {
+	if err := r.applyUnstructured(ctx, logger, se); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create ServiceEntry: %w", err)
 	}
 
 	// 3. DestinationRule (only if TLS; delete stale DR when TLS is disabled)
-	drName := ModelDestinationRuleName(model.Name)
-	if spec.TLS {
-		dr := BuildDestinationRule(spec, model.Name, ns, labels)
-		if err := r.setUnstructuredOwner(model, dr); err != nil {
+	if tls {
+		dr := buildDestinationRule(extModel.Spec.Endpoint, name, ns, labels)
+		if err := r.setUnstructuredOwner(extModel, dr); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to set owner on DestinationRule: %w", err)
 		}
-		if err := r.applyUnstructured(ctx, log, dr); err != nil {
+		if err := r.applyUnstructured(ctx, logger, dr); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to create DestinationRule: %w", err)
 		}
 	} else {
-		if err := r.deleteIfExists(ctx, log, "DestinationRule", drName, ns, schema.GroupVersionKind{
+		if err := r.deleteIfExists(ctx, logger, "DestinationRule", name, ns, schema.GroupVersionKind{
 			Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule",
 		}); err != nil {
-			log.Error(err, "Failed to delete stale DestinationRule", "name", drName)
+			return ctrl.Result{}, fmt.Errorf("failed to delete stale DestinationRule: %w", err)
 		}
 	}
 
 	// 4. HTTPRoute (routes requests to external provider via gateway)
-	hr := BuildHTTPRoute(spec, model.Name, ns, gwName, gwNamespace, labels)
-	if err := controllerutil.SetControllerReference(model, hr, r.Scheme); err != nil {
+	hr := buildHTTPRoute(extModel.Spec.Endpoint, name, ns, port, gwName, gwNamespace, labels)
+	if err := controllerutil.SetControllerReference(extModel, hr, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on HTTPRoute: %w", err)
 	}
-	if err := r.applyHTTPRoute(ctx, log, hr); err != nil {
+	if err := r.applyHTTPRoute(ctx, logger, hr); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to create HTTPRoute: %w", err)
 	}
 
-	log.Info("ExternalModel resources reconciled successfully",
+	logger.Info("ExternalModel resources reconciled successfully",
 		"service", svc.Name,
 		"serviceEntry", se.GetName(),
 		"httpRoute", hr.Name,
@@ -184,7 +201,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // setUnstructuredOwner sets the controller OwnerReference on an unstructured resource.
-func (r *Reconciler) setUnstructuredOwner(owner *maasv1alpha1.MaaSModelRef, obj *unstructured.Unstructured) error {
+func (r *Reconciler) setUnstructuredOwner(owner *maasv1alpha1.ExternalModel, obj *unstructured.Unstructured) error {
 	isController := true
 	blockDeletion := true
 	obj.SetOwnerReferences([]metav1.OwnerReference{
@@ -228,7 +245,10 @@ func (r *Reconciler) applyService(ctx context.Context, log logr.Logger, desired 
 	if err != nil {
 		return err
 	}
-	if !equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+	specChanged := !equality.Semantic.DeepEqual(existing.Spec, desired.Spec)
+	ownerChanged := !equality.Semantic.DeepEqual(existing.OwnerReferences, desired.OwnerReferences)
+	labelsChanged := !equality.Semantic.DeepEqual(existing.Labels, desired.Labels)
+	if specChanged || ownerChanged || labelsChanged {
 		existing.Spec = desired.Spec
 		existing.Labels = desired.Labels
 		existing.OwnerReferences = desired.OwnerReferences
@@ -273,95 +293,10 @@ func (r *Reconciler) applyHTTPRoute(ctx context.Context, log logr.Logger, desire
 	return r.Update(ctx, existing)
 }
 
-// specFromExternalModel reads ExternalModelSpec from the ExternalModel CR and
-// optional annotation overrides from the MaaSModelRef.
-// Provider and endpoint come from the ExternalModel CR (PR #586).
-// Port, TLS, path-prefix, and extra-headers are optional annotation overrides on the MaaSModelRef.
-func specFromExternalModel(extModel *maasv1alpha1.ExternalModel, model *maasv1alpha1.MaaSModelRef) (ExternalModelSpec, error) {
-	ann := model.GetAnnotations()
-	if ann == nil {
-		ann = map[string]string{}
-	}
-
-	spec := ExternalModelSpec{
-		Provider:   extModel.Spec.Provider,
-		Endpoint:   extModel.Spec.Endpoint,
-		PathPrefix: ann[AnnPathPrefix],
-		TLS:        true,
-		Port:       443,
-		// TLSInsecureSkipVerify: extModel.Spec.TLSInsecureSkipVerify, // requires issue #627 CRD change
-	}
-
-	if spec.Provider == "" {
-		return spec, fmt.Errorf("provider is required on ExternalModel %s", extModel.Name)
-	}
-	if spec.Endpoint == "" {
-		return spec, fmt.Errorf("endpoint is required on ExternalModel %s", extModel.Name)
-	}
-
-	if portStr, ok := ann[AnnPort]; ok {
-		p, err := strconv.ParseInt(portStr, 10, 32)
-		if err != nil {
-			return spec, fmt.Errorf("invalid port %q: %w", portStr, err)
-		}
-		if p < 1 || p > 65535 {
-			return spec, fmt.Errorf("port %d out of range (1-65535)", p)
-		}
-		spec.Port = int32(p)
-	}
-
-	if tlsStr, ok := ann[AnnTLS]; ok {
-		parsed, err := strconv.ParseBool(tlsStr)
-		if err != nil {
-			return spec, fmt.Errorf("invalid tls value %q: %w", tlsStr, err)
-		}
-		spec.TLS = parsed
-	}
-
-	if extraStr, ok := ann[AnnExtraHeaders]; ok && extraStr != "" {
-		spec.ExtraHeaders = map[string]string{}
-		for pair := range strings.SplitSeq(extraStr, ",") {
-			kv := strings.SplitN(pair, "=", 2)
-			if len(kv) == 2 {
-				spec.ExtraHeaders[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
-			}
-		}
-	}
-
-	return spec, nil
-}
-
-// externalModelPredicate filters MaaSModelRef events to only ExternalModel kind.
-func externalModelPredicate() predicate.Predicate {
-	isExternalModel := func(obj client.Object) bool {
-		model, ok := obj.(*maasv1alpha1.MaaSModelRef)
-		if !ok {
-			return false
-		}
-		return model.Spec.ModelRef.Kind == "ExternalModel"
-	}
-	return predicate.Funcs{
-		CreateFunc: func(e event.CreateEvent) bool {
-			return isExternalModel(e.Object)
-		},
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			return isExternalModel(e.ObjectOld) || isExternalModel(e.ObjectNew)
-		},
-		DeleteFunc: func(e event.DeleteEvent) bool {
-			return isExternalModel(e.Object)
-		},
-		GenericFunc: func(e event.GenericEvent) bool {
-			return isExternalModel(e.Object)
-		},
-	}
-}
-
-// SetupWithManager registers the reconciler to watch MaaSModelRef CRs
-// with kind=ExternalModel only (filtered by predicate).
+// SetupWithManager registers the reconciler to watch ExternalModel CRs.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaaSModelRef{}).
-		WithEventFilter(externalModelPredicate()).
+		For(&maasv1alpha1.ExternalModel{}).
 		Named("external-model-reconciler").
 		Complete(r)
 }
