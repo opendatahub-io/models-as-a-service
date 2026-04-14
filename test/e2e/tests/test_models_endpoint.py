@@ -368,7 +368,7 @@ class TestModelsEndpoint:
             # Add SA to premium-simulator-subscription to give it access to a second subscription
             log.info(f"Adding {sa_user} to premium-simulator-subscription users")
             subprocess.run([
-                "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                "oc", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                 "-n", maas_ns,
                 "--type=merge",
                 "-p", json.dumps({"spec": {"owner": {"users": [sa_user]}}})
@@ -418,7 +418,7 @@ class TestModelsEndpoint:
                 log.info(f"Removing {sa_user} from premium-simulator-subscription users")
                 # Get current users list, remove our SA, then patch
                 result = subprocess.run([
-                    "kubectl", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                    "oc", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                     "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
                 ], capture_output=True, text=True, check=True, timeout=30)
 
@@ -426,7 +426,7 @@ class TestModelsEndpoint:
                     users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
                     users = [u for u in users if u != sa_user]
                     subprocess.run([
-                        "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                        "oc", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                         "-n", maas_ns,
                         "--type=merge",
                         "-p", json.dumps({"spec": {"owner": {"users": users}}})
@@ -509,7 +509,7 @@ class TestModelsEndpoint:
             # Add SA to premium subscription
             log.info(f"Adding {sa_user} to premium-simulator-subscription")
             subprocess.run([
-                "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                "oc", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                 "-n", maas_ns,
                 "--type=merge",
                 "-p", json.dumps({"spec": {"owner": {"users": [sa_user]}}})
@@ -573,7 +573,7 @@ class TestModelsEndpoint:
             # Cleanup
             if sa_user is not None:
                 result = subprocess.run([
-                    "kubectl", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                    "oc", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                     "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
                 ], capture_output=True, text=True, check=True, timeout=30)
 
@@ -581,7 +581,7 @@ class TestModelsEndpoint:
                     users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
                     users = [u for u in users if u != sa_user]
                     subprocess.run([
-                        "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                        "oc", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                         "-n", maas_ns,
                         "--type=merge",
                         "-p", json.dumps({"spec": {"owner": {"users": users}}})
@@ -632,7 +632,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(auth_policy_cr),
                 text=True,
                 check=True,
@@ -667,7 +667,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(subscription_cr),
                 text=True,
                 check=True,
@@ -797,7 +797,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(auth_policy_cr),
                 text=True,
                 check=True,
@@ -832,7 +832,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(subscription_cr),
                 text=True,
                 check=True,
@@ -964,7 +964,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(auth_policy_cr),
                 text=True,
                 check=True,
@@ -999,7 +999,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(subscription_cr),
                 text=True,
                 check=True,

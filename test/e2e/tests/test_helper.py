@@ -361,7 +361,7 @@ def _list_crs(kind, namespace=None):
         "maassubscription": "maassubscriptions",
     }.get(kind, f"{kind}s")
 
-    cmd = ["kubectl", "get", plural, "-n", namespace, "-o", "json"]
+    cmd = ["oc", "get", plural, "-n", namespace, "-o", "json"]
 
     # Retry transient network errors with exponential backoff
     max_retries = 3
