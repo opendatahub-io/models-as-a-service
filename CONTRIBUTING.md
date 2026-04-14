@@ -70,7 +70,7 @@ This project uses two CI systems: **Konflux** (Tekton-based) for container image
 
 ### Konflux / Tekton pipelines
 
-Konflux builds multi-arch container images (x86_64, arm64, ppc64le, s390x) for both `maas-api` and `maas-controller` on every PR and push to `main`. Pipeline definitions live in `.tekton/` and reference a shared pipeline from [odh-konflux-central](https://github.com/opendatahub-io/odh-konflux-central) (`pipeline/multi-arch-container-build.yaml`). For a full overview of the ODH Konflux CI infrastructure (builds, integration test scenarios, group testing, must-gather), see the [ODH Konflux ITS Infrastructure](https://docs.google.com/document/d/11DcaZSOlg2sdcfE_P_VZVx_gOnNkJJyugPYrY8hpKbk/edit?tab=t.0) document.
+Konflux builds multi-arch container images (x86_64, arm64, ppc64le, s390x) for both `maas-api` and `maas-controller` on every PR and push to `main`. Pipeline definitions live in `.tekton/` and reference a shared pipeline from [odh-konflux-central](https://github.com/opendatahub-io/odh-konflux-central) (`pipeline/multi-arch-container-build.yaml`).
 
 | Pipeline | Trigger | Output image |
 |----------|---------|--------------|
@@ -80,8 +80,6 @@ Konflux builds multi-arch container images (x86_64, arm64, ppc64le, s390x) for b
 | `odh-maas-controller-on-push` | Push to `main` | `quay.io/opendatahub/maas-controller:odh-stable` |
 
 **Integration tests (e2e):** When a PR build completes, Konflux runs an integration test that provisions an ephemeral OpenShift cluster (HyperShift on AWS), deploys the ODH stack with the newly built images, and runs `test/e2e/scripts/prow_run_smoke_test.sh`. This is defined in `odh-konflux-central` under `integration-tests/models-as-a-service/`.
-
-**Group testing:** Because both `maas-api` and `maas-controller` are built from this mono-repo, group testing ensures e2e tests run with both images built from the same PR commit. After all component builds complete, a `/group-test` comment is automatically posted on the PR, triggering a combined test run.
 
 **Docs-only skip:** PRs that only touch documentation files (`docs/**` or `**/*.md`) skip the Konflux build pipelines and integration tests entirely. This is controlled via a CEL expression in the `.tekton/` pipeline definitions.
 
