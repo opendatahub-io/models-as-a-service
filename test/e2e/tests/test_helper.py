@@ -421,10 +421,10 @@ def _get_auth_policies_for_model(model_ref, namespace=None, model_namespace=None
         for ref in model_refs:
             if isinstance(ref, dict):
                 ref_name = ref.get("name")
-                ref_ns = ref.get("namespace", model_namespace)
+                ref_ns = ref.get("namespace")
             else:
                 ref_name = ref
-                ref_ns = model_namespace
+                ref_ns = None
             if ref_name == model_ref and ref_ns == model_namespace:
                 matching.append(policy["metadata"]["name"])
                 break
@@ -452,10 +452,10 @@ def _get_subscriptions_for_model(model_ref, namespace=None, model_namespace=None
         for ref in model_refs:
             if isinstance(ref, dict):
                 ref_name = ref.get("name")
-                ref_ns = ref.get("namespace", model_namespace)
+                ref_ns = ref.get("namespace")
             else:
                 ref_name = ref
-                ref_ns = model_namespace
+                ref_ns = None
             if ref_name == model_ref and ref_ns == model_namespace:
                 matching.append(sub["metadata"]["name"])
                 break
@@ -719,7 +719,12 @@ def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=N
             model_statuses = status.get("modelRefStatuses", [])
 
             if phase == expected_phase:
-                if not require_model_statuses or len(model_statuses) > 0:
+                if require_model_statuses:
+                    expected_count = len(cr.get("spec", {}).get("modelRefs", []))
+                    if len(model_statuses) >= expected_count:
+                        log.info(f"MaaSSubscription {name} reached phase '{expected_phase}' with {len(model_statuses)}/{expected_count} modelRefStatuses")
+                        return cr
+                else:
                     log.info(f"MaaSSubscription {name} reached phase '{expected_phase}'")
                     return cr
             log.debug(f"MaaSSubscription {name}: phase={phase}, modelRefStatuses={len(model_statuses)}")
