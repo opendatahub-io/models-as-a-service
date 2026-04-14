@@ -227,15 +227,15 @@ func TestFindHTTPRouteForModel_ExternalModel_Success(t *testing.T) {
 		},
 	}
 	route := &gatewayapiv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "maas-model-foo", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(model, route).Build()
 	routeName, routeNS, err := findHTTPRouteForModel(ctx, c, "default", "foo")
 	if err != nil {
 		t.Fatalf("findHTTPRouteForModel: %v", err)
 	}
-	if routeName != "maas-model-foo" || routeNS != "default" {
-		t.Errorf("findHTTPRouteForModel: got (%q, %q), want (\"maas-model-foo\", \"default\")", routeName, routeNS)
+	if routeName != "foo" || routeNS != "default" {
+		t.Errorf("findHTTPRouteForModel: got (%q, %q), want (\"foo\", \"default\")", routeName, routeNS)
 	}
 }
 

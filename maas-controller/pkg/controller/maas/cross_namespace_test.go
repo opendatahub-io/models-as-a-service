@@ -42,7 +42,7 @@ func TestMaaSAuthPolicyReconciler_CrossNamespace(t *testing.T) {
 		modelNamespaceA = "model-ns-a"
 		modelNamespaceB = "model-ns-b"
 		modelName       = "test-model"
-		httpRouteName   = "maas-model-" + modelName
+		httpRouteName   = modelName
 		authPolicyName  = "maas-auth-" + modelName
 		maasPolicyName  = "cross-ns-policy"
 	)
@@ -139,7 +139,7 @@ func TestMaaSAuthPolicyReconciler_SelectiveModelManagement(t *testing.T) {
 		modelNamespaceA = "model-ns-a"
 		modelNamespaceB = "model-ns-b"
 		modelName       = "test-model"
-		httpRouteName   = "maas-model-" + modelName
+		httpRouteName   = modelName
 		authPolicyName  = "maas-auth-" + modelName
 		maasPolicyName  = "selective-policy"
 	)
@@ -213,7 +213,7 @@ func TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces(t *testing.T) {
 		modelName      = "shared-model"
 		namespaceA     = "team-a"
 		namespaceB     = "team-b"
-		httpRouteName  = "maas-model-" + modelName
+		httpRouteName  = modelName
 		authPolicyName = "maas-auth-" + modelName
 	)
 
@@ -305,7 +305,7 @@ func TestMaaSSubscriptionReconciler_CrossNamespace(t *testing.T) {
 		modelNamespaceA = "model-ns-a"
 		modelNamespaceB = "model-ns-b"
 		modelName       = "test-model"
-		httpRouteName   = "maas-model-" + modelName
+		httpRouteName   = modelName
 		trlpName        = "maas-trlp-" + modelName
 		subName         = "cross-ns-subscription"
 	)
@@ -417,7 +417,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 	const (
 		modelName        = "llm"
 		modelNamespace   = "models"
-		httpRouteName    = "maas-model-" + modelName
+		httpRouteName    = modelName
 		trlpName         = "maas-trlp-" + modelName
 		subscriptionName = "gold" // SAME name in both namespaces
 		namespaceA       = "tenant-a"
@@ -610,7 +610,7 @@ func TestMaaSModelRefDeletion_CrossNamespaceIsolation(t *testing.T) {
 		modelName      = "shared-model"
 		namespaceA     = "team-a"
 		namespaceB     = "team-b"
-		httpRouteName  = "maas-model-" + modelName
+		httpRouteName  = modelName
 		authPolicyName = "maas-auth-" + modelName
 	)
 

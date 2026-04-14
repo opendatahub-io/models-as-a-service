@@ -507,7 +507,8 @@ main() {
   esac
 
   # Install subscription controller (always deployed)
-  # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script.
+  # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script
+  # unless the operator has already created deployment/maas-controller (starting from 3.4).
   log_info ""
   log_info "MaaS Subscription Controller..."
   local script_dir
@@ -521,27 +522,31 @@ main() {
     return 1
   else
     if [[ "$DEPLOYMENT_MODE" != "kustomize" ]]; then
-      log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
       if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
         log_error "Namespace $NAMESPACE does not exist. Create it first (e.g. via ODH operator)."
         return 1
       fi
-      set_maas_controller_image
-      if [[ "$NAMESPACE" != "opendatahub" ]]; then
-        (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
-          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
-          cleanup_maas_controller_image
-          log_error "Failed to apply maas-controller manifests"
-          return 1
-        }
+      if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
+        log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
       else
-        kubectl apply -k "$config_dir" || {
-          cleanup_maas_controller_image
-          log_error "Failed to apply maas-controller manifests"
-          return 1
-        }
+        log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
+        set_maas_controller_image
+        if [[ "$NAMESPACE" != "opendatahub" ]]; then
+          (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
+            sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
+            cleanup_maas_controller_image
+            log_error "Failed to apply maas-controller manifests"
+            return 1
+          }
+        else
+          kubectl apply -k "$config_dir" || {
+            cleanup_maas_controller_image
+            log_error "Failed to apply maas-controller manifests"
+            return 1
+          }
+        fi
+        cleanup_maas_controller_image
       fi
-      cleanup_maas_controller_image
     else
       log_info "  Controller deployed via kustomize overlay (deployment/base/maas-controller/default)"
     fi
