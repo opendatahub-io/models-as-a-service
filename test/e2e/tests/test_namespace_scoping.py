@@ -12,15 +12,10 @@ Requires:
   - LLMInferenceService deployed in llm namespace (facebook-opt-125m-simulated)
   - oc/kubectl access with cluster-admin or sufficient RBAC permissions
 
-Environment variables (all optional, with defaults):
-  - GATEWAY_HOST: Gateway hostname (required)
-  - MAAS_API_BASE_URL: MaaS API URL (required)
-  - MAAS_SUBSCRIPTION_NAMESPACE: MaaS subscription namespace (default: models-as-a-service)
-  - E2E_TIMEOUT: Request timeout in seconds (default: 30)
-  - E2E_RECONCILE_WAIT: Wait time for controller reconciliation (default: 8)
-  - E2E_SKIP_TLS_VERIFY: Set to "true" to skip TLS verification
-  - E2E_MODEL_REF: Model ref for tests (default: facebook-opt-125m-simulated)
-  - E2E_MODEL_NAMESPACE: Namespace where model MaaSModelRef lives (default: llm)
+Environment variables:
+  See test_helper.py module docstring for shared environment variables
+  (GATEWAY_HOST, MAAS_API_BASE_URL, MAAS_SUBSCRIPTION_NAMESPACE, etc.).
+  This file uses no additional file-specific environment variables.
 """
 
 import json
