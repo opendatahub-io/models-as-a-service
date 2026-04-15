@@ -80,7 +80,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: prometheus
+                    name: kuadrant-prometheus-datasource
                   query: 'count(count by (user) (increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]) > 0)) or vector(0)'
                   seriesNameFormat: Users
     successRate:
@@ -104,7 +104,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: prometheus
+                    name: kuadrant-prometheus-datasource
                   query: '((sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))) / ((sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) + (sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0))) > 0)) or vector(1)'
                   seriesNameFormat: Success Rate
     tokenConsumptionByUser:
@@ -167,7 +167,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: prometheus
+                    name: kuadrant-prometheus-datasource
                   query: 'round(sum by (user, subscription, model) (increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range])))'
           - kind: TimeSeriesQuery
             spec:
@@ -176,7 +176,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: prometheus
+                    name: kuadrant-prometheus-datasource
                   query: |-
                     round(
                       sum by (user, subscription, model) (
@@ -194,7 +194,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: prometheus
+                    name: kuadrant-prometheus-datasource
                   query: |-
                     round(
                       sum by (user, subscription, model) (
@@ -227,7 +227,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: prometheus
+                    name: kuadrant-prometheus-datasource
                   query: 'sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0)'
                   seriesNameFormat: Errors
     totalRequests:
@@ -252,7 +252,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: prometheus
+                    name: kuadrant-prometheus-datasource
                   query: '(sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0)) + (sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0))'
                   seriesNameFormat: Requests
     totalTokens:
@@ -277,7 +277,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: prometheus
+                    name: kuadrant-prometheus-datasource
                   query: 'sum(increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range])) or vector(0)'
                   seriesNameFormat: Tokens
   variables:
@@ -294,7 +294,7 @@ spec:
           spec:
             datasource:
               kind: PrometheusDatasource
-              name: prometheus
+              name: kuadrant-prometheus-datasource
             labelName: user
             matchers:
               - 'authorized_hits{user!=""}'
@@ -311,7 +311,7 @@ spec:
           spec:
             datasource:
               kind: PrometheusDatasource
-              name: prometheus
+              name: kuadrant-prometheus-datasource
             labelName: subscription
             matchers:
               - 'authorized_hits{subscription!=""}'
@@ -328,7 +328,7 @@ spec:
           spec:
             datasource:
               kind: PrometheusDatasource
-              name: prometheus
+              name: kuadrant-prometheus-datasource
             labelName: model
             matchers:
               - 'authorized_hits{model!=""}'

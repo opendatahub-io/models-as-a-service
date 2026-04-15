@@ -40,25 +40,27 @@ import pytest
 import requests
 
 from conftest import TLS_VERIFY
-from test_subscription import SIMULATOR_SUBSCRIPTION, _delete_sa, _sa_to_user
 from test_helper import (
-    MODEL_REF,
-    MODEL_NAMESPACE,
     MODEL_NAME,
+    MODEL_NAMESPACE,
+    MODEL_REF,
+    SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
-    _ns,
-    _create_sa_token,
     _create_api_key,
     _create_api_key_raw,
-    _get_cr,
+    _create_sa_token,
     _create_test_auth_policy,
     _create_test_subscription,
     _delete_cr,
-    _wait_reconcile,
-    _wait_for_maas_subscription_ready,
+    _delete_sa,
+    _get_cr,
+    _maas_api_url,
+    _ns,
+    _sa_to_user,
     _scale_controller_down,
     _scale_controller_up,
-    _maas_api_url,
+    _wait_for_maas_subscription_phase,
+    _wait_reconcile,
 )
 
 log = logging.getLogger(__name__)
@@ -73,7 +75,7 @@ def model_completions_url(model_v1: str) -> str:
 @pytest.fixture
 def inference_model_name() -> str:
     """Model name for inference requests. Override with INFERENCE_MODEL_NAME env var."""
-    return os.environ.get("INFERENCE_MODEL_NAME", "facebook/opt-125m")
+    return os.environ.get("INFERENCE_MODEL_NAME", MODEL_NAME)
 
 
 class TestAPIKeyCRUD:
@@ -333,7 +335,7 @@ class TestAPIKeyExpiration:
     Environment Variables:
     - API_KEY_MAX_EXPIRATION_DAYS: The configured max expiration in days (set on maas-api deployment).
       Must be explicitly set by the e2e test harness to match the maas-api deployment configuration.
-      Default is 30 days. Minimum is 1 day.
+      Default is 90 days. Minimum is 1 day.
     """
 
     @pytest.fixture
@@ -1109,7 +1111,7 @@ class TestAPIKeySubscriptionPhases:
 
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
-            _wait_for_maas_subscription_ready(subscription_name, ns)
+            _wait_for_maas_subscription_phase(subscription_name, namespace=ns)
 
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             phase = cr.get("status", {}).get("phase")

@@ -12,15 +12,10 @@ Requires:
   - LLMInferenceService deployed in llm namespace (facebook-opt-125m-simulated)
   - oc/kubectl access with cluster-admin or sufficient RBAC permissions
 
-Environment variables (all optional, with defaults):
-  - GATEWAY_HOST: Gateway hostname (required)
-  - MAAS_API_BASE_URL: MaaS API URL (required)
-  - MAAS_SUBSCRIPTION_NAMESPACE: MaaS subscription namespace (default: models-as-a-service)
-  - E2E_TIMEOUT: Request timeout in seconds (default: 30)
-  - E2E_RECONCILE_WAIT: Wait time for controller reconciliation (default: 8)
-  - E2E_SKIP_TLS_VERIFY: Set to "true" to skip TLS verification
-  - E2E_MODEL_REF: Model ref for tests (default: facebook-opt-125m-simulated)
-  - E2E_MODEL_NAMESPACE: Namespace where model MaaSModelRef lives (default: llm)
+Environment variables:
+  See test_helper.py module docstring for shared environment variables
+  (GATEWAY_HOST, MAAS_API_BASE_URL, MAAS_SUBSCRIPTION_NAMESPACE, etc.).
+  This file uses no additional file-specific environment variables.
 """
 
 import json
@@ -45,7 +40,7 @@ from test_helper import (
     _maas_api_url,
     _ns,
     _revoke_api_key,
-    _wait_for_subscription_phase,
+    _wait_for_maas_subscription_phase,
     _wait_reconcile,
 )
 
@@ -190,7 +185,7 @@ class TestMaaSAPIWatchNamespace:
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
                 },
             })
-            _wait_for_subscription_phase(sub_name, "Active", ns)
+            _wait_for_maas_subscription_phase(sub_name, "Active", namespace=ns)
 
             r = _call_subscriptions_select(api_key, "e2e-api-user", ["system:authenticated"], requested_subscription=sub_name)
             assert r.status_code == 200, f"subscriptions/select failed: {r.status_code} {r.text}"
