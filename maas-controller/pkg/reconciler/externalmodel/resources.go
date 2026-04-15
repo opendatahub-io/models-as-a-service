@@ -87,7 +87,7 @@ func buildDestinationRule(endpoint, name, namespace string, labels map[string]st
 // Path prefix is /<namespace>/<name> for namespace isolation.
 // Only a Host header filter is set (required for TLS SNI).
 // BBR ext-proc handles path rewriting and provider-specific headers.
-func buildHTTPRoute(endpoint, name, namespace string, port int32, gatewayName, gatewayNamespace string, labels map[string]string) *gatewayapiv1.HTTPRoute {
+func buildHTTPRoute(endpoint, name, targetModel, namespace string, port int32, gatewayName, gatewayNamespace string, labels map[string]string) *gatewayapiv1.HTTPRoute {
 	gwNamespace := gatewayapiv1.Namespace(gatewayNamespace)
 	pathType := gatewayapiv1.PathMatchPathPrefix
 	pathPrefix := "/" + namespace + "/" + name
@@ -160,7 +160,7 @@ func buildHTTPRoute(endpoint, name, namespace string, port int32, gatewayName, g
 								{
 									Name:  "X-Gateway-Model-Name",
 									Type:  &headerType,
-									Value: name,
+									Value: targetModel,
 								},
 							},
 						},
