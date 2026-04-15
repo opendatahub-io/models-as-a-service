@@ -1,13 +1,78 @@
 # Validation Guide
 
-This guide provides instructions for validating and testing your MaaS Platform deployment.
+After deploying MaaS, you need to verify three things. First, that the infrastructure is healthy: pods are running, the gateway is accepting traffic, and auth/rate-limit policies are enforced. Second, that you can deploy a model and talk to it through the gateway: create an API key, list available models, and send an inference request. Third, that security is active: requests without credentials are rejected and rate limits kick in after a few calls.
 
 !!! note "Prerequisite"
     At least one model must be deployed to validate the installation. See [Model Setup (On Cluster)](model-setup.md) to deploy sample models.
 
-## Manual Validation (Recommended)
+## Quick Validation
 
-Follow these steps to validate your deployment and understand each component:
+Run the validation script to check all components in one pass:
+
+```bash
+./scripts/validate-deployment.sh
+```
+
+To validate a specific model:
+
+```bash
+./scripts/validate-deployment.sh <model-name>
+```
+
+!!! note "Non-admin users"
+    The script reads the cluster ingress config to find the gateway URL. If you don't have cluster-reader permissions, set the URL manually:
+    ```bash
+    export MAAS_GATEWAY_HOST="https://maas.apps.your-cluster.example.com"
+    ./scripts/validate-deployment.sh
+    ```
+
+!!! note "OpenShift required"
+    The validation script requires an OpenShift cluster. For non-OpenShift environments, use the step-by-step validation below.
+
+### What the script checks
+
+The script runs four groups of checks:
+
+1. **Component status** -- MaaS API pods, policy engine pods, RHOAI/KServe pods, and deployed models
+2. **Gateway status** -- gateway is accepted and programmed, HTTPRoute is configured, hostname is reachable
+3. **Policy status** -- AuthPolicy is enforced, TokenRateLimitPolicy is configured
+4. **API endpoint tests** -- authentication token works, API key creation works, models endpoint responds, model inference returns a result, rate limiting kicks in, unauthorized requests are rejected
+
+### Reading the output
+
+Each check shows PASS, FAIL, or WARNING. At the end, the script prints a summary:
+
+```
+Validation Summary
+
+Results:
+  Passed: 15
+  Failed: 0
+  Warnings: 0
+
+All critical checks passed!
+```
+
+When a check fails, the script prints the reason and a suggestion. For example:
+
+```
+FAIL: Models endpoint failed (HTTP 403)
+  Reason: Response empty
+  Suggestion: Check MaaS API service and logs
+```
+
+For the full list of script options and flags, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#validate-deploymentsh).
+
+### If checks fail
+
+Use the step-by-step validation below to isolate which component is broken. For common error patterns, see [Troubleshooting](troubleshooting.md).
+
+## Step-by-Step Validation
+
+Use these steps to test individual components, debug specific failures, or understand how the system works.
+
+!!! info "OC token vs API key"
+    Two types of credentials work with the MaaS gateway. Use your OpenShift token (`oc whoami -t`) for admin operations like creating API keys. Use an API key (`sk-oai-...`) for model operations like inference and listing models. The steps below use both.
 
 ### 1. Get Gateway Endpoint
 
@@ -17,16 +82,24 @@ HOST="https://maas.${CLUSTER_DOMAIN}" && \
 echo "Gateway endpoint: $HOST"
 ```
 
-!!! note
-    If you haven't created the `maas-default-gateway` yet, you can use the fallback:
-    ```bash
-    HOST="https://gateway.${CLUSTER_DOMAIN}" && \
-    echo "Using fallback gateway endpoint: $HOST"
+??? success "Expected output"
     ```
+    Gateway endpoint: https://maas.apps.your-cluster.example.com
+    ```
+
+!!! note
+    If you don't have cluster-reader permissions, set the gateway URL directly:
+    ```bash
+    HOST="https://maas.apps.your-cluster.example.com"
+    ```
+
+**If this fails:**
+
+- Empty `CLUSTER_DOMAIN`: you don't have permission to read the ingress config. Set `HOST` manually as shown above.
 
 ### 2. Get API Key
 
-For OpenShift, create an API key (authenticate with your OpenShift token):
+Create an API key using your OpenShift token:
 
 ```bash
 API_KEY_RESPONSE=$(curl -sSk \
@@ -39,15 +112,26 @@ API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key) && \
 echo "API key obtained: ${API_KEY:0:20}..."
 ```
 
+??? success "Expected output"
+    ```
+    API key obtained: sk-oai-abc123def456...
+    ```
+
 !!! warning "API key shown only once"
     The plaintext API key is returned **only at creation time**. We do not store the API key, so there is no way to retrieve it again. Store it securely when it is displayed. If you run into errors, see [Troubleshooting](troubleshooting.md).
 
 !!! note
     `subscription` is the MaaSSubscription metadata name to bind (here `simulator-subscription` matches the [maas-system](https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/maas-system) free sample). Use your own name or omit the field to auto-select by `spec.priority`. For details, see [Understanding Token Management](../configuration-and-management/token-management.md).
 
+**If this fails:**
+
+- **401 Unauthorized**: your OC token is expired or invalid. Run `oc login` again.
+- **400 "invalid subscription"**: no MaaSSubscription exists with that name. Deploy a model with MaaS CRs first (see [Model Setup](model-setup.md)), or omit the `subscription` field to auto-select.
+- **503 Service Unavailable**: the gateway can't reach the MaaS API backend. Check that the `maas-api` pod is running: `kubectl get pods -l app.kubernetes.io/name=maas-api -A`
+
 ### 3. List Available Models
 
-Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models` with an API key does not require `X-MaaS-Subscription`—the list is scoped to that subscription. (With an OpenShift user token instead of an API key, you can optionally send `X-MaaS-Subscription` to filter when you have access to multiple subscriptions.)
+Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models` with an API key returns only models from that subscription. With an OpenShift token instead of an API key, you can send `X-MaaS-Subscription` to filter when you have access to multiple subscriptions.
 
 ```bash
 MODELS=$(curl -sSk ${HOST}/maas-api/v1/models \
@@ -59,52 +143,127 @@ MODEL_URL=$(echo $MODELS | jq -r '.data[0].url') && \
 echo "Model URL: $MODEL_URL"
 ```
 
-### 4. Test Model Inference Endpoint
+??? success "Expected output"
+    ```json
+    {
+      "data": [
+        {
+          "id": "facebook/opt-125m",
+          "url": "https://maas.apps.your-cluster.example.com/llm/facebook-opt-125m-simulated",
+          "object": "model"
+        }
+      ],
+      "object": "list"
+    }
+    ```
+    ```
+    Model URL: https://maas.apps.your-cluster.example.com/llm/facebook-opt-125m-simulated
+    ```
 
-Send a request to the model endpoint (should get a 200 OK response):
+**If this fails:**
+
+- **403 Forbidden**: the API key is invalid or the AuthPolicy is not enforced. Create a new API key and try again.
+- **Empty list** (`{"data":[], "object":"list"}`): a model is deployed but the MaaSModelRef is missing or not in Ready state. Check: `kubectl get maasmodelref -A`
+- **401 Unauthorized**: the API key format is wrong or expired. Make sure you're using the `sk-oai-...` key from step 2.
+
+### 4. Test Model Inference
+
+Send a chat completion request to the model. You should get a 200 OK response with generated text:
 
 ```bash
 curl -sSk -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-  "${MODEL_URL}/v1/completions" | jq
+  -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
+  "${MODEL_URL}/v1/chat/completions" | jq
 ```
+
+??? success "Expected output"
+    ```json
+    {
+      "id": "chatcmpl-abc123",
+      "created": 1776000000,
+      "model": "facebook/opt-125m",
+      "usage": {
+        "prompt_tokens": 1,
+        "completion_tokens": 25,
+        "total_tokens": 26
+      },
+      "object": "chat.completion",
+      "choices": [
+        {
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "Hello! How can I help you today?"
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    }
+    ```
+
+!!! note
+    Some models only support `/v1/completions` (prompt-based) instead of `/v1/chat/completions`. If you get a 404 or 400, try the completions endpoint:
+    ```bash
+    curl -sSk -H "Authorization: Bearer $API_KEY" \
+      -H "Content-Type: application/json" \
+      -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
+      "${MODEL_URL}/v1/completions" | jq
+    ```
+
+**If this fails:**
+
+- **401 Unauthorized**: the API key is not recognized. It may be expired or in the wrong format. Create a new one.
+- **403 Forbidden**: Authorino can't validate the API key against the MaaS API. This usually means a TLS configuration issue between Authorino and maas-api. Check the Authorino logs: `kubectl logs deployment/authorino -n kuadrant-system`
+- **503 Service Unavailable**: the gateway can't reach the model backend. Check that the model pod is running: `kubectl get pods -n llm`
+- **404 Not Found**: the model URL is wrong or the HTTPRoute is not configured. Check: `kubectl get httproute -A`
 
 ### 5. Test Authorization Enforcement
 
-Send a request to the model endpoint without a token (should get a 401 Unauthorized response):
+Send a request without any credentials. You should get a 401 Unauthorized response:
 
 ```bash
-curl -sSk -H "Content-Type: application/json" \
-  -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-  "${MODEL_URL}/v1/completions" -v
+curl -sSk -o /dev/null -w "HTTP status: %{http_code}\n" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
+  "${MODEL_URL}/v1/chat/completions"
 ```
+
+??? success "Expected output"
+    ```
+    HTTP status: 401
+    ```
+
+**If this fails:**
+
+- **200 OK instead of 401**: the AuthPolicy is not enforced on this route. Check: `kubectl get authpolicy -A` and verify the ENFORCED column is True.
 
 ### 6. Test Rate Limiting
 
-Send multiple requests to trigger rate limit (should get 200 OK followed by 429 Rate Limit Exceeded after about 4 requests):
+Send multiple requests to trigger the rate limit. After a few successful requests, you should start getting 429 responses:
 
 ```bash
 for i in {1..16}; do
-  curl -sSk -o /dev/null -w "%{http_code}\n" \
+  curl -sSk -o /dev/null -w "%{http_code} " \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
-    -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-    "${MODEL_URL}/v1/completions"
+    -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
+    "${MODEL_URL}/v1/chat/completions"
 done
+echo ""
 ```
 
-See the deployment scripts documentation at `scripts/README.md` and the [Troubleshooting](troubleshooting.md) guide for more information.
+??? success "Expected output"
+    ```
+    200 200 200 429 429 429 429 429 429 429 429 429 429 429 429 429
+    ```
+    The exact number of 200s before rate limiting depends on your TokenRateLimitPolicy configuration. With the default simulator subscription (100 tokens/min), you should see 429s after 3-5 requests.
 
-## Automated Validation
+**If this fails:**
 
-For faster validation, you can use the automated validation script to run the manual validation steps more quickly:
+- **No 429s after 16 requests**: the TokenRateLimitPolicy is missing or not enforced. Check: `kubectl get tokenratelimitpolicy -A`. If multiple TokenRateLimitPolicies target the same HTTPRoute, see [Subscription limitations](../configuration-and-management/subscription-known-issues.md#token-rate-limits-when-multiple-model-references-share-one-httproute).
 
-```bash
-./scripts/validate-deployment.sh
-```
-
-The script automates the manual validation steps above and provides detailed feedback with specific suggestions for fixing any issues found. This is useful when you need to quickly verify deployment status, but understanding the manual steps above helps with troubleshooting.
+For more troubleshooting, see [Troubleshooting](troubleshooting.md).
 
 ## TLS Verification
 
