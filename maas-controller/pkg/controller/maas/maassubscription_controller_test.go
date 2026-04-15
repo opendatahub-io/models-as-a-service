@@ -249,16 +249,10 @@ func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition(t *testing.T)
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
 	ctx := context.Background()
 
-	// Reconcile all subscriptions - each reconcile now sets its own SpecPriorityDuplicate condition
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}); err != nil {
 		t.Fatalf("Reconcile sub-a: %v", err)
 	}
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-b", Namespace: namespace}}); err != nil {
-		t.Fatalf("Reconcile sub-b: %v", err)
-	}
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-c", Namespace: namespace}}); err != nil {
-		t.Fatalf("Reconcile sub-c: %v", err)
-	}
+	r.scanForDuplicatePriority(ctx)
 
 	assertSpecPriorityDuplicate := func(t *testing.T, subName string, wantTrue bool, mustContainPeer string) {
 		t.Helper()

@@ -355,9 +355,6 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	subscription.Status.ModelRefStatuses = modelStatuses
 
-	// Check for duplicate priority and update condition
-	r.updateDuplicatePriorityCondition(ctx, subscription)
-
 	// Derive final phase based on model and TRLP health
 	phase, message := deriveFinalPhase(modelStatuses, trlpStatuses)
 	r.updateStatus(ctx, subscription, phase, message, statusSnapshot)
@@ -764,57 +761,8 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 	}
 }
 
-// updateDuplicatePriorityCondition sets the SpecPriorityDuplicate condition on the subscription
-// based on whether other subscriptions share the same priority value.
-func (r *MaaSSubscriptionReconciler) updateDuplicatePriorityCondition(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription) {
-	log := logr.FromContextOrDiscard(ctx)
-	var list maasv1alpha1.MaaSSubscriptionList
-	if err := r.List(ctx, &list); err != nil {
-		log.Error(err, "failed to list MaaSSubscriptions for duplicate priority check")
-		return
-	}
-
-	selfKey := subscription.Namespace + "/" + subscription.Name
-	selfPriority := subscription.Spec.Priority
-
-	// Find other live subscriptions with the same priority
-	var peers []string
-	for i := range list.Items {
-		s := &list.Items[i]
-		if s.DeletionTimestamp.IsZero() && s.Spec.Priority == selfPriority {
-			key := s.Namespace + "/" + s.Name
-			if key != selfKey {
-				peers = append(peers, key)
-			}
-		}
-	}
-	sort.Strings(peers)
-
-	gen := subscription.GetGeneration()
-	var desired metav1.Condition
-	if len(peers) == 0 {
-		desired = metav1.Condition{
-			Type:               ConditionSpecPriorityDuplicate,
-			Status:             metav1.ConditionFalse,
-			Reason:             "NoDuplicatePeers",
-			Message:            "",
-			ObservedGeneration: gen,
-		}
-	} else {
-		desired = metav1.Condition{
-			Type:               ConditionSpecPriorityDuplicate,
-			Status:             metav1.ConditionTrue,
-			Reason:             "SharedPriority",
-			Message:            fmt.Sprintf("spec.priority %d is shared with: %s", selfPriority, strings.Join(peers, ", ")),
-			ObservedGeneration: gen,
-		}
-	}
-
-	apimeta.SetStatusCondition(&subscription.Status.Conditions, desired)
-}
-
-// scanForDuplicatePriority triggers reconciliation of all subscriptions when priority-related changes occur.
-// Each subscription's reconcile loop will then update its own SpecPriorityDuplicate condition.
+// scanForDuplicatePriority lists live MaaSSubscriptions and sets SpecPriorityDuplicate
+// on each. Triggered on create, delete, or when spec.priority changes (see SetupWithManager).
 func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Context) {
 	log := logr.FromContextOrDiscard(ctx).WithName("MaaSSubscriptionDuplicatePriority")
 	var list maasv1alpha1.MaaSSubscriptionList
@@ -837,11 +785,13 @@ func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Contex
 		k := s.Namespace + "/" + s.Name
 		byPriority[p] = append(byPriority[p], k)
 	}
+	for p := range byPriority {
+		sort.Strings(byPriority[p])
+	}
 
 	var duplicateDetails []string
 	for p, keys := range byPriority {
 		if len(keys) > 1 {
-			sort.Strings(keys)
 			duplicateDetails = append(duplicateDetails, fmt.Sprintf("priority=%d:%v", p, keys))
 		}
 	}
@@ -849,6 +799,57 @@ func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Contex
 	if len(duplicateDetails) > 0 {
 		log.Info("duplicate MaaSSubscription spec.priority groups — resolve ties for predictable API key mint / subscription selection",
 			"groups", duplicateDetails)
+	}
+
+	for _, i := range liveIdx {
+		s := &list.Items[i]
+		selfKey := s.Namespace + "/" + s.Name
+		p := s.Spec.Priority
+		keys := byPriority[p]
+		var peers []string
+		for _, k := range keys {
+			if k != selfKey {
+				peers = append(peers, k)
+			}
+		}
+
+		latest := &maasv1alpha1.MaaSSubscription{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: s.Name}, latest); err != nil {
+			log.Error(err, "failed to get MaaSSubscription for duplicate priority status patch", "subscription", selfKey)
+			continue
+		}
+		if !latest.DeletionTimestamp.IsZero() {
+			continue
+		}
+
+		gen := latest.GetGeneration()
+		var desired metav1.Condition
+		if len(peers) == 0 {
+			desired = metav1.Condition{
+				Type:               ConditionSpecPriorityDuplicate,
+				Status:             metav1.ConditionFalse,
+				Reason:             "NoDuplicatePeers",
+				Message:            "",
+				ObservedGeneration: gen,
+			}
+		} else {
+			desired = metav1.Condition{
+				Type:               ConditionSpecPriorityDuplicate,
+				Status:             metav1.ConditionTrue,
+				Reason:             "SharedPriority",
+				Message:            fmt.Sprintf("spec.priority %d is shared with: %s", p, strings.Join(peers, ", ")),
+				ObservedGeneration: gen,
+			}
+		}
+
+		cur := apimeta.FindStatusCondition(latest.Status.Conditions, ConditionSpecPriorityDuplicate)
+		if conditionsSemanticallyEqual(cur, &desired) {
+			continue
+		}
+		apimeta.SetStatusCondition(&latest.Status.Conditions, desired)
+		if err := r.Status().Update(ctx, latest); err != nil {
+			log.Error(err, "failed to update SpecPriorityDuplicate status", "subscription", selfKey)
+		}
 	}
 }
 
