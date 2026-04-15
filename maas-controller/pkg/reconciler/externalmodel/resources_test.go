@@ -64,7 +64,7 @@ func TestBuildDestinationRule(t *testing.T) {
 }
 
 func TestBuildHTTPRoute(t *testing.T) {
-	hr := buildHTTPRoute("api.openai.com", "gpt-4o", "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("gpt-4o"))
+	hr := buildHTTPRoute("api.openai.com", "gpt-4o", "gpt-4o", "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("gpt-4o"))
 
 	assert.Equal(t, "gpt-4o", hr.Name)
 	assert.Equal(t, "llm", hr.Namespace)
@@ -79,7 +79,7 @@ func TestBuildHTTPRoute(t *testing.T) {
 	assert.Equal(t, "/llm/gpt-4o", *rule1.Matches[0].Path.Value)
 	assert.Equal(t, "gpt-4o", string(rule1.BackendRefs[0].Name))
 
-	// Rule 2: header-based match
+	// Rule 2: header-based match uses targetModel
 	rule2 := hr.Spec.Rules[1]
 	assert.Equal(t, "X-Gateway-Model-Name", string(rule2.Matches[0].Headers[0].Name))
 	assert.Equal(t, "gpt-4o", rule2.Matches[0].Headers[0].Value)
@@ -91,4 +91,18 @@ func TestBuildHTTPRoute(t *testing.T) {
 		assert.Equal(t, "Host", string(rule.Filters[0].RequestHeaderModifier.Set[0].Name))
 		assert.Equal(t, "api.openai.com", rule.Filters[0].RequestHeaderModifier.Set[0].Value)
 	}
+}
+
+func TestBuildHTTPRoute_TargetModelDiffersFromName(t *testing.T) {
+	hr := buildHTTPRoute("bedrock-mantle.us-east-2.api.aws", "my-bedrock", "openai.gpt-oss-20b", "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("my-bedrock"))
+
+	// Name and path use ExternalModel name
+	assert.Equal(t, "my-bedrock", hr.Name)
+	assert.Equal(t, "/llm/my-bedrock", *hr.Spec.Rules[0].Matches[0].Path.Value)
+
+	// Header match uses targetModel (what the user sends in body.model)
+	assert.Equal(t, "openai.gpt-oss-20b", hr.Spec.Rules[1].Matches[0].Headers[0].Value)
+
+	// BackendRef uses ExternalModel name (Service name)
+	assert.Equal(t, "my-bedrock", string(hr.Spec.Rules[0].BackendRefs[0].Name))
 }
