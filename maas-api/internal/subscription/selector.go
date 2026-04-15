@@ -495,10 +495,10 @@ func subscriptionIncludesModel(sub *subscription, requestedModel string) bool {
 //
 // Two validation paths:
 // 1. API key creation (requestedModel=""): Allow Active/Degraded/Pending, block Failed/unreconciled.
-//   Rationale: Users can create keys while subscription is setting up (Pending), but enforcement
-//   happens at inference time. Failed subscriptions blocked to prevent key spam on broken subscriptions.
+// Rationale: Users can create keys while subscription is setting up (Pending), but enforcement
+// happens at inference time. Failed subscriptions blocked to prevent key spam on broken subscriptions.
 // 2. Inference (requestedModel set): Strict allowlist of Active/Degraded only.
-//   Blocks Pending/Failed/unreconciled at authorization time.
+// Blocks Pending/Failed/unreconciled at authorization time.
 func checkModelHealth(sub *subscription, requestedModel string) error {
 	// API key creation path: Allow Active, Degraded, Pending
 	// Block Failed (prevents key spam on permanently broken subscriptions)
