@@ -124,13 +124,13 @@ func TestTokenRateLimitWindowPattern(t *testing.T) {
 		{"1 hour", "1h", true},
 		{"30 seconds", "30s", true},
 		{"5 minutes", "5m", true},
-		{"24 hours", "24h", true},  // common replacement for "1d"
+		{"24 hours", "24h", true}, // common replacement for "1d"
 
 		// --- valid: numeric boundary values (1-9999) ---
-		{"max 4-digit value", "9999h", true},  // upper boundary
+		{"max 4-digit value", "9999h", true}, // upper boundary
 		{"3-digit value", "100m", true},
 		{"2-digit value", "10s", true},
-		{"single digit", "9s", true},          // lower boundary (besides 1)
+		{"single digit", "9s", true}, // lower boundary (besides 1)
 
 		// --- invalid: days unit ---
 		// Previously allowed by the old pattern. Kuadrant does not support "d";
@@ -170,7 +170,7 @@ func TestTokenRateLimitWindowPattern(t *testing.T) {
 		{"trailing whitespace", "1m ", false},
 		{"decimal", "1.5h", false},
 		{"negative", "-1m", false},
-		{"go duration", "1h30m", false},  // compound durations are not supported
+		{"go duration", "1h30m", false}, // compound durations are not supported
 	}
 
 	for _, tt := range tests {
