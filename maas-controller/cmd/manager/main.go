@@ -209,6 +209,7 @@ func checkSubscriptionNamespaceReady(ctx context.Context, clientset kubernetes.I
 		return fmt.Errorf("subscription namespace %q does not exist", namespace)
 	}
 	if errors.IsForbidden(err) {
+		setupLog.V(1).Info("readiness: insufficient permissions to check namespace, assuming ready", "namespace", namespace, "error", err)
 		return nil
 	}
 	if err != nil {
