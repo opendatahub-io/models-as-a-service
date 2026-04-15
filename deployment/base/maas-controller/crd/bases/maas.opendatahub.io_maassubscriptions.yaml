@@ -93,6 +93,8 @@ spec:
                               Allowed units: s (seconds), m (minutes), h (hours). Days (d) are not
                               supported; use hours instead (e.g., "24h" for one day).
                               The numeric part must be between 1 and 9999.
+                            maxLength: 5
+                            minLength: 2
                             pattern: ^[1-9]\d{0,3}(s|m|h)$
                             type: string
                         required:

@@ -82,6 +82,8 @@ type TokenRateLimit struct {
 	// Allowed units: s (seconds), m (minutes), h (hours). Days (d) are not
 	// supported; use hours instead (e.g., "24h" for one day).
 	// The numeric part must be between 1 and 9999.
+	// +kubebuilder:validation:MinLength=2
+	// +kubebuilder:validation:MaxLength=5
 	// +kubebuilder:validation:Pattern=`^[1-9]\d{0,3}(s|m|h)$`
 	Window string `json:"window"`
 }
