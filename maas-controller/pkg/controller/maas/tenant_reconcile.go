@@ -92,18 +92,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	ms := managementState(tenant.Annotations)
 	if ms == managementStateRemoved || ms == managementStateUnmanaged {
-		if err := r.patchStatus(ctx, &tenant, "", metav1.ConditionFalse, "ManagementStateIdle",
-			fmt.Sprintf("management state is %q; platform workloads are not driven by this reconciler in this state", ms)); err != nil {
-			return ctrl.Result{}, err
-		}
-		if controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-			patchBase := client.MergeFrom(tenant.DeepCopy())
-			controllerutil.RemoveFinalizer(&tenant, tenantFinalizer)
-			if err := r.Patch(ctx, &tenant, patchBase); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
+		return r.handleIdleManagementState(ctx, &tenant, ms)
 	}
 
 	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
@@ -234,6 +223,33 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	log.V(1).Info("Tenant platform reconciled", "name", tenant.Name)
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+}
+
+// handleIdleManagementState handles Removed and Unmanaged states.
+// Removed tears down owned resources before dropping the finalizer;
+// Unmanaged simply drops the finalizer, leaving resources in place.
+func (r *TenantReconciler) handleIdleManagementState(ctx context.Context, tenant *maasv1alpha1.Tenant, ms string) (ctrl.Result, error) {
+	if err := r.patchStatus(ctx, tenant, "", metav1.ConditionFalse, "ManagementStateIdle",
+		fmt.Sprintf("management state is %q; platform workloads are not driven by this reconciler in this state", ms)); err != nil {
+		return ctrl.Result{}, err
+	}
+	if controllerutil.ContainsFinalizer(tenant, tenantFinalizer) {
+		if ms == managementStateRemoved {
+			pending, err := r.finalizeTenantDeletion(ctx, tenant)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if pending {
+				return ctrl.Result{RequeueAfter: finalizeRequeueInterval}, nil
+			}
+		}
+		patchBase := client.MergeFrom(tenant.DeepCopy())
+		controllerutil.RemoveFinalizer(tenant, tenantFinalizer)
+		if err := r.Patch(ctx, tenant, patchBase); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{}, nil
 }
 
 func applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {

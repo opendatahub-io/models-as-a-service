@@ -155,7 +155,8 @@ func checkDatabaseSecret(ctx context.Context, c client.Client, appNamespace stri
 			MaaSDBSecretName, appNamespace)
 	}
 
-	if _, ok := secret.Data[MaaSDBSecretKey]; !ok {
+	value, ok := secret.Data[MaaSDBSecretKey]
+	if !ok || strings.TrimSpace(string(value)) == "" {
 		return fmt.Sprintf("database Secret '%s' in namespace '%s' is missing required key '%s'. "+
 			"The Secret must contain a valid PostgreSQL connection URL",
 			MaaSDBSecretName, appNamespace, MaaSDBSecretKey)

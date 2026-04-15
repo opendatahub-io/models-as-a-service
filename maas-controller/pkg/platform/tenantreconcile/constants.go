@@ -16,15 +16,16 @@ const (
 	DefaultGatewayNamespace = "openshift-ingress"
 	DefaultGatewayName      = "maas-default-gateway"
 
-	GatewayAuthPolicyName       = "gateway-auth-policy"
-	MaaSAPIAuthPolicyName       = "maas-api-auth-policy"
-	GatewayDestinationRuleName  = "maas-api-backend-tls"
-	TelemetryPolicyName         = "maas-telemetry"
-	IstioTelemetryName          = "latency-per-subscription"
-	MaaSParametersConfigMapName = "maas-parameters"
-	MaaSAPIDeploymentName       = "maas-api"
-	MaaSDBSecretName            = "maas-db-config" //nolint:gosec // secret name reference, not a credential
-	MaaSDBSecretKey             = "DB_CONNECTION_URL"
+	GatewayDefaultAuthPolicyName               = "gateway-default-auth"
+	GatewayTokenRateLimitDefaultDenyPolicyName = "gateway-default-deny"
+	MaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
+	GatewayDestinationRuleName                 = "maas-api-backend-tls"
+	TelemetryPolicyName                        = "maas-telemetry"
+	IstioTelemetryName                         = "latency-per-subscription"
+	MaaSParametersConfigMapName                = "maas-parameters"
+	MaaSAPIDeploymentName                      = "maas-api"
+	MaaSDBSecretName                           = "maas-db-config" //nolint:gosec // secret name reference, not a credential
+	MaaSDBSecretKey                            = "DB_CONNECTION_URL"
 
 	MonitoringNamespace         = "openshift-monitoring"
 	ClusterMonitoringConfigName = "cluster-monitoring-config"
@@ -46,13 +47,14 @@ var ImageParamKeys = map[string]string{
 
 // GVKs used for post-render and readiness (mirrors opendatahub-operator/pkg/cluster/gvk selections for modelsasservice).
 var (
-	GVKConfigMap       = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
-	GVKDeployment      = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
-	GVKAuthPolicy      = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}
-	GVKDestinationRule = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"}
-	GVKTelemetryPolicy = schema.GroupVersionKind{Group: "extensions.kuadrant.io", Version: "v1alpha1", Kind: "TelemetryPolicy"}
-	GVKEnvoyFilter     = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1alpha3", Kind: "EnvoyFilter"}
-	GVKIstioTelemetry  = schema.GroupVersionKind{Group: "telemetry.istio.io", Version: "v1", Kind: "Telemetry"}
-	GVKAuthConfig      = schema.GroupVersionKind{Group: "authorino.kuadrant.io", Version: "v1beta3", Kind: "AuthConfig"}
-	GVKAuthorino       = schema.GroupVersionKind{Group: "operator.authorino.kuadrant.io", Version: "v1beta1", Kind: "Authorino"}
+	GVKConfigMap            = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
+	GVKDeployment           = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	GVKAuthPolicy           = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}
+	GVKTokenRateLimitPolicy = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}
+	GVKDestinationRule      = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"}
+	GVKTelemetryPolicy      = schema.GroupVersionKind{Group: "extensions.kuadrant.io", Version: "v1alpha1", Kind: "TelemetryPolicy"}
+	GVKEnvoyFilter          = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1alpha3", Kind: "EnvoyFilter"}
+	GVKIstioTelemetry       = schema.GroupVersionKind{Group: "telemetry.istio.io", Version: "v1", Kind: "Telemetry"}
+	GVKAuthConfig           = schema.GroupVersionKind{Group: "authorino.kuadrant.io", Version: "v1beta3", Kind: "AuthConfig"}
+	GVKAuthorino            = schema.GroupVersionKind{Group: "operator.authorino.kuadrant.io", Version: "v1beta1", Kind: "Authorino"}
 )

@@ -27,8 +27,12 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 		resource := &resources[i]
 		gvk := resource.GroupVersionKind()
 		switch {
-		case gvk == GVKAuthPolicy && resource.GetName() == GatewayAuthPolicyName:
+		case gvk == GVKAuthPolicy && resource.GetName() == GatewayDefaultAuthPolicyName:
 			if err := configureAuthPolicy(log, resource, gatewayNamespace, gatewayName); err != nil {
+				return nil, err
+			}
+		case gvk == GVKTokenRateLimitPolicy && resource.GetName() == GatewayTokenRateLimitDefaultDenyPolicyName:
+			if err := configureTokenRateLimitPolicy(log, resource, gatewayNamespace, gatewayName); err != nil {
 				return nil, err
 			}
 		case gvk == GVKDestinationRule && resource.GetName() == GatewayDestinationRuleName:
@@ -57,6 +61,15 @@ func configureAuthPolicy(log logr.Logger, resource *unstructured.Unstructured, g
 	resource.SetNamespace(gatewayNamespace)
 	if err := unstructured.SetNestedField(resource.Object, gatewayName, "spec", "targetRef", "name"); err != nil {
 		return fmt.Errorf("failed to set spec.targetRef.name on AuthPolicy: %w", err)
+	}
+	return nil
+}
+
+func configureTokenRateLimitPolicy(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string) error {
+	log.V(4).Info("Configuring TokenRateLimitPolicy", "name", resource.GetName(), "newNamespace", gatewayNamespace, "newTargetGateway", gatewayName)
+	resource.SetNamespace(gatewayNamespace)
+	if err := unstructured.SetNestedField(resource.Object, gatewayName, "spec", "targetRef", "name"); err != nil {
+		return fmt.Errorf("failed to set spec.targetRef.name on TokenRateLimitPolicy: %w", err)
 	}
 	return nil
 }
