@@ -831,14 +831,66 @@ install_optional_operators() {
 # RATE LIMITER INSTALLATION
 #──────────────────────────────────────────────────────────────
 
+# Patch one env var on spec.install.spec.deployments[0].containers[0] of a ClusterServiceVersion.
+# Returns 0 if a patch was applied, 1 if the value was already correct, 2 if patch failed.
+patch_csv_operator_container_env() {
+  local namespace=$1
+  local csv_name=$2
+  local env_name=$3
+  local env_value=$4
+
+  local current
+  current=$(kubectl get csv "$csv_name" -n "$namespace" -o jsonpath="{.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[?(@.name==\"${env_name}\")].value}" 2>/dev/null || echo "")
+
+  if [[ "$current" == "$env_value" ]]; then
+    return 1
+  fi
+
+  local env_index
+  env_index=$(kubectl get csv "$csv_name" -n "$namespace" -o json | jq -r --arg n "$env_name" '.spec.install.spec.deployments[0].spec.template.spec.containers[0].env | to_entries[] | select(.value.name == $n) | .key' 2>/dev/null | head -1)
+
+  if [[ -z "$env_index" ]]; then
+    log_debug "Adding ${env_name} to CSV ${csv_name}"
+    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
+      {
+        \"op\": \"add\",
+        \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-\",
+        \"value\": {
+          \"name\": \"${env_name}\",
+          \"value\": \"${env_value}\"
+        }
+      }
+    ]" 2>/dev/null || {
+      log_warn "Failed to add ${env_name} to CSV"
+      return 2
+    }
+  else
+    log_debug "Updating ${env_name} in CSV ${csv_name} (index: $env_index)"
+    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
+      {
+        \"op\": \"replace\",
+        \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/${env_index}/value\",
+        \"value\": \"${env_value}\"
+      }
+    ]" 2>/dev/null || {
+      log_warn "Failed to update ${env_name} in CSV"
+      return 2
+    }
+  fi
+  return 0
+}
+
 # Patch Kuadrant/RHCL CSV to recognize OpenShift Gateway controller
 # This is required because Kuadrant needs to know about the Gateway API provider
 # Without this patch, Kuadrant shows "MissingDependency" and AuthPolicies won't be enforced
-patch_kuadrant_csv_for_gateway() {
+#
+# Also sets RATELIMIT_*_SERVICE_FAILURE_MODE=deny so policy fails closed when Limitador
+# service is unavailable (see Kuadrant operator deployment env).
+patch_kuadrant_csv() {
   local namespace=$1
   local operator_prefix=$2
 
-  log_info "Patching $operator_prefix CSV for OpenShift Gateway controller..."
+  log_info "Patching $operator_prefix CSV (Gateway API, rate limit failure modes)..."
 
   # Find the CSV
   local csv_name
@@ -849,50 +901,27 @@ patch_kuadrant_csv_for_gateway() {
     return 0
   fi
 
-  # Check if ISTIO_GATEWAY_CONTROLLER_NAMES already has both values
-  local current_value
-  current_value=$(kubectl get csv "$csv_name" -n "$namespace" -o jsonpath='{.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[?(@.name=="ISTIO_GATEWAY_CONTROLLER_NAMES")].value}' 2>/dev/null || echo "")
+  local patched_any=false
 
-  if [[ "$current_value" == *"istio.io/gateway-controller"* && "$current_value" == *"openshift.io/gateway-controller"* ]]; then
-    log_debug "CSV already has correct ISTIO_GATEWAY_CONTROLLER_NAMES value"
+  # --- ISTIO_GATEWAY_CONTROLLER_NAMES (OpenShift Gateway controller) ---
+  local gateway_controller_names="istio.io/gateway-controller,openshift.io/gateway-controller/v1"
+  patch_csv_operator_container_env "$namespace" "$csv_name" "ISTIO_GATEWAY_CONTROLLER_NAMES" "$gateway_controller_names" && patched_any=true
+
+  # --- Rate limit dependency failure modes (fail closed) ---
+  patch_csv_operator_container_env "$namespace" "$csv_name" "RATELIMIT_CHECK_SERVICE_FAILURE_MODE" "deny" && patched_any=true
+  patch_csv_operator_container_env "$namespace" "$csv_name" "RATELIMIT_REPORT_SERVICE_FAILURE_MODE" "deny" && patched_any=true
+
+  if [[ "$patched_any" != "true" ]]; then
+    log_debug "CSV already has all required operator env (Gateway + rate limit failure modes)"
     return 0
   fi
 
-  # Find the index of ISTIO_GATEWAY_CONTROLLER_NAMES env var
-  local env_index
-  env_index=$(kubectl get csv "$csv_name" -n "$namespace" -o json | jq '.spec.install.spec.deployments[0].spec.template.spec.containers[0].env | to_entries | .[] | select(.value.name=="ISTIO_GATEWAY_CONTROLLER_NAMES") | .key' 2>/dev/null || echo "")
-
-  if [[ -z "$env_index" ]]; then
-    # Env var doesn't exist, add it
-    log_debug "Adding ISTIO_GATEWAY_CONTROLLER_NAMES to CSV"
-    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p='[
-      {
-        "op": "add",
-        "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-",
-        "value": {
-          "name": "ISTIO_GATEWAY_CONTROLLER_NAMES",
-          "value": "istio.io/gateway-controller,openshift.io/gateway-controller/v1"
-        }
-      }
-    ]' 2>/dev/null || log_warn "Failed to add ISTIO_GATEWAY_CONTROLLER_NAMES to CSV"
-  else
-    # Env var exists, update it
-    log_debug "Updating ISTIO_GATEWAY_CONTROLLER_NAMES in CSV (index: $env_index)"
-    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
-      {
-        \"op\": \"replace\",
-        \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/${env_index}/value\",
-        \"value\": \"istio.io/gateway-controller,openshift.io/gateway-controller/v1\"
-      }
-    ]" 2>/dev/null || log_warn "Failed to update ISTIO_GATEWAY_CONTROLLER_NAMES in CSV"
-  fi
-
-  log_info "CSV patched for OpenShift Gateway controller"
+  log_info "CSV patched (Gateway controller and/or rate limit failure modes)"
 
   # CRITICAL: Force delete the operator pod to pick up the new env var
   # OLM updates the deployment spec but doesn't always trigger a pod restart
   # The operator must have ISTIO_GATEWAY_CONTROLLER_NAMES set BEFORE Kuadrant CR is created
-  log_info "Forcing operator restart to apply new Gateway controller configuration..."
+  log_info "Forcing operator restart to apply CSV env configuration..."
   
   # The kuadrant operator deployment is always named kuadrant-operator-controller-manager
   # regardless of whether we're using rhcl-operator or kuadrant-operator
@@ -909,14 +938,16 @@ patch_kuadrant_csv_for_gateway() {
     kubectl rollout status deployment/"$operator_deployment" -n "$namespace" --timeout="${ROLLOUT_TIMEOUT}s" 2>/dev/null || \
       log_warn "Operator rollout status check timed out (timeout: ${ROLLOUT_TIMEOUT}s)"
     
-    # Verify the env var is in the RUNNING pod
+    # Verify required env vars are in the RUNNING pod
     local pod_env
-    pod_env=$(kubectl exec -n "$namespace" deployment/"$operator_deployment" -- env 2>/dev/null | grep ISTIO_GATEWAY_CONTROLLER_NAMES || echo "")
-    
-    if [[ "$pod_env" == *"openshift.io/gateway-controller/v1"* ]]; then
-      log_info "Operator pod is running with OpenShift Gateway controller configuration"
+    pod_env=$(kubectl exec -n "$namespace" deployment/"$operator_deployment" -- env 2>/dev/null || true)
+
+    if echo "$pod_env" | grep '^ISTIO_GATEWAY_CONTROLLER_NAMES=' | grep -q 'openshift.io/gateway-controller/v1' \
+      && echo "$pod_env" | grep -Fq 'RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny' \
+      && echo "$pod_env" | grep -Fq 'RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny'; then
+      log_info "Operator pod has required CSV env (ISTIO gateway controller + RATELIMIT_* failure modes)"
     else
-      log_warn "Operator pod may not have correct env yet: $pod_env"
+      log_warn "Operator pod may not have correct env yet (ISTIO / RATELIMIT_* failure modes)"
     fi
     
     # Give the operator time to fully initialize with the new Gateway controller configuration
@@ -949,7 +980,7 @@ install_policy_engine() {
       fi
 
       # Patch RHCL CSV to recognize OpenShift Gateway controller
-      patch_kuadrant_csv_for_gateway "rh-connectivity-link" "rhcl-operator"
+      patch_kuadrant_csv "rh-connectivity-link" "rhcl-operator"
 
       # Apply RHCL/Kuadrant custom resource
       apply_kuadrant_cr "rh-connectivity-link"
@@ -1012,7 +1043,7 @@ EOF
       fi
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
-      patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
+      patch_kuadrant_csv "$kuadrant_ns" "kuadrant-operator"
 
       # Apply Kuadrant custom resource
       apply_kuadrant_cr "$kuadrant_ns"
