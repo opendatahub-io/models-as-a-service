@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -61,6 +62,13 @@ func (r *Reconciler) gatewayNamespace() string {
 		return r.GatewayNamespace
 	}
 	return defaultGatewayNamespace
+}
+
+// sanitizeDNSName converts a name to DNS-1035 compatible format by replacing
+// dots with dashes. Service names must be DNS-1035 compliant while CRD names
+// (ExternalModel, MaaSModelRef) allow dots.
+func sanitizeDNSName(name string) string {
+	return strings.ReplaceAll(name, ".", "-")
 }
 
 // commonLabels returns labels applied to all managed resources.
@@ -142,12 +150,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	ns := extModel.Namespace
 	name := extModel.Name
+	svcName := sanitizeDNSName(name)
 	gwName := r.gatewayName()
 	gwNamespace := r.gatewayNamespace()
 	labels := commonLabels(name)
 
 	// 1. ExternalName Service (backend for HTTPRoute)
-	svc := buildService(extModel.Spec.Endpoint, name, ns, port, labels)
+	// Service names must be DNS-1035 compliant — sanitize dots to dashes.
+	svc := buildService(extModel.Spec.Endpoint, svcName, ns, port, labels)
 	if err := controllerutil.SetControllerReference(extModel, svc, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on Service: %w", err)
 	}
@@ -182,7 +192,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// 4. HTTPRoute (routes requests to external provider via gateway)
-	hr := buildHTTPRoute(extModel.Spec.Endpoint, name, ns, port, gwName, gwNamespace, labels)
+	hr := buildHTTPRoute(extModel.Spec.Endpoint, name, svcName, ns, port, gwName, gwNamespace, labels)
 	if err := controllerutil.SetControllerReference(extModel, hr, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on HTTPRoute: %w", err)
 	}

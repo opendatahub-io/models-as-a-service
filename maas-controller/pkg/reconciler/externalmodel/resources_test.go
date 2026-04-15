@@ -64,7 +64,7 @@ func TestBuildDestinationRule(t *testing.T) {
 }
 
 func TestBuildHTTPRoute(t *testing.T) {
-	hr := buildHTTPRoute("api.openai.com", "gpt-4o", "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("gpt-4o"))
+	hr := buildHTTPRoute("api.openai.com", "gpt-4o", "gpt-4o", "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("gpt-4o"))
 
 	assert.Equal(t, "gpt-4o", hr.Name)
 	assert.Equal(t, "llm", hr.Namespace)
@@ -82,7 +82,7 @@ func TestBuildHTTPRoute(t *testing.T) {
 	// Rule 2: header-based match
 	rule2 := hr.Spec.Rules[1]
 	assert.Equal(t, "X-Gateway-Model-Name", string(rule2.Matches[0].Headers[0].Name))
-	assert.Equal(t, "gpt-4o", rule2.Matches[0].Headers[0].Value)
+	assert.Equal(t, "llm/gpt-4o", rule2.Matches[0].Headers[0].Value)
 
 	// Only Host header filter (required for TLS SNI), no URLRewrite
 	for i, rule := range hr.Spec.Rules {
@@ -91,4 +91,29 @@ func TestBuildHTTPRoute(t *testing.T) {
 		assert.Equal(t, "Host", string(rule.Filters[0].RequestHeaderModifier.Set[0].Name))
 		assert.Equal(t, "api.openai.com", rule.Filters[0].RequestHeaderModifier.Set[0].Value)
 	}
+}
+
+func TestBuildHTTPRoute_DotsInName(t *testing.T) {
+	// When model name has dots, Service name is sanitized but path/header keep dots
+	svcName := sanitizeDNSName("openai.gpt-oss-20b")
+	hr := buildHTTPRoute("bedrock-mantle.us-east-2.api.aws", "openai.gpt-oss-20b", svcName, "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("openai.gpt-oss-20b"))
+
+	// HTTPRoute name keeps dots
+	assert.Equal(t, "openai.gpt-oss-20b", hr.Name)
+
+	// Path keeps dots
+	assert.Equal(t, "/llm/openai.gpt-oss-20b", *hr.Spec.Rules[0].Matches[0].Path.Value)
+
+	// Header match includes namespace prefix for namespace isolation
+	assert.Equal(t, "llm/openai.gpt-oss-20b", hr.Spec.Rules[1].Matches[0].Headers[0].Value)
+
+	// BackendRef uses sanitized name (dashes)
+	assert.Equal(t, "openai-gpt-oss-20b", string(hr.Spec.Rules[0].BackendRefs[0].Name))
+	assert.Equal(t, "openai-gpt-oss-20b", string(hr.Spec.Rules[1].BackendRefs[0].Name))
+}
+
+func TestSanitizeDNSName(t *testing.T) {
+	assert.Equal(t, "openai-gpt-oss-20b", sanitizeDNSName("openai.gpt-oss-20b"))
+	assert.Equal(t, "gpt-4o", sanitizeDNSName("gpt-4o"))
+	assert.Equal(t, "a-b-c", sanitizeDNSName("a.b.c"))
 }
