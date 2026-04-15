@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -86,6 +87,77 @@ func TestDeletionTimestampSet(t *testing.T) {
 			got := deletionTimestampSet(e)
 			if got != tt.expected {
 				t.Errorf("deletionTimestampSet() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestTokenRateLimitWindowPattern validates the kubebuilder regex pattern applied to
+// TokenRateLimit.Window. The pattern (^[1-9]\d{0,3}(s|m|h)$) must accept only values
+// that Kuadrant's TokenRateLimitPolicy accepts and reject everything else.
+func TestTokenRateLimitWindowPattern(t *testing.T) {
+	// This must stay in sync with the +kubebuilder:validation:Pattern marker on
+	// TokenRateLimit.Window in maassubscription_types.go.
+	windowPattern := regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
+
+	tests := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		// --- valid: basic units ---
+		{"1 second", "1s", true},
+		{"1 minute", "1m", true},
+		{"1 hour", "1h", true},
+		{"30 seconds", "30s", true},
+		{"5 minutes", "5m", true},
+		{"24 hours", "24h", true},
+
+		// --- valid: boundary numeric values ---
+		{"max 4-digit value", "9999h", true},
+		{"3-digit value", "100m", true},
+		{"2-digit value", "10s", true},
+		{"single digit", "9s", true},
+
+		// --- invalid: days unit (removed for Kuadrant compatibility) ---
+		{"days not allowed", "1d", false},
+		{"7 days not allowed", "7d", false},
+		{"30 days not allowed", "30d", false},
+
+		// --- invalid: leading zero ---
+		{"leading zero", "01m", false},
+		{"leading zero hours", "024h", false},
+
+		// --- invalid: zero value ---
+		{"zero seconds", "0s", false},
+		{"zero minutes", "0m", false},
+		{"zero hours", "0h", false},
+
+		// --- invalid: exceeds 4-digit cap ---
+		{"5-digit value", "10000s", false},
+		{"6-digit value", "100000m", false},
+
+		// --- invalid: unsupported units ---
+		{"milliseconds not allowed", "100ms", false},
+		{"uppercase day", "1D", false},
+		{"weeks not allowed", "1w", false},
+
+		// --- invalid: missing or wrong format ---
+		{"no unit", "100", false},
+		{"no number", "m", false},
+		{"empty string", "", false},
+		{"leading whitespace", " 1m", false},
+		{"trailing whitespace", "1m ", false},
+		{"decimal", "1.5h", false},
+		{"negative", "-1m", false},
+		{"go duration", "1h30m", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := windowPattern.MatchString(tt.value)
+			if got != tt.valid {
+				t.Errorf("windowPattern.MatchString(%q) = %v, want %v", tt.value, got, tt.valid)
 			}
 		})
 	}
