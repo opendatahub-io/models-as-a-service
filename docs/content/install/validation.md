@@ -1,6 +1,10 @@
 # Validation Guide
 
-After deploying MaaS, you need to verify three things. First, that the infrastructure is healthy: pods are running, the gateway is accepting traffic, and auth/rate-limit policies are enforced. Second, that you can deploy a model and talk to it through the gateway: create an API key, list available models, and send an inference request. Third, that security is active: requests without credentials are rejected and rate limits kick in after a few calls.
+After deploying MaaS, you need to verify three things:
+
+1. That the infrastructure is healthy: pods are running, the gateway is accepting traffic, and auth/rate-limit policies are enforced.
+2. That you can deploy a model and talk to it through the gateway: create an API key, list available models, and send an inference request.
+3. That security is active: requests without credentials are rejected and rate limits kick in after a few calls.
 
 !!! note "Prerequisite"
     At least one model must be deployed to validate the installation. See [Model Setup (On Cluster)](model-setup.md) to deploy sample models.
