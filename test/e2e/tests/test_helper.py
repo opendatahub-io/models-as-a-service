@@ -1,13 +1,37 @@
 """
 Shared helpers and constants for MaaS E2E tests.
+
 This module centralizes common utilities used across multiple test files:
 - Environment-based constants (timeouts, model refs, namespaces)
 - Cluster authentication (OC tokens, service account tokens)
 - API key management (create, revoke)
-- Custom Resource management (apply, delete, get)
+- Custom Resource management (apply, delete, get, list, snapshot)
 - Inference helpers (send requests, poll for expected status)
-- Wait/polling utilities (reconciliation, CR readiness)
+- Wait/polling utilities (reconciliation, CR readiness, phase checks)
 - CR creation helpers (MaaSAuthPolicy, MaaSSubscription)
+
+Environment variables (all optional unless noted):
+  - GATEWAY_HOST: Gateway hostname (required)
+  - MAAS_API_BASE_URL: MaaS API URL (auto-derived from GATEWAY_HOST if not set)
+  - MAAS_SUBSCRIPTION_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
+  - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: SA token source for Prow
+  - E2E_TIMEOUT: Request timeout in seconds (default: 45)
+  - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
+  - E2E_SKIP_TLS_VERIFY: Set to "true" to skip TLS verification
+  - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
+  - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
+  - E2E_MODEL_REF: Model ref for CRs (default: facebook-opt-125m-simulated)
+  - E2E_MODEL_NAMESPACE: Namespace where models live (default: llm)
+  - E2E_SIMULATOR_SUBSCRIPTION: Free-tier subscription (default: simulator-subscription)
+  - E2E_PREMIUM_MODEL_REF: Premium model ref (default: premium-simulated-simulated-premium)
+  - E2E_PREMIUM_SIMULATOR_SUBSCRIPTION: Premium subscription (default: premium-simulator-subscription)
+  - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
+  - E2E_UNCONFIGURED_MODEL_REF: Unconfigured model ref (default: e2e-unconfigured-facebook-opt-125m-simulated)
+  - E2E_UNCONFIGURED_MODEL_PATH: Path to unconfigured model (default: /llm/e2e-unconfigured-facebook-opt-125m-simulated)
+  - E2E_DISTINCT_MODEL_REF: First distinct model ref (default: e2e-distinct-simulated)
+  - E2E_DISTINCT_MODEL_ID: Model ID for first distinct model (default: test/e2e-distinct-model)
+  - E2E_DISTINCT_MODEL_2_REF: Second distinct model ref (default: e2e-distinct-2-simulated)
+  - E2E_DISTINCT_MODEL_2_ID: Model ID for second distinct model (default: test/e2e-distinct-model-2)
 """
 
 import base64
@@ -27,7 +51,6 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Constants (override with env vars)
 # ---------------------------------------------------------------------------
-
 TIMEOUT = int(os.environ.get("E2E_TIMEOUT", "45"))
 RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "8"))
 TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
@@ -36,8 +59,15 @@ MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
+PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
+PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription")
+SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
 UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
 UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
+DISTINCT_MODEL_REF = os.environ.get("E2E_DISTINCT_MODEL_REF", "e2e-distinct-simulated")
+DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", "test/e2e-distinct-model")
+DISTINCT_MODEL_2_REF = os.environ.get("E2E_DISTINCT_MODEL_2_REF", "e2e-distinct-2-simulated")
+DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", "test/e2e-distinct-model-2")
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +132,30 @@ def _create_sa_token(sa_name, namespace=None, duration="10m"):
     if not token:
         raise RuntimeError(f"Could not create token for SA {sa_name}: {result.stderr}")
     return token
+
+
+def _delete_sa(sa_name, namespace=None):
+    """Delete a service account (best-effort, for cleanup)."""
+    namespace = namespace or _ns()
+    result = subprocess.run(
+        ["oc", "delete", "sa", sa_name, "-n", namespace, "--ignore-not-found"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        log.warning(
+            "Failed to delete serviceaccount/%s in %s: %s",
+            sa_name,
+            namespace,
+            result.stderr.strip(),
+        )
+
+
+def _sa_to_user(sa_name, namespace=None):
+    """Convert service account name to Kubernetes user principal."""
+    namespace = namespace or _ns()
+    return f"system:serviceaccount:{namespace}:{sa_name}"
 
 
 def _get_cluster_token():
@@ -269,6 +323,143 @@ def _get_cr(kind, name, namespace=None):
         raise RuntimeError(
             f"Failed to get {kind}/{name} in namespace '{namespace}': {result.stderr.strip()}"
         )
+
+
+def _snapshot_cr(kind, name, namespace=None):
+    """Capture a CR for later restoration (strips runtime metadata)."""
+    cr = _get_cr(kind, name, namespace)
+    if not cr:
+        return None
+    meta = cr.get("metadata", {})
+    for key in ("resourceVersion", "uid", "creationTimestamp", "generation", "managedFields"):
+        meta.pop(key, None)
+    annotations = meta.get("annotations", {})
+    annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+    if not annotations:
+        meta.pop("annotations", None)
+    cr.pop("status", None)
+    return cr
+
+
+def _list_crs(kind, namespace=None):
+    """List all CRs of a given kind.
+
+    Args:
+        kind: CR kind (e.g., 'maasmodelref', 'maasauthpolicy')
+        namespace: Namespace to search (defaults to _ns())
+
+    Returns:
+        List of CR dictionaries
+
+    Raises:
+        RuntimeError: If kubectl command fails with contextual error details
+    """
+    namespace = namespace or _ns()
+    plural = {
+        "maasmodelref": "maasmodelrefs",
+        "maasauthpolicy": "maasauthpolicies",
+        "maassubscription": "maassubscriptions",
+    }.get(kind, f"{kind}s")
+
+    cmd = ["oc", "get", plural, "-n", namespace, "-o", "json"]
+
+    # Retry transient network errors with exponential backoff
+    max_retries = 3
+    retry_delay = 2  # seconds
+
+    for attempt in range(max_retries):
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        if result.returncode == 0:
+            return json.loads(result.stdout).get("items", [])
+
+        # Check if error is transient and we have retries left
+        if attempt < max_retries - 1 and _is_transient_kubectl_error(result.stderr):
+            log.warning(
+                f"Transient kubectl error (attempt {attempt + 1}/{max_retries}): {result.stderr.strip()}"
+            )
+            time.sleep(retry_delay * (attempt + 1))  # exponential backoff
+            continue
+
+        # Final attempt or non-transient error
+        raise RuntimeError(
+            f"Failed to list {plural} in namespace '{namespace}'.\n"
+            f"Command: {' '.join(cmd)}\n"
+            f"Exit code: {result.returncode}\n"
+            f"Stderr: {result.stderr}\n"
+            f"Guidance: Ensure the CRD exists, namespace is correct, and you have permissions."
+        )
+
+    # Unreachable: loop always exits via return or raise
+    # Included for type checker and defensive programming
+    return []
+
+
+def _get_auth_policies_for_model(model_ref, namespace=None, model_namespace=None):
+    """Get all MaaSAuthPolicies that reference a model.
+
+    Args:
+        model_ref: Name of the MaaSModelRef
+        namespace: Namespace to search for policies (defaults to _ns())
+        model_namespace: Expected namespace of the modelRef (defaults to MODEL_NAMESPACE)
+
+    Returns:
+        List of auth policy names that reference the model
+    """
+    namespace = namespace or _ns()
+    model_namespace = model_namespace or MODEL_NAMESPACE
+    policies = _list_crs("maasauthpolicy", namespace)
+
+    matching = []
+    for policy in policies:
+        model_refs = policy.get("spec", {}).get("modelRefs", [])
+        for ref in model_refs:
+            if isinstance(ref, dict):
+                ref_name = ref.get("name")
+                ref_ns = ref.get("namespace")
+            else:
+                ref_name = ref
+                ref_ns = None
+            if ref_name == model_ref and ref_ns == model_namespace:
+                matching.append(policy["metadata"]["name"])
+                break
+    return matching
+
+
+def _get_subscriptions_for_model(model_ref, namespace=None, model_namespace=None):
+    """Get all MaaSSubscriptions that reference a model.
+
+    Args:
+        model_ref: Name of the MaaSModelRef
+        namespace: Namespace to search for subscriptions (defaults to _ns())
+        model_namespace: Expected namespace of the modelRef (defaults to MODEL_NAMESPACE)
+
+    Returns:
+        List of subscription names that reference the model
+    """
+    namespace = namespace or _ns()
+    model_namespace = model_namespace or MODEL_NAMESPACE
+    subs = _list_crs("maassubscription", namespace)
+
+    matching = []
+    for sub in subs:
+        model_refs = sub.get("spec", {}).get("modelRefs", [])
+        for ref in model_refs:
+            if isinstance(ref, dict):
+                ref_name = ref.get("name")
+                ref_ns = ref.get("namespace")
+            else:
+                ref_name = ref
+                ref_ns = None
+            if ref_name == model_ref and ref_ns == model_namespace:
+                matching.append(sub["metadata"]["name"])
+                break
+    return matching
 
 
 # ---------------------------------------------------------------------------
@@ -448,14 +639,67 @@ def _wait_reconcile(seconds=None):
     time.sleep(seconds or RECONCILE_WAIT)
 
 
-def _wait_for_subscription_phase(name, expected_phase="Active", namespace=None, timeout=60):
-    """Wait for MaaSSubscription to reach a specific phase with populated status.
+def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=60):
+    """Wait for TokenRateLimitPolicy to be created and enforced for a model.
+
+    Args:
+        model_ref: Name of the model (e.g., "e2e-distinct-simulated")
+        model_namespace: Namespace where the TRLP should be created (default: MODEL_NAMESPACE)
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Raises:
+        TimeoutError: If TRLP isn't created and enforced within timeout
+    """
+    trlp_name = f"maas-trlp-{model_ref}"
+    deadline = time.time() + timeout
+    log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} in {model_namespace} (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        result = subprocess.run(
+            ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace, "-o", "json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            try:
+                trlp = json.loads(result.stdout)
+                conditions = trlp.get("status", {}).get("conditions", [])
+                enforced = next((c for c in conditions if c.get("type") == "Enforced"), None)
+                if enforced and enforced.get("status") == "True":
+                    log.info(f"TokenRateLimitPolicy {trlp_name} is enforced")
+                    return
+                log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
+            except (json.JSONDecodeError, KeyError) as e:
+                log.debug(f"Failed to parse TRLP status: {e}")
+        elif _is_not_found_error(result.stderr):
+            log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
+        elif _is_transient_kubectl_error(result.stderr):
+            log.debug(
+                f"Transient error while reading TokenRateLimitPolicy {trlp_name}: {result.stderr.strip()}"
+            )
+        else:
+            raise RuntimeError(
+                f"Failed to get TokenRateLimitPolicy {trlp_name} in namespace '{model_namespace}': "
+                f"{result.stderr.strip()}"
+            )
+        time.sleep(3)
+
+    raise TimeoutError(
+        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s"
+    )
+
+
+def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=None, timeout=60, require_model_statuses=False):
+    """Wait for MaaSSubscription to reach a specific phase.
 
     Args:
         name: Name of the MaaSSubscription
-        expected_phase: Expected phase (e.g., "Active", "Failed", "Degraded")
+        expected_phase: Phase to wait for (default: "Active")
         namespace: Namespace (defaults to _ns())
         timeout: Maximum wait time in seconds (default: 60)
+        require_model_statuses: If True, also requires modelRefStatuses to be populated
+                                (default: False). Set to True for status reporting tests.
 
     Returns:
         The subscription CR dict when the expected phase is reached
@@ -474,10 +718,15 @@ def _wait_for_subscription_phase(name, expected_phase="Active", namespace=None, 
             phase = status.get("phase")
             model_statuses = status.get("modelRefStatuses", [])
 
-            # Check if phase matches AND modelRefStatuses is populated
-            if phase == expected_phase and len(model_statuses) > 0:
-                log.info(f"✅ MaaSSubscription {name} reached phase '{expected_phase}' with {len(model_statuses)} model status(es)")
-                return cr
+            if phase == expected_phase:
+                if require_model_statuses:
+                    expected_count = len(cr.get("spec", {}).get("modelRefs", []))
+                    if len(model_statuses) >= expected_count:
+                        log.info(f"MaaSSubscription {name} reached phase '{expected_phase}' with {len(model_statuses)}/{expected_count} modelRefStatuses")
+                        return cr
+                else:
+                    log.info(f"MaaSSubscription {name} reached phase '{expected_phase}'")
+                    return cr
             log.debug(f"MaaSSubscription {name}: phase={phase}, modelRefStatuses={len(model_statuses)}")
         time.sleep(2)
 
@@ -490,16 +739,19 @@ def _wait_for_subscription_phase(name, expected_phase="Active", namespace=None, 
     )
 
 
-def _wait_for_authpolicy_phase(name, expected_phase="Active", namespace=None, timeout=60, require_auth_policies=True):
-    """Wait for MaaSAuthPolicy to reach a specific phase with populated status.
+def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=None, timeout=60,
+                                require_auth_policies=True, require_enforced=True):
+    """Wait for MaaSAuthPolicy to reach a specific phase.
 
     Args:
         name: Name of the MaaSAuthPolicy
-        expected_phase: Expected phase (e.g., "Active", "Failed", "Degraded")
+        expected_phase: Phase to wait for (default: "Active")
         namespace: Namespace (defaults to _ns())
         timeout: Maximum wait time in seconds (default: 60)
         require_auth_policies: If True, requires authPolicies to be populated (default: True).
                                Set to False for Failed phase with missing models.
+        require_enforced: If True, requires all authPolicies to have ready=True
+                          (default: True). Only applies when require_auth_policies is True.
 
     Returns:
         The auth policy CR dict when the expected phase is reached
@@ -518,11 +770,26 @@ def _wait_for_authpolicy_phase(name, expected_phase="Active", namespace=None, ti
             phase = status.get("phase")
             auth_policies = status.get("authPolicies", [])
 
-            # Check if phase matches, optionally require authPolicies
             if phase == expected_phase:
-                if not require_auth_policies or len(auth_policies) > 0:
-                    log.info(f"✅ MaaSAuthPolicy {name} reached phase '{expected_phase}' with {len(auth_policies)} auth policy status(es)")
+                # No auth policies required — phase match is sufficient
+                if not require_auth_policies:
+                    log.info(f"MaaSAuthPolicy {name} reached phase '{expected_phase}'")
                     return cr
+
+                # Auth policies required — check they exist
+                if len(auth_policies) > 0:
+                    if require_enforced:
+                        all_enforced = all(
+                            ap.get("ready") is True
+                            for ap in auth_policies
+                        )
+                        if all_enforced:
+                            log.info(f"MaaSAuthPolicy {name} reached phase '{expected_phase}' and all enforced")
+                            return cr
+                    else:
+                        log.info(f"MaaSAuthPolicy {name} reached phase '{expected_phase}' with {len(auth_policies)} auth policy status(es)")
+                        return cr
+
             log.debug(f"MaaSAuthPolicy {name}: phase={phase}, authPolicies={len(auth_policies)}")
         time.sleep(2)
 
@@ -532,57 +799,4 @@ def _wait_for_authpolicy_phase(name, expected_phase="Active", namespace=None, ti
     raise TimeoutError(
         f"MaaSAuthPolicy {name} did not reach phase '{expected_phase}' within {timeout}s "
         f"(current: phase={status.get('phase')}, authPolicies={len(status.get('authPolicies', []))})"
-    )
-
-
-def _wait_for_maas_auth_policy_ready(name, namespace=None, timeout=60):
-    """Wait for MaaSAuthPolicy to reach Active phase with enforced AuthPolicies."""
-    namespace = namespace or _ns()
-    deadline = time.time() + timeout
-    log.info(f"Waiting for MaaSAuthPolicy {name} to become Active (timeout: {timeout}s)...")
-
-    while time.time() < deadline:
-        cr = _get_cr("maasauthpolicy", name, namespace)
-        if cr:
-            phase = cr.get("status", {}).get("phase")
-            auth_policies = cr.get("status", {}).get("authPolicies", [])
-            all_ready = all(
-                ap.get("ready") is True
-                for ap in auth_policies
-            )
-            if phase == "Active" and auth_policies and all_ready:
-                log.info(f"MaaSAuthPolicy {name} is Active and enforced")
-                return
-            log.debug(f"MaaSAuthPolicy {name} phase: {phase}, authPolicies: {len(auth_policies)}, all_ready: {all_ready}")
-        time.sleep(2)
-
-    cr = _get_cr("maasauthpolicy", name, namespace)
-    current_phase = cr.get("status", {}).get("phase") if cr else "not found"
-    auth_policies = cr.get("status", {}).get("authPolicies", []) if cr else []
-    raise TimeoutError(
-        f"MaaSAuthPolicy {name} did not become Active/enforced within {timeout}s "
-        f"(current phase: {current_phase}, authPolicies: {len(auth_policies)})"
-    )
-
-
-def _wait_for_maas_subscription_ready(name, namespace=None, timeout=30):
-    """Wait for MaaSSubscription to reach Active phase."""
-    namespace = namespace or _ns()
-    deadline = time.time() + timeout
-    log.info(f"Waiting for MaaSSubscription {name} to become Active (timeout: {timeout}s)...")
-
-    while time.time() < deadline:
-        cr = _get_cr("maassubscription", name, namespace)
-        if cr:
-            phase = cr.get("status", {}).get("phase")
-            if phase == "Active":
-                log.info(f"MaaSSubscription {name} is Active")
-                return
-            log.debug(f"MaaSSubscription {name} phase: {phase}")
-        time.sleep(2)
-
-    cr = _get_cr("maassubscription", name, namespace)
-    current_phase = cr.get("status", {}).get("phase") if cr else "not found"
-    raise TimeoutError(
-        f"MaaSSubscription {name} did not become Active within {timeout}s (current phase: {current_phase})"
     )

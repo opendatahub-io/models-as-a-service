@@ -33,31 +33,12 @@ Requires:
   - maas-controller deployed with example CRs applied
   - oc/kubectl access to create service account tokens (for API key creation)
 
-Environment variables (all optional, with defaults):
-  - GATEWAY_HOST: Gateway hostname (required)
-  - MAAS_API_BASE_URL: MaaS API URL (required for API key creation)
-  - MAAS_SUBSCRIPTION_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
-  - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: When set, use this SA token
-    instead of oc whoami -t (e.g. for Prow where oc whoami -t is unavailable)
-  - E2E_TIMEOUT: Request timeout in seconds (default: 30)
-  - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
-  - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
-  - E2E_PREMIUM_MODEL_PATH: Path to premium model (default: /llm/premium-simulated-simulated-premium)
-  - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
-  - E2E_MODEL_REF: Model ref for CRs (default: facebook-opt-125m-simulated)
-  - E2E_PREMIUM_MODEL_REF: Premium model ref for CRs (default: premium-simulated-simulated-premium)
-  - E2E_UNCONFIGURED_MODEL_REF: Unconfigured model ref (default: e2e-unconfigured-facebook-opt-125m-simulated)
-  - E2E_UNCONFIGURED_MODEL_PATH: Path to unconfigured model (default: /llm/e2e-unconfigured-facebook-opt-125m-simulated)
-  - E2E_DISTINCT_MODEL_REF: First distinct model ref for multi-model tests (default: e2e-distinct-simulated)
-  - E2E_DISTINCT_MODEL_PATH: Path to first distinct model (default: /llm/e2e-distinct-simulated)
-  - E2E_DISTINCT_MODEL_ID: Model ID served by first distinct model (default: test/e2e-distinct-model)
-  - E2E_DISTINCT_MODEL_2_REF: Second distinct model ref for multi-model tests (default: e2e-distinct-2-simulated)
-  - E2E_DISTINCT_MODEL_2_PATH: Path to second distinct model (default: /llm/e2e-distinct-2-simulated)
-  - E2E_DISTINCT_MODEL_2_ID: Model ID served by second distinct model (default: test/e2e-distinct-model-2)
-  - E2E_SIMULATOR_SUBSCRIPTION: Free-tier subscription (default: simulator-subscription)
-  - E2E_PREMIUM_SIMULATOR_SUBSCRIPTION: Premium-tier subscription (default: premium-simulator-subscription)
-  - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
-  - E2E_INVALID_SUBSCRIPTION: Invalid subscription name for 403 test (default: nonexistent-sub)
+Environment variables:
+  See test_helper.py module docstring for shared environment variables
+  (GATEWAY_HOST, MAAS_API_BASE_URL, MAAS_SUBSCRIPTION_NAMESPACE, etc.).
+
+  File-specific variables (all optional, with defaults):
+  - E2E_PREMIUM_MODEL_PATH: Gateway path for premium model (default: /llm/premium-simulated-simulated-premium)
 """
 
 import copy
@@ -77,7 +58,8 @@ from test_helper import (
     MODEL_NAMESPACE,
     MODEL_PATH,
     MODEL_REF,
-    RECONCILE_WAIT,
+    PREMIUM_MODEL_REF,
+    SIMULATOR_ACCESS_POLICY,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
     TLS_VERIFY,
@@ -89,19 +71,22 @@ from test_helper import (
     _create_test_auth_policy,
     _create_test_subscription,
     _delete_cr,
+    _delete_sa,
     _gateway_url,
+    _get_auth_policies_for_model,
     _get_cluster_token,
     _get_cr,
+    _get_subscriptions_for_model,
     _inference,
-    _is_transient_kubectl_error,
     _maas_api_url,
     _ns,
     _poll_status,
     _revoke_api_key,
-    _wait_for_authpolicy_phase,
-    _wait_for_maas_auth_policy_ready,
-    _wait_for_maas_subscription_ready,
-    _wait_for_subscription_phase,
+    _sa_to_user,
+    _snapshot_cr,
+    _wait_for_maas_auth_policy_phase,
+    _wait_for_maas_subscription_phase,
+    _wait_for_token_rate_limit_policy,
     _wait_reconcile,
 )
 
@@ -110,18 +95,6 @@ log = logging.getLogger(__name__)
 
 # Constants specific to test_subscription.py (not shared)
 PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simulated-simulated-premium")
-PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
-DISTINCT_MODEL_REF = os.environ.get("E2E_DISTINCT_MODEL_REF", "e2e-distinct-simulated")
-DISTINCT_MODEL_PATH = os.environ.get("E2E_DISTINCT_MODEL_PATH", "/llm/e2e-distinct-simulated")
-DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", "test/e2e-distinct-model")
-DISTINCT_MODEL_2_REF = os.environ.get("E2E_DISTINCT_MODEL_2_REF", "e2e-distinct-2-simulated")
-DISTINCT_MODEL_2_PATH = os.environ.get("E2E_DISTINCT_MODEL_2_PATH", "/llm/e2e-distinct-2-simulated")
-DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", "test/e2e-distinct-model-2")
-PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get(
-    "E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription"
-)
-SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
-INVALID_SUBSCRIPTION = os.environ.get("E2E_INVALID_SUBSCRIPTION", "nonexistent-sub")
 
 # Generated resource names (for TestManagedAnnotation)
 AUTH_POLICY_NAME = f"maas-auth-{MODEL_REF}"
@@ -152,11 +125,6 @@ def _get_default_api_key() -> str:
     return _default_api_key_cache[pid]
 
 
-def _delete_sa(sa_name, namespace=None):
-    namespace = namespace or _ns()
-    subprocess.run(["oc", "delete", "sa", sa_name, "-n", namespace, "--ignore-not-found"], capture_output=True, text=True)
-
-
 def _cr_exists(kind, name, namespace=None):
     namespace = namespace or _ns()
     result = subprocess.run(["oc", "get", kind, name, "-n", namespace], capture_output=True, text=True)
@@ -176,62 +144,6 @@ def _annotate(kind, name, annotation, namespace=None):
         text=True,
         check=True,
     )
-
-
-def _get_auth_policies_for_model(model_ref, namespace=None):
-    """Get all MaaSAuthPolicies that reference a model.
-
-    Args:
-        model_ref: Name of the MaaSModelRef
-        namespace: Namespace to search (defaults to _ns())
-
-    Returns:
-        List of auth policy names that reference the model
-    """
-    namespace = namespace or _ns()
-    policies = _list_crs("maasauthpolicy", namespace)
-
-    matching = []
-    for policy in policies:
-        model_refs = policy.get("spec", {}).get("modelRefs", [])
-        for ref in model_refs:
-            # Handle both string refs and dict refs with 'name' field
-            ref_name = ref.get("name") if isinstance(ref, dict) else ref
-            if ref_name == model_ref:
-                matching.append(policy["metadata"]["name"])
-                break
-    return matching
-
-
-def _get_subscriptions_for_model(model_ref, namespace=None):
-    """Get all MaaSSubscriptions that reference a model.
-
-    Args:
-        model_ref: Name of the MaaSModelRef
-        namespace: Namespace to search (defaults to _ns())
-
-    Returns:
-        List of subscription names that reference the model
-    """
-    namespace = namespace or _ns()
-    subs = _list_crs("maassubscription", namespace)
-
-    matching = []
-    for sub in subs:
-        model_refs = sub.get("spec", {}).get("modelRefs", [])
-        for ref in model_refs:
-            # Handle both string refs and dict refs with 'name' field
-            ref_name = ref.get("name") if isinstance(ref, dict) else ref
-            if ref_name == model_ref:
-                matching.append(sub["metadata"]["name"])
-                break
-    return matching
-
-
-def _sa_to_user(sa_name, namespace=None):
-    """Convert service account name to Kubernetes user principal."""
-    namespace = namespace or _ns()
-    return f"system:serviceaccount:{namespace}:{sa_name}"
 
 
 def _create_test_maas_model(name, llmis_name=MODEL_REF, llmis_namespace=MODEL_NAMESPACE, namespace=None):
@@ -291,121 +203,6 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
         f"MaaSModelRef {name} did not become Ready within {timeout}s (current phase: {current_phase})"
     )
 
-
-def _wait_for_token_rate_limit_policy(model_ref, model_namespace="llm", timeout=60):
-    """Wait for TokenRateLimitPolicy to be created and enforced for a model.
-
-    Args:
-        model_ref: Name of the model (e.g., "e2e-distinct-simulated")
-        model_namespace: Namespace where the TRLP should be created (default: "llm")
-        timeout: Maximum wait time in seconds (default: 60)
-
-    Raises:
-        TimeoutError: If TRLP isn't created and enforced within timeout
-    """
-    trlp_name = f"maas-trlp-{model_ref}"
-    deadline = time.time() + timeout
-    log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} in {model_namespace} (timeout: {timeout}s)...")
-
-    while time.time() < deadline:
-        result = subprocess.run(
-            ["oc", "get", "tokenratelimitpolicy", trlp_name, "-n", model_namespace, "-o", "json"],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            try:
-                trlp = json.loads(result.stdout)
-                conditions = trlp.get("status", {}).get("conditions", [])
-                # Check if TRLP is enforced
-                enforced = next((c for c in conditions if c.get("type") in ["Enforced", "Ready"]), None)
-                if enforced and enforced.get("status") == "True":
-                    log.info(f"✅ TokenRateLimitPolicy {trlp_name} is enforced")
-                    return
-                log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
-            except (json.JSONDecodeError, KeyError) as e:
-                log.debug(f"Failed to parse TRLP status: {e}")
-        else:
-            log.debug(f"TokenRateLimitPolicy {trlp_name} not found yet...")
-        time.sleep(3)
-
-    raise TimeoutError(
-        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s"
-    )
-
-
-def _snapshot_cr(kind, name, namespace=None):
-    """Capture a CR for later restoration (strips runtime metadata)."""
-    cr = _get_cr(kind, name, namespace)
-    if not cr:
-        return None
-    meta = cr.get("metadata", {})
-    for key in ("resourceVersion", "uid", "creationTimestamp", "generation", "managedFields"):
-        meta.pop(key, None)
-    annotations = meta.get("annotations", {})
-    annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
-    if not annotations:
-        meta.pop("annotations", None)
-    cr.pop("status", None)
-    return cr
-
-
-def _list_crs(kind, namespace=None):
-    """List all CRs of a given kind.
-
-    Args:
-        kind: CR kind (e.g., 'maasmodelref', 'maasauthpolicy')
-        namespace: Namespace to search (defaults to _ns())
-
-    Returns:
-        List of CR dictionaries
-
-    Raises:
-        RuntimeError: If kubectl command fails with contextual error details
-    """
-    namespace = namespace or _ns()
-    plural = {
-        "maasmodelref": "maasmodelrefs",
-        "maasauthpolicy": "maasauthpolicies",
-        "maassubscription": "maassubscriptions",
-    }.get(kind, f"{kind}s")
-
-    cmd = ["kubectl", "get", plural, "-n", namespace, "-o", "json"]
-
-    # Retry transient network errors with exponential backoff
-    max_retries = 3
-    retry_delay = 2  # seconds
-
-    for attempt in range(max_retries):
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False
-        )
-
-        if result.returncode == 0:
-            return json.loads(result.stdout).get("items", [])
-
-        # Check if error is transient and we have retries left
-        if attempt < max_retries - 1 and _is_transient_kubectl_error(result.stderr):
-            log.warning(
-                f"Transient kubectl error (attempt {attempt + 1}/{max_retries}): {result.stderr.strip()}"
-            )
-            time.sleep(retry_delay * (attempt + 1))  # exponential backoff
-            continue
-
-        # Final attempt or non-transient error
-        raise RuntimeError(
-            f"Failed to list {plural} in namespace '{namespace}'.\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"Exit code: {result.returncode}\n"
-            f"Stderr: {result.stderr}\n"
-            f"Guidance: Ensure the CRD exists, namespace is correct, and you have permissions."
-        )
-
-    # Unreachable: loop always exits via return (line 684) or raise (line 695)
-    # Included for type checker and defensive programming
-    return []
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +269,7 @@ def high_priority_subscription_name_for_api_key_binding():
             groups=["system:authenticated"],
             priority=_E2E_API_KEY_BINDING_HIGH_PRIORITY,
         )
-        _wait_for_maas_subscription_ready(name, ns, timeout=90)
+        _wait_for_maas_subscription_phase(name, namespace=ns, timeout=90)
         yield name
     finally:
         _delete_cr("maassubscription", name)
@@ -756,7 +553,7 @@ class TestSubscriptionEnforcement:
                 groups=["system:authenticated"]
             )
             _wait_reconcile()
-            _wait_for_maas_auth_policy_ready(auth_policy_name, timeout=90)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
 
             # 2. Create subscription with low token limit
             _create_test_subscription(
@@ -767,7 +564,7 @@ class TestSubscriptionEnforcement:
                 window=window
             )
             _wait_reconcile()
-            _wait_for_maas_subscription_ready(subscription_name, timeout=90)
+            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
 
             # Wait for TRLP to be created AND enforced by Kuadrant/Limitador
             _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)
@@ -1170,7 +967,7 @@ class TestOrderingEdgeCases:
                 },
             })
             _wait_reconcile()
-            _wait_for_maas_subscription_ready("e2e-ordering-sub", namespace=ns, timeout=90)
+            _wait_for_maas_subscription_phase("e2e-ordering-sub", namespace=ns, timeout=90)
 
             api_key = _create_api_key(
                 _get_cluster_token(),
@@ -1945,10 +1742,10 @@ class TestStatusReporting:
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
 
-            _wait_for_maas_auth_policy_ready(auth_name)
+            _wait_for_maas_auth_policy_phase(auth_name)
 
             # Wait for subscription to reach Active phase with populated status
-            cr = _wait_for_subscription_phase(subscription_name, "Active", timeout=60)
+            cr = _wait_for_maas_subscription_phase(subscription_name, "Active", timeout=60, require_model_statuses=True)
 
             status = cr.get("status", {})
             model_statuses = status.get("modelRefStatuses", [])
@@ -1989,8 +1786,8 @@ class TestStatusReporting:
             # Create subscription with non-existent model
             _create_test_subscription(subscription_name, missing_model, users=[sa_user])
 
-            # Wait for subscription to reach Failed phase with polling
-            cr = _wait_for_subscription_phase(subscription_name, "Failed", timeout=60)
+            # Wait for subscription to reach Failed phase with populated status
+            cr = _wait_for_maas_subscription_phase(subscription_name, "Failed", timeout=60, require_model_statuses=True)
 
             status = cr.get("status", {})
             model_statuses = status.get("modelRefStatuses", [])
@@ -2028,7 +1825,7 @@ class TestStatusReporting:
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
 
             # Wait for auth policy to reach Active phase with populated status
-            cr = _wait_for_authpolicy_phase(auth_name, "Active", timeout=90)
+            cr = _wait_for_maas_auth_policy_phase(auth_name, "Active", timeout=90)
 
             status = cr.get("status", {})
             auth_policies = status.get("authPolicies", [])
@@ -2068,7 +1865,7 @@ class TestStatusReporting:
             _create_test_auth_policy(auth_name, missing_model, users=[sa_user])
 
             # Wait for auth policy to reach Failed phase (no authPolicies expected for missing model)
-            cr = _wait_for_authpolicy_phase(auth_name, "Failed", timeout=60, require_auth_policies=False)
+            cr = _wait_for_maas_auth_policy_phase(auth_name, "Failed", timeout=60, require_auth_policies=False)
 
             status = cr.get("status", {})
             log.info(f"AuthPolicy status: phase={status.get('phase')}, authPolicies={status.get('authPolicies', [])}")
@@ -2105,7 +1902,7 @@ class TestStatusReporting:
             _create_test_subscription(subscription_name, [MODEL_REF, missing_model], users=[sa_user])
 
             # Wait for subscription to reach Degraded phase with polling
-            cr = _wait_for_subscription_phase(subscription_name, "Degraded", timeout=60)
+            cr = _wait_for_maas_subscription_phase(subscription_name, "Degraded", timeout=60)
 
             status = cr.get("status", {})
             model_statuses = status.get("modelRefStatuses", [])
@@ -2150,7 +1947,7 @@ class TestStatusReporting:
             _create_test_auth_policy(auth_name, [MODEL_REF, missing_model], users=[sa_user])
 
             # Wait for auth policy to reach Degraded phase with polling
-            cr = _wait_for_authpolicy_phase(auth_name, "Degraded", timeout=60)
+            cr = _wait_for_maas_auth_policy_phase(auth_name, "Degraded", timeout=60)
 
             status = cr.get("status", {})
             auth_policies = status.get("authPolicies", [])
@@ -2194,8 +1991,8 @@ class TestStatusReporting:
             _create_test_auth_policy(auth_name, model_name, users=[sa_user])
             _create_test_subscription(subscription_name, model_name, users=[sa_user])
 
-            _wait_for_maas_auth_policy_ready(auth_name)
-            _wait_for_maas_subscription_ready(subscription_name)
+            _wait_for_maas_auth_policy_phase(auth_name)
+            _wait_for_maas_subscription_phase(subscription_name)
 
             # Verify initial Active status
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
@@ -2210,7 +2007,7 @@ class TestStatusReporting:
 
             # Wait for subscription to transition to Failed phase with polling
             # Use longer timeout to allow for cache invalidation
-            cr = _wait_for_subscription_phase(subscription_name, "Failed", timeout=120)
+            cr = _wait_for_maas_subscription_phase(subscription_name, "Failed", timeout=120)
 
             # Poll for modelRefStatuses to also reflect the deletion
             # (cache may take additional time to invalidate)
