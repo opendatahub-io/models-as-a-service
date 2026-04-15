@@ -94,7 +94,7 @@ func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string
 					if pollErr != nil {
 						return false, fmt.Errorf("error checking namespace status during deletion wait: %w", pollErr)
 					}
-					if checkNs.Status.Phase == corev1.NamespaceActive {
+					if checkNs.Status.Phase == corev1.NamespaceActive || checkNs.Status.Phase == "" {
 						setupLog.Info("subscription namespace became active during deletion wait "+
 							"(recreated by operator or external process)",
 							"namespace", namespace)
@@ -148,14 +148,33 @@ func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string
 				Name: namespace,
 				Labels: map[string]string{
 					"opendatahub.io/generated-namespace": "true",
+					"app.kubernetes.io/managed-by":       "maas-controller",
+					"app.kubernetes.io/part-of":          "maas-controller",
 				},
 			},
 		}
 
 		_, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-		if err == nil || errors.IsAlreadyExists(err) {
+		if err == nil {
 			setupLog.Info("subscription namespace ready", "namespace", namespace)
 			return true, nil
+		}
+		if errors.IsAlreadyExists(err) {
+			// Re-check phase: AlreadyExists only proves the name is occupied, but the namespace
+			// could still be Terminating. Verify it's actually ready before returning success.
+			existingNs, getErr := clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+			if getErr != nil {
+				setupLog.Info("namespace already exists but failed to verify phase, will retry",
+					"namespace", namespace, "error", getErr)
+				return false, nil
+			}
+			if existingNs.Status.Phase == corev1.NamespaceActive || existingNs.Status.Phase == "" {
+				setupLog.Info("subscription namespace ready", "namespace", namespace)
+				return true, nil
+			}
+			setupLog.Info("namespace already exists but is not ready, will retry",
+				"namespace", namespace, "phase", existingNs.Status.Phase)
+			return false, nil
 		}
 		if errors.IsForbidden(err) {
 			return false, fmt.Errorf("service account lacks permission to create namespace %q — "+
@@ -172,7 +191,7 @@ func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string
 // continue into namespace creation. If fallThroughToCreate is false and the returned error is nil, the
 // subscription namespace is already satisfied (Active or assumed external management).
 func resolveNamespaceAfterTerminationWait(namespace string, finalNs *corev1.Namespace, finalErr error) (doneErr error, fallThroughToCreate bool) {
-	if finalErr == nil && finalNs.Status.Phase == corev1.NamespaceActive {
+	if finalErr == nil && (finalNs.Status.Phase == corev1.NamespaceActive || finalNs.Status.Phase == "") {
 		setupLog.Info("subscription namespace exists and is active "+
 			"(recreated externally during deletion wait)",
 			"namespace", namespace)
@@ -247,6 +266,9 @@ func (m *subscriptionNamespaceMonitor) NeedLeaderElection() bool {
 }
 
 func (m *subscriptionNamespaceMonitor) Start(ctx context.Context) error {
+	if m.interval <= 0 {
+		return fmt.Errorf("subscription namespace maintain interval must be positive, got %v", m.interval)
+	}
 	run := func() {
 		innerCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
