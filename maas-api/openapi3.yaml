@@ -3,6 +3,13 @@ info:
     title: Models as a Service API
     description: Models as a Service Billing and Management API
     version: "1.0"
+    contact:
+        name: MaaS API Support
+        url: https://github.com/opendatahub-io/models-as-a-service
+        email: opendatahub@redhat.com
+    license:
+        name: Apache 2.0
+        url: https://www.apache.org/licenses/LICENSE-2.0
 servers:
     - url: '{serverUrl}'
       variables:
@@ -174,7 +181,9 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
                             example:
-                                error: Failed to retrieve LLM models
+                                error:
+                                    message: Failed to retrieve LLM models
+                                    type: server_error
     /v1/api-keys:
         post:
             tags:
@@ -453,7 +462,9 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
                             example:
-                                error: "Access denied: you can only bulk revoke your own API keys"
+                                error:
+                                    message: "Access denied: you can only bulk revoke your own API keys"
+                                    type: forbidden
     /v1/api-keys/{id}:
         get:
             tags:
@@ -531,8 +542,12 @@ paths:
                             example:
                                 - subscription_id_header: free-tier
                                   subscription_description: Free Tier
+                                  priority: 0
+                                  model_refs: []
                                 - subscription_id_header: premium
                                   subscription_description: Premium Plan
+                                  priority: 10
+                                  model_refs: []
                 "500":
                     description: Internal Server Error response.
                     content:
@@ -565,6 +580,8 @@ paths:
                             example:
                                 - subscription_id_header: premium
                                   subscription_description: Premium Plan
+                                  priority: 10
+                                  model_refs: []
                 "400":
                     description: Bad Request. Missing model-id parameter.
                     content:
@@ -834,7 +851,8 @@ components:
                                 example: 100
                             window:
                                 type: string
-                                description: "Time window (e.g., 1m, 1h, 24h)"
+                                description: "Time window (e.g., 1m, 1h, 24h). Allowed units: s, m, h (1-9999)."
+                                pattern: "^[1-9]\\d{0,3}(s|m|h)$"
                                 example: 1m
                         required:
                             - limit
@@ -925,9 +943,11 @@ components:
 tags:
     - name: api-keys
       description: "\U0001F5DD️ Named API Key Management service. Long-lived, trackable tokens for applications."
+    - name: api-keys-v2
+      description: "\U0001F511 API Key Management v2. OpenAI-compatible API keys with hash-based storage."
+    - name: health
+      description: ❤️ Health check service
     - name: models
       description: "\U0001F916 Model management service"
     - name: subscriptions
       description: Subscription listing service
-    - name: health
-      description: ❤️ Health check service

@@ -36,6 +36,8 @@ spec:
     - 'odh-pr-{{revision}}'
   - name: pipeline-type
     value: pull-request
+  - name: enable-group-testing
+    value: "true"
   pipelineRef:
     resolver: git
     params:

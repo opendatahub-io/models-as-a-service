@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -86,6 +87,97 @@ func TestDeletionTimestampSet(t *testing.T) {
 			got := deletionTimestampSet(e)
 			if got != tt.expected {
 				t.Errorf("deletionTimestampSet() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestTokenRateLimitWindowPattern validates the kubebuilder regex pattern applied to
+// TokenRateLimit.Window (defined in maassubscription_types.go).
+//
+// Background: MaaSSubscription.tokenRateLimits[].window values are passed through
+// verbatim into Kuadrant TokenRateLimitPolicy rates[].window. Kuadrant only accepts
+// s (seconds), m (minutes), and h (hours) with short numeric segments. The previous
+// pattern (^(\d+)(s|m|h|d)$) allowed d (days) and unbounded numbers, both of which
+// Kuadrant rejects at TRLP apply time. The tightened pattern (^[1-9]\d{0,3}(s|m|h)$)
+// ensures CRD admission catches invalid values before they reach the controller.
+//
+// Pattern breakdown:
+//   - ^[1-9]    — first digit must be 1-9 (no leading zeros, no zero window)
+//   - \d{0,3}   — up to 3 more digits (total 1-4 digits → range 1-9999)
+//   - (s|m|h)   — only Kuadrant-compatible time units
+//   - $         — no trailing characters
+func TestTokenRateLimitWindowPattern(t *testing.T) {
+	// This must stay in sync with the +kubebuilder:validation:Pattern marker on
+	// TokenRateLimit.Window in maassubscription_types.go. If the marker changes,
+	// update this constant and re-run the test to verify.
+	windowPattern := regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
+
+	tests := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		// --- valid: each Kuadrant-accepted unit with typical values ---
+		{"1 second", "1s", true},
+		{"1 minute", "1m", true},
+		{"1 hour", "1h", true},
+		{"30 seconds", "30s", true},
+		{"5 minutes", "5m", true},
+		{"24 hours", "24h", true}, // common replacement for "1d"
+
+		// --- valid: numeric boundary values (1-9999) ---
+		{"max 4-digit value", "9999h", true}, // upper boundary
+		{"3-digit value", "100m", true},
+		{"2-digit value", "10s", true},
+		{"single digit", "9s", true}, // lower boundary (besides 1)
+
+		// --- invalid: days unit ---
+		// Previously allowed by the old pattern. Kuadrant does not support "d";
+		// users should convert to hours (e.g. "1d" → "24h", "7d" → "168h").
+		{"days not allowed", "1d", false},
+		{"7 days not allowed", "7d", false},
+		{"30 days not allowed", "30d", false},
+
+		// --- invalid: leading zero ---
+		// Leading zeros produce ambiguous values and are not valid Kuadrant input.
+		{"leading zero", "01m", false},
+		{"leading zero hours", "024h", false},
+
+		// --- invalid: zero value ---
+		// A zero-length window is meaningless for rate limiting.
+		{"zero seconds", "0s", false},
+		{"zero minutes", "0m", false},
+		{"zero hours", "0h", false},
+
+		// --- invalid: exceeds 4-digit cap ---
+		// Kuadrant rejects oversized numeric segments. The pattern caps at 9999.
+		{"5-digit value", "10000s", false},
+		{"6-digit value", "100000m", false},
+
+		// --- invalid: unsupported units ---
+		// Kuadrant does not accept milliseconds, and the pattern is case-sensitive.
+		{"milliseconds not allowed", "100ms", false},
+		{"uppercase day", "1D", false},
+		{"weeks not allowed", "1w", false},
+
+		// --- invalid: malformed input ---
+		// Catch-all cases for input that doesn't match the expected format at all.
+		{"no unit", "100", false},
+		{"no number", "m", false},
+		{"empty string", "", false},
+		{"leading whitespace", " 1m", false},
+		{"trailing whitespace", "1m ", false},
+		{"decimal", "1.5h", false},
+		{"negative", "-1m", false},
+		{"go duration", "1h30m", false}, // compound durations are not supported
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := windowPattern.MatchString(tt.value)
+			if got != tt.valid {
+				t.Errorf("windowPattern.MatchString(%q) = %v, want %v", tt.value, got, tt.valid)
 			}
 		})
 	}

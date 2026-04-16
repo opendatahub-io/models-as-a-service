@@ -20,6 +20,23 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+//+kubebuilder:printcolumn:name="Endpoint",type="string",JSONPath=".status.endpoint"
+//+kubebuilder:printcolumn:name="HTTPRoute",type="string",JSONPath=".status.httpRouteName"
+//+kubebuilder:printcolumn:name="Gateway",type="string",JSONPath=".status.httpRouteGatewayName"
+//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+
+// MaaSModelRef is the Schema for the maasmodelrefs API
+type MaaSModelRef struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   MaaSModelSpec   `json:"spec,omitempty"`
+	Status MaaSModelStatus `json:"status,omitempty"`
+}
+
 // MaaSModelSpec defines the desired state of MaaSModelRef
 type MaaSModelSpec struct {
 	// ModelRef references the actual model endpoint
@@ -29,15 +46,6 @@ type MaaSModelSpec struct {
 	// or Gateway/HTTPRoute).
 	// +optional
 	EndpointOverride string `json:"endpointOverride,omitempty"`
-}
-
-// CredentialReference references a Kubernetes Secret with provider API credentials.
-// The Secret must be in the same namespace as the ExternalModel.
-type CredentialReference struct {
-	// Name is the name of the Secret
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	Name string `json:"name"`
 }
 
 // ModelReference references a model endpoint in the same namespace.
@@ -90,23 +98,6 @@ type MaaSModelStatus struct {
 	// Conditions represent the latest available observations of the model's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
-//+kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
-//+kubebuilder:printcolumn:name="Endpoint",type="string",JSONPath=".status.endpoint"
-//+kubebuilder:printcolumn:name="HTTPRoute",type="string",JSONPath=".status.httpRouteName"
-//+kubebuilder:printcolumn:name="Gateway",type="string",JSONPath=".status.httpRouteGatewayName"
-//+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-
-// MaaSModelRef is the Schema for the maasmodelrefs API
-type MaaSModelRef struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   MaaSModelSpec   `json:"spec,omitempty"`
-	Status MaaSModelStatus `json:"status,omitempty"`
 }
 
 //+kubebuilder:object:root=true

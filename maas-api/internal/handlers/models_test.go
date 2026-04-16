@@ -90,6 +90,12 @@ func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 		map[string]any{"name": "premium-users"},
 	}, "spec", "owner", "groups")
 
+	// Set status.phase to Active (required for subscription filtering)
+	_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+	_ = unstructured.SetNestedSlice(sub.Object, []any{
+		map[string]any{"type": "Ready", "status": "True"},
+	}, "status", "conditions")
+
 	return []*unstructured.Unstructured{sub}, nil
 }
 
@@ -114,6 +120,12 @@ func (f fakeMultiSubscriptionLister) List() ([]*unstructured.Unstructured, error
 			groupSlice[i] = map[string]any{"name": g}
 		}
 		_ = unstructured.SetNestedSlice(sub.Object, groupSlice, "spec", "owner", "groups")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
 
 		result = append(result, sub)
 	}
@@ -320,7 +332,7 @@ func TestListingModels(t *testing.T) {
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger)
+	modelMgr, errMgr := models.NewManager(testLogger, 15)
 	require.NoError(t, errMgr)
 
 	// Set up test fixtures
@@ -349,6 +361,16 @@ func TestListingModels(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
+
+	// Verify anti-caching and freshness headers (authorization timing race mitigation)
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"),
+		"Expected Cache-Control: no-store to prevent caching of authorization-checked listings")
+	accessCheckedAt := w.Header().Get("X-Access-Checked-At")
+	assert.NotEmpty(t, accessCheckedAt, "Expected X-Access-Checked-At header with RFC3339 timestamp")
+	if accessCheckedAt != "" {
+		_, parseErr := time.Parse(time.RFC3339, accessCheckedAt)
+		require.NoError(t, parseErr, "X-Access-Checked-At should be valid RFC3339")
+	}
 
 	var response pagination.Page[models.Model]
 	err = json.Unmarshal(w.Body.Bytes(), &response)
@@ -425,7 +447,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger)
+	modelMgr, errMgr := models.NewManager(testLogger, 15)
 	require.NoError(t, errMgr)
 
 	_, cleanup := fixtures.StubTokenProviderAPIs(t)
@@ -637,6 +659,12 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 			sub.SetAnnotations(annotations)
 		}
 
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
@@ -647,7 +675,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger)
+	modelMgr, err := models.NewManager(testLogger, 15)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
@@ -819,6 +847,13 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 				"groups": groupSlice,
 			},
 		}, "spec")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
@@ -829,7 +864,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger)
+	modelMgr, err := models.NewManager(testLogger, 15)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
@@ -931,6 +966,13 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 				"groups": groupSlice,
 			},
 		}, "spec")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
@@ -940,7 +982,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger)
+	modelMgr, err := models.NewManager(testLogger, 15)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
@@ -1031,6 +1073,13 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 				"groups": groupSlice,
 			},
 		}, "spec")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
@@ -1040,7 +1089,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger)
+	modelMgr, err := models.NewManager(testLogger, 15)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
@@ -1129,6 +1178,13 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 				"groups": groupSlice,
 			},
 		}, "spec")
+
+		// Set status.phase to Active (required for subscription filtering)
+		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"type": "Ready", "status": "True"},
+		}, "status", "conditions")
+
 		return sub
 	}
 
@@ -1139,7 +1195,7 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger)
+	modelMgr, err := models.NewManager(testLogger, 15)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)

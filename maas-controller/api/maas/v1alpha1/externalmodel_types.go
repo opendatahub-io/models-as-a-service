@@ -20,43 +20,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ExternalModelSpec defines the desired state of ExternalModel
-type ExternalModelSpec struct {
-	// Provider identifies the API format and auth type for the external model.
-	// e.g. "openai", "anthropic".
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=63
-	Provider string `json:"provider"`
-
-	// Endpoint is the FQDN of the external provider (no scheme or path).
-	// e.g. "api.openai.com".
-	// This field is metadata for downstream consumers (e.g. BBR provider-resolver plugin)
-	// and is not used by the controller for endpoint derivation.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$`
-	Endpoint string `json:"endpoint"`
-
-	// CredentialRef references a Kubernetes Secret containing the provider API key.
-	// The Secret must contain a data key "api-key" with the credential value.
-	// +kubebuilder:validation:Required
-	CredentialRef CredentialReference `json:"credentialRef"`
-}
-
-// ExternalModelStatus defines the observed state of ExternalModel
-type ExternalModelStatus struct {
-	// Phase represents the current phase of the external model
-	// +kubebuilder:validation:Enum=Pending;Ready;Failed
-	Phase string `json:"phase,omitempty"`
-
-	// Conditions represent the latest available observations of the external model's state
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
 //+kubebuilder:printcolumn:name="Provider",type="string",JSONPath=".spec.provider"
+//+kubebuilder:printcolumn:name="TargetModel",type="string",JSONPath=".spec.targetModel"
 //+kubebuilder:printcolumn:name="Endpoint",type="string",JSONPath=".spec.endpoint"
 //+kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
@@ -70,6 +37,60 @@ type ExternalModel struct {
 
 	Spec   ExternalModelSpec   `json:"spec,omitempty"`
 	Status ExternalModelStatus `json:"status,omitempty"`
+}
+
+// ExternalModelSpec defines the desired state of ExternalModel
+type ExternalModelSpec struct {
+	// Provider identifies the API format and auth type for the external model.
+	// The allowed values are: "openai", "anthropic", "azure-openai", "vertex" and "bedrock-openai".
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Enum=openai;anthropic;azure-openai;vertex;bedrock-openai
+	Provider string `json:"provider"`
+
+	// TargetModel is the upstream model name at the external provider.
+	// e.g. "gpt-4o", "claude-sonnet-4-5-20241022".
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	TargetModel string `json:"targetModel"`
+
+	// Endpoint is the FQDN of the external provider (no scheme or path).
+	// e.g. "api.openai.com".
+	// This field is metadata for downstream consumers (e.g. BBR provider-resolver plugin)
+	// and is not used by the controller for endpoint derivation.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$`
+	Endpoint string `json:"endpoint"`
+
+	// CredentialRef references a Kubernetes Secret containing the provider API key.
+	// The Secret must contain a data key "api-key" with the credential value.
+	// +kubebuilder:validation:Required
+	CredentialRef CredentialReference `json:"credentialRef"`
+}
+
+// CredentialReference references a Kubernetes Secret with provider API credentials.
+// The Secret must be in the same namespace as the ExternalModel.
+type CredentialReference struct {
+	// Name is the name of the Secret
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+}
+
+// ExternalModelStatus defines the observed state of ExternalModel
+type ExternalModelStatus struct {
+	// Phase represents the current phase of the external model
+	// +kubebuilder:validation:Enum=Pending;Ready;Failed
+	Phase string `json:"phase,omitempty"`
+
+	// Conditions represent the latest available observations of the external model's state
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 //+kubebuilder:object:root=true

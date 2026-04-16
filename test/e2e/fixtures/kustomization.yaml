@@ -13,3 +13,4 @@ resources:
   - unconfigured  # No auth/subscription (validates 403)
   - distinct      # Distinct model ID (validates multiple distinct models)
   - distinct-2    # Second distinct model ID (validates multiple distinct models)
+  - trlp-test     # TRLP test model (validates TRLP validation behavior)

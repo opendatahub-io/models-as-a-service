@@ -7,6 +7,17 @@
 # artifact collection for Prow/CI. Use for diagnosing 403/401 issues,
 # DNS/connectivity problems, and collecting logs for analysis.
 #
+# Collected artifacts (under $ARTIFACT_DIR):
+#   authorino-debug.log        - Authorino pod logs (token-redacted)
+#   cluster-state.log          - Cluster snapshot (nodes, namespaces, policies, CRs)
+#   maas-debug-report.log      - Full MaaS debug report
+#   maas-crs/                  - Full YAML of MaaS custom resources:
+#     maasmodelrefs.yaml         - MaaSModelRef definitions
+#     maasauthpolicies.yaml      - MaaSAuthPolicy definitions
+#     maassubscriptions.yaml     - MaaSSubscription definitions
+#     externalmodels.yaml        - ExternalModel definitions
+#   pod-logs/                  - Per-pod logs from the deployment namespace
+#
 # Usage:
 #   source test/e2e/scripts/auth_utils.sh
 #   patch_authorino_debug
@@ -16,10 +27,15 @@
 #   ./test/e2e/scripts/auth_utils.sh
 #
 # Environment:
-#   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
-#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
-#   AUTHORINO_NAMESPACE - Namespace for Authorino (default: kuadrant-system)
-#   ARTIFACT_DIR       - Prow artifact dir; also ARTIFACTS, LOG_DIR (default: test/e2e/reports)
+#   DEPLOYMENT_NAMESPACE       - MaaS API and controller namespace (default: opendatahub)
+#   MAAS_SUBSCRIPTION_NAMESPACE - MaaS CRs namespace (default: models-as-a-service)
+#   AUTHORINO_NAMESPACE        - Authorino namespace (default: kuadrant-system)
+#   OPERATOR_NAMESPACE         - RHOAI operator namespace (default: redhat-ods-operator)
+#   APPLICATIONS_NAMESPACE     - RHOAI applications namespace (default: redhat-ods-applications)
+#   GATEWAY_NAMESPACE          - Gateway/ingress namespace (default: openshift-ingress)
+#   LLM_NAMESPACE              - LLM workload namespace (default: llm)
+#   ISTIO_NAMESPACE            - Istio/service mesh namespace (default: istio-system)
+#   ARTIFACT_DIR               - Prow artifact dir; also ARTIFACTS, LOG_DIR (default: test/e2e/reports)
 #
 # =============================================================================
 
@@ -38,6 +54,11 @@ PROJECT_ROOT="$(_find_root)"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-kuadrant-system}"
+OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE:-redhat-ods-operator}"
+APPLICATIONS_NAMESPACE="${APPLICATIONS_NAMESPACE:-redhat-ods-applications}"
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+LLM_NAMESPACE="${LLM_NAMESPACE:-llm}"
+ISTIO_NAMESPACE="${ISTIO_NAMESPACE:-istio-system}"
 # OpenShift CI/Prow use ARTIFACT_DIR; respect ARTIFACTS_DIR if already set by caller
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}}"
 
@@ -93,7 +114,62 @@ collect_authorino_logs_redacted() {
       fi
     done
   done
-  [[ -s "$outfile" ]] && echo "  Saved to $outfile"
+  [[ -s "$outfile" ]] && echo "  Saved to $outfile" || true
+}
+
+# -----------------------------------------------------------------------------
+# Collect full MaaS CR YAML definitions to artifact dir
+# Mirrors the CRD list from red-hat-data-services/must-gather:
+#   gather_models_as_a_service
+# -----------------------------------------------------------------------------
+MAAS_CRDS=(
+  "maasmodelrefs.maas.opendatahub.io"
+  "maasauthpolicies.maas.opendatahub.io"
+  "maassubscriptions.maas.opendatahub.io"
+  "externalmodels.maas.opendatahub.io"
+)
+
+collect_maas_crs() {
+  local outdir="${1:-$ARTIFACTS_DIR/maas-crs}"
+  mkdir -p "$outdir"
+  echo "Collecting MaaS CR definitions to $outdir"
+
+  local ns_list=""
+  for crd in "${MAAS_CRDS[@]}"; do
+    local nss
+    nss=$(kubectl get "$crd" --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{end}' 2>/dev/null || true)
+    ns_list+=" $nss"
+  done
+  ns_list=$(echo "$ns_list" | tr ' ' '\n' | sort -u | grep -v '^$' || true)
+
+  if [[ -z "$ns_list" ]]; then
+    echo "  No MaaS CRs found in any namespace"
+    echo "No MaaS CRs found at $(date -Iseconds 2>/dev/null || date)" > "$outdir/no-crs-found.log"
+    return 0
+  fi
+
+  local total=0
+  for crd in "${MAAS_CRDS[@]}"; do
+    local short_name="${crd%%.*}"
+    local outfile="$outdir/${short_name}.yaml"
+    : > "$outfile"
+    for ns in $ns_list; do
+      local yaml
+      yaml=$(kubectl get "$crd" -n "$ns" -o yaml 2>/dev/null || true)
+      if [[ -n "$yaml" ]] && ! echo "$yaml" | grep -q 'items: \[\]'; then
+        {
+          echo "# --- namespace: $ns ---"
+          echo "$yaml"
+          echo ""
+        } | redact_tokens >> "$outfile"
+        total=$((total + 1))
+      fi
+    done
+    if [[ ! -s "$outfile" ]]; then
+      rm -f "$outfile"
+    fi
+  done
+  echo "  Saved CRs from $(echo "$ns_list" | wc -w | tr -d ' ') namespace(s) to $outdir ($total resource group(s))"
 }
 
 # -----------------------------------------------------------------------------
@@ -110,6 +186,18 @@ collect_cluster_state() {
     echo ""
     echo "--- MaaS deployment namespace ($DEPLOYMENT_NAMESPACE) ---"
     kubectl get all -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
+    echo ""
+    echo "--- RHOAI Operator namespace ($OPERATOR_NAMESPACE) ---"
+    kubectl get pods,deployments,csv -n "$OPERATOR_NAMESPACE" -o wide 2>/dev/null || true
+    echo ""
+    echo "--- RHOAI Applications namespace ($APPLICATIONS_NAMESPACE) ---"
+    kubectl get pods,deployments,services -n "$APPLICATIONS_NAMESPACE" -o wide 2>/dev/null || true
+    echo ""
+    echo "--- DSC / DSCI ---"
+    kubectl get datasciencecluster,dscinitialization -o wide 2>/dev/null || true
+    echo ""
+    echo "--- Gateway namespace ($GATEWAY_NAMESPACE) ---"
+    kubectl get pods,services -n "$GATEWAY_NAMESPACE" -o wide 2>/dev/null || true
     echo ""
     echo "--- AuthPolicies ---"
     kubectl get authpolicies -A 2>/dev/null || true
@@ -156,7 +244,24 @@ collect_e2e_artifacts() {
   echo "Artifact dir: $ARTIFACTS_DIR"
   collect_authorino_logs_redacted "$ARTIFACTS_DIR/authorino-debug.log"
   collect_cluster_state "$ARTIFACTS_DIR"
-  collect_namespace_pod_logs "$DEPLOYMENT_NAMESPACE" "$ARTIFACTS_DIR/pod-logs"
+  collect_maas_crs "$ARTIFACTS_DIR/maas-crs"
+  local ns
+  for ns in \
+    "$DEPLOYMENT_NAMESPACE" \
+    "$MAAS_SUBSCRIPTION_NAMESPACE" \
+    "$OPERATOR_NAMESPACE" \
+    "$APPLICATIONS_NAMESPACE" \
+    "$AUTHORINO_NAMESPACE" \
+    "$GATEWAY_NAMESPACE" \
+    "$LLM_NAMESPACE" \
+    "$ISTIO_NAMESPACE" \
+  ; do
+    if kubectl get namespace "$ns" &>/dev/null; then
+      collect_namespace_pod_logs "$ns" "$ARTIFACTS_DIR/pod-logs/$ns"
+    else
+      echo "  Skipping namespace $ns (not found)"
+    fi
+  done
   echo "=============================================="
 }
 
@@ -320,7 +425,7 @@ EOF
   fi
 
   # Fallback to deployment namespace if still empty
-  [[ -z "$maas_api_ns" ]] && maas_api_ns="$DEPLOYMENT_NAMESPACE"
+  [[ -z "$maas_api_ns" ]] && maas_api_ns="$DEPLOYMENT_NAMESPACE" || true
 
   local sub_select_url="https://maas-api.${maas_api_ns}.svc.cluster.local:8443/internal/v1/subscriptions/select"
   _section "Subscription Selector Endpoint Validation"
@@ -421,11 +526,16 @@ main() {
     patch_authorino_debug
     return 0
   fi
-  # Default: collect artifacts, then print auth debug report
+  # Default: collect artifacts, then print auth debug report (also saved to file)
   collect_e2e_artifacts
   echo ""
-  echo "========== Auth Debug Report =========="
-  run_auth_debug_report
+  echo "========== MaaS Debug Report =========="
+  local report
+  report=$(run_auth_debug_report)
+  echo "$report"
+  mkdir -p "$ARTIFACTS_DIR"
+  echo "$report" > "$ARTIFACTS_DIR/maas-debug-report.log"
+  echo "MaaS debug report saved to $ARTIFACTS_DIR/maas-debug-report.log"
 }
 
 # Run main only when executed directly (not sourced)

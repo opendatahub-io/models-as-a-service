@@ -230,7 +230,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     !!! note "Development and early testing"
         Kustomize deployment can be used for **development and early testing purposes**. For production, use the Managed tab above.
 
-    Set `modelsAsService` to **Unmanaged** so the operator does not deploy the MaaS API, then deploy MaaS via the ODH overlay:
+    Set `modelsAsService` to **Removed** so the operator does not deploy the MaaS API, then deploy MaaS via the ODH overlay:
 
     ```yaml
     kubectl apply -f - <<EOF

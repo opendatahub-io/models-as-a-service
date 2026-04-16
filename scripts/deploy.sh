@@ -507,7 +507,8 @@ main() {
   esac
 
   # Install subscription controller (always deployed)
-  # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script.
+  # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script
+  # unless the operator has already created deployment/maas-controller (starting from 3.4).
   log_info ""
   log_info "MaaS Subscription Controller..."
   local script_dir
@@ -521,27 +522,31 @@ main() {
     return 1
   else
     if [[ "$DEPLOYMENT_MODE" != "kustomize" ]]; then
-      log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
       if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
         log_error "Namespace $NAMESPACE does not exist. Create it first (e.g. via ODH operator)."
         return 1
       fi
-      set_maas_controller_image
-      if [[ "$NAMESPACE" != "opendatahub" ]]; then
-        (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
-          sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
-          cleanup_maas_controller_image
-          log_error "Failed to apply maas-controller manifests"
-          return 1
-        }
+      if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
+        log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
       else
-        kubectl apply -k "$config_dir" || {
-          cleanup_maas_controller_image
-          log_error "Failed to apply maas-controller manifests"
-          return 1
-        }
+        log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
+        set_maas_controller_image
+        if [[ "$NAMESPACE" != "opendatahub" ]]; then
+          (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
+            sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
+            cleanup_maas_controller_image
+            log_error "Failed to apply maas-controller manifests"
+            return 1
+          }
+        else
+          kubectl apply -k "$config_dir" || {
+            cleanup_maas_controller_image
+            log_error "Failed to apply maas-controller manifests"
+            return 1
+          }
+        fi
+        cleanup_maas_controller_image
       fi
-      cleanup_maas_controller_image
     else
       log_info "  Controller deployed via kustomize overlay (deployment/base/maas-controller/default)"
     fi
@@ -571,8 +576,15 @@ main() {
     fi
   fi
 
+  log_info "MaaS API and MaaS Controller deployment completed successfully!"
+  local deployed_api_image deployed_ctrl_image
+  deployed_api_image=$(kubectl get deployment/maas-api -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+  deployed_ctrl_image=$(kubectl get deployment/maas-controller -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+  log_info "  maas-api image:        $deployed_api_image"
+  log_info "  maas-controller image: $deployed_ctrl_image"
+
   log_info "==================================================="
-  log_info "  Deployment completed successfully!"
+  log_info "  Models-as-a-Service Deployment completed successfully!"
   log_info "==================================================="
 }
 
@@ -683,8 +695,9 @@ deploy_via_kustomize() {
 
   log_info "Applying kustomize manifests..."
   # Patch MAAS_SUBSCRIPTION_NAMESPACE env var with the configured subscription namespace
+  # tls/http overlays reference ../odh/params.env outside the overlay root.
   kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
-    kustomize build "$overlay" | \
+    kustomize build --load-restrictor LoadRestrictionsNone "$overlay" | \
     perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}'"$subscription_namespace"'"/smg'
   )
 
@@ -1164,7 +1177,7 @@ apply_custom_resources() {
 
   local webhook_deployment
   if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
-    webhook_deployment="rhods-operator-controller-manager"
+    webhook_deployment="rhods-operator"
   else
     webhook_deployment="opendatahub-operator-controller-manager"
   fi

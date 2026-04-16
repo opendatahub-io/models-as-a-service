@@ -216,27 +216,130 @@ curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
 
 ### Option 2: Kustomize-Based Installation
 
-The observability stack is defined in `deployment/base/observability/`. It includes:
+!!! warning "Development/Testing Only"
+    **This is not the standard customer install.** The production path is operator-managed via ODH/RHOAI (Option 1 above).
+    
+    These Kustomize entrypoints exist so the team can install, iterate, and test observability without a full operator-driven deployment.
+
+#### Kustomize Entrypoint Map
+
+The observability stack is defined across multiple Kustomize directories. Each can be built and applied independently:
+
+| Entrypoint (kustomize build target) | What it deploys | Operator-owned equivalent |
+|--------------------------------------|----------------|---------------------------|
+| `deployment/base/observability/` | TelemetryPolicy + Istio Telemetry (conditional ServiceMonitors applied only via script) | Operator installs TelemetryPolicy as part of the MaaS stack; Kuadrant operator owns ServiceMonitors when `spec.observability.enable: true` |
+| `deployment/components/observability/grafana/` | GrafanaDashboard CRs (Platform Admin, AI Engineer) | Operator does not manage Grafana dashboards; same CRs are used in both paths |
+| `deployment/components/observability/prometheus/` | Standalone Prometheus + RBAC + ServiceMonitors in `llm-observability` namespace | OpenShift User Workload Monitoring (built-in Prometheus) — operator path relies on this instead |
+| `deployment/components/observability/observability/` | Aggregator that pulls in `prometheus/` above | Same as above — this is a convenience wrapper |
+| `deployment/components/observability/observability/dashboards/` | Perses PersesDashboard + Prometheus datasource | No operator equivalent — Perses is optional in both paths |
+
+**Base observability resources** (`deployment/base/observability/`):
 
 | Resource | Purpose |
 |----------|---------|
 | **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `subscription`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `subscription`. |
 | **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `subscription` label to gateway latency (`istio_request_duration_milliseconds_bucket`) via the `X-MaaS-Subscription` header injected by the controller-generated AuthPolicy. Enables per-subscription latency tracking (P50/P95/P99). |
 
-**Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Subscription` is injected):
+**Conditional resources** (not in kustomization.yaml, applied only by `install-observability.sh`):
 
-    ./scripts/observability/install-observability.sh [--namespace NAMESPACE]
+| Resource | Applied when… |
+|----------|--------------|
+| `limitador-servicemonitor.yaml` | No Kuadrant PodMonitor scraping Limitador `/metrics` |
+| `authorino-server-metrics-servicemonitor.yaml` | No existing monitor scraping Authorino `/server-metrics` |
+| `istio-gateway-service.yaml` | Gateway deployment exists in `openshift-ingress` |
+| `istio-gateway-servicemonitor.yaml` | Gateway deployment exists (paired with the Service above) |
+
+#### Dry-Run Verification
+
+Validate that every kustomization builds cleanly without applying to a cluster:
+
+```bash
+# Base telemetry (TelemetryPolicy + Istio Telemetry)
+kustomize build deployment/base/observability \
+  | kubectl apply --dry-run=client -f -
+
+# Grafana dashboards
+kustomize build deployment/components/observability/grafana \
+  | kubectl apply --dry-run=client -f -
+
+# Standalone Prometheus stack
+kustomize build deployment/components/observability/prometheus \
+  | kubectl apply --dry-run=client -f -
+
+# Prometheus aggregator (same content as prometheus/ above)
+kustomize build deployment/components/observability/observability \
+  | kubectl apply --dry-run=client -f -
+
+# Perses dashboards
+kustomize build deployment/components/observability/observability/dashboards \
+  | kubectl apply --dry-run=client -f -
+```
+
+!!! note "CI Validation"
+    CI runs `scripts/ci/validate-manifests.sh` on every PR that touches `deployment/**`, which runs `kustomize build` against all `kustomization.yaml` files. Files with `kind: Component` are skipped (they must be included via a parent's `components:` field), but directories whose kustomization.yaml declares `kind: Kustomization` can build standalone and are validated by CI dry-run.
+
+#### Deploy to a Cluster
+
+**Quick deployment** (recommended):
+
+```bash
+# Deploys base telemetry + conditional ServiceMonitors
+./scripts/observability/install-observability.sh [--namespace NAMESPACE]
+```
+
+**Manual deployment** (step-by-step):
+
+```bash
+# 1. Base telemetry (requires Gateway + AuthPolicy to exist first)
+kustomize build deployment/base/observability | kubectl apply -f -
+
+# 2. Conditional ServiceMonitors (Limitador, Authorino, Gateway, LLM models)
+#    Use the install script — it detects existing Kuadrant monitors to avoid duplicates:
+./scripts/observability/install-observability.sh
+
+# 3. Grafana dashboards (discovers Grafana instance cluster-wide)
+./scripts/observability/install-grafana-dashboards.sh
+
+# 4. (Optional) Standalone Prometheus — only if NOT using OpenShift User Workload Monitoring
+kustomize build deployment/components/observability/observability | kubectl apply -f -
+
+# 5. (Optional) Perses dashboards
+kustomize build deployment/components/observability/observability/dashboards | kubectl apply -f -
+```
 
 When using the full deployment script, this is applied automatically:
 
-    ./scripts/deploy.sh
+```bash
+./scripts/deploy.sh
+```
 
 !!! note "Prerequisites"
     - **Tools**: `kubectl`, `kustomize`, `jq`, `yq` must be installed
     - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and subscription selection must be deployed first. The AuthPolicy injects `X-MaaS-Subscription`, which Istio Telemetry reads to label latency by subscription. Without it, the `subscription` label on gateway latency will be empty.
     - **Namespace**: Use `--namespace` if your MaaS API is deployed to a namespace other than `maas-api` (e.g. `--namespace opendatahub`)
 
-**Optional:** The Istio gateway (Envoy) ServiceMonitor is included in `deployment/base/observability/` and deployed automatically by `install-observability.sh`.
+#### Operator vs Kustomize Drift Reference
+
+When updating manifests in `deployment/base/observability/` or `deployment/components/observability/`, check whether the operator path produces equivalent resources. Drift between the two is expected in some areas (e.g., the standalone Prometheus stack has no operator equivalent) but should be tracked for the telemetry CRs and ServiceMonitors.
+
+| Resource | Kustomize source | Operator creates? | Notes |
+|----------|-----------------|-------------------|-------|
+| TelemetryPolicy | `base/observability/gateway-telemetry-policy.yaml` | Yes | Keep in sync — labels must match |
+| Istio Telemetry | `base/observability/istio-gateway-telemetry.yaml` | Yes | Keep in sync — header extraction must match |
+| Limitador ServiceMonitor | `base/observability/limitador-servicemonitor.yaml` | Kuadrant PodMonitor when `observability.enable: true` | Script skips ours if Kuadrant's exists |
+| Authorino /server-metrics | `base/observability/authorino-server-metrics-servicemonitor.yaml` | Not yet (Kuadrant only scrapes `/metrics`) | MaaS supplements the operator gap |
+| Istio Gateway ServiceMonitor | `base/observability/istio-gateway-servicemonitor.yaml` | No | MaaS-only; applied conditionally |
+| Grafana Dashboards | `components/observability/grafana/` | No | Same CRs used in both paths |
+| Standalone Prometheus | `components/observability/prometheus/` | No (uses OpenShift UWM instead) | Dev/test only — not for production |
+| Perses Dashboards | `components/observability/observability/dashboards/` | No | Optional in both paths |
+
+#### Keeping Docs Accurate
+
+When you change any YAML under `deployment/base/observability/` or `deployment/components/observability/`:
+
+1. Verify the build still passes: `kustomize build <dir> | kubectl apply --dry-run=client -f -`
+2. Update the **entrypoint map table above** if you add, remove, or rename an entrypoint
+3. Update this document if the change affects user-facing instructions (metrics, ServiceMonitor behavior, dashboard content)
 
 ## Metrics Collection
 

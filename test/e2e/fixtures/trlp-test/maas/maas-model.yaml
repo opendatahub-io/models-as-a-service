@@ -1,0 +1,13 @@
+# MaaSModelRef for the TRLP test simulator.
+# Used by e2e tests to validate TRLP validation behavior (Degraded with TRLP not ready blocks inference).
+# LLMIS from docs/samples/models/e2e-trlp-test-simulated (name: e2e-trlp-test-simulated in namespace llm).
+# Serves model ID: test/e2e-trlp-test-model
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: e2e-trlp-test-simulated
+  namespace: llm
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: e2e-trlp-test-simulated
