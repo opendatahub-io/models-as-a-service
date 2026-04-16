@@ -700,21 +700,23 @@ The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimen
 ### Sensitive Header Redaction
 
 !!! warning "Security"
-    Authorization headers, API keys, and cookies are never logged in full. Only presence indicators (`authHeaderProvided: true/false`) and request IDs are logged for debugging.
+    Authorization headers, API keys, and cookies are never logged in full. Only presence indicators (where explicitly added) and request IDs are logged for debugging.
 
 **What's logged:**
-- Request IDs (`X-Request-ID` in all responses) for correlation
+- Request IDs (`X-Request-ID` in all HTTP responses) for correlation
 - User/subscription identifiers (post-validation only)
-- Header presence indicators, not values
+- Header presence indicators where explicitly added (e.g., `authHeaderProvided: true/false` in model discovery logs)
+- No header values or lengths
 
 **What's NOT logged:**
 - Authorization header values or lengths
 - API key values (only shown once at creation)
 - Session cookies
+- Any sensitive header contents
 
 **Debugging auth failures:**
 ```bash
-# Get request ID from user, search logs
+# Get request ID from response header, search logs
 kubectl logs -n models-as-a-service deployment/maas-api | grep "<request-id>"
 
 # Check Authorino auth metrics
@@ -726,7 +728,13 @@ kubectl exec -n kuadrant-system deployment/authorino -- \
 ```
 
 **Gateway access logging:**
-Access logging is disabled by default. If needed for troubleshooting, configure Istio Telemetry with proper header redaction using Envoy CEL expressions (e.g., `has(%REQ(AUTHORIZATION)%) ? 'true' : 'false'` for presence indicators only).
+Access logging is disabled by default. If needed for troubleshooting, configure Istio Telemetry with proper header redaction using Envoy CEL expressions:
+
+```yaml
+# Example Envoy CEL for safe access logging
+auth_header_present: "has(request.headers['authorization']) ? 'true' : 'false'"
+# NEVER: request.headers['authorization'] - this logs the full value
+```
 
 **Future tracing:**
 If distributed tracing is implemented, Authorization headers must be excluded from span attributes using OpenTelemetry span processors or Istio Telemetry configuration.

@@ -72,14 +72,20 @@ func serve() error {
 		gin.SetMode(gin.DebugMode)
 	}
 
-	router := gin.Default()
+	// Use gin.New() instead of gin.Default() to control middleware order
+	router := gin.New()
+
+	// Add request ID middleware first so it's available to logger
+	router.Use(middleware.RequestID())
+
+	// Add Logger and Recovery middleware after RequestID
+	router.Use(gin.Logger())
+	router.Use(gin.Recovery())
+
 	if cfg.DebugMode {
 		log.Warn("Debug CORS policy active: allowing localhost origins only")
 		router.Use(cors.New(debugCORSConfig()))
 	}
-
-	// Add request ID middleware for correlation without exposing tokens
-	router.Use(middleware.RequestID())
 
 	router.OPTIONS("/*path", func(c *gin.Context) { c.Status(204) })
 
