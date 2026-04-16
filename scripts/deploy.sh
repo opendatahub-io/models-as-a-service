@@ -531,22 +531,31 @@ main() {
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
     log_info "  Installing controller (CRDs, RBAC, deployment)..."
-    set_maas_controller_image
     if [[ "$NAMESPACE" != "opendatahub" ]]; then
       (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
         sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
-        cleanup_maas_controller_image
         log_error "Failed to apply maas-controller manifests"
         return 1
       }
     else
       kubectl apply -k "$config_dir" || {
-        cleanup_maas_controller_image
         log_error "Failed to apply maas-controller manifests"
         return 1
       }
     fi
-    cleanup_maas_controller_image
+  fi
+
+  if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
+    log_info "  Custom MaaS controller image: $MAAS_CONTROLLER_IMAGE"
+    kubectl set image deployment/maas-controller manager="${MAAS_CONTROLLER_IMAGE}" -n "$NAMESPACE" || {
+      log_error "Failed to set maas-controller container image"
+      return 1
+    }
+    kubectl set env deployment/maas-controller -n "$NAMESPACE" \
+      "RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE}" || {
+      log_error "Failed to set RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE on maas-controller"
+      return 1
+    }
   fi
 
   log_info "  Waiting for maas-controller to be ready..."
@@ -563,7 +572,6 @@ main() {
     log_info "  Configuring custom MaaS API image: $MAAS_API_IMAGE"
     env_patches+=("RELATED_IMAGE_ODH_MAAS_API_IMAGE=$MAAS_API_IMAGE")
   fi
-
   # Patch controller with correct audience for HyperShift/ROSA clusters.
   local cluster_aud
   cluster_aud=$(get_cluster_audience 2>/dev/null || echo "")
