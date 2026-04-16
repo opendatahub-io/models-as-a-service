@@ -9,9 +9,6 @@ After deploying MaaS, you need to verify three things:
 !!! note "Prerequisite"
     At least one model must be deployed to validate the installation. See [Model Setup (On Cluster)](model-setup.md) to deploy sample models.
 
-!!! info "About the `-k` flag"
-    The `curl` commands below use `-k` (`--insecure`) to skip TLS certificate verification. This is common on OpenShift clusters with self-signed or internal-CA certificates. For production or shared environments, prefer `--cacert /path/to/ca.crt` to validate the server certificate.
-
 ## Step-by-Step Validation
 
 Use these steps to test individual components, debug specific failures, or understand how the system works.
@@ -27,9 +24,19 @@ HOST="https://maas.${CLUSTER_DOMAIN}" && \
 echo "Gateway endpoint: $HOST"
 ```
 
+Extract the cluster CA certificate so that `curl` can verify TLS without the `-k` flag:
+
+```bash
+CA_CERT="/tmp/cluster-ca.crt"
+oc get configmap kube-root-ca.crt -n openshift-config \
+  -o jsonpath='{.data.ca-bundle\.crt}' > "$CA_CERT"
+echo "CA certificate saved to $CA_CERT"
+```
+
 ??? success "Expected output"
     ```text
     Gateway endpoint: https://maas.apps.your-cluster.example.com
+    CA certificate saved to /tmp/cluster-ca.crt
     ```
 
 !!! note
@@ -37,6 +44,9 @@ echo "Gateway endpoint: $HOST"
     ```bash
     HOST="https://maas.apps.your-cluster.example.com"
     ```
+
+!!! tip "If CA extraction fails"
+    If you cannot extract the CA certificate (e.g., missing permissions or non-OpenShift cluster), you can fall back to `curl -k` to skip TLS verification. This is acceptable for one-off debugging but should not be used in automation or shared environments, as it disables certificate validation.
 
 **If this fails:**
 
@@ -47,7 +57,7 @@ echo "Gateway endpoint: $HOST"
 Create an API key using your OpenShift token:
 
 ```bash
-API_KEY_RESPONSE=$(curl -sSk \
+API_KEY_RESPONSE=$(curl -sS --cacert "$CA_CERT" \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -82,7 +92,7 @@ echo "API key obtained successfully."
 Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models` with an API key returns only models from that subscription. With an OpenShift token instead of an API key, you can send `X-MaaS-Subscription` to filter when you have access to multiple subscriptions.
 
 ```bash
-MODELS=$(curl -sSk \
+MODELS=$(curl -sS --cacert "$CA_CERT" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" \
     "${HOST}/maas-api/v1/models")
@@ -120,7 +130,7 @@ echo "Model URL: $MODEL_URL"
 Send a chat completion request to the model. You should get a 200 OK response with generated text:
 
 ```bash
-RESPONSE=$(curl -sSk \
+RESPONSE=$(curl -sS --cacert "$CA_CERT" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
@@ -156,7 +166,7 @@ echo "$RESPONSE" | jq .
 !!! note
     Some models only support `/v1/completions` (prompt-based) instead of `/v1/chat/completions`. If you get a 404 or 400, try the completions endpoint:
     ```bash
-    RESPONSE=$(curl -sSk \
+    RESPONSE=$(curl -sS --cacert "$CA_CERT" \
       -H "Authorization: Bearer $API_KEY" \
       -H "Content-Type: application/json" \
       -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
@@ -176,7 +186,7 @@ echo "$RESPONSE" | jq .
 Send a request without any credentials. You should get a 401 Unauthorized response:
 
 ```bash
-curl -sSk -o /dev/null -w "HTTP status: %{http_code}\n" \
+curl -sS --cacert "$CA_CERT" -o /dev/null -w "HTTP status: %{http_code}\n" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
   "${MODEL_URL}/v1/chat/completions"
@@ -197,7 +207,7 @@ Send multiple requests to trigger the rate limit. After a few successful request
 
 ```bash
 for i in {1..16}; do
-  curl -sSk -o /dev/null -w "%{http_code} " \
+  curl -sS --cacert "$CA_CERT" -o /dev/null -w "%{http_code} " \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
