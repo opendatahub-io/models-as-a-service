@@ -15,9 +15,9 @@ Requires:
   - Pre-deployed test models (free-tier simulator)
 
 Environment variables:
-  - See test_subscription.py docstring for shared variables
-  - E2E_UNCONFIGURED_MODEL_PATH: Path to a model with no subscription (for cross-model tests)
-  - E2E_UNCONFIGURED_MODEL_REF: MaaSModelRef name for the unconfigured model
+  See test_helper.py module docstring for shared environment variables
+  (GATEWAY_HOST, MAAS_API_BASE_URL, MAAS_SUBSCRIPTION_NAMESPACE, etc.).
+  This file uses no additional file-specific environment variables.
 """
 
 import http.client
@@ -51,8 +51,8 @@ from test_helper import (
     _inference,
     _maas_api_url,
     _poll_status,
-    _wait_for_authpolicy_phase,
-    _wait_for_subscription_phase,
+    _wait_for_maas_auth_policy_phase,
+    _wait_for_maas_subscription_phase,
 )
 
 log = logging.getLogger(__name__)
@@ -267,7 +267,7 @@ class TestAuthPolicyRemoval:
                 groups=["system:authenticated"],
             )
 
-            _wait_for_authpolicy_phase(policy_name)
+            _wait_for_maas_auth_policy_phase(policy_name)
 
             # Verify Kuadrant AuthPolicy was generated
             ap = _get_cr("authpolicy", kuadrant_auth_name, namespace=MODEL_NAMESPACE)
@@ -335,7 +335,7 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            _wait_for_subscription_phase(sub_name, "Degraded", timeout=60)
+            _wait_for_maas_subscription_phase(sub_name, "Degraded", timeout=60)
 
             # No TRLP should exist for the ghost model
             ghost_trlp_name = f"maas-trlp-{ghost_model}"
@@ -375,7 +375,7 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            _wait_for_authpolicy_phase(policy_name, "Degraded", timeout=60, require_auth_policies=False)
+            _wait_for_maas_auth_policy_phase(policy_name, "Degraded", timeout=60, require_auth_policies=False)
 
             # No AuthPolicy should exist for the ghost model
             ghost_auth_name = f"maas-auth-{ghost_model}"

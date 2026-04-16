@@ -28,7 +28,6 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
-	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
 )
 
 // routeConditionProgrammed is the "Programmed" condition type for route parent status.
@@ -58,7 +57,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		return fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
 	}
 
-	routeName := externalmodel.ModelRouteName(model.Name)
+	routeName := model.Spec.ModelRef.Name
 	routeNS := model.Namespace
 
 	route := &gatewayapiv1.HTTPRoute{}
@@ -113,18 +112,14 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 				pNS = string(*parent.ParentRef.Namespace)
 			}
 			if pName == expectedGatewayName && pNS == expectedGatewayNamespace {
-				accepted := false
-				programmed := false
 				for _, cond := range parent.Conditions {
 					if cond.Type == string(gatewayapiv1.RouteConditionAccepted) && cond.Status == metav1.ConditionTrue {
-						accepted = true
-					}
-					if cond.Type == routeConditionProgrammed && cond.Status == metav1.ConditionTrue {
-						programmed = true
+						gatewayAccepted = true
 					}
 				}
-				gatewayAccepted = accepted && programmed
-				break
+				if gatewayAccepted {
+					break
+				}
 			}
 		}
 	}
@@ -182,11 +177,13 @@ func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, mode
 }
 
 // GetModelEndpoint returns the endpoint URL for the ExternalModel.
-// Follows the same resolution order as llmisvc: HTTPRoute hostnames > gateway listeners > gateway addresses.
+// Uses ExternalModel name (spec.modelRef.name) in the path to match the HTTPRoute
+// created by the reconciler and BBR's model-provider-resolver store key.
 func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
+	extModelName := model.Spec.ModelRef.Name
 	if len(model.Status.HTTPRouteHostnames) > 0 {
 		hostname := model.Status.HTTPRouteHostnames[0]
-		return fmt.Sprintf("https://%s/%s", hostname, model.Name), nil
+		return fmt.Sprintf("https://%s/%s/%s", hostname, model.Namespace, extModelName), nil
 	}
 
 	gatewayName := h.r.gatewayName()
@@ -199,19 +196,19 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 
 	for _, listener := range gateway.Spec.Listeners {
 		if listener.Hostname != nil {
-			return fmt.Sprintf("https://%s/%s", string(*listener.Hostname), model.Name), nil
+			return fmt.Sprintf("https://%s/%s/%s", string(*listener.Hostname), model.Namespace, extModelName), nil
 		}
 	}
 
 	for _, addr := range gateway.Status.Addresses {
 		if addr.Type != nil && *addr.Type == gatewayapiv1.HostnameAddressType {
-			return fmt.Sprintf("https://%s/%s", addr.Value, model.Name), nil
+			return fmt.Sprintf("https://%s/%s/%s", addr.Value, model.Namespace, extModelName), nil
 		}
 	}
 	if len(gateway.Status.Addresses) > 0 {
 		log.Info("Using IP-based gateway address; TLS hostname verification may fail",
-			"address", gateway.Status.Addresses[0].Value, "model", model.Name)
-		return fmt.Sprintf("https://%s/%s", gateway.Status.Addresses[0].Value, model.Name), nil
+			"address", gateway.Status.Addresses[0].Value, "model", extModelName)
+		return fmt.Sprintf("https://%s/%s/%s", gateway.Status.Addresses[0].Value, model.Namespace, extModelName), nil
 	}
 
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)
@@ -228,7 +225,7 @@ func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Log
 type externalModelRouteResolver struct{}
 
 func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error) {
-	routeName = externalmodel.ModelRouteName(model.Name)
+	routeName = model.Spec.ModelRef.Name
 	routeNamespace = model.Namespace
 	return routeName, routeNamespace, nil
 }

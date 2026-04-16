@@ -19,14 +19,18 @@ import logging
 import os
 import subprocess
 import time
-from typing import Optional
 
 import pytest
 import requests
 
 from test_helper import (
-    _wait_for_authpolicy_phase,
-    _wait_for_subscription_phase,
+    MODEL_NAMESPACE,
+    TLS_VERIFY,
+    _apply_cr,
+    _delete_cr,
+    _get_cr,
+    _wait_for_maas_auth_policy_phase,
+    _wait_for_maas_subscription_phase,
 )
 
 log = logging.getLogger(__name__)
@@ -34,37 +38,15 @@ log = logging.getLogger(__name__)
 # ─── Configuration ──────────────────────────────────────────────────────────
 
 EXTERNAL_ENDPOINT = os.environ.get("E2E_EXTERNAL_ENDPOINT", os.environ.get("E2E_SIMULATOR_ENDPOINT", "httpbin.org"))
-MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
 SUBSCRIPTION_NAMESPACE = os.environ.get("E2E_SUBSCRIPTION_NAMESPACE", os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service"))
 EXTERNAL_SUBSCRIPTION = os.environ.get("E2E_EXTERNAL_SUBSCRIPTION", "e2e-external-subscription")
 EXTERNAL_AUTH_POLICY = os.environ.get("E2E_EXTERNAL_AUTH_POLICY", "e2e-external-access")
 RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
-TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
 
 EXTERNAL_MODEL_NAME = "e2e-external-model"
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def _apply_cr(cr_dict: dict):
-    """Apply a Kubernetes CR from a dict."""
-    result = subprocess.run(
-        ["oc", "apply", "-f", "-"],
-        input=json.dumps(cr_dict),
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        log.warning(f"oc apply failed: {result.stderr}")
-    return result.returncode == 0
-
-
-def _delete_cr(kind: str, name: str, namespace: str):
-    """Delete a Kubernetes resource (best effort)."""
-    subprocess.run(
-        ["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"],
-        capture_output=True, text=True,
-    )
-
 
 def _patch_cr(kind: str, name: str, namespace: str, patch: dict):
     """Patch a Kubernetes resource."""
@@ -73,27 +55,6 @@ def _patch_cr(kind: str, name: str, namespace: str, patch: dict):
         capture_output=True, text=True,
     )
 
-
-def _get_cr(kind: str, name: str, namespace: str) -> Optional[dict]:
-    """Get a Kubernetes resource as dict, or None if not found."""
-    result = subprocess.run(
-        ["oc", "get", kind, name, "-n", namespace, "-o", "json"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        return None
-    return json.loads(result.stdout)
-
-
-def _wait_for_phase(kind: str, name: str, namespace: str, phase: str, timeout: int = 60) -> bool:
-    """Wait for a CR to reach a specific status phase."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        cr = _get_cr(kind, name, namespace)
-        if cr and cr.get("status", {}).get("phase") == phase:
-            return True
-        time.sleep(2)
-    return False
 
 
 # ─── Connectivity check ──────────────────────────────────────────────────────
@@ -206,8 +167,8 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
     })
 
     # Wait for CRs to reconcile
-    _wait_for_authpolicy_phase(EXTERNAL_AUTH_POLICY, namespace=SUBSCRIPTION_NAMESPACE)
-    _wait_for_subscription_phase(EXTERNAL_SUBSCRIPTION, namespace=SUBSCRIPTION_NAMESPACE)
+    _wait_for_maas_auth_policy_phase(EXTERNAL_AUTH_POLICY, namespace=SUBSCRIPTION_NAMESPACE)
+    _wait_for_maas_subscription_phase(EXTERNAL_SUBSCRIPTION, namespace=SUBSCRIPTION_NAMESPACE)
 
     # Create API key for tests
     log.info("Creating API key for external model tests...")
@@ -251,14 +212,14 @@ class TestExternalModelDiscovery:
         assert cr is not None, f"MaaSModelRef {EXTERNAL_MODEL_NAME} not found"
 
     def test_reconciler_created_httproute(self, external_models_setup):
-        """Reconciler created maas-model-* HTTPRoute."""
-        cr = _get_cr("httproute", f"maas-model-{EXTERNAL_MODEL_NAME}", MODEL_NAMESPACE)
-        assert cr is not None, f"HTTPRoute maas-model-{EXTERNAL_MODEL_NAME} not found"
+        """Reconciler created HTTPRoute matching the ExternalModel name."""
+        cr = _get_cr("httproute", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        assert cr is not None, f"HTTPRoute {EXTERNAL_MODEL_NAME} not found"
 
     def test_reconciler_created_backend_service(self, external_models_setup):
         """Reconciler created backend service."""
-        cr = _get_cr("service", f"maas-model-{EXTERNAL_MODEL_NAME}-backend", MODEL_NAMESPACE)
-        assert cr is not None, f"Service maas-model-{EXTERNAL_MODEL_NAME}-backend not found"
+        cr = _get_cr("service", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        assert cr is not None, f"Service {EXTERNAL_MODEL_NAME} not found"
 
 
 # ─── Tests: Auth ─────────────────────────────────────────────────────────────
@@ -269,7 +230,7 @@ class TestExternalModelAuth:
     def test_invalid_key_returns_401(self, external_models_setup):
         """Invalid API key returns 401/403."""
         setup = external_models_setup
-        url = f"{setup['gateway_url']}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
+        url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
         headers = {
             "Content-Type": "application/json",
             "Authorization": "Bearer INVALID-KEY-12345",
@@ -282,7 +243,7 @@ class TestExternalModelAuth:
     def test_no_key_returns_401(self, external_models_setup):
         """No API key returns 401/403."""
         setup = external_models_setup
-        url = f"{setup['gateway_url']}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
+        url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
 
@@ -301,7 +262,7 @@ class TestExternalModelEgress:
         external endpoint. Expect 200 confirming egress connectivity.
         """
         setup = external_models_setup
-        url = f"{setup['gateway_url']}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
+        url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {setup['api_key']}",
@@ -326,8 +287,8 @@ class TestExternalModelCleanup:
 
     def test_delete_removes_httproute(self, external_models_setup):
         """
-        Deleting a MaaSModelRef removes the maas-model-* HTTPRoute
-        via the finalizer.
+        Deleting an ExternalModel removes the HTTPRoute via OwnerReference
+        garbage collection (ExternalModel owns all reconciled resources).
         """
         temp_name = "e2e-cleanup-test"
 
@@ -346,38 +307,22 @@ class TestExternalModelCleanup:
                 },
             },
         })
-        _apply_cr({
-            "apiVersion": "maas.opendatahub.io/v1alpha1",
-            "kind": "MaaSModelRef",
-            "metadata": {
-                "name": temp_name,
-                "namespace": MODEL_NAMESPACE,
-                "annotations": {
-                    "maas.opendatahub.io/endpoint": EXTERNAL_ENDPOINT,
-                    "maas.opendatahub.io/provider": "openai",
-                },
-            },
-            "spec": {"modelRef": {"kind": "ExternalModel", "name": temp_name}},
-        })
 
         try:
             # Wait for reconciler to create resources
             time.sleep(RECONCILE_WAIT * 2)
 
             # Verify HTTPRoute was created
-            route = _get_cr("httproute", f"maas-model-{temp_name}", MODEL_NAMESPACE)
-            assert route is not None, f"HTTPRoute maas-model-{temp_name} should exist before deletion"
+            route = _get_cr("httproute", temp_name, MODEL_NAMESPACE)
+            assert route is not None, f"HTTPRoute {temp_name} should exist before deletion"
 
-            # Delete
-            _delete_cr("maasmodelref", temp_name, MODEL_NAMESPACE)
+            # Delete the ExternalModel (owns the HTTPRoute via OwnerReference)
+            _delete_cr("externalmodel", temp_name, MODEL_NAMESPACE)
             time.sleep(RECONCILE_WAIT)
 
-            # Verify HTTPRoute was cleaned up
-            route = _get_cr("httproute", f"maas-model-{temp_name}", MODEL_NAMESPACE)
-            assert route is None, f"HTTPRoute maas-model-{temp_name} should be cleaned up after deletion"
+            # Verify HTTPRoute was cleaned up by garbage collection
+            route = _get_cr("httproute", temp_name, MODEL_NAMESPACE)
+            assert route is None, f"HTTPRoute {temp_name} should be cleaned up after ExternalModel deletion"
         finally:
             # Always clean up to avoid resource leaks
-            _patch_cr("maasmodelref", temp_name, MODEL_NAMESPACE,
-                      {"metadata": {"finalizers": []}})
-            _delete_cr("maasmodelref", temp_name, MODEL_NAMESPACE)
             _delete_cr("externalmodel", temp_name, MODEL_NAMESPACE)
