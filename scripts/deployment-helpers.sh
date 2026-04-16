@@ -223,6 +223,137 @@ log_error() {
 # OLM Subscription and CSV Helper Functions
 # ==========================================
 
+# Patch one env var on spec.install.spec.deployments[0].containers[0] of a ClusterServiceVersion.
+# Returns 0 if a patch was applied, 1 if the value was already correct, 2 if patch failed.
+patch_csv_operator_container_env() {
+  local namespace=$1
+  local csv_name=$2
+  local env_name=$3
+  local env_value=$4
+
+  local current
+  current=$(kubectl get csv "$csv_name" -n "$namespace" -o jsonpath="{.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[?(@.name==\"${env_name}\")].value}" 2>/dev/null || echo "")
+
+  if [[ "$current" == "$env_value" ]]; then
+    return 1
+  fi
+
+  local env_index
+  env_index=$(kubectl get csv "$csv_name" -n "$namespace" -o json | jq -r --arg n "$env_name" '.spec.install.spec.deployments[0].spec.template.spec.containers[0].env | to_entries[] | select(.value.name == $n) | .key' 2>/dev/null | head -1)
+
+  if [[ -z "$env_index" ]]; then
+    log_debug "Adding ${env_name} to CSV ${csv_name}"
+    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
+      {
+        \"op\": \"add\",
+        \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-\",
+        \"value\": {
+          \"name\": \"${env_name}\",
+          \"value\": \"${env_value}\"
+        }
+      }
+    ]" 2>/dev/null || {
+      log_warn "Failed to add ${env_name} to CSV"
+      return 2
+    }
+  else
+    log_debug "Updating ${env_name} in CSV ${csv_name} (index: $env_index)"
+    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
+      {
+        \"op\": \"replace\",
+        \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/${env_index}/value\",
+        \"value\": \"${env_value}\"
+      }
+    ]" 2>/dev/null || {
+      log_warn "Failed to update ${env_name} in CSV"
+      return 2
+    }
+  fi
+  return 0
+}
+
+# Patch Kuadrant/RHCL CSV to recognize OpenShift Gateway controller
+# This is required because Kuadrant needs to know about the Gateway API provider
+# Without this patch, Kuadrant shows "MissingDependency" and AuthPolicies won't be enforced
+#
+# Also sets RATELIMIT_*_SERVICE_FAILURE_MODE=deny so policy fails closed when Limitador
+# service is unavailable (see Kuadrant operator deployment env).
+#
+# Arguments: <namespace> <csv_name_prefix>  e.g. patch_kuadrant_csv "kuadrant-system" "kuadrant-operator"
+patch_kuadrant_csv() {
+  local namespace=$1
+  local operator_prefix=$2
+
+  log_info "Patching $operator_prefix CSV (Gateway API, rate limit failure modes)..."
+
+  # Find the CSV
+  local csv_name
+  csv_name=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | awk '{print $1}' | head -1)
+
+  if [[ -z "$csv_name" ]]; then
+    log_warn "Could not find CSV for $operator_prefix in $namespace, skipping Gateway controller patch"
+    return 0
+  fi
+
+  local patched_any=false
+
+  # --- ISTIO_GATEWAY_CONTROLLER_NAMES (OpenShift Gateway controller) ---
+  local gateway_controller_names="istio.io/gateway-controller,openshift.io/gateway-controller/v1"
+  patch_csv_operator_container_env "$namespace" "$csv_name" "ISTIO_GATEWAY_CONTROLLER_NAMES" "$gateway_controller_names" && patched_any=true
+
+  # --- Rate limit dependency failure modes (fail closed) ---
+  patch_csv_operator_container_env "$namespace" "$csv_name" "RATELIMIT_CHECK_SERVICE_FAILURE_MODE" "deny" && patched_any=true
+  patch_csv_operator_container_env "$namespace" "$csv_name" "RATELIMIT_REPORT_SERVICE_FAILURE_MODE" "deny" && patched_any=true
+
+  if [[ "$patched_any" != "true" ]]; then
+    log_debug "CSV already has all required operator env (Gateway + rate limit failure modes)"
+    return 0
+  fi
+
+  log_info "CSV patched (Gateway controller and/or rate limit failure modes)"
+
+  # CRITICAL: Force delete the operator pod to pick up the new env var
+  # OLM updates the deployment spec but doesn't always trigger a pod restart
+  # The operator must have ISTIO_GATEWAY_CONTROLLER_NAMES set BEFORE Kuadrant CR is created
+  log_info "Forcing operator restart to apply CSV env configuration..."
+
+  # The kuadrant operator deployment is always named kuadrant-operator-controller-manager
+  # regardless of whether we're using rhcl-operator or kuadrant-operator
+  local operator_deployment="kuadrant-operator-controller-manager"
+  if kubectl get deployment "$operator_deployment" -n "$namespace" &>/dev/null; then
+    # Force delete the operator pod - this ensures the new env var is picked up
+    kubectl delete pod -n "$namespace" -l control-plane=controller-manager --force --grace-period=0 2>/dev/null || \
+      kubectl delete pod -n "$namespace" -l app.kubernetes.io/name=kuadrant-operator --force --grace-period=0 2>/dev/null || \
+      kubectl delete pod -n "$namespace" -l app=kuadrant --force --grace-period=0 2>/dev/null || true
+
+    # Wait for the new pod to be ready
+    log_info "Waiting for operator pod to restart..."
+    sleep 5
+    kubectl rollout status deployment/"$operator_deployment" -n "$namespace" --timeout="${ROLLOUT_TIMEOUT}s" 2>/dev/null || \
+      log_warn "Operator rollout status check timed out (timeout: ${ROLLOUT_TIMEOUT}s)"
+
+    # Verify required env vars are in the RUNNING pod
+    local pod_env
+    pod_env=$(kubectl exec -n "$namespace" deployment/"$operator_deployment" -- env 2>/dev/null || true)
+
+    if echo "$pod_env" | grep '^ISTIO_GATEWAY_CONTROLLER_NAMES=' | grep -q 'openshift.io/gateway-controller/v1' \
+      && echo "$pod_env" | grep -Fq 'RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny' \
+      && echo "$pod_env" | grep -Fq 'RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny'; then
+      log_info "Operator pod has required CSV env (ISTIO gateway controller + RATELIMIT_* failure modes)"
+    else
+      log_warn "Operator pod may not have correct env yet (ISTIO / RATELIMIT_* failure modes)"
+    fi
+
+    # Give the operator time to fully initialize with the new Gateway controller configuration
+    # This is critical - the operator needs to register as a Gateway controller before Kuadrant CR is created
+    log_info "Waiting 15s for operator to fully initialize with Gateway controller configuration..."
+    sleep 15
+  else
+    log_warn "Could not find operator deployment, waiting 60s for env propagation"
+    sleep 60
+  fi
+}
+
 # waitsubscriptioninstalled namespace subscription_name
 #   Waits for an OLM Subscription to finish installing its CSV.
 #   Exits with error if the installation times out.

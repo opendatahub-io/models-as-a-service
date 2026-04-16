@@ -168,29 +168,9 @@ EOF
 
         sleep 5
 
-        # Patch Kuadrant for OpenShift Gateway Controller
-        echo "   Patching Kuadrant operator..."
-        if ! kubectl -n kuadrant-system get deployment kuadrant-operator-controller-manager -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ISTIO_GATEWAY_CONTROLLER_NAMES")]}' | grep -q "ISTIO_GATEWAY_CONTROLLER_NAMES"; then
-          # Find the actual CSV name instead of hardcoding it
-          KUADRANT_CSV=$(find_csv_with_min_version "kuadrant-operator" "$KUADRANT_MIN_VERSION" "kuadrant-system" || echo "")
-          if [ -n "$KUADRANT_CSV" ]; then
-            kubectl patch csv "$KUADRANT_CSV" -n kuadrant-system --type='json' -p='[
-              {
-                "op": "add",
-                "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-",
-                "value": {
-                  "name": "ISTIO_GATEWAY_CONTROLLER_NAMES",
-                  "value": "istio.io/gateway-controller,openshift.io/gateway-controller/v1"
-                }
-              }
-            ]'
-            echo "   ✅ Kuadrant operator patched ($KUADRANT_CSV)"
-          else
-            echo "   ⚠️  Kuadrant CSV not found, skipping patch"
-          fi
-        else
-          echo "   ✅ Kuadrant operator already configured"
-        fi
+        # Gateway API + fail-close rate limits (same as deploy.sh patch_kuadrant_csv)
+        echo "🚀 Patching Kuadrant operator CSV..."
+        patch_kuadrant_csv "kuadrant-system" "kuadrant-operator"
 
         echo "✅ Successfully installed kuadrant"
         echo ""
