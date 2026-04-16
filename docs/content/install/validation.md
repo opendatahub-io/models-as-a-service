@@ -9,68 +9,6 @@ After deploying MaaS, you need to verify three things:
 !!! note "Prerequisite"
     At least one model must be deployed to validate the installation. See [Model Setup](model-setup.md) to deploy sample models.
 
-## Quick Validation
-
-Run the validation script to check all components in one pass:
-
-```bash
-./scripts/validate-deployment.sh
-```
-
-To validate a specific model:
-
-```bash
-./scripts/validate-deployment.sh <model-name>
-```
-
-!!! note "Non-admin users"
-    The script reads the cluster ingress config to find the gateway URL. If you don't have cluster-reader permissions, set the URL manually:
-    ```bash
-    export MAAS_GATEWAY_HOST="https://maas.apps.your-cluster.example.com"
-    ./scripts/validate-deployment.sh
-    ```
-
-!!! note "OpenShift required"
-    The validation script requires an OpenShift cluster. For non-OpenShift environments, use the step-by-step validation below.
-
-### What the script checks
-
-The script runs four groups of checks:
-
-1. **Component status** -- MaaS API pods, policy engine pods, RHOAI/KServe pods, and deployed models
-2. **Gateway status** -- gateway is accepted and programmed, HTTPRoute is configured, hostname is reachable
-3. **Policy status** -- AuthPolicy is enforced, TokenRateLimitPolicy is configured
-4. **API endpoint tests** -- authentication token works, API key creation works, models endpoint responds, model inference returns a result, rate limiting kicks in, unauthorized requests are rejected
-
-### Reading the output
-
-Each check shows PASS, FAIL, or WARNING. At the end, the script prints a summary:
-
-```
-Validation Summary
-
-Results:
-  Passed: 15
-  Failed: 0
-  Warnings: 0
-
-All critical checks passed!
-```
-
-When a check fails, the script prints the reason and a suggestion. For example:
-
-```
-FAIL: Models endpoint failed (HTTP 403)
-  Reason: Response empty
-  Suggestion: Check MaaS API service and logs
-```
-
-For the full list of script options and flags, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#validate-deploymentsh).
-
-### If checks fail
-
-Use the step-by-step validation below to isolate which component is broken. For common error patterns, see [Troubleshooting](troubleshooting.md).
-
 ## Step-by-Step Validation
 
 Use these steps to test individual components, debug specific failures, or understand how the system works.
@@ -87,7 +25,7 @@ echo "Gateway endpoint: $HOST"
 ```
 
 ??? success "Expected output"
-    ```
+    ```text
     Gateway endpoint: https://maas.apps.your-cluster.example.com
     ```
 
@@ -118,15 +56,18 @@ API_KEY_RESPONSE=$(curl -sS \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{"name": "validation-key", "description": "Key for validation", "expiresIn": "1h", "subscription": "simulator-subscription"}' \
-  "${HOST}/maas-api/v1/api-keys") && \
-API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key) && \
-echo "API key obtained: ${API_KEY:0:20}..."
+  "${HOST}/maas-api/v1/api-keys")
+API_KEY=$(echo "$API_KEY_RESPONSE" | jq -r '.key')
+echo "API key obtained successfully."
 ```
 
 ??? success "Expected output"
+    ```text
+    API key obtained successfully.
     ```
-    API key obtained: sk-oai-abc123def456...
-    ```
+
+!!! tip "If jq fails"
+    If you see a jq parse error, the curl request likely returned a non-JSON error. Run `echo "$API_KEY_RESPONSE"` to inspect the raw response.
 
 !!! note "Optional"
     List your API keys (metadata only; plaintext secrets are never returned):
@@ -156,12 +97,13 @@ echo "API key obtained: ${API_KEY:0:20}..."
 Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models` with an API key returns only models from that subscription. With an OpenShift token instead of an API key, you can send `X-MaaS-Subscription` to filter when you have access to multiple subscriptions.
 
 ```bash
-MODELS=$(curl -sS ${HOST}/maas-api/v1/models \
+MODELS=$(curl -sS \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $API_KEY" | jq -r .) && \
-echo $MODELS | jq . && \
-MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id') && \
-MODEL_URL=$(echo $MODELS | jq -r '.data[0].url') && \
+    -H "Authorization: Bearer $API_KEY" \
+    "${HOST}/maas-api/v1/models")
+echo "$MODELS" | jq .
+MODEL_NAME=$(echo "$MODELS" | jq -r '.data[0].id')
+MODEL_URL=$(echo "$MODELS" | jq -r '.data[0].url')
 echo "Model URL: $MODEL_URL"
 ```
 
@@ -178,7 +120,7 @@ echo "Model URL: $MODEL_URL"
       "object": "list"
     }
     ```
-    ```
+    ```text
     Model URL: https://maas.apps.your-cluster.example.com/llm/facebook-opt-125m-simulated
     ```
 
@@ -193,10 +135,12 @@ echo "Model URL: $MODEL_URL"
 Send a chat completion request to the model. You should get a 200 OK response with generated text:
 
 ```bash
-curl -sS -H "Authorization: Bearer $API_KEY" \
+RESPONSE=$(curl -sS \
+  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
-  "${MODEL_URL}/v1/chat/completions" | jq
+  "${MODEL_URL}/v1/chat/completions")
+echo "$RESPONSE" | jq .
 ```
 
 ??? success "Expected output"
@@ -227,10 +171,12 @@ curl -sS -H "Authorization: Bearer $API_KEY" \
 !!! note
     Some models only support `/v1/completions` (prompt-based) instead of `/v1/chat/completions`. If you get a 404 or 400, try the completions endpoint:
     ```bash
-    curl -sS -H "Authorization: Bearer $API_KEY" \
+    RESPONSE=$(curl -sS \
+      -H "Authorization: Bearer $API_KEY" \
       -H "Content-Type: application/json" \
       -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-      "${MODEL_URL}/v1/completions" | jq
+      "${MODEL_URL}/v1/completions")
+    echo "$RESPONSE" | jq .
     ```
 
 **If this fails:**
@@ -252,7 +198,7 @@ curl -sS -o /dev/null -w "HTTP status: %{http_code}\n" \
 ```
 
 ??? success "Expected output"
-    ```
+    ```text
     HTTP status: 401
     ```
 
@@ -276,7 +222,7 @@ echo ""
 ```
 
 ??? success "Expected output"
-    ```
+    ```text
     200 200 200 429 429 429 429 429 429 429 429 429 429 429 429 429
     ```
     The exact number of 200s before rate limiting depends on your TokenRateLimitPolicy configuration. With the default simulator subscription (100 tokens/min), you should see 429s after 3-5 requests.
@@ -286,6 +232,68 @@ echo ""
 - **No 429s after 16 requests**: the TokenRateLimitPolicy is missing or not enforced. Check: `kubectl get tokenratelimitpolicy -A`. If multiple TokenRateLimitPolicies target the same HTTPRoute, see [Subscription limitations](../configuration-and-management/subscription-known-issues.md#token-rate-limits-when-multiple-model-references-share-one-httproute).
 
 For more troubleshooting, see [Troubleshooting](troubleshooting.md).
+
+## Automated Validation
+
+Run the validation script to check all components in one pass:
+
+```bash
+./scripts/validate-deployment.sh
+```
+
+To validate a specific model:
+
+```bash
+./scripts/validate-deployment.sh <model-name>
+```
+
+!!! note "Non-admin users"
+    The script reads the cluster ingress config to find the gateway URL. If you don't have cluster-reader permissions, set the URL manually:
+    ```bash
+    export MAAS_GATEWAY_HOST="https://maas.apps.your-cluster.example.com"
+    ./scripts/validate-deployment.sh
+    ```
+
+!!! note "OpenShift required"
+    The validation script requires an OpenShift cluster. For non-OpenShift environments, use the step-by-step validation above.
+
+### What the script checks
+
+The script runs four groups of checks:
+
+1. **Component status** -- MaaS API pods, policy engine pods, RHOAI/KServe pods, and deployed models
+2. **Gateway status** -- gateway is accepted and programmed, HTTPRoute is configured, hostname is reachable
+3. **Policy status** -- AuthPolicy is enforced, TokenRateLimitPolicy is configured
+4. **API endpoint tests** -- authentication token works, API key creation works, models endpoint responds, model inference returns a result, rate limiting kicks in, unauthorized requests are rejected
+
+### Reading the output
+
+Each check shows PASS, FAIL, or WARNING. At the end, the script prints a summary:
+
+```text
+Validation Summary
+
+Results:
+  Passed: 15
+  Failed: 0
+  Warnings: 0
+
+All critical checks passed!
+```
+
+When a check fails, the script prints the reason and a suggestion. For example:
+
+```text
+FAIL: Models endpoint failed (HTTP 403)
+  Reason: Response empty
+  Suggestion: Check MaaS API service and logs
+```
+
+For the full list of script options and flags, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#validate-deploymentsh).
+
+### If checks fail
+
+Use the step-by-step validation above to isolate which component is broken. For common error patterns, see [Troubleshooting](troubleshooting.md).
 
 ## TLS Verification
 
