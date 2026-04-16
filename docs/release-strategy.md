@@ -60,9 +60,9 @@ These show how many commits are pending promotion between upstream branches:
 
 ### Downstream Release Branches
 
-Each row shows how far behind a `downstream` [red-hat-data-services](https://github.com/red-hat-data-services/models-as-a-service) release branch is from the `upstream` [opendatahub-io](https://github.com/opendatahub-io/models-as-a-service) source branches:
+Each row shows how far **behind** a downstream [red-hat-data-services](https://github.com/red-hat-data-services/models-as-a-service) release branch is from the upstream [opendatahub-io](https://github.com/opendatahub-io/models-as-a-service) source branches:
 
-| `downstream` branch | vs `upstream/main`<br>Commit Difference | vs `upstream/stable`<br>Commit Difference | vs `upstream/rhoai`<br>Commit Difference |
+| `red-hat-data-services` | Commits behind<br>`opendatahub-io/main` | Commits behind<br>`opendatahub-io/stable` | Commits behind<br>`opendatahub-io/rhoai` |
 | --- | :---: | :---: | :---: |
 | [![main][img-last-ds-main]][commits-ds-main] | [![diff][img-ds-main-vs-main]][cmp-ds-main-vs-main] | [![diff][img-ds-main-vs-stable]][cmp-ds-main-vs-stable] | [![diff][img-ds-main-vs-rhoai]][cmp-ds-main-vs-rhoai] |
 | [![rhoai-3.4][img-last-ds-rhoai-3.4]][commits-ds-rhoai-3.4] | [![diff][img-ds-rhoai-3.4-vs-main]][cmp-ds-rhoai-3.4-vs-main] | [![diff][img-ds-rhoai-3.4-vs-stable]][cmp-ds-rhoai-3.4-vs-stable] | [![diff][img-ds-rhoai-3.4-vs-rhoai]][cmp-ds-rhoai-3.4-vs-rhoai] |
