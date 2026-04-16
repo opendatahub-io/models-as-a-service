@@ -74,26 +74,121 @@ MODELS=$(curl "${MAAS_API_URL}/v1/models" \
 echo $MODELS | jq .
 ```
 
-Example response:
+**Example response with API key:**
+
+When using an API key (bound to a single subscription at creation time), you see models from that subscription. Each model shows the subscription in its `subscriptions` array:
 
 ```json
 {
+  "object": "list",
   "data": [
     {
-      "id": "simulator",
-      "name": "Simulator Model",
-      "url": "https://gateway.your-domain.com/simulator/v1/chat/completions",
-      "subscription": "free"
+      "id": "llama-2-7b-chat",
+      "created": 1672531200,
+      "object": "model",
+      "owned_by": "llm/llama-2-7b-chat",
+      "kind": "LLMInferenceService",
+      "url": "https://maas.your-domain.com/llm/llama-2-7b-chat",
+      "ready": true,
+      "modelDetails": {
+        "description": "Llama 2 7B optimized for chat",
+        "displayName": "Llama 2 7B Chat"
+      },
+      "subscriptions": [
+        {
+          "name": "premium-subscription",
+          "displayName": "Premium Tier",
+          "description": "Premium-tier subscription with 1000 tokens/min rate limit"
+        }
+      ]
     },
     {
-      "id": "qwen3",
-      "name": "Qwen3 Model",
-      "url": "https://gateway.your-domain.com/qwen3/v1/chat/completions",
-      "subscription": "premium"
+      "id": "mixtral-8x7b-instruct",
+      "created": 1672531200,
+      "object": "model",
+      "owned_by": "llm/mixtral-8x7b-instruct",
+      "kind": "LLMInferenceService",
+      "url": "https://maas.your-domain.com/llm/mixtral-8x7b-instruct",
+      "ready": true,
+      "modelDetails": {
+        "description": "Mixtral 8x7B instruction-tuned model",
+        "displayName": "Mixtral 8x7B Instruct"
+      },
+      "subscriptions": [
+        {
+          "name": "premium-subscription",
+          "displayName": "Premium Tier",
+          "description": "Premium-tier subscription with 1000 tokens/min rate limit"
+        }
+      ]
     }
   ]
 }
 ```
+
+**Example response with user token:**
+
+When using a Kubernetes/OpenShift user token, you may have access to multiple subscriptions. Models accessible via multiple subscriptions show all of them in the `subscriptions` array:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "llama-2-7b-chat",
+      "created": 1672531200,
+      "object": "model",
+      "owned_by": "llm/llama-2-7b-chat",
+      "kind": "LLMInferenceService",
+      "url": "https://maas.your-domain.com/llm/llama-2-7b-chat",
+      "ready": true,
+      "modelDetails": {
+        "description": "Llama 2 7B optimized for chat",
+        "displayName": "Llama 2 7B Chat"
+      },
+      "subscriptions": [
+        {
+          "name": "basic-subscription",
+          "displayName": "Basic Tier",
+          "description": "Basic-tier subscription with 500 tokens/min rate limit"
+        },
+        {
+          "name": "free-subscription",
+          "displayName": "Free Tier",
+          "description": "Free-tier subscription with 100 tokens/min rate limit"
+        }
+      ]
+    },
+    {
+      "id": "mixtral-8x7b-instruct",
+      "created": 1672531200,
+      "object": "model",
+      "owned_by": "llm/mixtral-8x7b-instruct",
+      "kind": "LLMInferenceService",
+      "url": "https://maas.your-domain.com/llm/mixtral-8x7b-instruct",
+      "ready": true,
+      "modelDetails": {
+        "description": "Mixtral 8x7B instruction-tuned model",
+        "displayName": "Mixtral 8x7B Instruct"
+      },
+      "subscriptions": [
+        {
+          "name": "premium-subscription",
+          "displayName": "Premium Tier",
+          "description": "Premium-tier subscription with 1000 tokens/min rate limit"
+        }
+      ]
+    }
+  ]
+}
+```
+
+!!! tip "Understanding the subscriptions array"
+    The `subscriptions` array shows all subscriptions that provide access to a model. When you have access via multiple subscriptions:
+    
+    - **API keys** are bound to one subscription at creation, so all models show that single subscription
+    - **User tokens** may have access to multiple subscriptions; each model shows all applicable subscriptions
+    - In the user token example above, `llama-2-7b-chat` is accessible via two subscriptions, while `mixtral-8x7b-instruct` is only in the premium tier
 
 ### Get Model Details
 
