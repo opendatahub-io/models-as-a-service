@@ -51,7 +51,7 @@ This is useful when a fix needs to be fast-tracked without waiting for the next 
 
 ### Upstream Pipeline
 
-These show how many commits are pending promotion between upstream branches:
+These show how many commits are pending promotion between upstream [opendatahub-io](https://github.com/opendatahub-io/models-as-a-service) source branches:
 
 | Promotion | Commits Difference | Last Commit |
 | --- | :---: | --- |
