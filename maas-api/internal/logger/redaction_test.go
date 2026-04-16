@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 func TestRedactHeader(t *testing.T) {
@@ -129,6 +130,61 @@ func TestIsSensitiveHeader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := logger.IsSensitiveHeader(tt.header)
 			assert.Equal(t, tt.sensitive, got)
+		})
+	}
+}
+
+func TestRedactHeaders_CaseInsensitive(t *testing.T) {
+	// Test that lowercase/mixed-case header names are properly redacted
+	headers := http.Header{}
+	//nolint:canonicalheader // Intentionally testing non-canonical headers
+	headers.Set("authorization", "Bearer lowercase-token")
+	//nolint:canonicalheader // Intentionally testing non-canonical headers
+	headers.Set("x-api-key", "lowercase-api-key")
+	//nolint:canonicalheader // Intentionally testing non-canonical headers
+	headers.Set("content-type", "application/json")
+	headers.Set("X-Request-ID", "req-123")
+
+	redacted := logger.RedactHeaders(headers, false)
+
+	// http.Header canonicalizes keys, so "authorization" becomes "Authorization"
+	// All variations should be redacted
+	assert.Equal(t, "present", redacted["Authorization"],
+		"Authorization should be redacted regardless of input case")
+	assert.Equal(t, "present", redacted["X-Api-Key"],
+		"X-API-Key should be redacted regardless of input case")
+
+	// Non-sensitive headers should pass through unchanged
+	// Note: http.Header canonicalizes "content-type" to "Content-Type"
+	assert.Equal(t, "application/json", redacted["Content-Type"],
+		"Non-sensitive header should pass through")
+	assert.Equal(t, "req-123", redacted["X-Request-Id"],
+		"Non-sensitive header should pass through")
+}
+
+func TestIsSensitiveHeader_CaseInsensitive(t *testing.T) {
+	tests := []struct {
+		name      string
+		header    string
+		sensitive bool
+	}{
+		{"lowercase authorization", "authorization", true},
+		{"uppercase AUTHORIZATION", "AUTHORIZATION", true},
+		{"mixed case Authorization", "Authorization", true},
+		{"lowercase x-api-key", "x-api-key", true},
+		{"uppercase X-API-KEY", "X-API-KEY", true},
+		{"mixed case X-Api-Key", "X-Api-Key", true},
+		{"lowercase cookie", "cookie", true},
+		{"uppercase COOKIE", "COOKIE", true},
+		{"lowercase content-type", "content-type", false},
+		{"uppercase CONTENT-TYPE", "CONTENT-TYPE", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := logger.IsSensitiveHeader(tt.header)
+			assert.Equal(t, tt.sensitive, got,
+				"Header %s should be %v", tt.header, tt.sensitive)
 		})
 	}
 }
