@@ -697,6 +697,40 @@ The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimen
 !!! note "Security"
     The `X-MaaS-Subscription` header should be injected server-side by AuthPolicy. Ensure your AuthPolicy injects this header from the subscription selection (not client input) for accurate metrics attribution.
 
+### Sensitive Header Redaction
+
+!!! warning "Security"
+    Authorization headers, API keys, and cookies are never logged in full. Only presence indicators (`authHeaderProvided: true/false`) and request IDs are logged for debugging.
+
+**What's logged:**
+- Request IDs (`X-Request-ID` in all responses) for correlation
+- User/subscription identifiers (post-validation only)
+- Header presence indicators, not values
+
+**What's NOT logged:**
+- Authorization header values or lengths
+- API key values (only shown once at creation)
+- Session cookies
+
+**Debugging auth failures:**
+```bash
+# Get request ID from user, search logs
+kubectl logs -n models-as-a-service deployment/maas-api | grep "<request-id>"
+
+# Check Authorino auth metrics
+kubectl exec -n kuadrant-system deployment/authorino -- \
+  curl -s localhost:8080/metrics | grep "auth_server_response_status"
+
+# Query gateway metrics for auth failures
+# Prometheus: sum by (response_code) (rate(istio_requests_total{response_code=~"401|403"}[5m]))
+```
+
+**Gateway access logging:**
+Access logging is disabled by default. If needed for troubleshooting, configure Istio Telemetry with proper header redaction using Envoy CEL expressions (e.g., `has(%REQ(AUTHORIZATION)%) ? 'true' : 'false'` for presence indicators only).
+
+**Future tracing:**
+If distributed tracing is implemented, Authorization headers must be excluded from span attributes using OpenTelemetry span processors or Istio Telemetry configuration.
+
 ### Common Queries
 
 **Token-based queries (billing/cost):**

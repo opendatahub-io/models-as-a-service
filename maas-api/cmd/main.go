@@ -21,6 +21,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -76,6 +77,9 @@ func serve() error {
 		log.Warn("Debug CORS policy active: allowing localhost origins only")
 		router.Use(cors.New(debugCORSConfig()))
 	}
+
+	// Add request ID middleware for correlation without exposing tokens
+	router.Use(middleware.RequestID())
 
 	router.OPTIONS("/*path", func(c *gin.Context) { c.Status(204) })
 
