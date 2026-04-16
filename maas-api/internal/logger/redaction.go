@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
+	"slices"
 )
 
 // SensitiveHeaders lists HTTP headers that must never be logged in full.
@@ -17,7 +18,7 @@ var SensitiveHeaders = []string{
 // RedactHeader returns a safe representation of a header value for logging.
 // - Empty values return "absent"
 // - Non-empty values return "present" by default
-// - If hashPrefix is true, returns "present:sha256:<first-8-chars-of-hash>"
+// - If hashPrefix is true, returns "present:sha256:<first-8-chars-of-hash>".
 func RedactHeader(value string, hashPrefix bool) string {
 	if value == "" {
 		return "absent"
@@ -51,11 +52,9 @@ func RedactHeaders(headers http.Header, hashPrefix bool) map[string]string {
 				val = values[0]
 			}
 			result[name] = RedactHeader(val, hashPrefix)
-		} else {
+		} else if len(values) > 0 {
 			// Pass through non-sensitive headers
-			if len(values) > 0 {
-				result[name] = values[0]
-			}
+			result[name] = values[0]
 		}
 	}
 
@@ -64,10 +63,5 @@ func RedactHeaders(headers http.Header, hashPrefix bool) map[string]string {
 
 // IsSensitiveHeader checks if a header name is in the sensitive list.
 func IsSensitiveHeader(name string) bool {
-	for _, h := range SensitiveHeaders {
-		if h == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(SensitiveHeaders, name)
 }

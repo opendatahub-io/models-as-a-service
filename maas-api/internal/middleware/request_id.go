@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	// RequestIDHeader is the HTTP header name for request IDs
+	// RequestIDHeader is the HTTP header name for request IDs.
 	RequestIDHeader = "X-Request-ID"
-	// RequestIDKey is the context key for storing request IDs
+	// RequestIDKey is the context key for storing request IDs.
 	RequestIDKey = "request_id"
 )
 
