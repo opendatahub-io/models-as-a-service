@@ -40,6 +40,7 @@ from test_helper import (
     _maas_api_url,
     _ns,
     _revoke_api_key,
+    _wait_for_maas_subscription_phase,
     _wait_reconcile,
 )
 
@@ -184,7 +185,7 @@ class TestMaaSAPIWatchNamespace:
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
                 },
             })
-            _wait_reconcile()
+            _wait_for_maas_subscription_phase(sub_name, "Active", namespace=ns)
 
             r = _call_subscriptions_select(api_key, "e2e-api-user", ["system:authenticated"], requested_subscription=sub_name)
             assert r.status_code == 200, f"subscriptions/select failed: {r.status_code} {r.text}"

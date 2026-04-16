@@ -851,7 +851,8 @@ components:
                                 example: 100
                             window:
                                 type: string
-                                description: "Time window (e.g., 1m, 1h, 24h)"
+                                description: "Time window (e.g., 1m, 1h, 24h). Allowed units: s, m, h (1-9999)."
+                                pattern: "^[1-9]\\d{0,3}(s|m|h)$"
                                 example: 1m
                         required:
                             - limit

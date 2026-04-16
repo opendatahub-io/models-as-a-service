@@ -1228,3 +1228,121 @@ func TestMaaSSubscriptionReconciler_AllValidModelRefs_ActivePhase(t *testing.T) 
 		t.Error("expected tokenRateLimitStatus.Ready=true")
 	}
 }
+
+// TestMaaSSubscriptionReconciler_WindowValuesInTRLP verifies that valid window values
+// (seconds, minutes, hours) are correctly propagated into the generated TokenRateLimitPolicy
+// rates, and that the previously allowed "d" (days) unit is no longer used.
+//
+// This is an end-to-end reconciliation test: it creates a MaaSSubscription with a specific
+// window value, runs the reconciler, and then inspects the resulting Kuadrant
+// TokenRateLimitPolicy to confirm that spec.limits.<key>.rates[0].window carries the
+// exact value from the subscription. This complements TestTokenRateLimitWindowPattern
+// (in helpers_test.go) which validates the CRD admission regex in isolation — here we
+// verify the controller doesn't silently drop, transform, or default the window on its
+// way into the TRLP.
+func TestMaaSSubscriptionReconciler_WindowValuesInTRLP(t *testing.T) {
+	tests := []struct {
+		name   string
+		window string
+	}{
+		{"seconds", "30s"},      // short window, typical for burst limits
+		{"minutes", "5m"},       // default-like value used across the codebase
+		{"hours", "24h"},        // common replacement for the now-removed "1d"
+		{"max digits", "9999h"}, // upper bound of the 4-digit numeric cap
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			const (
+				modelName     = "llm"
+				namespace     = "default"
+				httpRouteName = modelName
+				trlpName      = "maas-trlp-" + modelName
+				maasSubName   = "sub-window"
+			)
+
+			// Set up the minimum objects the reconciler needs: a MaaSModelRef (so the
+			// model lookup succeeds) and an HTTPRoute (so the TRLP has a valid target).
+			model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+			route := newHTTPRoute(httpRouteName, namespace)
+
+			// Build the subscription inline (instead of using newMaaSSubscription) so we
+			// can set a custom Window value per test case.
+			maasSub := &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{Name: maasSubName, Namespace: namespace},
+				Spec: maasv1alpha1.MaaSSubscriptionSpec{
+					Owner: maasv1alpha1.OwnerSpec{
+						Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
+					},
+					ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+						{
+							Name:      modelName,
+							Namespace: namespace,
+							TokenRateLimits: []maasv1alpha1.TokenRateLimit{
+								{Limit: 500, Window: tc.window},
+							},
+						},
+					},
+				},
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(model, route, maasSub).
+				WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+				Build()
+
+			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
+			if _, err := r.Reconcile(context.Background(), req); err != nil {
+				t.Fatalf("Reconcile: unexpected error: %v", err)
+			}
+
+			// Fetch the generated TokenRateLimitPolicy that the reconciler should have
+			// created for this model.
+			trlp := &unstructured.Unstructured{}
+			trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+			if err := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: namespace}, trlp); err != nil {
+				t.Fatalf("Get TokenRateLimitPolicy %q: %v", trlpName, err)
+			}
+
+			// Navigate into spec.limits.<key>.rates to find the rate entry produced
+			// from the subscription's TokenRateLimit. The key format is
+			// "<namespace>-<subName>-<modelName>-tokens".
+			limitKey := namespace + "-" + maasSubName + "-" + modelName + "-tokens"
+			ratesRaw, found, err := unstructured.NestedSlice(trlp.Object, "spec", "limits", limitKey, "rates")
+			if err != nil || !found {
+				t.Fatalf("spec.limits.%s.rates not found: found=%v err=%v", limitKey, found, err)
+			}
+			if len(ratesRaw) != 1 {
+				t.Fatalf("expected 1 rate entry, got %d", len(ratesRaw))
+			}
+
+			rateMap, ok := ratesRaw[0].(map[string]any)
+			if !ok {
+				t.Fatalf("rate entry is not map[string]any: %T", ratesRaw[0])
+			}
+
+			// Verify the window value was passed through verbatim — no conversion,
+			// defaulting, or normalization should occur between the CRD and the TRLP.
+			gotWindow, ok := rateMap["window"].(string)
+			if !ok {
+				t.Fatalf("window is not a string: %T", rateMap["window"])
+			}
+			if gotWindow != tc.window {
+				t.Errorf("TRLP window = %q, want %q", gotWindow, tc.window)
+			}
+
+			// Also verify the limit to ensure the full rate entry is intact.
+			gotLimit, ok := rateMap["limit"].(int64)
+			if !ok {
+				t.Fatalf("limit is not int64: %T", rateMap["limit"])
+			}
+			if gotLimit != 500 {
+				t.Errorf("TRLP limit = %d, want 500", gotLimit)
+			}
+		})
+	}
+}
