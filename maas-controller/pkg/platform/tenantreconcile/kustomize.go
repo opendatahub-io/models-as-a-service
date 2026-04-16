@@ -87,9 +87,36 @@ func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructu
 		if err != nil {
 			return nil, fmt.Errorf("resource map: %w", err)
 		}
+		normalizeJSONTypes(m)
 		out = append(out, unstructured.Unstructured{Object: m})
 	}
 	return out, nil
+}
+
+// normalizeJSONTypes converts Go int values to int64 in an unstructured map.
+// Kustomize's resMap.Map() returns int for YAML integers, but
+// k8s.io/apimachinery DeepCopyJSONValue only handles int64/float64.
+func normalizeJSONTypes(obj map[string]any) {
+	for k, v := range obj {
+		obj[k] = normalizeValue(v)
+	}
+}
+
+func normalizeValue(v any) any {
+	switch val := v.(type) {
+	case int:
+		return int64(val)
+	case map[string]any:
+		normalizeJSONTypes(val)
+		return val
+	case []any:
+		for i, item := range val {
+			val[i] = normalizeValue(item)
+		}
+		return val
+	default:
+		return v
+	}
 }
 
 func fileExists(p string) bool {

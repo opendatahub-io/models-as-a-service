@@ -32,7 +32,6 @@ spec:
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
           - --maas-api-namespace=$(MAAS_API_NAMESPACE)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
-          - --cluster-audience=$(CLUSTER_AUDIENCE)
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
         env:
@@ -46,11 +45,6 @@ spec:
                 fieldPath: metadata.namespace
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
-          - name: CLUSTER_AUDIENCE
-            valueFrom:
-              configMapKeyRef:
-                name: maas-parameters
-                key: cluster-audience
         image: maas-controller
         name: manager
         imagePullPolicy: Always

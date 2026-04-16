@@ -156,7 +156,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	setDependenciesCondition(&tenant, true, "")
 
-	appNs := tenant.Namespace
+	appNs := r.AppNamespace
 	rep := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs)
 	setPrerequisiteConditionsFromReport(&tenant, rep)
 	if len(rep.Blocking) > 0 {

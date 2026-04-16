@@ -168,6 +168,30 @@ replacements:
       index: 1
 
 # -----------------------------------------------------------------------------
+# 3b. DESTINATIONRULE HOST FIX (TLS overlay)
+# -----------------------------------------------------------------------------
+# When the TLS overlay is used, a DestinationRule is created with placeholder
+# host: maas-api.maas-api.svc → maas-api.<app-namespace>.svc
+# NOTE: DestinationRule namespace must be fixed by each overlay directly
+# (not here) because the overlay's `namespace:` directive overrides component
+# replacements. See overlays/odh for the pattern.
+# -----------------------------------------------------------------------------
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.app-namespace
+  targets:
+  - select:
+      kind: DestinationRule
+      name: maas-api-backend-tls
+    fieldPaths:
+    - spec.host
+    options:
+      delimiter: "."
+      index: 1
+
+# -----------------------------------------------------------------------------
 # 4. CLUSTER AUDIENCE FOR KUBERNETESTOKENREVIEW
 # -----------------------------------------------------------------------------
 # Sets the correct audience for kubernetesTokenReview authentication.

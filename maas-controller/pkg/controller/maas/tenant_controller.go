@@ -46,8 +46,10 @@ type TenantReconciler struct {
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
 	ManifestPath string
-	// AppNamespace is the fallback workloads namespace when DSCI cannot be read (typically the maas-api namespace / --maas-api-namespace).
+	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace, default opendatahub).
 	AppNamespace string
+	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
+	TenantNamespace string
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
@@ -65,6 +67,25 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
+// +kubebuilder:rbac:groups=operator.authorino.kuadrant.io,resources=authorinos,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kuadrant.io,resources=ratelimitpolicies,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=extensions.kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;patch;delete
+
+// maas-controller creates the maas-api ClusterRole via SSA.
+// The rules below mirror the maas-api ClusterRole so the controller can pass the API-server escalation check.
+//
+// +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
 
 // Reconcile drives Tenant platform lifecycle (ODH no longer runs the modelsasservice deploy pipeline).
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -76,7 +97,7 @@ const openshiftAuthenticationClusterName = "cluster"
 func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Object) []reconcile.Request {
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{
 		Name:      maasv1alpha1.TenantInstanceName,
-		Namespace: r.AppNamespace,
+		Namespace: r.TenantNamespace,
 	}}}
 }
 

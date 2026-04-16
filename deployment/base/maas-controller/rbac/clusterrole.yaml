@@ -19,18 +19,28 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - namespaces
-  verbs:
-  - create
-  - get
-- apiGroups:
-  - ""
-  resources:
+  - endpoints
+  - pods
   - secrets
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
 - apiGroups:
   - ""
   resources:
@@ -63,12 +73,46 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
   - config.openshift.io
   resources:
   - authentications
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - extensions.kuadrant.io
+  resources:
+  - telemetrypolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
   - watch
 - apiGroups:
   - gateway.networking.k8s.io
@@ -108,6 +152,17 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - kuadrant.io
+  resources:
+  - ratelimitpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
   - watch
 - apiGroups:
   - maas.opendatahub.io
@@ -162,7 +217,19 @@ rules:
   - delete
   - get
   - list
+  - patch
   - update
+  - watch
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - envoyfilters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
   - watch
 - apiGroups:
   - networking.istio.io
@@ -186,6 +253,14 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - operator.authorino.kuadrant.io
+  resources:
+  - authorinos
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
@@ -204,4 +279,15 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - telemetry.istio.io
+  resources:
+  - telemetries
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
   - watch

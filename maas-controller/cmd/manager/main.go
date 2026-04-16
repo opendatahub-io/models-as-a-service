@@ -325,44 +325,58 @@ func getClusterServiceAccountIssuer(c client.Reader) (string, error) {
 	return issuer, nil
 }
 
-// ensureDefaultTenantRunnable returns a manager.Runnable that creates the default-tenant CR
-// if it does not already exist. It runs after the manager cache starts so it can use the
-// cached client. The pattern mirrors ensureSubscriptionNamespaceExists but for the Tenant CR.
-func ensureDefaultTenantRunnable(mgr ctrl.Manager, appNamespace string) manager.RunnableFunc {
+// ensureDefaultTenantRunnable returns a manager.Runnable that periodically ensures the
+// default-tenant CR exists. If the Tenant is deleted (e.g. during testing or operator
+// lifecycle), it will be recreated on the next tick.
+func ensureDefaultTenantRunnable(mgr ctrl.Manager, tenantNamespace string) manager.RunnableFunc {
 	return func(ctx context.Context) error {
 		log := ctrl.Log.WithName("setup").WithName("ensureDefaultTenant")
 		c := mgr.GetClient()
 
-		key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: appNamespace}
-		var existing maasv1alpha1.Tenant
-		if err := c.Get(ctx, key, &existing); err == nil {
-			log.Info("default-tenant already exists", "namespace", appNamespace)
-			return nil
-		} else if !errors.IsNotFound(err) {
-			return fmt.Errorf("check for existing default-tenant: %w", err)
-		}
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
 
-		tenant := &maasv1alpha1.Tenant{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: maasv1alpha1.GroupVersion.String(),
-				Kind:       maasv1alpha1.TenantKind,
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      maasv1alpha1.TenantInstanceName,
-				Namespace: appNamespace,
-			},
-		}
-		tenantreconcile.EnsureTenantGatewayDefaults(tenant)
-
-		if err := c.Create(ctx, tenant); err != nil {
-			if errors.IsAlreadyExists(err) {
-				log.Info("default-tenant was created concurrently", "namespace", appNamespace)
-				return nil
+		ensure := func() {
+			key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNamespace}
+			var existing maasv1alpha1.Tenant
+			if err := c.Get(ctx, key, &existing); err == nil {
+				return
+			} else if !errors.IsNotFound(err) {
+				log.Error(err, "failed to check for default-tenant")
+				return
 			}
-			return fmt.Errorf("create default-tenant in %s: %w", appNamespace, err)
+
+			tenant := &maasv1alpha1.Tenant{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: maasv1alpha1.GroupVersion.String(),
+					Kind:       maasv1alpha1.TenantKind,
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      maasv1alpha1.TenantInstanceName,
+					Namespace: tenantNamespace,
+				},
+			}
+			tenantreconcile.EnsureTenantGatewayDefaults(tenant)
+
+			if err := c.Create(ctx, tenant); err != nil {
+				if errors.IsAlreadyExists(err) {
+					return
+				}
+				log.Error(err, "failed to create default-tenant", "namespace", tenantNamespace)
+				return
+			}
+			log.Info("created default-tenant", "namespace", tenantNamespace)
 		}
-		log.Info("created default-tenant", "namespace", appNamespace)
-		return nil
+
+		ensure()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				ensure()
+			}
+		}
 	}
 }
 
@@ -513,10 +527,11 @@ func main() {
 	setupLog.Info("Tenant platform kustomize path", "path", manifestPath)
 
 	if err := (&maas.TenantReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		ManifestPath: manifestPath,
-		AppNamespace: maasSubscriptionNamespace,
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		ManifestPath:    manifestPath,
+		AppNamespace:    maasAPINamespace,
+		TenantNamespace: maasSubscriptionNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
 		os.Exit(1)
