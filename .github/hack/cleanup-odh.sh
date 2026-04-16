@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# cleanup-odh.sh - Remove OpenDataHub operator and all related resources
+# cleanup-odh.sh - Remove OpenDataHub/RHOAI MaaS resources and related operators
 #
 # This script removes:
 # - DataScienceCluster and DSCInitialization custom resources
@@ -8,7 +8,9 @@
 # - Custom CatalogSource (odh-custom-catalog)
 # - ODH operator namespace (odh-operator)
 # - OpenDataHub application namespace (opendatahub)
+# - MaaS resources from RHOAI namespace (redhat-ods-applications)
 # - MaaS subscription namespace (models-as-a-service)
+# - Policy engine artifacts (Kuadrant/RHCL OLM resources, AuthConfig CRs)
 # - Keycloak identity provider (if deployed)
 # - ODH CRDs (optional)
 #
@@ -38,6 +40,19 @@ if ! command -v jq &>/dev/null; then
 fi
 
 echo "Connected to cluster. Starting cleanup..."
+echo ""
+
+# Detect operator type to find the right application namespace
+MAAS_APP_NAMESPACE=""
+if kubectl get subscription rhods-operator -n redhat-ods-operator &>/dev/null; then
+    MAAS_APP_NAMESPACE="redhat-ods-applications"
+    echo "Detected RHOAI operator (application namespace: $MAAS_APP_NAMESPACE)"
+elif kubectl get subscription opendatahub-operator -A &>/dev/null; then
+    MAAS_APP_NAMESPACE="opendatahub"
+    echo "Detected ODH operator (application namespace: $MAAS_APP_NAMESPACE)"
+else
+    echo "No operator detected, will clean both namespaces"
+fi
 echo ""
 
 # 1. Delete DataScienceCluster instances
@@ -81,6 +96,41 @@ kubectl delete ns odh-operator --ignore-not-found --timeout=120s 2>/dev/null || 
 # 8. Delete opendatahub namespace (contains deployed components)
 echo "8. Deleting opendatahub namespace..."
 kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || true
+
+# 8b. Clean MaaS resources from RHOAI application namespace
+# On RHOAI clusters, MaaS resources live in redhat-ods-applications which is
+# operator-managed. We delete MaaS resources individually instead of the namespace.
+cleanup_maas_resources() {
+    local ns=$1
+    if ! kubectl get namespace "$ns" &>/dev/null; then
+        echo "   $ns not found, skipping"
+        return 0
+    fi
+
+    echo "   Cleaning MaaS resources from $ns..."
+    kubectl delete deployment maas-api maas-controller postgres -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete service maas-api postgres -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete secret maas-db-config postgres-creds -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete authpolicy maas-api-auth-policy -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete httproute maas-api-route -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete destinationrule maas-api-backend-tls -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete networkpolicy maas-api-cleanup-restrict maas-authorino-allow -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete cronjob maas-api-key-cleanup -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete role maas-api-db-secret maas-controller-leader-election-role -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete rolebinding maas-api-db-secret maas-controller-leader-election-rolebinding -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete serviceaccount maas-api maas-controller -n "$ns" --ignore-not-found 2>/dev/null || true
+    echo "   ✅ MaaS resources cleaned from $ns"
+}
+
+if [[ "$MAAS_APP_NAMESPACE" == "redhat-ods-applications" ]]; then
+    echo "8b. Cleaning MaaS resources from RHOAI namespace..."
+    cleanup_maas_resources "redhat-ods-applications"
+elif [[ -z "$MAAS_APP_NAMESPACE" ]]; then
+    # No operator detected, clean both just in case
+    echo "8b. Cleaning MaaS resources from both possible namespaces..."
+    cleanup_maas_resources "redhat-ods-applications"
+    cleanup_maas_resources "opendatahub"
+fi
 
 force_delete_namespace() {
     local ns=$1
@@ -172,6 +222,11 @@ if kubectl get namespace rh-connectivity-link &>/dev/null; then
     echo "   ✅ RHCL OLM resources cleaned"
 fi
 
+# 11b. Delete AuthConfig CRs cluster-wide
+# Old AuthConfig CRs can block new policy engine installs if the CRD schema changes.
+echo "11b. Deleting AuthConfig CRs..."
+kubectl delete authconfig --all --all-namespaces --ignore-not-found 2>/dev/null || true
+
 # 12. Delete policy engine namespaces (Kuadrant or RHCL)
 for policy_ns in kuadrant-system rh-connectivity-link; do
     echo "12. Deleting $policy_ns namespace (if installed)..."
@@ -210,6 +265,7 @@ kubectl delete envoyfilter kuadrant-auth-tls-fix -n openshift-ingress --ignore-n
 kubectl delete authpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete ratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete tokenratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
+kubectl delete gatewayclass openshift-default --ignore-not-found 2>/dev/null || true
 
 # 16. Delete MaaS RBAC (ClusterRoles, ClusterRoleBindings - can conflict with other managers)
 echo "16. Deleting MaaS RBAC..."
@@ -233,4 +289,5 @@ echo ""
 echo "Verify cleanup with:"
 echo "  kubectl get subscription -A | grep -i odh"
 echo "  kubectl get csv -A | grep -i odh"
-echo "  kubectl get ns | grep -E 'odh|opendatahub|models-as-a-service|kuadrant|rh-connectivity-link|keycloak-system|llm'"
+echo "  kubectl get ns | grep -E 'odh|opendatahub|models-as-a-service|kuadrant|rh-connectivity-link|keycloak-system|llm'
+  kubectl get deployment maas-api maas-controller postgres -n redhat-ods-applications 2>/dev/null || echo '  (no MaaS resources in redhat-ods-applications)'"

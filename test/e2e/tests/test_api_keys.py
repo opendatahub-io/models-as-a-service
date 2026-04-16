@@ -36,7 +36,7 @@ import requests
 import time
 
 from conftest import TLS_VERIFY
-from test_subscription import SIMULATOR_SUBSCRIPTION
+from test_helper import MODEL_NAME, SIMULATOR_SUBSCRIPTION
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def model_completions_url(model_v1: str) -> str:
 @pytest.fixture
 def inference_model_name() -> str:
     """Model name for inference requests. Override with INFERENCE_MODEL_NAME env var."""
-    return os.environ.get("INFERENCE_MODEL_NAME", "facebook/opt-125m")
+    return os.environ.get("INFERENCE_MODEL_NAME", MODEL_NAME)
 
 
 class TestAPIKeyCRUD:
@@ -310,7 +310,7 @@ class TestAPIKeyExpiration:
     Environment Variables:
     - API_KEY_MAX_EXPIRATION_DAYS: The configured max expiration in days (set on maas-api deployment).
       Must be explicitly set by the e2e test harness to match the maas-api deployment configuration.
-      Default is 30 days. Minimum is 1 day.
+      Default is 90 days. Minimum is 1 day.
     """
 
     @pytest.fixture

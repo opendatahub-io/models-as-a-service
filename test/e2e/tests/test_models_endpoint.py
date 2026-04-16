@@ -4,11 +4,15 @@ E2E tests for the /v1/models endpoint that validate subscription-aware model fil
 Tests the /v1/models endpoint in maas-api/internal/handlers/models.go which lists
 available models filtered by the user's subscription access.
 
-Requires same environment setup as test_subscription.py:
+Requires:
   - GATEWAY_HOST env var (e.g. maas.apps.cluster.example.com)
   - MAAS_API_BASE_URL env var (e.g. https://maas.apps.cluster.example.com/maas-api)
   - maas-controller deployed with example CRs applied
   - oc/kubectl access to create service account tokens
+
+Environment variables:
+  See test_helper.py module docstring for shared environment variables.
+  This file uses no additional file-specific environment variables.
 """
 
 import json
@@ -21,8 +25,22 @@ import uuid
 import pytest
 import requests
 
-# Import helpers from test_subscription module
-from test_subscription import (
+from test_helper import (
+    DISTINCT_MODEL_2_ID,
+    DISTINCT_MODEL_2_REF,
+    DISTINCT_MODEL_ID,
+    DISTINCT_MODEL_REF,
+    MODEL_NAME,
+    MODEL_NAMESPACE,
+    MODEL_REF,
+    PREMIUM_MODEL_REF,
+    PREMIUM_SIMULATOR_SUBSCRIPTION,
+    SIMULATOR_ACCESS_POLICY,
+    SIMULATOR_SUBSCRIPTION,
+    TIMEOUT,
+    TLS_VERIFY,
+    UNCONFIGURED_MODEL_PATH,
+    UNCONFIGURED_MODEL_REF,
     _apply_cr,
     _create_api_key,
     _create_sa_token,
@@ -39,24 +57,10 @@ from test_subscription import (
     _ns,
     _sa_to_user,
     _snapshot_cr,
-    _wait_for_maas_auth_policy_ready,
-    _wait_for_maas_subscription_ready,
+    _wait_for_maas_auth_policy_phase,
+    _wait_for_maas_subscription_phase,
     _wait_for_token_rate_limit_policy,
     _wait_reconcile,
-    DISTINCT_MODEL_ID,
-    DISTINCT_MODEL_REF,
-    DISTINCT_MODEL_2_ID,
-    DISTINCT_MODEL_2_REF,
-    MODEL_NAMESPACE,
-    MODEL_REF,
-    PREMIUM_MODEL_REF,
-    PREMIUM_SIMULATOR_SUBSCRIPTION,
-    UNCONFIGURED_MODEL_REF,
-    UNCONFIGURED_MODEL_PATH,
-    SIMULATOR_ACCESS_POLICY,
-    SIMULATOR_SUBSCRIPTION,
-    TIMEOUT,
-    TLS_VERIFY,
 )
 
 log = logging.getLogger(__name__)
@@ -156,7 +160,7 @@ class TestModelsEndpoint:
     ═══════════════════════════════════════════════════════════════════════════
     ERROR CASES (HTTP 401) - Authentication Errors
     ═══════════════════════════════════════════════════════════════════════════
-    18. test_unauthenticated_request_401
+    22. test_unauthenticated_request_401
         → No Authorization header → 401 authentication_error
     """
 
@@ -364,7 +368,7 @@ class TestModelsEndpoint:
             # Add SA to premium-simulator-subscription to give it access to a second subscription
             log.info(f"Adding {sa_user} to premium-simulator-subscription users")
             subprocess.run([
-                "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                "oc", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                 "-n", maas_ns,
                 "--type=merge",
                 "-p", json.dumps({"spec": {"owner": {"users": [sa_user]}}})
@@ -414,7 +418,7 @@ class TestModelsEndpoint:
                 log.info(f"Removing {sa_user} from premium-simulator-subscription users")
                 # Get current users list, remove our SA, then patch
                 result = subprocess.run([
-                    "kubectl", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                    "oc", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                     "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
                 ], capture_output=True, text=True, check=True, timeout=30)
 
@@ -422,7 +426,7 @@ class TestModelsEndpoint:
                     users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
                     users = [u for u in users if u != sa_user]
                     subprocess.run([
-                        "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                        "oc", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                         "-n", maas_ns,
                         "--type=merge",
                         "-p", json.dumps({"spec": {"owner": {"users": users}}})
@@ -505,7 +509,7 @@ class TestModelsEndpoint:
             # Add SA to premium subscription
             log.info(f"Adding {sa_user} to premium-simulator-subscription")
             subprocess.run([
-                "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                "oc", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                 "-n", maas_ns,
                 "--type=merge",
                 "-p", json.dumps({"spec": {"owner": {"users": [sa_user]}}})
@@ -569,7 +573,7 @@ class TestModelsEndpoint:
             # Cleanup
             if sa_user is not None:
                 result = subprocess.run([
-                    "kubectl", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                    "oc", "get", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                     "-n", maas_ns, "-o", "jsonpath={.spec.owner.users}"
                 ], capture_output=True, text=True, check=True, timeout=30)
 
@@ -577,7 +581,7 @@ class TestModelsEndpoint:
                     users = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
                     users = [u for u in users if u != sa_user]
                     subprocess.run([
-                        "kubectl", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
+                        "oc", "patch", "maassubscription", PREMIUM_SIMULATOR_SUBSCRIPTION,
                         "-n", maas_ns,
                         "--type=merge",
                         "-p", json.dumps({"spec": {"owner": {"users": users}}})
@@ -628,7 +632,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(auth_policy_cr),
                 text=True,
                 check=True,
@@ -663,7 +667,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(subscription_cr),
                 text=True,
                 check=True,
@@ -793,7 +797,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(auth_policy_cr),
                 text=True,
                 check=True,
@@ -828,7 +832,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(subscription_cr),
                 text=True,
                 check=True,
@@ -876,10 +880,10 @@ class TestModelsEndpoint:
 
             # Both modelRefs serve the same model ID
             assert len(unique_ids) == 1, \
-                f"Expected only 1 unique model ID (both modelRefs serve facebook/opt-125m), got {len(unique_ids)}: {unique_ids}"
+                f"Expected only 1 unique model ID (both modelRefs serve {MODEL_NAME}), got {len(unique_ids)}: {unique_ids}"
 
             # Verify it's the expected model ID
-            expected_id = "facebook/opt-125m"
+            expected_id = MODEL_NAME
             assert expected_id in unique_ids, \
                 f"Expected to find '{expected_id}', but got {unique_ids}"
 
@@ -960,7 +964,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(auth_policy_cr),
                 text=True,
                 check=True,
@@ -995,7 +999,7 @@ class TestModelsEndpoint:
                 },
             }
             subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
+                ["oc", "apply", "-f", "-"],
                 input=json.dumps(subscription_cr),
                 text=True,
                 check=True,
@@ -1107,10 +1111,10 @@ class TestModelsEndpoint:
             _create_test_auth_policy(auth2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
             _create_test_subscription(sub2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
 
-            _wait_for_maas_auth_policy_ready(auth1_name)
-            _wait_for_maas_auth_policy_ready(auth2_name)
-            _wait_for_maas_subscription_ready(sub1_name)
-            _wait_for_maas_subscription_ready(sub2_name)
+            _wait_for_maas_auth_policy_phase(auth1_name)
+            _wait_for_maas_auth_policy_phase(auth2_name)
+            _wait_for_maas_subscription_phase(sub1_name)
+            _wait_for_maas_subscription_phase(sub2_name)
 
             # Query with user token (no X-MaaS-Subscription header)
             log.info("Querying /v1/models with user token (no header)")
@@ -1290,11 +1294,11 @@ class TestModelsEndpoint:
 
     def test_response_schema_matches_openapi(self):
         """
-        Test 10: Response structure matches OpenAPI schema.
+        Test 16: Response structure matches OpenAPI schema.
 
         Validates all required fields and types match the API specification.
         """
-        log.info("Test 9: Response schema matches OpenAPI spec")
+        log.info("Test 16: Response schema matches OpenAPI spec")
 
         sa_name = "e2e-models-schema-test-sa"
         sa_ns = "default"
@@ -1363,11 +1367,11 @@ class TestModelsEndpoint:
 
     def test_model_metadata_preserved(self):
         """
-        Test 11: Model metadata is correctly preserved.
+        Test 17: Model metadata is correctly preserved.
 
         Validates that url, ready, created, owned_by fields are accurate.
         """
-        log.info("Test 10: Model metadata preserved")
+        log.info("Test 17: Model metadata preserved")
 
         sa_name = "e2e-models-metadata-sa"
         sa_ns = "default"
@@ -1965,10 +1969,10 @@ class TestModelsEndpoint:
             _create_test_auth_policy(auth2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
             _create_test_subscription(sub2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
 
-            _wait_for_maas_auth_policy_ready(auth1_name)
-            _wait_for_maas_auth_policy_ready(auth2_name)
-            _wait_for_maas_subscription_ready(sub1_name)
-            _wait_for_maas_subscription_ready(sub2_name)
+            _wait_for_maas_auth_policy_phase(auth1_name)
+            _wait_for_maas_auth_policy_phase(auth2_name)
+            _wait_for_maas_subscription_phase(sub1_name)
+            _wait_for_maas_subscription_phase(sub2_name)
 
             # Query with K8s token (no header)
             log.info("Querying /v1/models with K8s token (no header) - should return models from both subscriptions")
@@ -2032,10 +2036,10 @@ class TestModelsEndpoint:
             _create_test_auth_policy(auth2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
             _create_test_subscription(sub2_name, DISTINCT_MODEL_2_REF, users=[sa_user])
 
-            _wait_for_maas_auth_policy_ready(auth1_name)
-            _wait_for_maas_auth_policy_ready(auth2_name)
-            _wait_for_maas_subscription_ready(sub1_name)
-            _wait_for_maas_subscription_ready(sub2_name)
+            _wait_for_maas_auth_policy_phase(auth1_name)
+            _wait_for_maas_auth_policy_phase(auth2_name)
+            _wait_for_maas_subscription_phase(sub1_name)
+            _wait_for_maas_subscription_phase(sub2_name)
 
             # Query with K8s token and header specifying sub1
             log.info(f"Querying /v1/models with K8s token and header: {sub1_name}")
@@ -2159,7 +2163,7 @@ class TestModelsEndpoint:
                 groups=["system:authenticated"]
             )
             _wait_reconcile()
-            _wait_for_maas_auth_policy_ready(auth_policy_name, timeout=90)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
 
             # 2. Create subscription with low token limit
             log.info(f"Creating subscription with {token_limit} token limit")
@@ -2171,7 +2175,7 @@ class TestModelsEndpoint:
                 window=window
             )
             _wait_reconcile()
-            _wait_for_maas_subscription_ready(subscription_name, timeout=90)
+            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
 
             # Wait for TRLP to be created and enforced
             _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)

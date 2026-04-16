@@ -43,6 +43,7 @@ resources:
   - ../../base/maas-controller/default
   - ../../base/maas-controller/policies  # gateway-default-auth, gateway-default-deny
   - ../../base/payload-processing/default  # BBR ext_proc for external model payload processing
+  - ../../components/observability/observability/dashboards/
 
 # Include shared-patches component for common configuration
 # This provides: env vars, image replacements, gateway config, URL placeholder fix

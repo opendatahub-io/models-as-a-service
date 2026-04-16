@@ -32,4 +32,4 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | limit | int64 | Yes | Maximum number of tokens allowed |
-| window | string | Yes | Time window (e.g., `1m`, `1h`, `24h`). Pattern: `^(\d+)(s|m|h|d)$` |
+| window | string | Yes | Time window (e.g., `1m`, `1h`, `24h`). Allowed units: `s`, `m`, `h` (1–9999). Pattern: `^[1-9]\d{0,3}(s\|m\|h)$`. **Breaking change:** `d` (days) is no longer accepted; use hours instead (e.g., `24h` not `1d`). |

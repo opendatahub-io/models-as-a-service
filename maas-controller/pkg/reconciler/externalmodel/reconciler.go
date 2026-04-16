@@ -182,7 +182,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// 4. HTTPRoute (routes requests to external provider via gateway)
-	hr := buildHTTPRoute(extModel.Spec.Endpoint, name, ns, port, gwName, gwNamespace, labels)
+	hr := buildHTTPRoute(extModel.Spec.Endpoint, name, extModel.Spec.TargetModel, ns, port, gwName, gwNamespace, labels)
 	if err := controllerutil.SetControllerReference(extModel, hr, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on HTTPRoute: %w", err)
 	}

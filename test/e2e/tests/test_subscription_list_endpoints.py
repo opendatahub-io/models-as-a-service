@@ -7,7 +7,15 @@ These endpoints return SubscriptionInfo objects with fields:
   subscription_id_header, subscription_description, display_name, priority,
   model_refs, organization_id, cost_center, labels
 
-Requires same environment setup as test_subscription.py.
+Requires:
+  - GATEWAY_HOST env var
+  - MAAS_API_BASE_URL env var
+  - maas-controller deployed with example CRs applied
+  - oc/kubectl access to create service account tokens
+
+Environment variables:
+  See test_helper.py module docstring for shared environment variables.
+  This file uses no additional file-specific environment variables.
 """
 
 import json
@@ -17,7 +25,14 @@ import os
 import pytest
 import requests
 
-from test_subscription import (
+from test_helper import (
+    DISTINCT_MODEL_2_REF,
+    DISTINCT_MODEL_REF,
+    MODEL_NAMESPACE,
+    MODEL_REF,
+    SIMULATOR_SUBSCRIPTION,
+    TIMEOUT,
+    TLS_VERIFY,
     _create_api_key,
     _create_sa_token,
     _create_test_auth_policy,
@@ -28,13 +43,6 @@ from test_subscription import (
     _ns,
     _sa_to_user,
     _wait_reconcile,
-    MODEL_NAMESPACE,
-    MODEL_REF,
-    DISTINCT_MODEL_REF,
-    DISTINCT_MODEL_2_REF,
-    SIMULATOR_SUBSCRIPTION,
-    TIMEOUT,
-    TLS_VERIFY,
 )
 
 log = logging.getLogger(__name__)

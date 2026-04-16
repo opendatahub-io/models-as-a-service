@@ -88,9 +88,14 @@ spec:
                             minimum: 1
                             type: integer
                           window:
-                            description: Window is the time window (e.g., "1m", "1h",
-                              "24h")
-                            pattern: ^(\d+)(s|m|h|d)$
+                            description: |-
+                              Window is the time window for rate limiting (e.g., "1m", "1h", "24h").
+                              Allowed units: s (seconds), m (minutes), h (hours). Days (d) are not
+                              supported; use hours instead (e.g., "24h" for one day).
+                              The numeric part must be between 1 and 9999.
+                            maxLength: 5
+                            minLength: 2
+                            pattern: ^[1-9]\d{0,3}(s|m|h)$
                             type: string
                         required:
                         - limit
