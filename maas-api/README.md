@@ -13,7 +13,6 @@
 !!! warning "Database Required"
     The maas-api **requires** a PostgreSQL database and will fail to start without it.
     You must create a Secret named `maas-db-config` with the `DB_CONNECTION_URL` key before deploying.
-
     For development, the `scripts/deploy.sh` script creates this automatically.
     For production ODH/RHOAI deployments, see [Database Setup](../docs/content/install/maas-setup.md#database-setup).
 
