@@ -51,7 +51,7 @@ spec:
         display:
           collapse:
             open: true
-          title: Token Consumption by User
+          title: Token Consumption
         items:
           - content:
               $ref: '#/spec/panels/tokenConsumptionByUser'
@@ -112,7 +112,7 @@ spec:
       spec:
         display:
           description: Per-user totals over the Range dropdown window.
-          name: Token Consumption by User
+          name: Token Consumption
         plugin:
           kind: Table
           spec:
