@@ -12,6 +12,8 @@
 #   OPERATOR_INSTALL_PLAN_APPROVAL - Manual (default) or Automatic; use "-" to omit.
 #     Manual: blocks auto-upgrades; this script auto-approves only the first InstallPlan so install does not stall.
 #   OPERATOR_IMAGE   - Custom operator image to patch into CSV (optional)
+#   OPERATOR_OPERANDS_MAP - Path to operands-map.yaml for RELATED_IMAGE env var injection (optional)
+#                           Used with OPERATOR_IMAGE to ensure component images match the operator.
 #
 # Usage: ./install-odh.sh
 
@@ -59,6 +61,51 @@ patch_operator_csv_if_needed() {
     {\"op\": \"replace\", \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/image\", \"value\": \"$OPERATOR_IMAGE\"}
   ]"
   log_info "CSV $csv_name patched with image $OPERATOR_IMAGE"
+
+  # When using a custom operator image, the community CSV may lack RELATED_IMAGE env vars
+  # that the operator needs to deploy the correct component versions.
+  # If OPERATOR_OPERANDS_MAP points to a local operands-map.yaml, inject its env vars into the CSV.
+  if [[ -n "${OPERATOR_OPERANDS_MAP:-}" && -f "$OPERATOR_OPERANDS_MAP" ]]; then
+    log_info "Injecting RELATED_IMAGE env vars from $OPERATOR_OPERANDS_MAP into CSV"
+    local env_patches="["
+    local first=true
+    while IFS= read -r line; do
+      local name value
+      name=$(echo "$line" | sed -n 's/.*name: \(RELATED_IMAGE_[^ ]*\)/\1/p')
+      if [[ -n "$name" ]]; then
+        read -r value_line
+        value=$(echo "$value_line" | sed -n 's/.*value: \(.*\)/\1/p')
+        if [[ -n "$value" ]]; then
+          $first || env_patches+=","
+          first=false
+          env_patches+="{\"name\":\"$name\",\"value\":\"$value\"}"
+        fi
+      fi
+    done < "$OPERATOR_OPERANDS_MAP"
+
+    if [[ "$env_patches" != "[" ]]; then
+      env_patches+="]"
+      local container_path="/spec/install/spec/deployments/0/spec/template/spec/containers/0"
+      local existing_env
+      existing_env=$(kubectl get csv "$csv_name" -n "$namespace" -o jsonpath="{${container_path}.env}" 2>/dev/null || echo "[]")
+
+      local merged_env
+      merged_env=$(python3 -c "
+import json, sys
+existing = json.loads('${existing_env}')
+new_envs = json.loads(sys.stdin.read())
+existing_names = {e['name'] for e in existing}
+for e in new_envs:
+    if e['name'] not in existing_names:
+        existing.append(e)
+print(json.dumps(existing))
+" <<< "$env_patches")
+
+      kubectl patch csv "$csv_name" -n "$namespace" --type='json' \
+        -p="[{\"op\": \"replace\", \"path\": \"${container_path}/env\", \"value\": ${merged_env}}]"
+      log_info "CSV env vars patched with RELATED_IMAGE entries"
+    fi
+  fi
 }
 
 echo "=== Installing OpenDataHub operator ==="

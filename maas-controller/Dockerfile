@@ -10,9 +10,9 @@ ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /app
-COPY go.mod go.sum ./
+COPY maas-controller/go.mod maas-controller/go.sum ./
 RUN go mod download
-COPY . .
+COPY maas-controller/ ./
 
 USER root
 
@@ -22,9 +22,14 @@ FROM --platform=$TARGETPLATFORM registry.access.redhat.com/ubi9/ubi-minimal:late
 
 WORKDIR /
 
-COPY --from=builder /app/manager .
+COPY --from=builder /app/manager /manager
 
 RUN chmod +x /manager
+COPY maas-api/deploy /maas-api/deploy
+COPY deployment/base/maas-api /deployment/base/maas-api
+COPY deployment/base/maas-controller/policies /deployment/base/maas-controller/policies
+COPY deployment/components /deployment/components
+RUN chmod -R g=u /maas-api /deployment
 
 # Use a non-root user (OpenShift will assign random UID)
 USER 1001

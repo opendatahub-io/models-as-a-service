@@ -43,12 +43,13 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // Default gateway name and namespace when not set via flags.
 const (
-	defaultGatewayName      = "maas-default-gateway"
-	defaultGatewayNamespace = "openshift-ingress"
+	defaultGatewayName      = tenantreconcile.DefaultGatewayName
+	defaultGatewayNamespace = tenantreconcile.DefaultGatewayNamespace
 	defaultClusterAudience  = "https://kubernetes.default.svc"
 )
 

@@ -270,6 +270,56 @@ curl -sSk \
   "${HOST}/maas-api/v1/api-keys/search" | jq .
 ```
 
+## Configuration
+
+The maas-api server is configured via **environment variables** or **CLI flags** (CLI flags take precedence). 
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEBUG_MODE` | `false` | Enable debug logging. Set to `true` or `1`. |
+| `NAMESPACE` | `maas-api` | Namespace where maas-api is deployed. |
+| `GATEWAY_NAME` | `maas-default-gateway` | Name of the Gateway resource used for model routing. |
+| `GATEWAY_NAMESPACE` | `openshift-ingress` | Namespace of the Gateway resource. |
+| `MAAS_SUBSCRIPTION_NAMESPACE` | `models-as-a-service` | Namespace where MaaSSubscription CRs are located. |
+| `INSTANCE_NAME` | Value of `GATEWAY_NAME` | Name of the MaaS instance (for logging/identification). |
+| `SECURE` | `false` | Enable HTTPS. Requires TLS configuration. |
+| `ADDRESS` | `:8443` (HTTPS) or `:8080` (HTTP) | Server listen address (host:port). |
+| `PORT` | - | **DEPRECATED.** Use `ADDRESS` with `SECURE=false` instead. |
+| `API_KEY_MAX_EXPIRATION_DAYS` | `90` | Maximum allowed API key lifetime in days. Users cannot create keys with longer expiration. Minimum: 1. |
+| `ACCESS_CHECK_TIMEOUT_SECONDS` | `15` | Timeout for model access validation during `/v1/models` requests. Models that don't respond within this window are excluded. Minimum: 1. |
+| `TLS_CERT` | - | Path to TLS certificate file (PEM format). Required if `SECURE=true` and not using self-signed cert. |
+| `TLS_KEY` | - | Path to TLS private key file (PEM format). Required if `SECURE=true` and not using self-signed cert. |
+| `TLS_SELF_SIGNED` | `false` | Generate self-signed certificate. Alternative to providing `TLS_CERT`/`TLS_KEY`. |
+
+!!! note "Database Configuration"
+    The database connection URL is loaded from the Kubernetes secret `maas-db-config` (key: `DB_CONNECTION_URL`) in the same namespace as the maas-api pod. See [Database Configuration](#database-configuration) below.
+
+!!! note "TLS Minimum Version"
+    The minimum TLS version can be configured via the `--tls-min-version` CLI flag (default: `1.2`). Environment variable configuration is not currently supported.
+
+### CLI Flags
+
+Most environment variables have corresponding CLI flags. When both are provided, CLI flags take precedence. Note that `API_KEY_MAX_EXPIRATION_DAYS` and `ACCESS_CHECK_TIMEOUT_SECONDS` are environment variable only and have no CLI flag equivalents.
+
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--debug` | `DEBUG_MODE` | `false` | Enable debug mode. |
+| `--namespace` | `NAMESPACE` | `maas-api` | Namespace of the MaaS instance. |
+| `--name` | `INSTANCE_NAME` | Value of `--gateway-name` | Name of the MaaS instance. |
+| `--gateway-name` | `GATEWAY_NAME` | `maas-default-gateway` | Name of the Gateway resource. |
+| `--gateway-namespace` | `GATEWAY_NAMESPACE` | `openshift-ingress` | Namespace where Gateway is deployed. |
+| `--maas-subscription-namespace` | `MAAS_SUBSCRIPTION_NAMESPACE` | `models-as-a-service` | Namespace where MaaSSubscription CRs are located. |
+| `--secure` | `SECURE` | `false` | Use HTTPS. Requires TLS configuration. |
+| `--address` | `ADDRESS` | `:8443` or `:8080` | HTTPS listen address. |
+| `--port` | `PORT` | - | **DEPRECATED.** Use `--address` with `--secure=false`. |
+| `--tls-cert` | `TLS_CERT` | - | Path to TLS certificate. |
+| `--tls-key` | `TLS_KEY` | - | Path to TLS private key. |
+| `--tls-self-signed` | `TLS_SELF_SIGNED` | `false` | Generate self-signed certificate. |
+| `--tls-min-version` | - | `1.2` | Minimum TLS version (`1.2` or `1.3`). |
+
+
 ### Database Configuration
 
 maas-api uses PostgreSQL for persistent storage of API key metadata. The database connection is configured via a Kubernetes Secret.
