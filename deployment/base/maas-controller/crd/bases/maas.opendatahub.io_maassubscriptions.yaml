@@ -247,6 +247,21 @@ spec:
                       type: boolean
                     reason:
                       description: Reason is a machine-readable reason code
+                      enum:
+                      - Reconciled
+                      - ReconcileFailed
+                      - PartialFailure
+                      - Valid
+                      - NotFound
+                      - GetFailed
+                      - Accepted
+                      - AcceptedEnforced
+                      - NotAccepted
+                      - Enforced
+                      - NotEnforced
+                      - BackendNotReady
+                      - ConditionsNotFound
+                      - Unknown
                       type: string
                   required:
                   - name
@@ -294,6 +309,21 @@ spec:
                       type: boolean
                     reason:
                       description: Reason is a machine-readable reason code
+                      enum:
+                      - Reconciled
+                      - ReconcileFailed
+                      - PartialFailure
+                      - Valid
+                      - NotFound
+                      - GetFailed
+                      - Accepted
+                      - AcceptedEnforced
+                      - NotAccepted
+                      - Enforced
+                      - NotEnforced
+                      - BackendNotReady
+                      - ConditionsNotFound
+                      - Unknown
                       type: string
                   required:
                   - model

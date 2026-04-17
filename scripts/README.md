@@ -29,6 +29,8 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - Installs primary operator (RHOAI or ODH) or deploys via kustomize
 - Applies custom resources (DSC, DSCI)
 - Configures TLS backend (enabled by default, use `--disable-tls-backend` to skip)
+- Deploys `maas-controller`, which then deploys `maas-api` via the **Tenant reconciler** (SSA)
+- Passes `MAAS_API_IMAGE` to the controller as `RELATED_IMAGE_ODH_MAAS_API_IMAGE` so the Tenant reconciler uses the correct image
 - Supports custom operator catalogs and MaaS API images for PR testing
 
 **Options:**
@@ -53,7 +55,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `kustomize` installed
 
 **Environment Variables:**
-- `MAAS_API_IMAGE` - Custom MaaS API container image (works in both operator and kustomize modes)
+- `MAAS_API_IMAGE` - Custom MaaS API container image (passed to the Tenant reconciler via `RELATED_IMAGE_ODH_MAAS_API_IMAGE` on the controller Deployment)
 - `MAAS_CONTROLLER_IMAGE` - Custom MaaS controller container image
 - `OPERATOR_CATALOG` - Custom operator catalog for PR testing
 - `OPERATOR_IMAGE` - Custom operator image for PR testing
@@ -221,7 +223,7 @@ Installs individual dependencies (Kuadrant, ODH, etc.).
 
 ### Initial Deployment (Operator Mode - Recommended)
 ```bash
-# 1. Deploy the platform using ODH operator (default)
+# 1. Deploy the platform (installs prerequisites + maas-controller; Tenant reconciler deploys maas-api)
 ./scripts/deploy.sh
 
 # 2. Validate the deployment
@@ -236,7 +238,7 @@ kustomize build docs/samples/models/simulator | kubectl apply -f -
 
 ### Initial Deployment (Kustomize Mode)
 ```bash
-# 1. Deploy the platform using kustomize
+# 1. Deploy the platform via kustomize (maas-controller Tenant reconciler deploys maas-api)
 ./scripts/deploy.sh --deployment-mode kustomize
 
 # 2. Validate the deployment

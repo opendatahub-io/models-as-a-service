@@ -13,6 +13,15 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
+// Phase constants for MaaSSubscription status.
+// These must match the Phase values defined in maas-controller/api/maas/v1alpha1/common_types.go.
+const (
+	PhasePending  = "Pending"
+	PhaseActive   = "Active"
+	PhaseDegraded = "Degraded"
+	PhaseFailed   = "Failed"
+)
+
 // Lister provides access to MaaSSubscription resources from an informer cache.
 type Lister interface {
 	List() ([]*unstructured.Unstructured, error)
@@ -37,18 +46,22 @@ func NewSelector(log *logger.Logger, lister Lister) *Selector {
 
 // subscription represents a parsed MaaSSubscription for selection.
 type subscription struct {
-	Name           string
-	Namespace      string
-	DisplayName    string
-	Description    string
-	Groups         []string
-	Users          []string
-	Priority       int32
-	MaxLimit       int64
-	OrganizationID string
-	CostCenter     string
-	Labels         map[string]string
-	ModelRefs      []ModelRefInfo
+	Name                   string
+	Namespace              string
+	DisplayName            string
+	Description            string
+	Groups                 []string
+	Users                  []string
+	Priority               int32
+	MaxLimit               int64
+	OrganizationID         string
+	CostCenter             string
+	Labels                 map[string]string
+	ModelRefs              []ModelRefInfo
+	Phase                  string                 // status.phase: "Active", "Failed", "Pending", or ""
+	Ready                  bool                   // computed from status.conditions Ready condition
+	DeletionTimestamp      *string                // metadata.deletionTimestamp (set when being deleted)
+	TokenRateLimitStatuses []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
 }
 
 // GetAllAccessible returns all subscriptions the user has access to.
@@ -62,11 +75,25 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
 	}
 
-	var accessible []*SelectResponse
+	accessible := make([]*SelectResponse, 0, len(subscriptions))
 	for _, sub := range subscriptions {
-		if userHasAccess(&sub, username, groups) {
-			accessible = append(accessible, toResponse(&sub))
+		// Check user access
+		if !userHasAccess(&sub, username, groups) {
+			continue
 		}
+
+		// Allowlist: only include Active and Degraded subscriptions
+		// Exclude Failed, Pending, empty (unreconciled), unknown phases, and deleting subscriptions
+		if sub.Phase != PhaseActive && sub.Phase != PhaseDegraded {
+			continue
+		}
+
+		// Exclude subscriptions being deleted
+		if sub.DeletionTimestamp != nil {
+			continue
+		}
+
+		accessible = append(accessible, toResponse(&sub))
 	}
 
 	// Sort for deterministic ordering
@@ -111,6 +138,10 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
 					return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
 				}
+				// Check model health for Degraded subscriptions
+				if err := checkModelHealth(&sub, requestedModel); err != nil {
+					return nil, err
+				}
 				return toResponse(&sub), nil
 			}
 		}
@@ -126,6 +157,10 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				}
 				if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
 					return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
+				}
+				// Check model health for Degraded subscriptions
+				if err := checkModelHealth(&sub, requestedModel); err != nil {
+					return nil, err
 				}
 				return toResponse(&sub), nil
 			}
@@ -152,6 +187,10 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	}
 
 	if len(accessibleSubs) == 1 {
+		// Check model health for Degraded subscriptions
+		if err := checkModelHealth(&accessibleSubs[0], requestedModel); err != nil {
+			return nil, err
+		}
 		return toResponse(&accessibleSubs[0]), nil
 	}
 
@@ -219,6 +258,8 @@ func (s *Selector) loadSubscriptions() ([]subscription, error) {
 }
 
 // parseSubscription extracts subscription data from unstructured object.
+//
+//nolint:gocyclo // TODO: refactor to reduce cyclomatic complexity
 func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 	spec, found, err := unstructured.NestedMap(obj.Object, "spec")
 	if err != nil || !found {
@@ -279,6 +320,72 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 
 	// Parse tokenMetadata
 	parseTokenMetadata(spec, &sub)
+
+	// Parse status.phase with validation
+	if status, found, _ := unstructured.NestedMap(obj.Object, "status"); found {
+		if phase, ok := status["phase"].(string); ok {
+			// Normalize whitespace and validate against known phases
+			phase = strings.TrimSpace(phase)
+			switch phase {
+			case PhaseActive, PhaseDegraded, PhaseFailed, PhasePending:
+				sub.Phase = phase
+			default:
+				// Unknown phase value - keep raw for debugging but will be rejected by health checks
+				sub.Phase = phase
+			}
+		}
+
+		// Parse status.conditions to extract Ready condition
+		if conditions, found, _ := unstructured.NestedSlice(status, "conditions"); found {
+			for _, condRaw := range conditions {
+				if condMap, ok := condRaw.(map[string]any); ok {
+					condType, _ := condMap["type"].(string)
+					if condType == "Ready" {
+						condStatus, _ := condMap["status"].(string)
+						sub.Ready = condStatus == "True"
+						break
+					}
+				}
+			}
+		}
+
+		// Parse status.tokenRateLimitStatuses to extract TRLP health
+		if trlpStatuses, found, _ := unstructured.NestedSlice(status, "tokenRateLimitStatuses"); found {
+			for _, statusRaw := range trlpStatuses {
+				if statusMap, ok := statusRaw.(map[string]any); ok {
+					trlpStatus := TokenRateLimitStatus{}
+					if model, ok := statusMap["model"].(string); ok {
+						trlpStatus.Model = model
+					}
+					if name, ok := statusMap["name"].(string); ok {
+						trlpStatus.Name = name
+					}
+					if namespace, ok := statusMap["namespace"].(string); ok {
+						trlpStatus.Namespace = namespace
+					}
+					if ready, ok := statusMap["ready"].(bool); ok {
+						trlpStatus.Ready = ready
+					}
+					if reason, ok := statusMap["reason"].(string); ok {
+						trlpStatus.Reason = reason
+					}
+					if message, ok := statusMap["message"].(string); ok {
+						trlpStatus.Message = message
+					}
+					sub.TokenRateLimitStatuses = append(sub.TokenRateLimitStatuses, trlpStatus)
+				}
+			}
+		}
+	}
+
+	// Parse metadata.deletionTimestamp
+	if metadata := obj.Object["metadata"]; metadata != nil {
+		if metadataMap, ok := metadata.(map[string]any); ok {
+			if deletionTimestamp, ok := metadataMap["deletionTimestamp"].(string); ok && deletionTimestamp != "" {
+				sub.DeletionTimestamp = &deletionTimestamp
+			}
+		}
+	}
 
 	return sub, nil
 }
@@ -383,6 +490,114 @@ func subscriptionIncludesModel(sub *subscription, requestedModel string) bool {
 	return false
 }
 
+// checkModelHealth validates subscription phase and model health.
+// Returns error if subscription is not in Active/Degraded phase or if model is unhealthy in Degraded subscriptions.
+//
+// Two validation paths:
+// 1. API key creation (requestedModel=""): Allow Active/Degraded/Pending, block Failed/unreconciled.
+// Rationale: Users can create keys while subscription is setting up (Pending), but enforcement
+// happens at inference time. Failed subscriptions blocked to prevent key spam on broken subscriptions.
+// 2. Inference (requestedModel set): Strict allowlist of Active/Degraded only.
+// Blocks Pending/Failed/unreconciled at authorization time.
+func checkModelHealth(sub *subscription, requestedModel string) error {
+	// API key creation path: Allow Active, Degraded, Pending
+	// Block Failed (prevents key spam on permanently broken subscriptions)
+	// Block unreconciled (empty phase)
+	if requestedModel == "" {
+		if sub.Phase == "" {
+			return &ModelUnhealthyError{
+				Subscription: sub.Name,
+				Phase:        sub.Phase,
+				Reason:       "SubscriptionNotReady",
+				Message:      "subscription is unreconciled (no status.phase set)",
+			}
+		}
+		if sub.Phase == PhaseFailed {
+			return &ModelUnhealthyError{
+				Subscription: sub.Name,
+				Phase:        sub.Phase,
+				Reason:       "SubscriptionNotReady",
+				Message:      "subscription is in Failed phase (cannot create API keys)",
+			}
+		}
+		return nil // Allow Active, Degraded, Pending for API key creation
+	}
+
+	// Inference path: Allowlist only Active and Degraded subscriptions
+	// Reject Failed, Pending, unreconciled, and unknown phases
+	if sub.Phase != PhaseActive && sub.Phase != PhaseDegraded {
+		phaseDisplay := sub.Phase
+		if phaseDisplay == "" {
+			phaseDisplay = "unreconciled"
+		}
+		return &ModelUnhealthyError{
+			Subscription: sub.Name,
+			Phase:        sub.Phase,
+			Reason:       "SubscriptionNotReady",
+			Message:      fmt.Sprintf("subscription is in %s phase (allowed: Active, Degraded)", phaseDisplay),
+		}
+	}
+
+	// Active subscriptions are allowed without TRLP checks (already validated above)
+	if sub.Phase != PhaseDegraded {
+		return nil
+	}
+
+	// For Degraded subscriptions, verify rate limits can be enforced (if defined)
+	// Parse the requested model (format: "namespace/name")
+	parts := strings.SplitN(requestedModel, "/", 2)
+	if len(parts) != 2 {
+		return &ModelUnhealthyError{
+			Subscription: sub.Name,
+			Phase:        sub.Phase,
+			Reason:       "InvalidModelFormat",
+			Message:      "invalid model format: must be namespace/name",
+		}
+	}
+	requestedNS := parts[0]
+	requestedName := parts[1]
+
+	// Check if this model has tokenRateLimits defined in the subscription spec
+	hasRateLimits := false
+	for _, ref := range sub.ModelRefs {
+		if ref.Namespace == requestedNS && ref.Name == requestedName {
+			if len(ref.TokenRateLimits) > 0 {
+				hasRateLimits = true
+			}
+			break
+		}
+	}
+
+	// If model doesn't have rate limits defined, allow inference (no TRLP to check)
+	if !hasRateLimits {
+		return nil
+	}
+
+	// Model has rate limits defined - verify TRLP is ready
+	for _, trlp := range sub.TokenRateLimitStatuses {
+		if trlp.Model == requestedName {
+			if !trlp.Ready {
+				return &ModelUnhealthyError{
+					Subscription: sub.Name,
+					Phase:        sub.Phase,
+					Reason:       "RateLimitNotEnforced",
+					Message:      "subscription rate limiting policies are not ready",
+				}
+			}
+			// TRLP is ready - allow inference
+			return nil
+		}
+	}
+
+	// Model has rate limits defined but TRLP status missing - fail closed
+	return &ModelUnhealthyError{
+		Subscription: sub.Name,
+		Phase:        sub.Phase,
+		Reason:       "RateLimitNotEnforced",
+		Message:      "subscription rate limiting policies are not ready",
+	}
+}
+
 // hasModel returns true if the subscription includes the given model name.
 func (s subscription) hasModel(modelID string) bool {
 	for _, ref := range s.ModelRefs {
@@ -442,7 +657,7 @@ func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
 	if modelRefs == nil {
 		modelRefs = []ModelRefInfo{}
 	}
-	return SubscriptionInfo{
+	info := SubscriptionInfo{
 		SubscriptionIDHeader:    sub.Name,
 		SubscriptionDescription: desc,
 		DisplayName:             sub.DisplayName,
@@ -452,6 +667,7 @@ func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
 		CostCenter:              sub.CostCenter,
 		Labels:                  sub.Labels,
 	}
+	return info
 }
 
 // ResponseToSubscriptionInfo converts a SelectResponse to a SubscriptionInfo.
@@ -485,7 +701,7 @@ func toResponse(sub *subscription) *SelectResponse {
 	if modelRefs == nil {
 		modelRefs = []ModelRefInfo{}
 	}
-	return &SelectResponse{
+	resp := &SelectResponse{
 		Name:           sub.Name,
 		Namespace:      sub.Namespace,
 		DisplayName:    sub.DisplayName,
@@ -495,7 +711,13 @@ func toResponse(sub *subscription) *SelectResponse {
 		OrganizationID: sub.OrganizationID,
 		CostCenter:     sub.CostCenter,
 		Labels:         sub.Labels,
+		Phase:          sub.Phase,
+		Ready:          sub.Ready,
 	}
+	if sub.DeletionTimestamp != nil {
+		resp.DeletionTimestamp = *sub.DeletionTimestamp
+	}
+	return resp
 }
 
 // NoSubscriptionError indicates no matching subscription found.
@@ -540,4 +762,17 @@ type ModelNotInSubscriptionError struct {
 
 func (e *ModelNotInSubscriptionError) Error() string {
 	return fmt.Sprintf("subscription %s does not include model %s", e.Subscription, e.Model)
+}
+
+// ModelUnhealthyError indicates the requested model is not healthy in a Degraded subscription.
+// Note: Model field is intentionally omitted to prevent XSS attacks.
+type ModelUnhealthyError struct {
+	Subscription string
+	Phase        string // Subscription phase for Authorino OPA evaluation
+	Reason       string
+	Message      string
+}
+
+func (e *ModelUnhealthyError) Error() string {
+	return "requested model is unhealthy in subscription"
 }

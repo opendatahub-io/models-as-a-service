@@ -63,6 +63,9 @@ from test_helper import (
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
     TLS_VERIFY,
+    TRLP_TEST_MODEL_REF,                                                                                                                                                              
+    TRLP_TEST_MODEL_PATH,
+    TRLP_TEST_MODEL_ID,
     UNCONFIGURED_MODEL_PATH,
     UNCONFIGURED_MODEL_REF,
     _apply_cr,
@@ -87,6 +90,9 @@ from test_helper import (
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_token_rate_limit_policy,
+    _scale_kuadrant_controller_down,
+    _scale_kuadrant_controller_up,
+    _wait_for_subscription_trlp_status,
     _wait_reconcile,
 )
 
@@ -1926,6 +1932,119 @@ class TestStatusReporting:
             _delete_sa(sa_name, namespace="default")
             _wait_reconcile()
 
+    def test_subscription_degraded_trlp_blocks_inference(self):
+        """
+        Test: Degraded subscription with TRLP not ready blocks inference.
+
+        This test verifies that when a subscription enters Degraded phase due to
+        TokenRateLimitPolicy not being ready (e.g., Kuadrant controller down),
+        inference requests are blocked with appropriate error to prevent rate
+        limits from being bypassed.
+
+        Uses pre-deployed e2e-trlp-test-simulated model to avoid TRLP sharing with concurrent tests.
+
+        Test flow:
+        1. Scale down Kuadrant controller
+        2. Create subscription with valid model - TRLP created but not accepted
+        3. Wait for subscription to enter Degraded phase (TRLP ready=false)
+        4. Create API key and verify inference is blocked (403 Forbidden)
+        5. Scale Kuadrant controller back up
+        6. Wait for subscription to reach Active phase (TRLP ready=true)
+        7. Verify inference works (200 OK)
+        """
+        ns = _ns()
+        subscription_name = "e2e-trlp-degraded-sub"
+        auth_name = "e2e-trlp-degraded-auth"
+        sa_name = "e2e-trlp-degraded-sa"
+
+        try:
+            # Step 1: Scale down Kuadrant controller BEFORE creating subscription
+            log.info("Step 1: Scaling down Kuadrant controller...")
+            _scale_kuadrant_controller_down()
+            time.sleep(5)  # Give time for controller to fully stop
+
+            # Step 2: Create auth policy and subscription
+            log.info("Step 2: Creating subscription with Kuadrant controller down...")
+            sa_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = f"system:serviceaccount:default:{sa_name}"
+
+            _create_test_auth_policy(auth_name, TRLP_TEST_MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_name, TRLP_TEST_MODEL_REF, users=[sa_user])
+
+            # Wait for auth policy - will be Degraded since Kuadrant is down
+            log.info("Waiting for MaaSAuthPolicy (will be Degraded with Kuadrant down)...")
+            _wait_for_maas_auth_policy_phase(auth_name, "Degraded", timeout=60, require_auth_policies=True, require_enforced=False)
+
+            # Step 3: Wait for subscription to reach Degraded phase with TRLP not ready
+            log.info("Step 3: Waiting for subscription to enter Degraded phase (TRLP not ready)...")
+            cr = _wait_for_maas_subscription_phase(subscription_name, "Degraded", timeout=120)
+            _wait_for_subscription_trlp_status(subscription_name, expected_ready=False, timeout=120)
+
+            status = cr.get("status", {})
+            trlp_statuses = status.get("tokenRateLimitStatuses", [])
+            log.info(f"Subscription Degraded: phase={status.get('phase')}, trlpStatuses={trlp_statuses}")
+
+            # Verify at least one TRLP is not ready
+            assert len(trlp_statuses) > 0, "Expected at least one TRLP status"
+            assert any(not trlp.get("ready") for trlp in trlp_statuses), "Expected at least one TRLP to be not ready"
+            log.info("✅ Subscription in Degraded phase with TRLP not ready")
+
+            # Step 4: Create API key and verify inference is blocked
+            log.info("Step 4: Creating API key and verifying inference is blocked...")
+            api_key = _create_api_key(sa_token, name="e2e-trlp-test-key", subscription=subscription_name)
+
+            resp = _inference(api_key, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID)
+            assert resp.status_code == 403, f"Expected 403 Forbidden for Degraded subscription with TRLP not ready, got {resp.status_code}: {resp.text}"
+            log.info("✅ Inference blocked for Degraded subscription with TRLP not ready")
+
+            # Step 5: Scale Kuadrant controller back up
+            log.info("Step 5: Scaling Kuadrant controller back up...")
+            _scale_kuadrant_controller_up()
+            time.sleep(10)  # Give time for TRLP to reconcile and be accepted
+
+            # Step 6: Wait for subscription to reach Active phase with TRLP ready
+            log.info("Step 6: Waiting for subscription to reach Active phase (TRLP ready)...")
+            _wait_for_maas_subscription_phase(subscription_name, "Active", timeout=120)
+            _wait_for_subscription_trlp_status(subscription_name, expected_ready=True, timeout=120)
+
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            status = cr.get("status", {})
+            trlp_statuses = status.get("tokenRateLimitStatuses", [])
+            log.info(f"Subscription Active: phase={status.get('phase')}, trlpStatuses={trlp_statuses}")
+
+            # Verify all TRLPs are now ready
+            assert all(trlp.get("ready") for trlp in trlp_statuses), "Expected all TRLPs to be ready"
+            log.info("✅ Subscription returned to Active phase with all TRLPs ready")
+
+            # Step 7: Verify inference works
+            log.info("Step 7: Verifying inference works with Active subscription...")
+            resp = _inference(api_key, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID)
+            assert resp.status_code == 200, f"Expected 200 OK for Active subscription, got {resp.status_code}: {resp.text}"
+            log.info("✅ Inference works with Active subscription after Kuadrant recovery")
+
+            log.info("✅ TRLP validation e2e test complete")
+
+        finally:
+            # Ensure Kuadrant controller is scaled back up even if test fails
+            try:
+                log.info("Cleanup: Ensuring Kuadrant controller is scaled up...")
+                _scale_kuadrant_controller_up()
+            except Exception as e:
+                log.warning(f"Failed to scale Kuadrant controller up during cleanup: {e}")
+
+            # Revoke API key
+            try:
+                oc_token = _get_cluster_token()
+                _revoke_api_key(oc_token, "e2e-trlp-test-key")
+            except Exception as e:
+                log.warning(f"Failed to revoke API key during cleanup: {e}")
+
+            # Clean up resources (but not the model - it's pre-deployed)
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()
+
     def test_authpolicy_degraded_status_with_partial_models(self):
         """
         Test: MaaSAuthPolicy shows Degraded phase when some models are valid, some missing.
@@ -2037,5 +2156,358 @@ class TestStatusReporting:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_cr("maasmodelref", model_name, namespace=MODEL_NAMESPACE)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()
+
+class TestDegradedSubscriptionFiltering:
+    """
+    Test active filtering for Degraded subscriptions.
+
+    Verifies inference behavior with subscriptions in different phases:
+    - Degraded subscriptions with healthy models allow inference
+    - Degraded subscriptions with unhealthy models block inference
+    - Failed subscriptions block inference
+    - Endpoints (/v1/models, /v1/subscriptions) report health correctly
+
+    Strategy: Let controller naturally set phase based on model health
+    (valid + missing models → Degraded, all missing → Failed).
+    """
+
+    def test_degraded_healthy_model_allows_inference(self):
+        """
+        Test: Inference to healthy model in Degraded subscription succeeds.
+
+        Setup:
+        1. Create subscription with 1 valid + 1 missing model
+        2. Controller sets phase=Degraded, modelRefStatuses shows mixed health
+
+        Verify:
+        - Subscription is Degraded with one ready=true, one ready=false
+        - Inference to the valid model succeeds (200)
+        """
+        ns = _ns()
+        subscription_name = "e2e-degraded-healthy-inf"
+        auth_name = "e2e-degraded-healthy-inf-auth"
+        sa_name = "e2e-degraded-healthy-inf-sa"
+        missing_model = "nonexistent-model-inf"
+
+        try:
+            oc_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = f"system:serviceaccount:default:{sa_name}"
+
+            # Create auth policy for valid model only
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+
+            # Create subscription with valid + missing → auto-Degraded
+            _create_test_subscription(
+                subscription_name,
+                [MODEL_REF, missing_model],
+                users=[sa_user]
+            )
+
+            _wait_reconcile(seconds=10)
+
+            # Verify Degraded with mixed health
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            status = cr.get("status", {})
+            phase = status.get("phase")
+            model_statuses = status.get("modelRefStatuses", [])
+
+            log.info(f"Phase: {phase}, modelRefStatuses: {model_statuses}")
+
+            assert phase == "Degraded", f"Expected Degraded, got {phase}"
+            assert len(model_statuses) == 2, f"Expected 2 statuses, got {len(model_statuses)}"
+
+            # Find our valid model status
+            valid_status = next(
+                (s for s in model_statuses if s.get("name") == MODEL_REF),
+                None
+            )
+            assert valid_status is not None, f"Missing status for {MODEL_REF}"
+            assert valid_status.get("ready") is True, \
+                f"Expected {MODEL_REF} ready=true, got {valid_status}"
+
+            log.info(f"✅ Subscription Degraded with {MODEL_REF} healthy")
+
+            # Create API key
+            # oc_token already set from _create_sa_token above
+            api_key = _create_api_key(
+                oc_token,
+                name="degraded-healthy",
+                subscription=subscription_name
+            )
+
+            # Inference to healthy model should work
+            log.info(f"Testing inference to healthy {MODEL_REF}...")
+            r = _inference(api_key, path=MODEL_PATH, model_name=MODEL_NAME)
+
+            assert r.status_code == 200, \
+                f"Expected 200 for healthy model in Degraded subscription, got {r.status_code}: {r.text[:500]}"
+
+            log.info("✅ Inference to healthy model in Degraded subscription succeeded")
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()
+
+    def test_failed_subscription_blocks_inference(self):
+        """
+        Test: Failed subscription blocks inference via OPA rule.
+
+        Setup:
+        1. Create subscription with valid model (starts Active)
+        2. Create API key
+        3. Manually patch subscription to Failed phase
+        4. Verify inference is rejected by OPA (403)
+
+        Note: We use manual patching because naturally creating a Failed subscription
+        requires only invalid models, which don't have routes (404 before OPA runs).
+        """
+        ns = _ns()
+        subscription_name = "e2e-failed-sub-inf"
+        auth_name = "e2e-failed-sub-inf-auth"
+        sa_name = "e2e-failed-sub-inf-sa"
+
+        try:
+            oc_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = f"system:serviceaccount:default:{sa_name}"
+
+            # Create auth policy for valid model
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+
+            # Create subscription with valid model (will be Active)
+            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
+
+            _wait_reconcile(seconds=10)
+
+            # Verify it starts as Active
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            phase = cr.get("status", {}).get("phase")
+            log.info(f"Initial phase: {phase}")
+            assert phase == "Active", f"Expected Active initially, got {phase}"
+
+            # Create API key while Active
+            api_key = _create_api_key(
+                oc_token,
+                name="failed-sub-test",
+                subscription=subscription_name
+            )
+
+            # Verify inference works while Active
+            log.info("Testing inference while Active...")
+            r = _inference(api_key, path=MODEL_PATH, model_name=MODEL_NAME)
+            assert r.status_code == 200,                 f"Expected 200 while Active, got {r.status_code}: {r.text[:200]}"
+            log.info("✅ Inference works with Active subscription")
+
+            # Manually patch subscription to Failed phase
+            import subprocess
+            import json
+            from datetime import datetime
+
+            log.info("Manually patching subscription to Failed phase...")
+            patch_data = {
+                "status": {
+                    "phase": "Failed",
+                    "conditions": [
+                        {
+                            "type": "Ready",
+                            "status": "False",
+                            "reason": "Failed",
+                            "message": "Subscription failed",
+                            "lastTransitionTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                        }
+                    ],
+                    "modelRefStatuses": [
+                        {
+                            "name": MODEL_REF,
+                            "namespace": MODEL_NAMESPACE,
+                            "ready": False,
+                            "reason": "ReconcileFailed",
+                            "message": "Model failed"
+                        }
+                    ]
+                }
+            }
+
+            cmd = [
+                "kubectl", "patch", "maassubscription", subscription_name,
+                "-n", ns,
+                "--type=merge",
+                "--subresource=status",
+                "-p", json.dumps(patch_data)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            assert result.returncode == 0, f"Failed to patch to Failed phase: {result.stderr}"
+
+            # Verify phase is Failed
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            phase = cr.get("status", {}).get("phase")
+            assert phase == "Failed", f"Expected Failed phase after patch, got {phase}"
+            log.info("✅ Subscription patched to Failed phase")
+
+            # Test inference with Failed subscription - should be rejected by OPA
+            log.info("Testing inference with Failed subscription...")
+            r = _inference(api_key, path=MODEL_PATH, model_name=MODEL_NAME)
+
+            log.info(f"Response: status={r.status_code}, body={r.text[:200]}")
+
+            # Failed phase should be rejected by OPA rule (403 or error message)
+            if r.status_code == 200:
+                assert "denied" in r.text.lower() or "access" in r.text.lower(),                     f"Expected access denied message, got: {r.text[:200]}"
+            else:
+                assert r.status_code == 403,                     f"Expected 403 for Failed subscription, got {r.status_code}: {r.text[:200]}"
+
+            log.info("✅ Inference with Failed subscription correctly rejected by OPA")
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()
+
+    def test_models_endpoint_with_degraded_subscription_api_key(self):
+        """
+        Test: /v1/models with API key bound to Degraded subscription.
+
+        Verify behavior when querying models list with a Degraded subscription.
+        Current implementation may succeed (showing valid models) or fail depending
+        on selector implementation.
+        """
+        ns = _ns()
+        subscription_name = "e2e-degraded-models-apikey"
+        auth_name = "e2e-degraded-models-apikey-auth"
+        sa_name = "e2e-degraded-models-apikey-sa"
+        missing_model = "nonexistent-model-apikey"
+
+        try:
+            oc_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = f"system:serviceaccount:default:{sa_name}"
+
+            # Create auth policy
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+
+            # Create subscription
+            _create_test_subscription(
+                subscription_name,
+                [MODEL_REF, missing_model],
+                users=[sa_user]
+            )
+
+            _wait_reconcile(seconds=10)
+
+            # Verify Degraded
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            phase = cr.get("status", {}).get("phase")
+            assert phase == "Degraded", f"Expected Degraded, got {phase}"
+
+            # Create API key
+            # oc_token already set from _create_sa_token above
+            api_key = _create_api_key(
+                oc_token,
+                name="degraded-models",
+                subscription=subscription_name
+            )
+
+            # Call /v1/models
+            url = f"{_maas_api_url()}/v1/models"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+
+            log.info(f"GET {url} with API key")
+            r = requests.get(url, headers=headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+            log.info(f"Response: {r.status_code}")
+
+            # Should succeed - API key can list models from Degraded subscription
+            assert r.status_code == 200, \
+                f"Expected 200 for /v1/models with Degraded subscription API key, got {r.status_code}: {r.text[:500]}"
+
+            data = r.json()
+            models = data.get("data", [])
+            log.info(f"✅ /v1/models succeeded, returned {len(models)} models")
+
+            # At least the valid model should be present
+            assert len(models) > 0, \
+                "Expected at least one model from Degraded subscription with valid model"
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()
+
+    def test_models_endpoint_with_degraded_subscription_kube_token(self):
+        """
+        Test: /v1/models with Kube token includes models from Degraded subscriptions.
+
+        Kube tokens should return models from all accessible subscriptions,
+        including Degraded ones.
+        """
+        ns = _ns()
+        subscription_name = "e2e-degraded-models-kube"
+        auth_name = "e2e-degraded-models-kube-auth"
+        sa_name = "e2e-degraded-models-kube-sa"
+        missing_model = "nonexistent-model-kube"
+
+        try:
+            oc_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = f"system:serviceaccount:default:{sa_name}"
+
+            # Create auth policy
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+
+            # Create subscription
+            _create_test_subscription(
+                subscription_name,
+                [MODEL_REF, missing_model],
+                users=[sa_user]
+            )
+
+            _wait_reconcile(seconds=10)
+
+            # Verify Degraded
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            phase = cr.get("status", {}).get("phase")
+            assert phase == "Degraded", f"Expected Degraded, got {phase}"
+
+            # Call /v1/models with Kube token
+            url = f"{_maas_api_url()}/v1/models"
+            headers = {
+                "Authorization": f"Bearer {oc_token}",
+                "Content-Type": "application/json"
+            }
+
+            log.info(f"GET {url} with Kube token")
+            r = requests.get(url, headers=headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+            assert r.status_code == 200, \
+                f"Expected 200 with Kube token, got {r.status_code}: {r.text[:500]}"
+
+            data = r.json()
+            models = data.get("data", [])
+            log.info(f"Returned {len(models)} models")
+
+            # Verify the Degraded subscription is included in model subscriptions
+            found_degraded_sub = False
+            for model in models:
+                subs = model.get("subscriptions", [])
+                sub_names = [s.get("name") for s in subs]
+                if subscription_name in sub_names:
+                    log.info(f"✅ Model {model.get('id')} includes Degraded subscription {subscription_name}")
+                    found_degraded_sub = True
+                    break
+
+            assert found_degraded_sub, \
+                f"Expected Degraded subscription '{subscription_name}' to be included in /v1/models response, but not found in any model's subscriptions"
+
+            log.info("✅ /v1/models with Kube token includes Degraded subscription")
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace="default")
             _wait_reconcile()

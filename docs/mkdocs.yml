@@ -57,9 +57,10 @@ nav:
     - Migration:
       - Tier to Subscription: migration/tier-to-subscription.md
   - Concepts:
-    - Architecture: architecture.md
-    - Access and Quota Overview: configuration-and-management/subscription-overview.md
-    - MaaS Models: configuration-and-management/maas-models.md
+    - Architecture: concepts/architecture.md
+    - Personas: concepts/personas.md
+    - Access and Quota Overview: concepts/subscription-overview.md
+    - Model Reference: concepts/model-reference.md
   - Install:
     - Quick Start: quickstart.md
     - Prerequisites:
