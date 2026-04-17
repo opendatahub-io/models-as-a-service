@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -52,7 +53,23 @@ import (
 // MaaSSubscriptionReconciler reconciles a MaaSSubscription object
 type MaaSSubscriptionReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+}
+
+// isPermanentError returns true for errors that indicate a non-recoverable state
+// (admission rejection, invalid spec, forbidden) where retrying won't help.
+// Transient errors (timeouts, network, 5xx) return false and should be requeued.
+func isPermanentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return apierrors.IsInvalid(err) ||
+		apierrors.IsForbidden(err) ||
+		apierrors.IsConflict(err) ||
+		apierrors.IsNotAcceptable(err) ||
+		strings.Contains(err.Error(), "admission webhook") ||
+		strings.Contains(err.Error(), "denied the request")
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch;create;update;patch;delete
@@ -61,6 +78,7 @@ type MaaSSubscriptionReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/finalizers,verbs=update
 
 const (
@@ -760,9 +778,6 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 
 func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
-		// For each model referenced by this subscription, rebuild the aggregated TokenRateLimitPolicy
-		// without the deleted subscription's limits. If no other subscriptions reference the model,
-		// the TRLP will be deleted. This ensures zero-downtime rate limiting during subscription removal.
 		seen := make(map[string]struct{}, len(subscription.Spec.ModelRefs))
 		for _, modelRef := range subscription.Spec.ModelRefs {
 			k := modelRef.Namespace + "/" + modelRef.Name
@@ -772,14 +787,31 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 			seen[k] = struct{}{}
 			log.Info("Rebuilding TokenRateLimitPolicy without deleted subscription", "model", modelRef.Namespace+"/"+modelRef.Name, "subscription", subscription.Name)
 			if err := r.reconcileTRLPForModel(ctx, log, modelRef.Namespace, modelRef.Name); err != nil {
-				log.Error(err, "failed to reconcile TokenRateLimitPolicy during deletion, will retry", "model", modelRef.Namespace+"/"+modelRef.Name)
-				return ctrl.Result{}, err
+				if !isPermanentError(err) {
+					log.Error(err, "transient TRLP reconciliation failure during deletion, will retry", "model", modelRef.Namespace+"/"+modelRef.Name)
+					return ctrl.Result{}, err
+				}
+				log.Error(err, "permanent TRLP reconciliation failure during deletion, falling back to force-delete", "model", modelRef.Namespace+"/"+modelRef.Name)
+				if delErr := r.deleteModelTRLP(ctx, log, modelRef.Namespace, modelRef.Name); delErr != nil {
+					log.Error(delErr, "TRLP force-delete also failed, proceeding with finalizer removal", "model", modelRef.Namespace+"/"+modelRef.Name)
+				}
+				if r.Recorder != nil {
+					r.Recorder.Eventf(subscription, "Warning", "TRLPCleanupFailed",
+						"TRLP cleanup failed for model %s/%s during deletion (permanent error: %v); finalizer removed, orphaned TRLP may need manual cleanup",
+						modelRef.Namespace, modelRef.Name, err)
+				}
 			}
 		}
-		// Also clean up stale TRLPs from modelRefs that were removed
-		// before the CR was deleted (edge case: edit + delete before reconcile).
 		if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
-			return ctrl.Result{}, err
+			if !isPermanentError(err) {
+				log.Error(err, "transient stale TRLP cleanup failure during deletion, will retry")
+				return ctrl.Result{}, err
+			}
+			log.Error(err, "permanent stale TRLP cleanup failure during deletion, proceeding with finalizer removal")
+			if r.Recorder != nil {
+				r.Recorder.Eventf(subscription, "Warning", "StaleTRLPCleanupFailed",
+					"Stale TRLP cleanup failed during deletion (permanent error: %v); finalizer removed, orphaned TRLP may need manual cleanup", err)
+			}
 		}
 		controllerutil.RemoveFinalizer(subscription, maasSubscriptionFinalizer)
 		if err := r.Update(ctx, subscription); err != nil {
@@ -941,6 +973,8 @@ func conditionsSemanticallyEqual(a, b *metav1.Condition) bool {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("maas-subscription-controller")
+
 	// Register field indexer for efficient lookup of MaaSSubscriptions by model reference.
 	// This avoids cluster-wide scans when finding subscriptions for a specific model.
 	if err := mgr.GetFieldIndexer().IndexField(
