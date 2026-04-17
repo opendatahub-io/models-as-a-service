@@ -39,7 +39,7 @@ func createNamespaceApplierPlugin(targetNamespace string) *builtins.NamespaceTra
 func odhComponentLabels() map[string]string {
 	return map[string]string{
 		LabelODHAppPrefix + "/" + ComponentName: "true",
-		LabelK8sPartOf:                          ComponentName,
+		LabelK8sPartOf:                          "models-as-a-service",
 	}
 }
 

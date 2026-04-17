@@ -118,6 +118,7 @@ func ApplyParams(componentPath, file string, imageParamsMap map[string]string, e
 func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, objs []unstructured.Unstructured) error {
 	for i := range objs {
 		u := objs[i].DeepCopy()
+
 		childNs := u.GetNamespace()
 		if childNs != "" && childNs == tenant.Namespace {
 			if err := controllerutil.SetControllerReference(tenant, u, scheme); err != nil {

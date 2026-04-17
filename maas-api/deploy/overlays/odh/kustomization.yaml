@@ -15,8 +15,7 @@ resources:
 namespace: opendatahub
 
 labels:
-- includeSelectors: true
-  pairs:
+- pairs:
     app.kubernetes.io/component: api
     app.kubernetes.io/name: maas-api
 

@@ -23,8 +23,19 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
 	gatewayName := tenant.Spec.GatewayRef.Name
 
+	// Filter out resources with opendatahub.io/managed: false annotation
+	var filteredResources []unstructured.Unstructured
 	for i := range resources {
 		resource := &resources[i]
+
+		// Skip resources with opendatahub.io/managed: false annotation
+		annotations := resource.GetAnnotations()
+		if annotations != nil && annotations["opendatahub.io/managed"] == "false" {
+			log.V(2).Info("Skipping resource due to opendatahub.io/managed=false annotation",
+				"kind", resource.GetKind(), "name", resource.GetName(), "namespace", resource.GetNamespace())
+			continue
+		}
+
 		gvk := resource.GroupVersionKind()
 		switch {
 		case gvk == GVKAuthPolicy && resource.GetName() == GatewayDefaultAuthPolicyName:
@@ -38,24 +49,26 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 		case gvk == GVKDestinationRule && resource.GetName() == GatewayDestinationRuleName:
 			configureDestinationRule(log, resource, gatewayNamespace)
 		}
+
+		filteredResources = append(filteredResources, *resource)
 	}
 
-	setManagedFalseAnnotation(resources)
+	setManagedFalseAnnotation(filteredResources)
 
-	if err := configureExternalOIDC(log, tenant, resources); err != nil {
+	if err := configureExternalOIDC(log, tenant, filteredResources); err != nil {
 		return nil, err
 	}
-	if err := configureTelemetryPolicyResources(log, tenant, &resources); err != nil {
+	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources); err != nil {
 		return nil, err
 	}
-	if err := configureIstioTelemetryResources(log, tenant, &resources); err != nil {
+	if err := configureIstioTelemetryResources(log, tenant, &filteredResources); err != nil {
 		return nil, err
 	}
-	if err := configureConfigHashAnnotation(log, resources); err != nil {
+	if err := configureConfigHashAnnotation(log, filteredResources); err != nil {
 		return nil, err
 	}
 	_ = ctx
-	return resources, nil
+	return filteredResources, nil
 }
 
 func configureAuthPolicy(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string) error {
@@ -183,10 +196,10 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 
 func isTelemetryEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
 	if t == nil {
-		return true // omitted telemetry block means enabled (API default)
+		return false
 	}
 	if t.Enabled == nil {
-		return true
+		return false
 	}
 	return *t.Enabled
 }
