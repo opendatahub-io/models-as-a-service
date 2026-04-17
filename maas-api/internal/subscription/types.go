@@ -28,6 +28,11 @@ type SelectResponse struct {
 	CostCenter     string            `json:"costCenter,omitempty"`     // Cost center for attribution
 	Labels         map[string]string `json:"labels,omitempty"`         // Additional tracking labels
 
+	// Health fields (populated from status and metadata)
+	Phase             string `json:"phase"`                       // Subscription phase: "Active", "Degraded", "Failed", "Pending", or "" (always serialized for Authorino OPA rules)
+	Ready             bool   `json:"ready"`                       // Whether subscription is ready (from Ready condition)
+	DeletionTimestamp string `json:"deletionTimestamp,omitempty"` // Set when subscription is being deleted
+
 	// Error fields (populated when selection fails)
 	Error   string `json:"error,omitempty"`   // Error code (e.g., "bad_request", "not_found", "access_denied", "multiple_subscriptions")
 	Message string `json:"message,omitempty"` // Human-readable error message
@@ -58,6 +63,16 @@ type ModelRefInfo struct {
 type TokenRateLimit struct {
 	Limit  int64  `json:"limit"`
 	Window string `json:"window"`
+}
+
+// TokenRateLimitStatus represents the status of a TokenRateLimitPolicy for a model.
+type TokenRateLimitStatus struct {
+	Model     string `json:"model"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Ready     bool   `json:"ready"`
+	Reason    string `json:"reason"`
+	Message   string `json:"message"`
 }
 
 // BillingRate defines billing information.

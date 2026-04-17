@@ -4,14 +4,13 @@ kind: Component
 # =============================================================================
 # SHARED PATCHES COMPONENT
 # =============================================================================
-# Provides common configuration for all MaaS deployment overlays (tls-backend,
-# http-backend, odh). Centralizes patches and replacements to eliminate duplication
+# Provides common configuration for MaaS deployment overlays (ODH operator,
+# Tenant reconciler). Centralizes patches and replacements to eliminate duplication
 # and maintain DRY principle.
 #
 # USED BY:
-# - deployment/overlays/tls-backend/
-# - deployment/overlays/http-backend/
-# - deployment/overlays/odh/
+# - deployment/overlays/odh/            (ODH operator overlay)
+# - maas-api/deploy/overlays/odh/       (Tenant reconciler overlay)
 #
 # PROVIDES:
 # - Environment variables for maas-api deployment
@@ -101,19 +100,6 @@ replacements:
     fieldPaths:
     - spec.template.spec.containers.[name=manager].image
 
-# Replace API key cleanup CronJob image from params.env (ubi-minimal for curl)
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.maas-api-key-cleanup-image
-  targets:
-  - select:
-      kind: CronJob
-      name: maas-api-key-cleanup
-    fieldPaths:
-    - spec.jobTemplate.spec.template.spec.containers.[name=cleanup].image
-
 # -----------------------------------------------------------------------------
 # 2. GATEWAY CONFIGURATION
 # -----------------------------------------------------------------------------
@@ -163,6 +149,30 @@ replacements:
       name: maas-api-auth-policy
     fieldPaths:
     - spec.rules.metadata.apiKeyValidation.http.url
+    options:
+      delimiter: "."
+      index: 1
+
+# -----------------------------------------------------------------------------
+# 3b. DESTINATIONRULE HOST FIX (TLS overlay)
+# -----------------------------------------------------------------------------
+# When the TLS overlay is used, a DestinationRule is created with placeholder
+# host: maas-api.maas-api.svc → maas-api.<app-namespace>.svc
+# NOTE: DestinationRule namespace must be fixed by each overlay directly
+# (not here) because the overlay's `namespace:` directive overrides component
+# replacements. See overlays/odh for the pattern.
+# -----------------------------------------------------------------------------
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.app-namespace
+  targets:
+  - select:
+      kind: DestinationRule
+      name: maas-api-backend-tls
+    fieldPaths:
+    - spec.host
     options:
       delimiter: "."
       index: 1

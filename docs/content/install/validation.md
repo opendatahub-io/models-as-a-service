@@ -24,6 +24,13 @@ echo "Gateway endpoint: $HOST"
     echo "Using fallback gateway endpoint: $HOST"
     ```
 
+!!! note "Optional"
+    List MaaSSubscriptions you can access (authenticate with your OpenShift token; requires `HOST` from above):
+    ```bash
+    curl -sSk -H "Authorization: Bearer $(oc whoami -t)" \
+      "${HOST}/maas-api/v1/subscriptions" | jq .
+    ```
+
 ### 2. Get API Key
 
 For OpenShift, create an API key (authenticate with your OpenShift token):
@@ -38,6 +45,17 @@ API_KEY_RESPONSE=$(curl -sSk \
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key) && \
 echo "API key obtained: ${API_KEY:0:20}..."
 ```
+
+!!! note "Optional"
+    List your API keys (metadata only; plaintext secrets are never returned):
+    ```bash
+    curl -sSk \
+      -H "Authorization: Bearer $(oc whoami -t)" \
+      -H "Content-Type: application/json" \
+      -X POST \
+      -d '{}' \
+      "${HOST}/maas-api/v1/api-keys/search" | jq .
+    ```
 
 !!! warning "API key shown only once"
     The plaintext API key is returned **only at creation time**. We do not store the API key, so there is no way to retrieve it again. Store it securely when it is displayed. If you run into errors, see [Troubleshooting](troubleshooting.md).
@@ -61,26 +79,26 @@ echo "Model URL: $MODEL_URL"
 
 ### 4. Test Model Inference Endpoint
 
-Send a request to the model endpoint (should get a 200 OK response):
+Send a request to the model’s OpenAI-compatible **chat completions** API (expect **200 OK**). This example uses **`POST /v1/chat/completions`** with a `messages` array. If your backend only implements **`/v1/completions`** (prompt-based) or another route, adjust the path and JSON body accordingly.
 
 ```bash
 curl -sSk -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-  "${MODEL_URL}/v1/completions" | jq
+  -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
+  "${MODEL_URL}/v1/chat/completions" | jq
 ```
 
-### 5. Test Authorization Enforcement
+### 6. Test Authorization Enforcement
 
 Send a request to the model endpoint without a token (should get a 401 Unauthorized response):
 
 ```bash
 curl -sSk -H "Content-Type: application/json" \
-  -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-  "${MODEL_URL}/v1/completions" -v
+  -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
+  "${MODEL_URL}/v1/chat/completions" -v
 ```
 
-### 6. Test Rate Limiting
+### 7. Test Rate Limiting
 
 Send multiple requests to trigger rate limit (should get 200 OK followed by 429 Rate Limit Exceeded after about 4 requests):
 
@@ -89,8 +107,8 @@ for i in {1..16}; do
   curl -sSk -o /dev/null -w "%{http_code}\n" \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
-    -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-    "${MODEL_URL}/v1/completions"
+    -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
+    "${MODEL_URL}/v1/chat/completions"
 done
 ```
 

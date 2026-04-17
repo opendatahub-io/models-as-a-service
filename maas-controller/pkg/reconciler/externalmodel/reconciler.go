@@ -21,6 +21,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 const (
@@ -30,9 +31,8 @@ const (
 	// annotationTLS controls TLS origination (default "true").
 	annotationTLS = "maas.opendatahub.io/tls"
 
-	// Default gateway (matches MaaS controller defaults)
-	defaultGatewayName      = "maas-default-gateway"
-	defaultGatewayNamespace = "openshift-ingress"
+	defaultGatewayName      = tenantreconcile.DefaultGatewayName
+	defaultGatewayNamespace = tenantreconcile.DefaultGatewayNamespace
 )
 
 // Reconciler watches ExternalModel CRs and creates the Istio resources

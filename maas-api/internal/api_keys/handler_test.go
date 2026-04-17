@@ -29,13 +29,13 @@ type fixedSubSelector struct{}
 
 func (fixedSubSelector) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if requested != "" {
-		return &subscription.SelectResponse{Name: requested}, nil
+		return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
 	}
-	return &subscription.SelectResponse{Name: testSubscriptionName}, nil
+	return &subscription.SelectResponse{Name: testSubscriptionName, Phase: "Active"}, nil
 }
 
 func (fixedSubSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
-	return &subscription.SelectResponse{Name: testSubscriptionName}, nil
+	return &subscription.SelectResponse{Name: testSubscriptionName, Phase: "Active"}, nil
 }
 
 // errSubSelector returns fixed errors from Select / SelectHighestPriority (for handler HTTP mapping tests).
@@ -48,14 +48,14 @@ func (e errSubSelector) Select(_ []string, _ string, _ string, _ string) (*subsc
 	if e.selectErr != nil {
 		return nil, e.selectErr
 	}
-	return &subscription.SelectResponse{Name: "stub-sub"}, nil
+	return &subscription.SelectResponse{Name: "stub-sub", Phase: "Active"}, nil
 }
 
 func (e errSubSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
 	if e.highestPriorityErr != nil {
 		return nil, e.highestPriorityErr
 	}
-	return &subscription.SelectResponse{Name: testSubscriptionName}, nil
+	return &subscription.SelectResponse{Name: testSubscriptionName, Phase: "Active"}, nil
 }
 
 // Test constants.

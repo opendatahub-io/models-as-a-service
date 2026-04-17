@@ -22,10 +22,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -41,11 +43,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
 )
 
@@ -56,6 +60,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(extv1.AddToScheme(scheme))
 	utilruntime.Must(kservev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayapiv1.Install(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
@@ -320,6 +325,61 @@ func getClusterServiceAccountIssuer(c client.Reader) (string, error) {
 	return issuer, nil
 }
 
+// ensureDefaultTenantRunnable returns a manager.Runnable that periodically ensures the
+// default-tenant CR exists. If the Tenant is deleted (e.g. during testing or operator
+// lifecycle), it will be recreated on the next tick.
+func ensureDefaultTenantRunnable(mgr ctrl.Manager, tenantNamespace string) manager.RunnableFunc {
+	return func(ctx context.Context) error {
+		log := ctrl.Log.WithName("setup").WithName("ensureDefaultTenant")
+		c := mgr.GetClient()
+
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		ensure := func() {
+			key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNamespace}
+			var existing maasv1alpha1.Tenant
+			if err := c.Get(ctx, key, &existing); err == nil {
+				return
+			} else if !errors.IsNotFound(err) {
+				log.Error(err, "failed to check for default-tenant")
+				return
+			}
+
+			tenant := &maasv1alpha1.Tenant{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: maasv1alpha1.GroupVersion.String(),
+					Kind:       maasv1alpha1.TenantKind,
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      maasv1alpha1.TenantInstanceName,
+					Namespace: tenantNamespace,
+				},
+			}
+			tenantreconcile.EnsureTenantGatewayDefaults(tenant)
+
+			if err := c.Create(ctx, tenant); err != nil {
+				if errors.IsAlreadyExists(err) {
+					return
+				}
+				log.Error(err, "failed to create default-tenant", "namespace", tenantNamespace)
+				return
+			}
+			log.Info("created default-tenant", "namespace", tenantNamespace)
+		}
+
+		ensure()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				ensure()
+			}
+		}
+	}
+}
+
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -365,11 +425,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("watching namespace for MaaS AuthPolicy and MaaSSubscription", "namespace", maasSubscriptionNamespace)
+	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
+	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
-			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: map[string]cache.Config{maasSubscriptionNamespace: {}}},
-			&maasv1alpha1.MaaSSubscription{}: {Namespaces: map[string]cache.Config{maasSubscriptionNamespace: {}}},
+			&maasv1alpha1.Tenant{}:           {Namespaces: nsCfg},
+			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
+			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
 		},
 	}
 
@@ -444,6 +506,34 @@ func main() {
 		needLeaderElection: enableLeaderElection,
 	}); err != nil {
 		setupLog.Error(err, "unable to add subscription namespace monitor")
+		os.Exit(1)
+	}
+
+	// Ensure the default-tenant CR exists in the MaaS subscription namespace
+	// (same namespace as MaaSSubscription / MaaSAuthPolicy CRs).
+	// maas-controller owns creation; ODH operator only reads status and deletes on disable.
+	if err := mgr.Add(ensureDefaultTenantRunnable(mgr, maasSubscriptionNamespace)); err != nil {
+		setupLog.Error(err, "unable to register ensureDefaultTenant runnable")
+		os.Exit(1)
+	}
+
+	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
+	if manifestPath == "" {
+		manifestPath = tenantreconcile.DefaultManifestPath()
+	}
+	if abs, err := filepath.Abs(manifestPath); err == nil {
+		manifestPath = abs
+	}
+	setupLog.Info("Tenant platform kustomize path", "path", manifestPath)
+
+	if err := (&maas.TenantReconciler{
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		ManifestPath:    manifestPath,
+		AppNamespace:    maasAPINamespace,
+		TenantNamespace: maasSubscriptionNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
 		os.Exit(1)
 	}
 

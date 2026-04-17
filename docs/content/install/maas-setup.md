@@ -185,12 +185,52 @@ After creating the database Secret and Gateways, create or update your DataScien
     - **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
     - **NetworkPolicy** (maas-authorino-allow) - Allows Authorino to reach MaaS API
 
+    ### ModelsAsService CR
+
+    With `modelsAsService` **Managed**, the [Open Data Hub operator](https://github.com/opendatahub-io/opendatahub-operator) reconciles a **cluster-scoped** `ModelsAsService` object. The resource name **must** be `default-modelsasservice` (only one instance per cluster). The authoritative API definition is in the operator repo: [`modelsasservice_types.go`](https://github.com/opendatahub-io/opendatahub-operator/blob/main/api/components/v1alpha1/modelsasservice_types.go).
+
+    **Nothing in `spec` is required for a default install.** If you omit `spec`, the operator uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below.
+
+    | Field | What to set |
+    | ----- | ----------- |
+    | `spec.gatewayRef.namespace` | Namespace of your Gateway API `Gateway` (default `openshift-ingress`). |
+    | `spec.gatewayRef.name` | Name of that `Gateway` (default `maas-default-gateway`). Set these if your MaaS hostname is exposed through a different Gateway than the default. |
+    | `spec.apiKeys.maxExpirationDays` | Maximum allowed API key lifetime in **days**. When set, users cannot mint keys with a longer lifetime than this value (via `expiresIn`). Optional; if unset, the operator does not apply a cap through this field (see also `maas-api` / `API_KEY_MAX_EXPIRATION_DAYS` in your deployment). |
+    | `spec.telemetry.metrics.captureOrganization` | Include `organization_id` on metrics (default `true`). |
+    | `spec.telemetry.metrics.captureUser` | Include user labels on metrics (default `false`; privacy-sensitive). |
+    | `spec.telemetry.metrics.captureGroup` | Include group labels on metrics (default `false`; higher cardinality). |
+    | `spec.telemetry.metrics.captureModelUsage` | Include model labels on usage metrics (default `true`). |
+
+    Example (patch common values):
+
+    ```yaml
+    apiVersion: components.platform.opendatahub.io/v1alpha1
+    kind: ModelsAsService
+    metadata:
+      name: default-modelsasservice
+    spec:
+      gatewayRef:
+        namespace: openshift-ingress
+        name: maas-default-gateway
+      apiKeys:
+        maxExpirationDays: 90
+      telemetry:
+        metrics:
+          captureUser: false
+          captureGroup: false
+    ```
+
+    ```bash
+    kubectl apply -f modelsasservice.yaml
+    kubectl get modelsasservice default-modelsasservice -o yaml
+    ```
+
 === "Kustomize"
 
     !!! note "Development and early testing"
         Kustomize deployment can be used for **development and early testing purposes**. For production, use the Managed tab above.
 
-    Set `modelsAsService` to **Unmanaged** so the operator does not deploy the MaaS API, then deploy MaaS via the ODH overlay:
+    Set `modelsAsService` to **Removed** so the operator does not deploy the MaaS API, then deploy MaaS via the ODH overlay:
 
     ```yaml
     kubectl apply -f - <<EOF
