@@ -739,6 +739,29 @@ find_project_root() {
   fi
 }
 
+# _patch_params_env key value project_root
+#   Patches a key=value line in params.env. Creates a backup on first call.
+_patch_params_env() {
+  local key="$1" value="$2" project_root="$3"
+  export _MAAS_PARAMS_ENV="$project_root/deployment/overlays/odh/params.env"
+  [ -f "$_MAAS_PARAMS_ENV" ] || return 0
+  export _MAAS_PARAMS_ENV_BACKUP="${_MAAS_PARAMS_ENV}.backup"
+  if [ ! -f "$_MAAS_PARAMS_ENV_BACKUP" ]; then
+    cp "$_MAAS_PARAMS_ENV" "$_MAAS_PARAMS_ENV_BACKUP"
+  fi
+  local sed_cmd="sed"
+  [[ "$(uname -s)" == "Darwin" ]] && sed_cmd="gsed"
+  $sed_cmd -i "s|^${key}=.*|${key}=${value}|" "$_MAAS_PARAMS_ENV"
+}
+
+# _cleanup_params_env
+#   Restores params.env from backup. Safe to call multiple times.
+_cleanup_params_env() {
+  if [ -n "${_MAAS_PARAMS_ENV_BACKUP:-}" ] && [ -f "$_MAAS_PARAMS_ENV_BACKUP" ]; then
+    mv -f "$_MAAS_PARAMS_ENV_BACKUP" "$_MAAS_PARAMS_ENV" 2>/dev/null || true
+  fi
+}
+
 # set_maas_api_image
 #   Sets the MaaS API container image in base kustomization using MAAS_API_IMAGE env var.
 #   If MAAS_API_IMAGE is not set, does nothing.
@@ -774,15 +797,20 @@ set_maas_api_image() {
     mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
     return 1
   }
+
+  # Patch params.env — kustomize replacements in shared-patches read from this
+  # file and override the base images: transformer set above.
+  _patch_params_env "maas-api-image" "$MAAS_API_IMAGE" "$project_root"
 }
 
 # cleanup_maas_api_image
-#   Restores the original kustomization.yaml from backup.
+#   Restores the original kustomization.yaml and params.env from backup.
 #   Safe to call even if set_maas_api_image was not called or MAAS_API_IMAGE was not set.
 cleanup_maas_api_image() {
   if [ -n "${_MAAS_API_BACKUP:-}" ] && [ -f "$_MAAS_API_BACKUP" ]; then
     mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
   fi
+  _cleanup_params_env
 }
 
 # set_maas_controller_image
@@ -817,15 +845,20 @@ set_maas_controller_image() {
     mv -f "$_MAAS_CONTROLLER_BACKUP" "$_MAAS_CONTROLLER_KUSTOMIZATION" 2>/dev/null || true
     return 1
   }
+
+  # Patch params.env — kustomize replacements in shared-patches read from this
+  # file and override the base images: transformer set above.
+  _patch_params_env "maas-controller-image" "$MAAS_CONTROLLER_IMAGE" "$project_root"
 }
 
 # cleanup_maas_controller_image
-#   Restores the original controller kustomization.yaml from backup.
+#   Restores the original controller kustomization.yaml and params.env from backup.
 #   Safe to call even if set_maas_controller_image was not called or MAAS_CONTROLLER_IMAGE was not set.
 cleanup_maas_controller_image() {
   if [ -n "${_MAAS_CONTROLLER_BACKUP:-}" ] && [ -f "$_MAAS_CONTROLLER_BACKUP" ]; then
     mv -f "$_MAAS_CONTROLLER_BACKUP" "$_MAAS_CONTROLLER_KUSTOMIZATION" 2>/dev/null || true
   fi
+  _cleanup_params_env
 }
 
 # set_overlay_namespace overlay_dir namespace
@@ -1487,4 +1520,117 @@ create_maas_db_config_secret() {
       --dry-run=client -o yaml | \
     kubectl label --local -f - app=maas-api --dry-run=client -o yaml | \
     kubectl apply -n "$namespace" -f -
+}
+
+# ==========================================
+# Diagnostic Helpers
+# ==========================================
+
+# dump_llmis_diagnostics <llmis_name> <namespace>
+#   Dumps comprehensive diagnostic information when an LLMInferenceService
+#   fails to become ready. Captures pod status, logs, events, and node resources
+#   to help diagnose deployment failures.
+#
+# Usage:
+#   if ! kubectl wait llminferenceservice/my-model --for=condition=Ready; then
+#       dump_llmis_diagnostics "my-model" "llm"
+#   fi
+#
+# Output:
+#   - LLMInferenceService status (conditions, observedGeneration)
+#   - Pod status (wide format)
+#   - ReplicaSet/Deployment status
+#   - Container logs (current and previous)
+#   - Namespace events
+#   - Node resource allocation
+dump_llmis_diagnostics() {
+    local llmis_name="$1"
+    local namespace="$2"
+
+    if [[ -z "$llmis_name" || -z "$namespace" ]]; then
+        echo "Usage: dump_llmis_diagnostics <llmis_name> <namespace>"
+        return 1
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo "LLMInferenceService Diagnostics: $llmis_name"
+    echo "=========================================="
+
+    echo ""
+    echo "========== LLMInferenceService Status =========="
+    # Only output status (not full YAML) to avoid logging potentially sensitive spec fields
+    kubectl get llminferenceservice/"$llmis_name" -n "$namespace" -o jsonpath='{.status}' 2>&1 | jq -C '.' 2>/dev/null || \
+        kubectl get llminferenceservice/"$llmis_name" -n "$namespace" -o jsonpath='{.status}' 2>&1 || \
+        echo "  (failed to get LLMIS status)"
+
+    echo ""
+    echo "========== Pod Status =========="
+    # KServe creates resources with pattern: ${llmis_name}-kserve-*
+    # Use name-based filtering since label selectors may not match
+    if kubectl get pods -n "$namespace" 2>/dev/null | grep -q "^${llmis_name}-"; then
+        kubectl get pods -n "$namespace" 2>&1 | grep "^NAME\|^${llmis_name}-" || echo "  (no matching pods found)"
+    else
+        echo "  (no pods found matching pattern: ${llmis_name}-*)"
+    fi
+
+    echo ""
+    echo "========== ReplicaSet Status =========="
+    if kubectl get rs -n "$namespace" 2>/dev/null | grep -q "^${llmis_name}-"; then
+        kubectl get rs -n "$namespace" -o wide 2>&1 | grep "^NAME\|^${llmis_name}-" || echo "  (no matching replicasets found)"
+    else
+        echo "  (no replicasets found matching pattern: ${llmis_name}-*)"
+    fi
+
+    echo ""
+    echo "========== Deployment Status =========="
+    if kubectl get deployment -n "$namespace" 2>/dev/null | grep -q "^${llmis_name}-"; then
+        kubectl get deployment -n "$namespace" -o wide 2>&1 | grep "^NAME\|^${llmis_name}-" || echo "  (no matching deployments found)"
+    else
+        echo "  (no deployments found matching pattern: ${llmis_name}-*)"
+    fi
+
+    echo ""
+    echo "========== Container Logs =========="
+    local pods
+    # Use awk alone to avoid grep exit code 1 when no matches found
+    pods=$(kubectl get pods -n "$namespace" --no-headers 2>/dev/null | awk '/^'"${llmis_name}"'-/ {print $1}')
+
+    if [[ -z "$pods" ]]; then
+        echo "  (no pods found - container logs unavailable)"
+    else
+        for pod in $pods; do
+            echo ""
+            echo "--- Pod: $pod ---"
+
+            # Try main container
+            echo "Main container (current):"
+            kubectl logs "$pod" -n "$namespace" -c main --tail=100 2>&1 || echo "  (no logs available)"
+
+            echo ""
+            echo "Main container (previous - if crashed):"
+            kubectl logs "$pod" -n "$namespace" -c main --previous --tail=100 2>&1 || echo "  (no previous logs)"
+
+            echo ""
+            echo "Storage initializer container:"
+            kubectl logs "$pod" -n "$namespace" -c storage-initializer --tail=50 2>&1 || echo "  (no logs available)"
+        done
+    fi
+
+    echo ""
+    echo "========== Namespace Events (Recent 100) =========="
+    kubectl get events -n "$namespace" --sort-by='.lastTimestamp' 2>&1 | tail -100 || echo "  (failed to get events)"
+
+    echo ""
+    echo "========== Node Status =========="
+    kubectl get nodes -o wide 2>&1 || echo "  (failed to get nodes)"
+
+    echo ""
+    echo "========== Node Resource Allocation =========="
+    kubectl describe nodes 2>&1 | grep -A 10 "Allocated resources:" || echo "  (failed to get node resources)"
+
+    echo ""
+    echo "=========================================="
+    echo "End of diagnostics for: $llmis_name"
+    echo "=========================================="
 }

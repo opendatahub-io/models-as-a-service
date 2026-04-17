@@ -401,6 +401,7 @@ MaaSSubscription and MaaSAuthPolicy use these phases:
 | **Active** | All model references valid, all operands healthy |
 | **Degraded** | Partial functionality — some models valid, others missing/invalid |
 | **Failed** | No functionality — all model references invalid or missing |
+| **Pending** | Transitional state — resources or model references are being created/updated and validity/health is not yet determined |
 
 Check per-item status to identify specific issues:
 

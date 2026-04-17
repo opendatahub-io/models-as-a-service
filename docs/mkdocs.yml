@@ -57,9 +57,10 @@ nav:
     - Migration:
       - Tier to Subscription: migration/tier-to-subscription.md
   - Concepts:
-    - Architecture: architecture.md
-    - Access and Quota Overview: configuration-and-management/subscription-overview.md
-    - MaaS Models: configuration-and-management/maas-models.md
+    - Architecture: concepts/architecture.md
+    - Personas: concepts/personas.md
+    - Access and Quota Overview: concepts/subscription-overview.md
+    - Model Reference: concepts/model-reference.md
   - Install:
     - Quick Start: quickstart.md
     - Prerequisites:
@@ -74,8 +75,9 @@ nav:
     - Configuration & Management:
       - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
       - Token Management: configuration-and-management/token-management.md
+      - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
-      - Subscription Known Issues: configuration-and-management/subscription-known-issues.md
+      - Subscription limitations & known issues: configuration-and-management/subscription-known-issues.md
     - Models:
       - Model Setup (On Cluster): configuration-and-management/model-setup.md
       - Model Listing Flow: configuration-and-management/model-listing-flow.md

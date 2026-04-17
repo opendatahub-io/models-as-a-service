@@ -32,28 +32,43 @@ const maxModelsResponseBytes int64 = 4 << 20 // 4 MiB
 
 // HTTP client and concurrency for access-validation probes.
 const (
-	httpClientTimeout       = 5 * time.Second
 	httpMaxIdleConns        = 100
 	httpIdleConnTimeout     = 90 * time.Second
 	maxDiscoveryConcurrency = 10
+
+	// defaultAccessCheckTimeout bounds the total duration of FilterModelsByAccess.
+	// This limits the staleness window between when access is checked and when
+	// the response reaches the client. Models whose probes don't complete within
+	// this window are excluded (fail-closed).
+	defaultAccessCheckTimeout = 15 * time.Second
 )
 
 // Manager runs access validation (probe model endpoints) for models listed from MaaSModelRef.
 type Manager struct {
-	logger     *logger.Logger
-	httpClient *http.Client
+	logger             *logger.Logger
+	httpClient         *http.Client
+	accessCheckTimeout time.Duration
 }
 
 // NewManager creates a Manager for filtering models by access. The client uses InsecureSkipVerify
 // for cluster-internal probes; auth is enforced by the gateway/model server.
-func NewManager(log *logger.Logger) (*Manager, error) {
+// accessCheckTimeoutSeconds controls the total duration bound for access validation;
+// if <= 0, the default of 15 seconds is used.
+func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int) (*Manager, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
+	timeout := defaultAccessCheckTimeout
+	if accessCheckTimeoutSeconds > 0 {
+		timeout = time.Duration(accessCheckTimeoutSeconds) * time.Second
+	}
 	return &Manager{
-		logger: log,
+		logger:             log,
+		accessCheckTimeout: timeout,
 		httpClient: &http.Client{
-			Timeout: httpClientTimeout,
+			// No per-client Timeout — each request inherits the accessCheckTimeout
+			// deadline via its context. This ensures that configuring a longer
+			// ACCESS_CHECK_TIMEOUT_SECONDS actually allows slower backends to respond.
 			Transport: &http.Transport{
 				TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // cluster-internal only
 				MaxIdleConns:        httpMaxIdleConns,
@@ -65,12 +80,26 @@ func NewManager(log *logger.Logger) (*Manager, error) {
 }
 
 // FilterModelsByAccess returns only models the user can access by probing each model's
-// /v1/models endpoint with the given Authorization and x-maas-subscription headers (passed through as-is). 2xx or 405 → include, 401/403/404 → exclude.
+// /v1/models endpoint with the given Authorization and x-maas-subscription headers (passed through as-is).
+// 2xx or 405 → include, 401/403/404 → exclude.
 // Models with nil URL are skipped. Concurrency is limited by maxDiscoveryConcurrency.
+//
+// Because authorization policies propagate asynchronously through the gateway, there is an
+// inherent eventual-consistency window: a model listed here may become inaccessible (or vice versa)
+// by the time the client acts on the response. Actual enforcement always happens at the gateway
+// when the model is invoked for inference. Callers should set Cache-Control: no-store and expose
+// a freshness timestamp via response headers so clients can assess freshness.
+//
+// The access check is bounded by accessCheckTimeout to limit the staleness window.
 func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, authHeader string, subscriptionHeader string) []Model {
 	if len(models) == 0 {
 		return models
 	}
+
+	// Bound the total access-check duration to limit the staleness window.
+	ctx, cancel := context.WithTimeout(ctx, m.accessCheckTimeout)
+	defer cancel()
+
 	m.logger.Debug("FilterModelsByAccess: validating access for models", "count", len(models), "subscriptionHeaderProvided", subscriptionHeader != "")
 	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null when no models are accessible
 	out := []Model{}
@@ -222,7 +251,11 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, s
 		lastResult = authRes
 		return lastResult != authRetry, nil
 	}); err != nil {
-		m.logger.Debug("Access validation failed: model fetch backoff exhausted", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
+		if errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
+			m.logger.Debug("Access validation failed: context deadline exceeded", "service", meta.ServiceName, "endpoint", meta.Endpoint, "timeout", m.accessCheckTimeout)
+		} else {
+			m.logger.Debug("Access validation failed: model fetch backoff exhausted", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
+		}
 		return nil // explicit fail-closed on error
 	}
 
@@ -249,6 +282,10 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 	// #nosec G704 -- Intentional HTTP request to probe model endpoint for authorization check
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
+			m.logger.Debug("Access validation: request timed out (context deadline exceeded)", "service", meta.ServiceName, "endpoint", meta.Endpoint)
+			return nil, authDenied // fail-closed, no point retrying a deadline
+		}
 		m.logger.Debug("Access validation: GET request failed", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
 		return nil, authRetry
 	}

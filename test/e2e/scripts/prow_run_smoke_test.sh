@@ -275,14 +275,12 @@ deploy_models() {
     echo "Waiting for models to be ready (timeout: ${LLMIS_TIMEOUT}s)..."
     if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
         echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for free simulator to be ready"
-        oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
-        oc get events -n llm --sort-by='.lastTimestamp' || true
+        dump_llmis_diagnostics "facebook-opt-125m-simulated" "llm"
         exit 1
     fi
     if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
         echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for premium simulator to be ready"
-        oc get llminferenceservice/premium-simulated-simulated-premium -n llm -o yaml || true
-        oc get events -n llm --sort-by='.lastTimestamp' || true
+        dump_llmis_diagnostics "premium-simulated-simulated-premium" "llm"
         exit 1
     fi
     echo "✅ Simulator models ready"
@@ -453,7 +451,38 @@ setup_premium_test_token() {
 
     export E2E_TEST_TOKEN_SA_NAMESPACE="$PREMIUM_USERS_NS"
     export E2E_TEST_TOKEN_SA_NAME="$PREMIUM_SA"
-    # TODO: Add brief reconcile wait if controller is slow to pick up patches.
+
+    # Wait for subscriptions to reconcile after patches (race condition fix)
+    # Subscriptions must reach Active or Degraded phase before tests start,
+    # otherwise the OPA rule in subscription-valid will reject empty phase.
+    echo "Waiting for MaaSSubscriptions to reconcile after patch (timeout: 60s)..."
+    local timeout=60
+    local deadline=$((SECONDS + timeout))
+    local both_ready=false
+
+    while [[ $SECONDS -lt $deadline ]]; do
+        local sim_phase premium_phase
+        sim_phase=$(oc get maassubscription simulator-subscription -n "$MAAS_SUBSCRIPTION_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+        premium_phase=$(oc get maassubscription premium-simulator-subscription -n "$MAAS_SUBSCRIPTION_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+
+        # Accept Active or Degraded (both are valid for tests)
+        if [[ "$sim_phase" == "Active" || "$sim_phase" == "Degraded" ]] && \
+           [[ "$premium_phase" == "Active" || "$premium_phase" == "Degraded" ]]; then
+            echo "✅ Both subscriptions ready: simulator-subscription=$sim_phase, premium-simulator-subscription=$premium_phase"
+            both_ready=true
+            break
+        fi
+
+        sleep 2
+    done
+
+    if ! $both_ready; then
+        echo "❌ ERROR: Subscriptions did not reach Active/Degraded phase within ${timeout}s"
+        echo "Subscription status:"
+        oc get maassubscriptions -n "$MAAS_SUBSCRIPTION_NAMESPACE" -o yaml || true
+        exit 1
+    fi
+
     echo "✅ Premium test token setup complete (E2E_TEST_TOKEN_SA_* exported)"
 }
 
@@ -517,7 +546,7 @@ run_e2e_tests() {
         echo "⚠️  WARNING: Gateway not reachable after ${gw_timeout}s, proceeding anyway (tests may fail)"
     fi
 
-    # Run all e2e tests: API keys, subscription, models endpoint, and namespace scoping tests
+    # Run all e2e tests: API keys, namespace scoping, negative security, subscription, models endpoint
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
@@ -525,9 +554,10 @@ run_e2e_tests() {
         --capture=tee-sys --show-capture=all --log-level=INFO \
         "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_namespace_scoping.py" \
+        "$test_dir/tests/test_negative_security.py" \
         "$test_dir/tests/test_subscription.py" \
         "$test_dir/tests/test_models_endpoint.py" \
-        "$test_dir/tests/test_external_oidc.py" ; then 
+        "$test_dir/tests/test_external_models.py" ; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi

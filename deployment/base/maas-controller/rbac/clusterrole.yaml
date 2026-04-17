@@ -23,6 +23,7 @@ rules:
   - services
   verbs:
   - create
+  - delete
   - get
   - list
   - update
@@ -91,6 +92,15 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
+  - externalmodels/finalizers
+  - maasauthpolicies/finalizers
+  - maasmodelrefs/finalizers
+  - maassubscriptions/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
   - maasauthpolicies
   - maasmodelrefs
   - maassubscriptions
@@ -102,14 +112,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - maas.opendatahub.io
-  resources:
-  - maasauthpolicies/finalizers
-  - maasmodelrefs/finalizers
-  - maassubscriptions/finalizers
-  verbs:
-  - update
 - apiGroups:
   - maas.opendatahub.io
   resources:

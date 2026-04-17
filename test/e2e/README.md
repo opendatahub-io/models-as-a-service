@@ -135,6 +135,42 @@ The `/v1/models` endpoint implements subscription-aware model filtering:
 - HTTP header handling follows standards (case-insensitive)
 - Model metadata is accurately preserved from source
 
+### Negative & Security Tests
+
+```bash
+cd test/e2e
+source .venv/bin/activate
+
+pytest tests/test_negative_security.py -v
+```
+
+**Test Coverage (8 tests):**
+
+- Header spoofing: client-injected identity headers (`X-MaaS-Username`, `X-MaaS-Group`, `X-MaaS-Key-Id`) are stripped
+- Duplicate `X-MaaS-Subscription` headers don't override API key binding
+- Expired API keys rejected at gateway (403)
+- Cross-model access denied when subscription doesn't cover the model (403)
+- AuthPolicy deletion revokes gateway access
+- MaaSSubscription referencing non-existent model does not reach Active
+- MaaSAuthPolicy referencing non-existent model does not reach Active
+- Special characters / injection payloads in `X-MaaS-Subscription` header handled safely
+
+These tests validate the platform's security invariants.
+
+### Namespace Scoping Tests
+
+Tests that MaaS controller and API only watch the subscription namespace:
+
+```bash
+pytest tests/test_namespace_scoping.py -v
+```
+
+**Test Coverage (3 test classes):**
+- MaaS API only sees subscriptions in the subscription namespace
+- Controller only reconciles CRs in the subscription namespace
+- AuthPolicy model ref scoping (only reconciled into the referenced model's namespace)
+- Subscription model ref scoping (TRLP only created in the referenced model's namespace)
+
 ## CI Integration
 
 These tests run automatically in CI via:
@@ -148,6 +184,8 @@ The `prow_run_smoke_test.sh` script:
    - API key management (`test_api_keys.py`)
    - Subscription controller (`test_subscription.py`)
    - Models endpoint (`test_models_endpoint.py`)
+   - Negative & security (`test_negative_security.py`)
+   - Namespace scoping (`test_namespace_scoping.py`)
    - External OIDC (`test_external_oidc.py`) when `EXTERNAL_OIDC=true`
 4. Requires externally provided OIDC settings when `EXTERNAL_OIDC=true`
 5. Runs deployment validation and token metadata verification

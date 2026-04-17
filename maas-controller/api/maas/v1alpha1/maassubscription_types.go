@@ -78,8 +78,13 @@ type TokenRateLimit struct {
 	// +kubebuilder:validation:Minimum=1
 	Limit int64 `json:"limit"`
 
-	// Window is the time window (e.g., "1m", "1h", "24h")
-	// +kubebuilder:validation:Pattern=`^(\d+)(s|m|h|d)$`
+	// Window is the time window for rate limiting (e.g., "1m", "1h", "24h").
+	// Allowed units: s (seconds), m (minutes), h (hours). Days (d) are not
+	// supported; use hours instead (e.g., "24h" for one day).
+	// The numeric part must be between 1 and 9999.
+	// +kubebuilder:validation:MinLength=2
+	// +kubebuilder:validation:MaxLength=5
+	// +kubebuilder:validation:Pattern=`^[1-9]\d{0,3}(s|m|h)$`
 	Window string `json:"window"`
 }
 

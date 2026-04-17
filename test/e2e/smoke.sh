@@ -82,30 +82,72 @@ fi
 USER="$(oc whoami)"
 echo "[smoke] Performing smoke test for user: ${USER}"
 
-# 1) Get OC token directly (no more /v1/tokens minting endpoint)
+# 1) Get bootstrap token and mint API key for tests
 mkdir -p "${DIR}/reports"
 LOG="${DIR}/reports/smoke-${USER}.log"
 : > "${LOG}"
 
-TOKEN="$(oc whoami -t || true)"
-if [[ -z "${TOKEN}" ]]; then
-  echo "[smoke] ERROR: could not get OC token via 'oc whoami -t'" | tee -a "${LOG}"
+# Get bootstrap token (cluster token used only for minting API keys)
+BOOTSTRAP_TOKEN="$(oc whoami -t || true)"
+if [[ -z "${BOOTSTRAP_TOKEN}" ]]; then
+  echo "[smoke] ERROR: could not get bootstrap token via 'oc whoami -t'" | tee -a "${LOG}"
   echo "[smoke] Make sure you are logged into OpenShift" | tee -a "${LOG}"
+  exit 1
+fi
+
+# Log token acquisition without exposing token content
+echo "[bootstrap] acquired cluster token (len=${#BOOTSTRAP_TOKEN})" >> "${LOG}"
+
+# Mint an API key using a bootstrap token
+# Usage: mint_api_key <key_name> [bootstrap_token]
+# All logs go to stderr; only the key is written to stdout
+mint_api_key() {
+  local key_name="${1:-e2e-smoke-key}"
+  local token="${2:-${BOOTSTRAP_TOKEN}}"
+  local response
+  local api_key
+  
+  # Pre-flight check for jq
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "[smoke] ERROR: jq is required to mint API keys" | tee -a "${LOG}" >&2
+    return 1
+  fi
+  
+  echo "[smoke] Minting API key '${key_name}' via ${MAAS_API_BASE_URL}/v1/api-keys..." | tee -a "${LOG}" >&2
+  
+  if ! response=$(curl -skS --max-time 30 -X POST \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\": \"${key_name}\", \"expiresIn\": \"2h\"}" \
+    "${MAAS_API_BASE_URL}/v1/api-keys" 2>&1); then
+    echo "[smoke] ERROR: Failed to reach ${MAAS_API_BASE_URL}/v1/api-keys" | tee -a "${LOG}" >&2
+    return 1
+  fi
+  
+  api_key=$(echo "${response}" | jq -r '.key // empty' 2>/dev/null || true)
+  
+  if [[ -z "${api_key}" || "${api_key}" == "null" ]]; then
+    echo "[smoke] ERROR: Failed to mint API key" | tee -a "${LOG}" >&2
+    echo "[smoke] Response from /v1/api-keys was not parseable (may contain sensitive data)" | tee -a "${LOG}" >&2
+    return 1
+  fi
+  
+  echo "[smoke] Successfully minted API key (len=${#api_key})" | tee -a "${LOG}" >&2
+  printf '%s\n' "${api_key}"
+}
+
+# Mint API key for tests
+if ! TOKEN=$(mint_api_key "e2e-smoke-${USER}"); then
+  echo "[smoke] ERROR: Failed to mint API key for tests" | tee -a "${LOG}"
   exit 1
 fi
 export TOKEN
 
-# Log a masked preview of the token to the log (not the console)
-echo "[token] using OC token: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
-
-# Admin token setup - use current user if possible, add to odh-admins
+# Admin token setup - add to odh-admins, then mint admin API key
 setup_admin_token() {
-  if [[ -n "${ADMIN_OC_TOKEN:-}" ]]; then
-    echo "[smoke] ADMIN_OC_TOKEN already set externally"
-    export ADMIN_OC_TOKEN
-    return 0
-  fi
-
+  # Clear any stale inherited value to prevent false positive admin tests
+  unset ADMIN_OC_TOKEN
+  
   echo "[smoke] Setting up admin token for admin tests..."
   
   local current_user
@@ -155,13 +197,25 @@ subjects:
   name: odh-admins
 RBAC_EOF
 
-  # Use current user's token
-  ADMIN_OC_TOKEN="$(oc whoami -t 2>/dev/null || true)"
-  if [[ -n "${ADMIN_OC_TOKEN}" ]]; then
+  # Get admin bootstrap token
+  local admin_bootstrap_token
+  admin_bootstrap_token="$(oc whoami -t 2>/dev/null || true)"
+  if [[ -z "${admin_bootstrap_token}" ]]; then
+    echo "[smoke] Failed to get admin bootstrap token - admin tests will be skipped"
+    return 0
+  fi
+  
+  # Mint admin API key
+  local admin_api_key
+  if ! admin_api_key=$(mint_api_key "e2e-admin-${current_user}" "${admin_bootstrap_token}"); then
+    echo "[smoke] Failed to mint admin API key - admin tests will be skipped"
+    return 0
+  fi
+  
+  if [[ -n "${admin_api_key}" ]]; then
+    ADMIN_OC_TOKEN="${admin_api_key}"
     export ADMIN_OC_TOKEN
-    echo "[smoke] ADMIN_OC_TOKEN configured - admin tests will run"
-  else
-    echo "[smoke] Failed to get token (cert-based auth?) - admin tests will be skipped"
+    echo "[smoke] Admin API key minted successfully - admin tests will run"
   fi
 }
 

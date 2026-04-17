@@ -1,6 +1,6 @@
 # Quota and Access Configuration
 
-This guide provides step-by-step instructions for configuring MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription. For conceptual overview, see [Access and Quota Overview](subscription-overview.md) and [MaaS Models](maas-models.md).
+This guide provides step-by-step instructions for configuring MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription. For conceptual overview, see [Access and Quota Overview](../concepts/subscription-overview.md) and [Model Reference](../concepts/model-reference.md).
 
 ## Prerequisites
 
@@ -136,6 +136,13 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
 [[ -n "$TRLP" ]] && kubectl wait --for=condition=Enforced=true tokenratelimitpolicy/${TRLP} -n ${MODEL_NS} --timeout=120s
 ```
 
+!!! warning "Multiple model references on one HTTPRoute"
+    **This limitation affects v3.4 deployments.** More than one **MaaSModelRef** on the same route can break independent per-subscription limits—only one **TokenRateLimitPolicy** is fully effective at the gateway. For **MaaSSubscription** readiness, the controller checks each TRLP’s **`Accepted`** condition; Kuadrant may still show **`Enforced`** and **`Overridden`** (or similar **`reason`**) when policies conflict on one route.
+
+    **Planning guidance:** Prefer **one HTTPRoute per model** when different subscriptions need separate limits. Putting models on a shared route “by tier” still implies **multiple TRLPs** if **multiple** **MaaSModelRef** resources target that route—it only aligns with this limitation when **every** model on the route is meant to share **one** **MaaSSubscription** (and access policy) story.
+
+    See [Subscription limitations and known issues](subscription-known-issues.md#token-rate-limits-when-multiple-model-references-share-one-httproute) for `kubectl`/`jq` examples and workarounds.
+
 !!! note "Namespace requirements"
     Both **MaaSAuthPolicy** and **MaaSSubscription** must be installed in the `models-as-a-service` namespace. Each `modelRefs` entry must specify the `namespace` where the MaaSModelRef lives (e.g. `llm`).
 
@@ -257,7 +264,7 @@ kubectl wait --for=condition=Enforced=true tokenratelimitpolicy/<policy-name> -n
 
 ## Related Documentation
 
-- [Access and Quota Overview](subscription-overview.md) — How policies and subscriptions work together
-- [MaaS Models](maas-models.md) — Conceptual overview
+- [Access and Quota Overview](../concepts/subscription-overview.md) — How policies and subscriptions work together
+- [Model Reference](../concepts/model-reference.md) — Conceptual overview
 - [Token Management](token-management.md)
 - [Validation](../install/validation.md)
