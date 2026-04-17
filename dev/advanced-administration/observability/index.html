@@ -253,7 +253,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../architecture/" class="md-tabs__link">
+        <a href="../../concepts/architecture/" class="md-tabs__link">
           
   
   
@@ -691,7 +691,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/" class="md-nav__link">
+      <a href="../../concepts/architecture/" class="md-nav__link">
         
   
   
@@ -719,7 +719,35 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration-and-management/subscription-overview/" class="md-nav__link">
+      <a href="../../concepts/personas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Personas
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/subscription-overview/" class="md-nav__link">
         
   
   
@@ -747,14 +775,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration-and-management/maas-models/" class="md-nav__link">
+      <a href="../../concepts/model-reference/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    MaaS Models
+    Model Reference
   
 
     
@@ -4226,7 +4254,7 @@
 <ul>
 <li><strong>vLLM</strong> (current stable) — full-featured LLM inference server</li>
 <li><strong>llm-d</strong> — llm-d inference platform (runs vLLM as backend + EPP routing layer)</li>
-<li><strong>llm-d-inference-sim</strong> (v0.7.1) — lightweight simulator for testing without GPUs</li>
+<li><strong>llm-d-inference-sim</strong> (v0.8.2) — lightweight simulator for testing without GPUs</li>
 </ul>
 <p><strong>Supported versions:</strong></p>
 <table>
@@ -4250,7 +4278,7 @@
 </tr>
 <tr>
 <td>llm-d-inference-sim</td>
-<td><strong>v0.7.1</strong></td>
+<td><strong>v0.8.2</strong></td>
 <td><code>docs/samples/models/simulator/</code></td>
 </tr>
 </tbody>
@@ -4433,7 +4461,7 @@
 </table>
 <div class="admonition note">
 <p class="admonition-title">Simulator metric alignment</p>
-<p>As of v0.7.1, the simulator fully aligns with current vLLM metric names (<code>kv_cache_usage_perc</code>, <code>inter_token_latency_seconds</code>, <code>prompt_tokens_total</code>, <code>generation_tokens_total</code>). Older simulator versions (v0.6.x) used different names (<code>gpu_cache_usage_perc</code>, <code>time_per_output_token_seconds</code>) and are <strong>no longer supported</strong> by MaaS dashboards. The simulator also exposes additional metrics not used by MaaS dashboards (e.g. <code>request_inference_time_seconds</code>, <code>request_params_max_tokens</code>).</p>
+<p>As of v0.7.1 (still true in v0.8.x), the simulator fully aligns with current vLLM metric names (<code>kv_cache_usage_perc</code>, <code>inter_token_latency_seconds</code>, <code>prompt_tokens_total</code>, <code>generation_tokens_total</code>). Older simulator versions (v0.6.x) used different names (<code>gpu_cache_usage_perc</code>, <code>time_per_output_token_seconds</code>) and are <strong>no longer supported</strong> by MaaS dashboards. The simulator also exposes additional metrics not used by MaaS dashboards (e.g. <code>request_inference_time_seconds</code>, <code>request_params_max_tokens</code>).</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Lazily registered metrics</p>
@@ -4510,7 +4538,7 @@
 <p>vLLM metrics provide input vs output token breakdown <strong>per model</strong> (<code>vllm:prompt_tokens_total</code> / <code>vllm:generation_tokens_total</code> counters, or <code>vllm:request_prompt_tokens</code> / <code>vllm:request_generation_tokens</code> histograms). However, these do not carry <code>user</code> or <code>subscription</code> labels. For per-user billing with input/output split, upstream changes to the Kuadrant wasm-shim are required (see <a href="#known-limitations">Known Limitations</a>).</p>
 </div>
 <h4 id="dashboard-metric-queries">Dashboard Metric Queries</h4>
-<p>Dashboard panels use histogram <code>_sum</code> as primary data source. All queries work across vLLM, llm-d, and llm-d-inference-sim v0.7.1:</p>
+<p>Dashboard panels use histogram <code>_sum</code> as primary data source. All queries work across vLLM, llm-d, and llm-d-inference-sim v0.8.2:</p>
 <table>
 <thead>
 <tr>
@@ -5119,7 +5147,7 @@ histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 8, 2026 14:54:07 UTC">April 8, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 02:14:44 UTC">April 17, 2026</span>
   </span>
 
     

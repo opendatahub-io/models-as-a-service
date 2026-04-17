@@ -8,13 +8,9 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/maas-models/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/troubleshooting-external-model-rbac/">
       
       
-        <link rel="prev" href="../subscription-overview/">
-      
-      
-        <link rel="next" href="../../quickstart/">
       
       
         
@@ -25,7 +21,7 @@
     
     
       
-        <title>MaaS Models - ODH Models-as-a-Service Documentation</title>
+        <title>Troubleshooting: ExternalModel Service ownerReference / finalizers (RBAC) - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#maas-models" class="md-skip">
+        <a href="#troubleshooting-externalmodel-service-ownerreference-finalizers-rbac" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +109,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              MaaS Models
+              Troubleshooting: ExternalModel Service ownerReference / finalizers (RBAC)
             
           </span>
         </div>
@@ -249,13 +245,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../architecture/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../concepts/architecture/" class="md-tabs__link">
           
   
   
@@ -632,31 +626,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -674,7 +665,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -692,7 +683,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/" class="md-nav__link">
+      <a href="../../concepts/architecture/" class="md-nav__link">
         
   
   
@@ -720,7 +711,35 @@
   
   
     <li class="md-nav__item">
-      <a href="../subscription-overview/" class="md-nav__link">
+      <a href="../../concepts/personas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Personas
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/subscription-overview/" class="md-nav__link">
         
   
   
@@ -745,44 +764,17 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    MaaS Models
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../concepts/model-reference/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    MaaS Models
+    Model Reference
   
 
     
@@ -791,59 +783,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#the-model-reference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The Model Reference
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-model-information-is-used" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How Model Information Is Used
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#summary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Summary
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2434,10 +2373,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#the-model-reference" class="md-nav__link">
+  <a href="#symptoms" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The Model Reference
+        Symptoms
       
     </span>
   </a>
@@ -2445,10 +2384,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-model-information-is-used" class="md-nav__link">
+  <a href="#cause" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How Model Information Is Used
+        Cause
       
     </span>
   </a>
@@ -2456,10 +2395,54 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#summary" class="md-nav__link">
+  <a href="#what-to-fix" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Summary
+        What to fix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-to-verify-important" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to verify (important)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#optional-add-the-rule-with-oc-patch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional: add the rule with oc patch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-we-changed-in-docs-2026-04-14" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What we changed in docs (2026-04-14)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
       
     </span>
   </a>
@@ -2486,48 +2469,70 @@
   
 
 
-<h1 id="maas-models">MaaS Models</h1>
-<p>MaaS uses <strong>MaaSModelRef</strong> to identify model servers that live on the cluster. Each MaaSModelRef is a reference to a model server—it holds the information MaaS needs to perform authentication, authorization, and rate limiting.</p>
-<p>By using a single unified object (MaaSModelRef) for all model types, MaaS can handle different kinds of model servers—each with its own backend and lifecycle—through one consistent interface. The controller uses a <strong>provider paradigm</strong> to distinguish between types: each model type (for example, LLMInferenceService, external APIs) has a provider that knows how to reconcile and resolve that type.</p>
-<p><strong>Supported LLMs:</strong> Most model families should work; an official validated list is in progress.</p>
-<p><strong>Supported inference services:</strong> vLLM through LLMInferenceService (KServe) is the initial supported release for on-cluster models; additional backends are planned for future releases.</p>
-<h2 id="the-model-reference">The Model Reference</h2>
-<p>A MaaS model is a reference to a model server (for example, an LLMInferenceService or external API). The MaaS controller, running in the <strong>control plane</strong>, reconciles these references and gathers the information needed to route requests and enforce policies—such as the model's endpoint URL and readiness status.</p>
-<p>That information is then used by MaaSSubscription and MaaSAuthPolicy to complete their logic: validating access, selecting subscriptions, and enforcing rate limits.</p>
-<h2 id="how-model-information-is-used">How Model Information Is Used</h2>
-<p>Both <strong>MaaSAuthPolicy</strong> (access) and <strong>MaaSSubscription</strong> (quota) reference models by their <strong>MaaSModelRef</strong> name. They rely on the information that MaaSModelRef provides—gathered at the control plane—to:</p>
+<h1 id="troubleshooting-externalmodel-service-ownerreference-finalizers-rbac">Troubleshooting: ExternalModel Service <code>ownerReference</code> / finalizers (RBAC)</h1>
+<h2 id="symptoms">Symptoms</h2>
 <ul>
-<li>Route requests to the correct model endpoint</li>
-<li>Validate that the user has access to the requested model</li>
-<li>Apply the correct rate limits for that model</li>
+<li><code>external-model-reconciler</code> logs show Service create failing with:</li>
 </ul>
-<pre class="mermaid"><code>flowchart LR
-    subgraph Downstream ["Downstream (cluster)"]
-        ModelServer["Model Server&lt;br/&gt;(e.g. LLMInferenceService)"]
-    end
-
-    MaaSModelRef["MaaSModelRef"]
-
-    subgraph Policies ["Policies"]
-        MaaSAuthPolicy["MaaSAuthPolicy"]
-        MaaSSubscription["MaaSSubscription"]
-    end
-
-    ModelServer --&gt;|"1. Fetches endpoint,&lt;br/&gt;status, etc."| MaaSModelRef
-    MaaSModelRef --&gt;|"2. Feeds model info"| MaaSAuthPolicy
-    MaaSModelRef --&gt;|"2. Feeds model info"| MaaSSubscription
-
-    style MaaSModelRef fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
-    style MaaSAuthPolicy fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
-    style MaaSSubscription fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
-    style ModelServer fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff</code></pre>
-<h2 id="summary">Summary</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>cannot set blockOwnerDeletion if an ownerReference refers to a resource you can&#39;t set finalizers on
+</code></pre></div>
 <ul>
-<li><strong>MaaSModelRef</strong> — Stores the reference to a model server; the controller gathers the information needed for auth and routing.</li>
-<li><strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong> — Reference models by name and use that information to enforce access and quota.</li>
-<li><strong>Control plane</strong> — The MaaS controller reconciles model references and populates the data that policies and subscriptions depend on.</li>
+<li><code>MaaSModelRef</code> objects that reference <code>ExternalModel</code> backends stay <code>Pending</code> with a backend-not-ready reason.</li>
 </ul>
-<p>For configuration details and how to create and use MaaSModelRef, see <a href="../quota-and-access-configuration/">Quota and Access Configuration</a> in the Administration Guide.</p>
+<h2 id="cause">Cause</h2>
+<p>The reconciler sets a <strong>controller <code>ownerReference</code></strong> on the <code>Service</code> it creates for an <code>ExternalModel</code>. With that pattern, the API server checks that the controller identity can <strong><code>update</code> the <code>externalmodels/finalizers</code> subresource</strong> (OwnerReferencesPermissionEnforcement).</p>
+<p>If the <strong><code>maas-controller</code> ServiceAccount</strong> is not allowed that verb on that subresource, Service creation fails before routes are healthy.</p>
+<h2 id="what-to-fix">What to fix</h2>
+<ol>
+<li><strong>ClusterRole</strong> <code>maas-controller-role</code> must include a rule that allows <code>update</code> on <code>externalmodels/finalizers</code> for API group <code>maas.opendatahub.io</code>.</li>
+</ol>
+<p>Source manifest in this repository: <code>deployment/base/maas-controller/rbac/clusterrole.yaml</code>.</p>
+<ol>
+<li><strong>ClusterRoleBinding</strong> <code>maas-controller-rolebinding</code> must bind that <code>ClusterRole</code> to the <strong><code>maas-controller</code> ServiceAccount</strong> in the namespace where the controller runs (commonly <code>opendatahub</code> when using the ODH overlay).</li>
+</ol>
+<p>On OpenShift, the <code>ModelsAsService</code> component may <strong>own</strong> these objects; if your live <code>ClusterRole</code> is missing the <code>externalmodels/finalizers</code> rule, upgrade or re-apply the manifest from this repo, or reconcile the component so the shipped RBAC matches.</p>
+<h2 id="how-to-verify-important">How to verify (important)</h2>
+<p><code>oc auth can-i</code> <strong>does not</strong> treat <code>externalmodels/finalizers</code> as a single resource name the same way RBAC does. Using the slash form often returns <strong><code>no</code> even when the rule is present</strong>.</p>
+<p>Use the <strong><code>--subresource=finalizers</code></strong> form instead:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Replace NAMESPACE with the namespace where ExternalModel CRs live (e.g. llm)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># Replace SA_NAMESPACE with the controller ServiceAccount namespace (e.g. opendatahub)</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>oc<span class="w"> </span>auth<span class="w"> </span>can-i<span class="w"> </span>update<span class="w"> </span>externalmodels<span class="w"> </span>--subresource<span class="o">=</span>finalizers<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>-n<span class="w"> </span>NAMESPACE<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--as<span class="o">=</span>system:serviceaccount:SA_NAMESPACE:maas-controller
+</code></pre></div>
+<p>You should see <strong><code>yes</code></strong>.</p>
+<p><strong>Incorrect (misleading false negative):</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Often prints &quot;no&quot; even when RBAC is correct — do not use for verification</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>oc<span class="w"> </span>auth<span class="w"> </span>can-i<span class="w"> </span>update<span class="w"> </span>externalmodels/finalizers<span class="w"> </span>-n<span class="w"> </span>NAMESPACE<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--as<span class="o">=</span>system:serviceaccount:SA_NAMESPACE:maas-controller
+</code></pre></div>
+<h2 id="optional-add-the-rule-with-oc-patch">Optional: add the rule with <code>oc patch</code></h2>
+<p>If you must patch the live <code>ClusterRole</code> (for example before an operator update ships the rule):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>oc<span class="w"> </span>patch<span class="w"> </span>clusterrole<span class="w"> </span>maas-controller-role<span class="w"> </span>--type<span class="o">=</span>json<span class="w"> </span>-p<span class="o">=</span><span class="s1">&#39;[</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="s1">  {</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="s1">    &quot;op&quot;: &quot;add&quot;,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="s1">    &quot;path&quot;: &quot;/rules/-&quot;,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="s1">    &quot;value&quot;: {</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="s1">      &quot;apiGroups&quot;: [&quot;maas.opendatahub.io&quot;],</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="s1">      &quot;resources&quot;: [&quot;externalmodels/finalizers&quot;],</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="s1">      &quot;verbs&quot;: [&quot;update&quot;]</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="s1">    }</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="s1">  }</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="s1">]&#39;</span>
+</code></pre></div>
+<p>Then verify with the <strong><code>--subresource=finalizers</code></strong> command above, not the slash form.</p>
+<h2 id="what-we-changed-in-docs-2026-04-14">What we changed in docs (2026-04-14)</h2>
+<ul>
+<li>Documented that <strong><code>oc auth can-i update externalmodels/finalizers</code></strong> can incorrectly report <strong><code>no</code></strong> when permission exists.</li>
+<li>Documented the supported check: <strong><code>oc auth can-i update externalmodels --subresource=finalizers</code></strong>.</li>
+<li>Pointed to <strong><code>deployment/base/maas-controller/rbac/clusterrole.yaml</code></strong> as the in-repo source for the <code>maas-controller-role</code> rules.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="../namespace-rbac/">Namespace user permissions (RBAC)</a></li>
+<li><a href="../maas-controller-overview/">MaaS controller overview</a></li>
+</ul>
 
 
 
@@ -2550,7 +2555,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 27, 2026 16:04:28 UTC">March 27, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 02:14:44 UTC">April 17, 2026</span>
   </span>
 
     
@@ -2560,7 +2565,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 02:14:44 UTC">April 17, 2026</span>
   </span>
 
     

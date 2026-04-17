@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/subscription-cardinality/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/concepts/subscription-overview/">
       
       
-        <link rel="prev" href="../limitador-persistence/">
+        <link rel="prev" href="../personas/">
       
       
-        <link rel="next" href="../../configuration-and-management/authorino-caching/">
+        <link rel="next" href="../model-reference/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Subscription Cardinality - ODH Models-as-a-Service Documentation</title>
+        <title>Access and Quota Overview - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#subscription-and-policy-cardinality" class="md-skip">
+        <a href="#access-and-quota-overview" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Subscription Cardinality
+              Access and Quota Overview
             
           </span>
         </div>
@@ -249,11 +249,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../concepts/architecture/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../architecture/" class="md-tabs__link">
           
   
   
@@ -289,8 +291,6 @@
   
   
   
-    
-  
   
     
     
@@ -298,12 +298,10 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../../configuration-and-management/quota-and-access-configuration/" class="md-tabs__link">
           
   
@@ -634,28 +632,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
-        
-          
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   
@@ -673,7 +674,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -691,7 +692,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../concepts/architecture/" class="md-nav__link">
+      <a href="../architecture/" class="md-nav__link">
         
   
   
@@ -719,7 +720,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../concepts/personas/" class="md-nav__link">
+      <a href="../personas/" class="md-nav__link">
         
   
   
@@ -744,10 +745,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../concepts/subscription-overview/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Access and Quota Overview
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -763,6 +791,59 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#policies-vs-subscriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Policies vs. Subscriptions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-separate-policies-and-subscriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Separate Policies and Subscriptions?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -775,7 +856,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../concepts/model-reference/" class="md-nav__link">
+      <a href="../model-reference/" class="md-nav__link">
         
   
   
@@ -1188,31 +1269,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -1230,7 +1308,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1254,13 +1332,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1269,7 +1344,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
         
           
-          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
             
   
   
@@ -1459,13 +1534,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1474,7 +1546,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
         
           
-          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
             
   
   
@@ -1608,13 +1680,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1623,7 +1692,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_3" >
         
           
-          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
             
   
   
@@ -1720,31 +1789,28 @@
                 
   
   
-    
   
   
-  
     
     
     
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
         
           
-          
         
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" checked>
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
         
           
-          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
             
   
   
@@ -1762,7 +1828,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1780,7 +1846,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../observability/" class="md-nav__link">
+      <a href="../../advanced-administration/observability/" class="md-nav__link">
         
   
   
@@ -1808,7 +1874,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../limitador-persistence/" class="md-nav__link">
+      <a href="../../advanced-administration/limitador-persistence/" class="md-nav__link">
         
   
   
@@ -1833,37 +1899,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Subscription Cardinality
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../advanced-administration/subscription-cardinality/" class="md-nav__link">
         
   
   
@@ -1879,37 +1918,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#todo" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        TODO
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2454,10 +2462,32 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#todo" class="md-nav__link">
+  <a href="#policies-vs-subscriptions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        TODO
+        Policies vs. Subscriptions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-separate-policies-and-subscriptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Separate Policies and Subscriptions?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
       
     </span>
   </a>
@@ -2484,18 +2514,86 @@
   
 
 
-<h1 id="subscription-and-policy-cardinality">Subscription and Policy Cardinality</h1>
-<p>MaaSAuthPolicy and MaaSSubscription support both <code>groups</code> and <code>users</code> in their subject/owner configuration. Using <code>users</code> for many individual human users can cause cardinality issues in the rate-limiting and policy enforcement layer (Limitador, Authorino), which may impact performance and scalability.</p>
-<p><strong>Recommendation:</strong> Prefer <code>groups</code> for human users. Reserve the <code>users</code> field for Service Accounts and other programmatic identities where the number of distinct users remains small.</p>
-<div class="admonition note">
-<p class="admonition-title">See also</p>
-<p>For configuration guidance, see <a href="../../configuration-and-management/quota-and-access-configuration/">Quota and Access Configuration</a>.</p>
-</div>
-<h2 id="todo">TODO</h2>
-<ul class="task-list">
-<li class="task-list-item"><input type="checkbox"/> Document cardinality limits and observed impact</li>
-<li class="task-list-item"><input type="checkbox"/> Provide guidance on when <code>users</code> is appropriate vs <code>groups</code></li>
-<li class="task-list-item"><input type="checkbox"/> Add monitoring and troubleshooting notes for cardinality-related issues</li>
+<h1 id="access-and-quota-overview">Access and Quota Overview</h1>
+<p>When planning authorization for Models as a Service, it is important to understand how <strong>policies</strong> (MaaSAuthPolicy) and <strong>subscriptions</strong> (MaaSSubscription) work together. Both use RBAC references (subjects or owners). A user must have <strong>both</strong> a matching policy (access) and a matching subscription (quota) to use a model.</p>
+<p>MaaSAuthPolicy and MaaSSubscription are namespace-scoped to <code>models-as-a-service</code>; they reference MaaSModelRefs (in e.g. <code>llm</code>) by <code>name</code> and <code>namespace</code> in their <code>modelRefs</code>.</p>
+<pre class="mermaid"><code>flowchart TD
+    User([User / App]) -- "Request (API key + model)" --&gt; Gateway{MaaS API Gateway}
+
+    subgraph Validation ["Dual-Check Gate"]
+        direction LR
+        A["MaaSAuthPolicy&lt;br/&gt;(Access: Can I use this?)"]
+        B["MaaSSubscription&lt;br/&gt;(Quota: Is there quota?)"]
+    end
+
+    Gateway --&gt; A
+    Gateway --&gt; B
+
+    A -- "Pass" --&gt; BothPass
+    B -- "Pass" --&gt; BothPass
+
+    BothPass{Access Granted} --&gt; InferenceService["Inference server&lt;br/&gt;(MaaSModelRef)"]
+
+    style User fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style Gateway fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
+    style A fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style B fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style BothPass fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
+    style InferenceService fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff</code></pre>
+<h2 id="policies-vs-subscriptions">Policies vs. Subscriptions</h2>
+<table>
+<thead>
+<tr>
+<th>Concern</th>
+<th>CRD</th>
+<th>Purpose</th>
+<th>Subjects/Owners</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Access</strong></td>
+<td>MaaSAuthPolicy</td>
+<td>Grants permission to use specific models</td>
+<td><code>subjects</code> (groups/users)</td>
+</tr>
+<tr>
+<td><strong>Quota</strong></td>
+<td>MaaSSubscription</td>
+<td>Defines token rate limits for model usage</td>
+<td><code>owner</code> (groups/users)</td>
+</tr>
+<tr>
+<td><strong>Model</strong></td>
+<td>MaaSModelRef</td>
+<td>Identifies models on the cluster; provides endpoint and status</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2 id="why-separate-policies-and-subscriptions">Why Separate Policies and Subscriptions?</h2>
+<p>This separation lets you create <strong>generic subscriptions</strong> that span many models while still limiting access to specific models per team.</p>
+<p><strong>Example:</strong> You have a Premium subscription that spans 20 models. You want to give the <code>data-science-team</code> access to 5 of those models at the Premium subscription level.</p>
+<p><strong>How to do it:</strong></p>
+<ol>
+<li>Make <code>data-science-team</code> the <strong>owner</strong> of the Premium subscription (they get quota for all 20 models).</li>
+<li>Create a <strong>policy</strong> that grants <code>data-science-team</code> access to only those 5 models.</li>
+</ol>
+<p>The team can use only the 5 models specified in the policy. Their usage is governed by the subscription's rate limits.</p>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li><strong>Add or remove access per team</strong> — Update the policy to grant or revoke access to models for that team; no changes to the subscription required.</li>
+<li><strong>Reuse one subscription across teams</strong> — Another team (e.g., <code>ml-engineering</code>) can be an owner of the same Premium subscription but have a policy that grants access to a different subset of models (e.g., 8 of the 20). Each team gets the same quota tier but only sees the models you allow.</li>
+</ul>
+<h2 id="related-documentation">Related Documentation</h2>
+<p>For configuration details, see:</p>
+<ul>
+<li><a href="../../configuration-and-management/quota-and-access-configuration/">Quota and Access Configuration</a> — Step-by-step configuration for MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription</li>
+</ul>
+<p>Additional references:</p>
+<ul>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/archdiagrams/SubscriptionArch.md">Subscription Architecture</a> — Design document for the subscription model</li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/docs/old-vs-new-flow.md">MaaS Controller old-vs-new flow</a> — Comparison of subscription-based flows</li>
 </ul>
 
 
@@ -2519,7 +2617,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 20:23:34 UTC">March 25, 2026</span>
   </span>
 
     

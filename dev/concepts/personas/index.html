@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/subscription-cardinality/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/concepts/personas/">
       
       
-        <link rel="prev" href="../limitador-persistence/">
+        <link rel="prev" href="../architecture/">
       
       
-        <link rel="next" href="../../configuration-and-management/authorino-caching/">
+        <link rel="next" href="../subscription-overview/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Subscription Cardinality - ODH Models-as-a-Service Documentation</title>
+        <title>Personas - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#subscription-and-policy-cardinality" class="md-skip">
+        <a href="#personas-and-responsibilities" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Subscription Cardinality
+              Personas
             
           </span>
         </div>
@@ -249,11 +249,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../concepts/architecture/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../architecture/" class="md-tabs__link">
           
   
   
@@ -289,8 +291,6 @@
   
   
   
-    
-  
   
     
     
@@ -298,12 +298,10 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../../configuration-and-management/quota-and-access-configuration/" class="md-tabs__link">
           
   
@@ -634,28 +632,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
-        
-          
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   
@@ -673,7 +674,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -691,7 +692,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../concepts/architecture/" class="md-nav__link">
+      <a href="../architecture/" class="md-nav__link">
         
   
   
@@ -716,10 +717,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../concepts/personas/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Personas
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -735,6 +763,70 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#resource-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-owners" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model owners
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#odh-administrators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ODH administrators
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-consumers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API consumers
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -747,7 +839,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../concepts/subscription-overview/" class="md-nav__link">
+      <a href="../subscription-overview/" class="md-nav__link">
         
   
   
@@ -775,7 +867,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../concepts/model-reference/" class="md-nav__link">
+      <a href="../model-reference/" class="md-nav__link">
         
   
   
@@ -1188,31 +1280,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -1230,7 +1319,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1254,13 +1343,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1269,7 +1355,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
         
           
-          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
             
   
   
@@ -1459,13 +1545,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1474,7 +1557,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
         
           
-          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
             
   
   
@@ -1608,13 +1691,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1623,7 +1703,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_3" >
         
           
-          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
             
   
   
@@ -1720,31 +1800,28 @@
                 
   
   
-    
   
   
-  
     
     
     
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
         
           
-          
         
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" checked>
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
         
           
-          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
             
   
   
@@ -1762,7 +1839,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1780,7 +1857,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../observability/" class="md-nav__link">
+      <a href="../../advanced-administration/observability/" class="md-nav__link">
         
   
   
@@ -1808,7 +1885,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../limitador-persistence/" class="md-nav__link">
+      <a href="../../advanced-administration/limitador-persistence/" class="md-nav__link">
         
   
   
@@ -1833,37 +1910,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Subscription Cardinality
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../advanced-administration/subscription-cardinality/" class="md-nav__link">
         
   
   
@@ -1879,37 +1929,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#todo" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        TODO
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2454,10 +2473,43 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#todo" class="md-nav__link">
+  <a href="#resource-model" class="md-nav__link">
     <span class="md-ellipsis">
       
-        TODO
+        Resource model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-owners" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model owners
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#odh-administrators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ODH administrators
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#api-consumers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        API consumers
       
     </span>
   </a>
@@ -2484,19 +2536,31 @@
   
 
 
-<h1 id="subscription-and-policy-cardinality">Subscription and Policy Cardinality</h1>
-<p>MaaSAuthPolicy and MaaSSubscription support both <code>groups</code> and <code>users</code> in their subject/owner configuration. Using <code>users</code> for many individual human users can cause cardinality issues in the rate-limiting and policy enforcement layer (Limitador, Authorino), which may impact performance and scalability.</p>
-<p><strong>Recommendation:</strong> Prefer <code>groups</code> for human users. Reserve the <code>users</code> field for Service Accounts and other programmatic identities where the number of distinct users remains small.</p>
-<div class="admonition note">
-<p class="admonition-title">See also</p>
-<p>For configuration guidance, see <a href="../../configuration-and-management/quota-and-access-configuration/">Quota and Access Configuration</a>.</p>
-</div>
-<h2 id="todo">TODO</h2>
-<ul class="task-list">
-<li class="task-list-item"><input type="checkbox"/> Document cardinality limits and observed impact</li>
-<li class="task-list-item"><input type="checkbox"/> Provide guidance on when <code>users</code> is appropriate vs <code>groups</code></li>
-<li class="task-list-item"><input type="checkbox"/> Add monitoring and troubleshooting notes for cardinality-related issues</li>
+<h1 id="personas-and-responsibilities">Personas and responsibilities</h1>
+<p>This page follows the same idea as the <a href="https://gateway-api.sigs.k8s.io/#personas">Gateway API personas</a>: short <strong>who</strong> and <strong>what they own</strong>, focused on <strong>MaaS day-to-day operation</strong> (not cluster install). Anything not listed as in scope is out of scope for that persona.</p>
+<h2 id="resource-model">Resource model</h2>
+<p><img alt="Personas resource model" src="../../assets/concepts/personas-resource-model-light.png#only-light" />
+<img alt="Personas resource model" src="../../assets/concepts/personas-resource-model-dark.png#only-dark" /></p>
+<p><strong>How to read it</strong></p>
+<ul>
+<li><strong>Model owners</strong> deploy <strong><code>MaaSModelRef</code></strong> and the <strong>model server</strong> workload in their namespace (often one stack per model line).</li>
+<li><strong>ODH administrators</strong> configure <strong><code>MaaSAuthPolicy</code></strong> and <strong><code>MaaSSubscription</code></strong> so the right callers and quotas apply to those models.</li>
+<li><strong><code>MaaSSubscription</code></strong> ties subscriptions to model references; parallel <strong>MaaSModelRef → model server</strong> branches can represent multiple models under one subscription pattern.</li>
+<li><strong>API consumers</strong> call inference through the <strong>Gateway</strong> with an <strong><code>sk-oai-*</code></strong> key and use <strong>maas-api</strong> for self-service key minting—they do not manage <strong><code>MaaSAuthPolicy</code></strong>, <strong><code>MaaSSubscription</code></strong>, or <strong><code>MaaSModelRef</code></strong> (those sit with administrators and model owners).</li>
 </ul>
+<hr />
+<h2 id="model-owners">Model owners</h2>
+<p><strong>Who:</strong> Teams that ship and operate a model in their namespace—often <strong>model owners</strong>, ML engineers, or project admins (not a special “data scientist” role required by MaaS).</p>
+<p><strong>Owns:</strong> <strong><code>MaaSModelRef</code></strong> in the same namespace as the <strong>model server</strong> (for example KServe <code>LLMInferenceService</code> or your inference <code>Deployment</code>)—the serving workload the reference points at.</p>
+<hr />
+<h2 id="odh-administrators">ODH administrators</h2>
+<p><strong>Who:</strong> OpenShift or ODH <strong>administrators</strong> who govern access and quota for MaaS.</p>
+<p><strong>Owns:</strong> <strong><code>MaaSAuthPolicy</code></strong>, <strong><code>MaaSSubscription</code></strong>, and the <strong>Gateway</strong> / <strong>HTTPRoute</strong> surface that exposes MaaS to users—at the level of <strong>MaaS and Gateway API resources</strong>, not the inference images or weights in application namespaces.</p>
+<hr />
+<h2 id="api-consumers">API consumers</h2>
+<p><strong>Who:</strong> Application developers, automation, or anyone calling inference with an <strong><code>sk-oai-*</code></strong> key.</p>
+<p><strong>Owns:</strong> <strong>Self-service</strong> use of <strong>maas-api</strong> (mint and manage keys within policy) and <strong>inference</strong> through the <strong>Gateway</strong>, subject to <strong><code>MaaSSubscription</code></strong> limits—shown on the <strong>inference</strong> arc in the diagram above.</p>
+<hr />
 
 
 
@@ -2519,7 +2583,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 02:14:44 UTC">April 17, 2026</span>
   </span>
 
     
@@ -2529,7 +2593,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 02:14:44 UTC">April 17, 2026</span>
   </span>
 
     

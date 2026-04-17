@@ -8,13 +8,9 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/subscription-overview/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/external-models/">
       
       
-        <link rel="prev" href="../../architecture/">
-      
-      
-        <link rel="next" href="../maas-models/">
       
       
         
@@ -25,7 +21,7 @@
     
     
       
-        <title>Access and Quota Overview - ODH Models-as-a-Service Documentation</title>
+        <title>External models - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#access-and-quota-overview" class="md-skip">
+        <a href="#external-models" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +109,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Access and Quota Overview
+              External models
             
           </span>
         </div>
@@ -249,13 +245,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../architecture/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../concepts/architecture/" class="md-tabs__link">
           
   
   
@@ -632,31 +626,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -674,7 +665,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -692,7 +683,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/" class="md-nav__link">
+      <a href="../../concepts/architecture/" class="md-nav__link">
         
   
   
@@ -717,26 +708,17 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
+    <li class="md-nav__item">
+      <a href="../../concepts/personas/" class="md-nav__link">
         
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
   
   
   <span class="md-ellipsis">
     
   
-    Access and Quota Overview
+    Personas
   
 
     
@@ -744,10 +726,20 @@
   
   
 
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/subscription-overview/" class="md-nav__link">
         
   
   
@@ -763,59 +755,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#policies-vs-subscriptions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Policies vs. Subscriptions
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#why-separate-policies-and-subscriptions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why Separate Policies and Subscriptions?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related Documentation
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -828,14 +767,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../maas-models/" class="md-nav__link">
+      <a href="../../concepts/model-reference/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    MaaS Models
+    Model Reference
   
 
     
@@ -2434,24 +2373,30 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#policies-vs-subscriptions" class="md-nav__link">
+  <a href="#flow-high-level" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Policies vs. Subscriptions
+        Flow (high level)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Flow (high level)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#httproute-name-one-route-per-externalmodel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTPRoute name: one route per ExternalModel
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#why-separate-policies-and-subscriptions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why Separate Policies and Subscriptions?
-      
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2459,7 +2404,7 @@
   <a href="#related-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Related Documentation
+        Related documentation
       
     </span>
   </a>
@@ -2486,86 +2431,60 @@
   
 
 
-<h1 id="access-and-quota-overview">Access and Quota Overview</h1>
-<p>When planning authorization for Models as a Service, it is important to understand how <strong>policies</strong> (MaaSAuthPolicy) and <strong>subscriptions</strong> (MaaSSubscription) work together. Both use RBAC references (subjects or owners). A user must have <strong>both</strong> a matching policy (access) and a matching subscription (quota) to use a model.</p>
-<p>MaaSAuthPolicy and MaaSSubscription are namespace-scoped to <code>models-as-a-service</code>; they reference MaaSModelRefs (in e.g. <code>llm</code>) by <code>name</code> and <code>namespace</code> in their <code>modelRefs</code>.</p>
-<pre class="mermaid"><code>flowchart TD
-    User([User / App]) -- "Request (API key + model)" --&gt; Gateway{MaaS API Gateway}
-
-    subgraph Validation ["Dual-Check Gate"]
-        direction LR
-        A["MaaSAuthPolicy&lt;br/&gt;(Access: Can I use this?)"]
-        B["MaaSSubscription&lt;br/&gt;(Quota: Is there quota?)"]
-    end
-
-    Gateway --&gt; A
-    Gateway --&gt; B
-
-    A -- "Pass" --&gt; BothPass
-    B -- "Pass" --&gt; BothPass
-
-    BothPass{Access Granted} --&gt; InferenceService["Inference Service"]
-
-    style User fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
-    style Gateway fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
-    style A fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
-    style B fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
-    style BothPass fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
-    style InferenceService fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff</code></pre>
-<h2 id="policies-vs-subscriptions">Policies vs. Subscriptions</h2>
-<table>
-<thead>
-<tr>
-<th>Concern</th>
-<th>CRD</th>
-<th>Purpose</th>
-<th>Subjects/Owners</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Access</strong></td>
-<td>MaaSAuthPolicy</td>
-<td>Grants permission to use specific models</td>
-<td><code>subjects</code> (groups/users)</td>
-</tr>
-<tr>
-<td><strong>Quota</strong></td>
-<td>MaaSSubscription</td>
-<td>Defines token rate limits for model usage</td>
-<td><code>owner</code> (groups/users)</td>
-</tr>
-<tr>
-<td><strong>Model</strong></td>
-<td>MaaSModelRef</td>
-<td>Identifies models on the cluster; provides endpoint and status</td>
-<td>—</td>
-</tr>
-</tbody>
-</table>
-<h2 id="why-separate-policies-and-subscriptions">Why Separate Policies and Subscriptions?</h2>
-<p>This separation lets you create <strong>generic subscriptions</strong> that span many models while still limiting access to specific models per team.</p>
-<p><strong>Example:</strong> You have a Premium subscription that spans 20 models. You want to give the <code>data-science-team</code> access to 5 of those models at the Premium subscription level.</p>
-<p><strong>How to do it:</strong></p>
+<h1 id="external-models">External models</h1>
+<div class="admonition warning">
+<p class="admonition-title">Documentation in progress</p>
+<p>This section is <strong>still under development</strong>. Behavior, field names, and operator steps may change in upcoming releases. For authoritative CRD fields, see the <strong><a href="../../reference/crds/external-model/">ExternalModel</a></strong> reference. For registration steps aligned with the API, see <a href="../model-listing-flow/#registering-external-models">Registering external models</a>.</p>
+</div>
+<p><strong>External models</strong> are inference backends that run <strong>outside</strong> the cluster (for example managed APIs or a reachable HTTP endpoint). In MaaS they are still represented by a <strong>MaaSModelRef</strong> with <strong><code>spec.modelRef.kind: ExternalModel</code></strong>, so listing, API keys, subscriptions, and gateway policies work the same way as for on-cluster models—the difference is how traffic is routed to the upstream provider.</p>
+<h2 id="flow-high-level">Flow (high level)</h2>
 <ol>
-<li>Make <code>data-science-team</code> the <strong>owner</strong> of the Premium subscription (they get quota for all 20 models).</li>
-<li>Create a <strong>policy</strong> that grants <code>data-science-team</code> access to only those 5 models.</li>
+<li>
+<p><strong>Provider configuration</strong> — You define an <strong><a href="../../reference/crds/external-model/">ExternalModel</a></strong> CR in the model namespace: <code>provider</code>, <code>endpoint</code> (FQDN), <code>credentialRef</code> (Secret with API keys), and <code>targetModel</code> (upstream model id). The Secret must live in the <strong>same namespace</strong> as the ExternalModel and the MaaSModelRef you will create.</p>
+</li>
+<li>
+<p><strong>Registration</strong> — You create a <strong>MaaSModelRef</strong> whose <strong><code>spec.modelRef.name</code></strong> matches the ExternalModel’s name (same namespace). The MaaS controller treats this as an external backend.</p>
+</li>
+<li>
+<p><strong>Route and mesh</strong> — The <strong>ExternalModel</strong> reconciler creates namespaced resources so traffic can leave the mesh to the provider: an ExternalName <strong>Service</strong>, Istio <strong>ServiceEntry</strong>, optional <strong>DestinationRule</strong> (TLS origination), and a Gateway API <strong>HTTPRoute</strong> attached to <strong><code>maas-default-gateway</code></strong>. Those objects are <strong>owned by the ExternalModel</strong> CR (not by the MaaSModelRef name).</p>
+</li>
 </ol>
-<p>The team can use only the 5 models specified in the policy. Their usage is governed by the subscription's rate limits.</p>
-<p><strong>Benefits:</strong></p>
+<h3 id="httproute-name-one-route-per-externalmodel">HTTPRoute name: one route per ExternalModel</h3>
+<p>The <strong>HTTPRoute</strong> <code>metadata.name</code> is the <strong>ExternalModel</strong> name (the same string as <strong><code>spec.modelRef.name</code></strong> on the <code>MaaSModelRef</code>). It is <strong>not</strong> the <code>MaaSModelRef</code>’s own <code>metadata.name</code>, so you can name the model reference <code>maas-model-my-model</code> while the ExternalModel (and its HTTPRoute) stay <code>my-model</code>.</p>
+<p>If you see <strong>two</strong> HTTPRoutes (for example <code>my-model</code> and <code>maas-model-my-model</code>), only <strong><code>my-model</code></strong> is created by the ExternalModel flow in this project. A route whose name matches the <strong>MaaSModelRef</strong> name is usually from <strong>KServe</strong> (an <code>LLMInferenceService</code> / <code>InferenceService</code> with that name), an old experiment, or a manually applied manifest—not from the ExternalModel reconciler.</p>
+<ol>
+<li>
+<p><strong>Status</strong> — The <strong>MaaSModelRef</strong> reconciler waits until the HTTPRoute is <strong>Accepted</strong> and <strong>Programmed</strong> on the gateway, then sets <strong><code>status.endpoint</code></strong> to the <strong>client-facing MaaS URL</strong> (not the raw provider URL). Clients and <strong><code>GET /v1/models</code></strong> both use that URL.</p>
+</li>
+<li>
+<p><strong>Access and quota</strong> — You apply <strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong> the same way as for on-cluster models.</p>
+</li>
+</ol>
+<pre class="mermaid"><code>flowchart LR
+  subgraph config [Configuration]
+    EM[ExternalModel CR]
+    SEC[Secret credentials]
+    MMR[MaaSModelRef kind ExternalModel]
+  end
+  subgraph control [Controller]
+    R[Reconciler creates mesh and HTTPRoute]
+    S[status.endpoint on MaaSModelRef]
+  end
+  subgraph policies [Policies]
+    AP[MaaSAuthPolicy]
+    SUB[MaaSSubscription]
+  end
+  EM --&gt; MMR
+  SEC --&gt; EM
+  MMR --&gt; R
+  R --&gt; S
+  MMR --&gt; AP
+  MMR --&gt; SUB</code></pre>
+<h2 id="related-documentation">Related documentation</h2>
 <ul>
-<li><strong>Add or remove access per team</strong> — Update the policy to grant or revoke access to models for that team; no changes to the subscription required.</li>
-<li><strong>Reuse one subscription across teams</strong> — Another team (e.g., <code>ml-engineering</code>) can be an owner of the same Premium subscription but have a policy that grants access to a different subset of models (e.g., 8 of the 20). Each team gets the same quota tier but only sees the models you allow.</li>
-</ul>
-<h2 id="related-documentation">Related Documentation</h2>
-<p>For configuration details, see:</p>
-<ul>
-<li><a href="../quota-and-access-configuration/">Quota and Access Configuration</a> — Step-by-step configuration for MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription</li>
-</ul>
-<p>Additional references:</p>
-<ul>
-<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/archdiagrams/SubscriptionArch.md">Subscription Architecture</a> — Design document for the subscription model</li>
-<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/docs/old-vs-new-flow.md">MaaS Controller old-vs-new flow</a> — Comparison of subscription-based flows</li>
+<li><a href="../maas-model-kinds/#externalmodel">MaaSModelRef kinds — ExternalModel</a> — reconciler responsibilities and optional annotations</li>
+<li><a href="../model-listing-flow/#registering-external-models">Model listing flow — Registering external models</a> — numbered steps and catalog behavior</li>
+<li><a href="../model-gateway-and-serving/">On-cluster models</a> — LLMInferenceService and <code>maas-default-gateway</code> (contrast with external routing)</li>
 </ul>
 
 
@@ -2589,7 +2508,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 25, 2026 20:23:34 UTC">March 25, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 02:14:44 UTC">April 17, 2026</span>
   </span>
 
     
@@ -2599,7 +2518,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 02:14:44 UTC">April 17, 2026</span>
   </span>
 
     
