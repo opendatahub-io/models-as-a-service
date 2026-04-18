@@ -1,0 +1,14 @@
+# Plugin Version: 2.3.0
+# DO NOT REMOVE: This comment is used for version detection during plugin updates
+# Python dependencies for security scanning scripts
+#
+# Install with: pip install -r requirements.txt
+# Requires: Python 3.8+
+#
+# Used by:
+# - .github/scripts/acknowledge-findings.py (YAML parsing, baseline management)
+# - .github/scripts/generate-security-report.py (YAML parsing)
+
+# YAML parsing (required)
+# Pinned to specific version for stability and security
+PyYAML==6.0.2
