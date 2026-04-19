@@ -20,7 +20,7 @@ flowchart TD
     A -- "Pass" --> BothPass
     B -- "Pass" --> BothPass
 
-    BothPass{Access Granted} --> InferenceService["Inference Service"]
+    BothPass{Access Granted} --> InferenceService["Inference server<br/>(MaaSModelRef)"]
 
     style User fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
     style Gateway fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
@@ -61,7 +61,7 @@ The team can use only the 5 models specified in the policy. Their usage is gover
 
 For configuration details, see:
 
-- [Quota and Access Configuration](quota-and-access-configuration.md) — Step-by-step configuration for MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription
+- [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md) — Step-by-step configuration for MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription
 
 Additional references:
 

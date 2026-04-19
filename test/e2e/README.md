@@ -182,7 +182,7 @@ The `prow_run_smoke_test.sh` script:
 2. Deploys test models (free + premium simulators)
 3. Runs E2E tests:
    - API key management (`test_api_keys.py`)
-   - Subscription controller (`test_subscription.py`)
+   - Subscription management (`test_subscription.py`)
    - Models endpoint (`test_models_endpoint.py`)
    - Negative & security (`test_negative_security.py`)
    - Namespace scoping (`test_namespace_scoping.py`)

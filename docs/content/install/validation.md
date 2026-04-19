@@ -52,6 +52,13 @@ echo "CA certificate saved to $CA_CERT"
 
 - Empty `CLUSTER_DOMAIN`: you don't have permission to read the ingress config. Set `HOST` manually as shown above.
 
+!!! note "Optional"
+    List MaaSSubscriptions you can access (authenticate with your OpenShift token; requires `HOST` from above):
+    ```bash
+    curl -sS --cacert "$CA_CERT" -H "Authorization: Bearer $(oc whoami -t)" \
+      "${HOST}/maas-api/v1/subscriptions" | jq .
+    ```
+
 ### 2. Get API Key
 
 Create an API key using your OpenShift token:
@@ -74,6 +81,17 @@ echo "API key obtained successfully."
 
 !!! tip "If jq fails"
     If you see a jq parse error, the curl request likely returned a non-JSON error. Run `echo "$API_KEY_RESPONSE"` to inspect the raw response.
+
+!!! note "Optional"
+    List your API keys (metadata only; plaintext secrets are never returned):
+    ```bash
+    curl -sS --cacert "$CA_CERT" \
+      -H "Authorization: Bearer $(oc whoami -t)" \
+      -H "Content-Type: application/json" \
+      -X POST \
+      -d '{}' \
+      "${HOST}/maas-api/v1/api-keys/search" | jq .
+    ```
 
 !!! warning "API key shown only once"
     The plaintext API key is returned **only at creation time**. We do not store the API key, so there is no way to retrieve it again. Store it securely when it is displayed. If you run into errors, see [Troubleshooting](troubleshooting.md).

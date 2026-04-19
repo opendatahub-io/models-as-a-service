@@ -6,12 +6,12 @@ metadata:
 
 # ODH operator overlay
 # This overlay configures MaaS for deployment via OpenDataHub operator
-# Includes: maas-api with TLS, maas-controller, and gateway-level default policies
+# Includes: maas-api with TLS, maas-controller (gateway policies managed separately)
 #
 # STRUCTURE:
-# - Base resources: maas-api with TLS, maas-controller, gateway policies
+# - Base resources: maas-api with TLS, maas-controller
 # - Shared config: Inherits common patches/replacements via shared-patches component
-# - ODH-specific: Additional replacements for gateway policies and DestinationRule
+# - ODH-specific: Additional replacements for DestinationRule
 #
 # SHARED CONFIGURATION (from components/shared-patches):
 # - Environment variables for maas-api deployment (maas-parameters from params.env)
@@ -20,8 +20,9 @@ metadata:
 # - AuthPolicy URL placeholder replacement (placehold → actual namespace)
 #
 # ODH-SPECIFIC CONFIGURATION:
-# - Gateway-level policies (gateway-default-auth, gateway-default-deny)
 # - DestinationRule for TLS backend configuration
+# - Note: Gateway-level policies (gateway-default-auth, gateway-default-deny) 
+#   are deployed separately to avoid WasmPlugin timeout issues
 #
 # For details, see: deployment/components/shared-patches/README.md
 
@@ -41,7 +42,6 @@ generatorOptions:
 resources:
   - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule + NetworkPolicy)
   - ../../base/maas-controller/default
-  - ../../base/maas-controller/policies  # gateway-default-auth, gateway-default-deny
   - ../../base/payload-processing/default  # BBR ext_proc for external model payload processing
   - ../../components/observability/observability/dashboards/
 
@@ -195,23 +195,13 @@ replacements:
     options:
       delimiter: "."
       index: 1
-# Replace gateway namespace in gateway policies
+# Replace gateway namespace in DestinationRule 
 - source:
     kind: ConfigMap
     version: v1
     name: maas-parameters
     fieldPath: data.gateway-namespace
   targets:
-  - select:
-      kind: AuthPolicy
-      name: gateway-default-auth
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: TokenRateLimitPolicy
-      name: gateway-default-deny
-    fieldPaths:
-    - metadata.namespace
   - select:
       kind: DestinationRule
       name: maas-api-backend-tls

@@ -29,14 +29,39 @@ For local testing:
   3. Get token: export ADMIN_OC_TOKEN=$(oc create token tester-admin -n default)
 """
 
+import json
 import logging
 import os
+import subprocess
+import time
+from datetime import datetime
+
 import pytest
 import requests
-import time
 
 from conftest import TLS_VERIFY
-from test_helper import MODEL_NAME, SIMULATOR_SUBSCRIPTION
+from test_helper import (
+    MODEL_NAME,
+    MODEL_NAMESPACE,
+    MODEL_REF,
+    SIMULATOR_SUBSCRIPTION,
+    TIMEOUT,
+    _create_api_key,
+    _create_api_key_raw,
+    _create_sa_token,
+    _create_test_auth_policy,
+    _create_test_subscription,
+    _delete_cr,
+    _delete_sa,
+    _get_cr,
+    _maas_api_url,
+    _ns,
+    _sa_to_user,
+    _scale_controller_down,
+    _scale_controller_up,
+    _wait_for_maas_subscription_phase,
+    _wait_reconcile,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1061,3 +1086,269 @@ class TestEphemeralKeyCleanup:
         assert r_get.json().get("status") == "active", \
             f"Key should still be active after cleanup, got: {r_get.json().get('status')}"
         print(f"[cleanup] Active ephemeral key {key_id} survived cleanup (correct behavior)")
+
+
+class TestAPIKeySubscriptionPhases:
+    """
+    Test API key creation with subscriptions in different phases.
+
+    Tests verify that API keys can be created for any reconciled subscription
+    phase (Active, Degraded, Failed, Pending), but not for unreconciled subscriptions.
+
+    Note: Inference behavior is tested separately in test_subscription.py::TestDegradedSubscriptionFiltering
+    """
+
+    def test_create_key_for_active_subscription(self):
+        """API key creation succeeds for Active subscription."""
+        ns = _ns()
+        subscription_name = "e2e-apikey-active-sub"
+        auth_name = "e2e-apikey-active-auth"
+        sa_name = "e2e-apikey-active-sa"
+
+        try:
+            oc_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = _sa_to_user(sa_name, namespace="default")
+
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
+            _wait_for_maas_subscription_phase(subscription_name, namespace=ns)
+
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            phase = cr.get("status", {}).get("phase")
+            assert phase == "Active", f"Expected Active, got {phase}"
+
+            # Create API key (should succeed)
+            api_key = _create_api_key(
+                oc_token,
+                name="active-sub-test",
+                subscription=subscription_name
+            )
+            assert api_key is not None and api_key.startswith("sk-"), \
+                f"Expected valid API key, got: {api_key[:20] if api_key else None}"
+            log.info("✅ API key created successfully for Active subscription")
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()
+
+    def test_create_key_for_degraded_subscription(self):
+        """API key creation succeeds for Degraded subscription."""
+        ns = _ns()
+        subscription_name = "e2e-apikey-degraded-sub"
+        auth_name = "e2e-apikey-degraded-auth"
+        sa_name = "e2e-apikey-degraded-sa"
+        missing_model = "nonexistent-model-apikey"
+
+        try:
+            oc_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = _sa_to_user(sa_name, namespace="default")
+
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+            # Create with valid + missing model to trigger Degraded phase
+            _create_test_subscription(
+                subscription_name,
+                [MODEL_REF, missing_model],
+                users=[sa_user]
+            )
+            _wait_reconcile(seconds=10)
+
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            phase = cr.get("status", {}).get("phase")
+            assert phase == "Degraded", f"Expected Degraded, got {phase}"
+
+            # Create API key (should succeed)
+            api_key = _create_api_key(
+                oc_token,
+                name="degraded-sub-test",
+                subscription=subscription_name
+            )
+            assert api_key is not None and api_key.startswith("sk-"), \
+                f"Expected valid API key, got: {api_key[:20] if api_key else None}"
+            log.info("✅ API key created successfully for Degraded subscription")
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()
+
+    def test_create_key_for_failed_subscription(self):
+        """API key creation is rejected for Failed subscription to prevent key spam."""
+        ns = _ns()
+        subscription_name = "e2e-apikey-failed-sub"
+        auth_name = "e2e-apikey-failed-auth"
+        sa_name = "e2e-apikey-failed-sa"
+
+        try:
+            oc_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = _sa_to_user(sa_name, namespace="default")
+
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
+            _wait_reconcile(seconds=10)
+
+            # Patch to Failed phase
+            patch_data = {
+                "status": {
+                    "phase": "Failed",
+                    "conditions": [{
+                        "type": "Ready",
+                        "status": "False",
+                        "reason": "Failed",
+                        "message": "Test scenario",
+                        "lastTransitionTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                    }],
+                    "modelRefStatuses": [{
+                        "name": MODEL_REF,
+                        "namespace": MODEL_NAMESPACE,
+                        "ready": False,
+                        "reason": "ReconcileFailed",
+                        "message": "Test failure"
+                    }]
+                }
+            }
+
+            cmd = [
+                "kubectl", "patch", "maassubscription", subscription_name,
+                "-n", ns, "--type=merge", "--subresource=status",
+                "-p", json.dumps(patch_data)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            assert result.returncode == 0, f"Failed to patch: {result.stderr}"
+
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            phase = cr.get("status", {}).get("phase")
+            assert phase == "Failed", f"Expected Failed, got {phase}"
+
+            # Create API key (should be rejected for Failed subscriptions)
+            resp = _create_api_key_raw(
+                oc_token,
+                name="failed-sub-test",
+                subscription=subscription_name
+            )
+            assert resp.status_code == 403, \
+                f"Expected 403 Forbidden for Failed subscription, got {resp.status_code}: {resp.text}"
+            log.info("✅ API key creation rejected for Failed subscription (prevents key spam)")
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()
+
+    def test_create_key_for_pending_subscription(self):
+        """API key creation succeeds for Pending subscription."""
+        ns = _ns()
+        subscription_name = "e2e-apikey-pending-sub"
+        auth_name = "e2e-apikey-pending-auth"
+        sa_name = "e2e-apikey-pending-sa"
+
+        try:
+            oc_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = _sa_to_user(sa_name, namespace="default")
+
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
+            _wait_reconcile(seconds=10)
+
+            # Patch to Pending phase
+            patch_data = {
+                "status": {
+                    "phase": "Pending",
+                    "conditions": [{
+                        "type": "Ready",
+                        "status": "False",
+                        "reason": "Pending",
+                        "message": "Reconciliation in progress",
+                        "lastTransitionTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                    }],
+                }
+            }
+
+            cmd = [
+                "kubectl", "patch", "maassubscription", subscription_name,
+                "-n", ns, "--type=merge", "--subresource=status",
+                "-p", json.dumps(patch_data)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            assert result.returncode == 0, f"Failed to patch: {result.stderr}"
+
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            phase = cr.get("status", {}).get("phase")
+            assert phase == "Pending", f"Expected Pending, got {phase}"
+
+            # Create API key (should succeed)
+            api_key = _create_api_key(
+                oc_token,
+                name="pending-sub-test",
+                subscription=subscription_name
+            )
+            assert api_key is not None and api_key.startswith("sk-"), \
+                f"Expected valid API key, got: {api_key[:20] if api_key else None}"
+            log.info("✅ API key created successfully for Pending subscription")
+
+        finally:
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()
+
+    def test_reject_key_for_unreconciled_subscription(self):
+        """
+        API key creation is rejected for unreconciled subscription (empty phase).
+
+        This test scales down the controller to ensure deterministic behavior.
+        """
+        ns = _ns()
+        subscription_name = "e2e-apikey-unreconciled-sub"
+        auth_name = "e2e-apikey-unreconciled-auth"
+        sa_name = "e2e-apikey-unreconciled-sa"
+
+        try:
+            # Scale down controller to prevent reconciliation
+            _scale_controller_down()
+
+            oc_token = _create_sa_token(sa_name, namespace="default")
+            sa_user = _sa_to_user(sa_name, namespace="default")
+
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+            # Create subscription (won't reconcile with controller scaled down)
+            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
+
+            # Verify subscription is unreconciled
+            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
+            phase = cr.get("status", {}).get("phase", "")
+            assert phase == "", f"Expected empty phase, got: {phase}"
+            log.info("✅ Subscription is unreconciled (empty phase)")
+
+            # Try to create API key (should fail with 400)
+            response = requests.post(
+                f"{_maas_api_url()}/v1/api-keys",
+                headers={
+                    "Authorization": f"Bearer {oc_token}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "name": "unreconciled-sub-test",
+                    "subscription": subscription_name
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            assert response.status_code == 400, \
+                f"Expected 400 for unreconciled subscription, got {response.status_code}: {response.text}"
+            response_data = response.json()
+            assert "code" in response_data and response_data["code"] == "subscription_not_ready", \
+                f"Expected subscription_not_ready error code, got: {response_data}"
+            log.info("✅ API key creation rejected for unreconciled subscription")
+
+        finally:
+            # Scale controller back up
+            _scale_controller_up()
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace="default")
+            _wait_reconcile()

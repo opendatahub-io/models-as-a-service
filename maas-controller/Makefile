@@ -58,14 +58,14 @@ build: tidy generate manifests lint test binary ##	run full build: tidy, generat
 
 .PHONY: binary
 binary: $(BUILD_DIR) ##	build manager binary to bin/manager (skip checks)
-	$(GO_ENV) go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/manager
+	$(GO_ENV) go build -o "$(BUILD_DIR)/$(BINARY_NAME)" ./cmd/manager
 
 $(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
+	mkdir -p "$(BUILD_DIR)"
 
 .PHONY: run
 run: binary ##	build and run manager locally
-	$(BUILD_DIR)/$(BINARY_NAME)
+	"$(BUILD_DIR)/$(BINARY_NAME)"
 
 TEST_FLAGS ?= -race -coverprofile=coverage.out
 .PHONY: test

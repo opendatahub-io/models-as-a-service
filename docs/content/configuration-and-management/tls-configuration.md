@@ -191,9 +191,8 @@ Pre-configured overlays are available for common scenarios:
 | Overlay | Description |
 |---------|-------------|
 | `deployment/base/maas-api/overlays/tls` | Base TLS overlay for maas-api (deployment patch, service annotation, DestinationRule) |
-| `deployment/overlays/tls-backend` | Full TLS deployment with Authorino configuration |
-| `deployment/overlays/tls-backend-disk` | TLS + persistent storage (PVC) |
-| `deployment/overlays/http-backend` | HTTP only (development/testing) |
+| `maas-api/deploy/overlays/odh` | Tenant reconciler overlay (TLS, gateway policies, shared-patches) |
+| `deployment/overlays/odh` | ODH operator overlay (TLS, controller, gateway policies, observability) |
 
 The `tls` base overlay includes:
 
@@ -203,11 +202,9 @@ The `tls` base overlay includes:
 | `service-patch.yaml` | Add serving-cert annotation, expose port 8443 |
 | `destinationrule.yaml` | Configure gateway TLS to maas-api backend |
 
-Deploy using:
-
-```bash
-kustomize build --load-restrictor LoadRestrictionsNone deployment/overlays/tls-backend | kubectl apply -f -
-```
+maas-api is deployed by the Tenant reconciler in `maas-controller`. The `deploy.sh` script
+installs prerequisites (policy engine, PostgreSQL, Authorino TLS) and then deploys
+`maas-controller`, which creates the `default-tenant` CR and reconciles maas-api via SSA.
 
 ## Verifying TLS Configuration
 

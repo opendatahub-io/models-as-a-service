@@ -405,7 +405,7 @@ MaaS supports three model serving backends that expose Prometheus metrics on `/m
 
 - **vLLM** (current stable) — full-featured LLM inference server
 - **llm-d** — llm-d inference platform (runs vLLM as backend + EPP routing layer)
-- **llm-d-inference-sim** (v0.7.1) — lightweight simulator for testing without GPUs
+- **llm-d-inference-sim** (v0.8.2) — lightweight simulator for testing without GPUs
 
 **Supported versions:**
 
@@ -413,7 +413,7 @@ MaaS supports three model serving backends that expose Prometheus metrics on `/m
 |---------|----------------|------------------|
 | vLLM | v0.7.x stable | — |
 | llm-d | v0.1.x | — |
-| llm-d-inference-sim | **v0.7.1** | `docs/samples/models/simulator/` |
+| llm-d-inference-sim | **v0.8.2** | `docs/samples/models/simulator/` |
 
 #### vLLM Metrics (port 8000)
 
@@ -443,7 +443,7 @@ All three backends expose `vllm:`-prefixed metrics. The table below shows which 
 | `vllm:time_per_output_token_seconds` | Histogram | Y | — | — | Legacy ITL name (kept by simulator for backward compat; not used by dashboards) |
 
 !!! note "Simulator metric alignment"
-    As of v0.7.1, the simulator fully aligns with current vLLM metric names (`kv_cache_usage_perc`, `inter_token_latency_seconds`, `prompt_tokens_total`, `generation_tokens_total`). Older simulator versions (v0.6.x) used different names (`gpu_cache_usage_perc`, `time_per_output_token_seconds`) and are **no longer supported** by MaaS dashboards. The simulator also exposes additional metrics not used by MaaS dashboards (e.g. `request_inference_time_seconds`, `request_params_max_tokens`).
+    As of v0.7.1 (still true in v0.8.x), the simulator fully aligns with current vLLM metric names (`kv_cache_usage_perc`, `inter_token_latency_seconds`, `prompt_tokens_total`, `generation_tokens_total`). Older simulator versions (v0.6.x) used different names (`gpu_cache_usage_perc`, `time_per_output_token_seconds`) and are **no longer supported** by MaaS dashboards. The simulator also exposes additional metrics not used by MaaS dashboards (e.g. `request_inference_time_seconds`, `request_params_max_tokens`).
 
 !!! note "Lazily registered metrics"
     Some vLLM/simulator metrics are **lazily registered** — they only appear in `/metrics` output after the first event that triggers them. For example, `request_queue_time_seconds` (on real vLLM) only appears after a request actually queues (when `max-num-seqs` is exceeded). Similarly, histogram counters like `e2e_request_latency_seconds` only appear after the first inference request completes. Dashboard panels will show "No Data" until sufficient traffic has been generated. This is normal Prometheus client behavior, not a configuration issue.
@@ -475,7 +475,7 @@ When using llm-d, the inference gateway's Endpoint Picker (EPP) exposes addition
 
 #### Dashboard Metric Queries
 
-Dashboard panels use histogram `_sum` as primary data source. All queries work across vLLM, llm-d, and llm-d-inference-sim v0.7.1:
+Dashboard panels use histogram `_sum` as primary data source. All queries work across vLLM, llm-d, and llm-d-inference-sim v0.8.2:
 
 | Panel | PromQL metric |
 |-------|---------------|
