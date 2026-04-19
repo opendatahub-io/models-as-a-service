@@ -29,6 +29,7 @@ const (
 )
 
 // ConditionReason represents a machine-readable reason for a status condition.
+// +kubebuilder:validation:Enum=Reconciled;ReconcileFailed;PartialFailure;Valid;NotFound;GetFailed;Accepted;AcceptedEnforced;NotAccepted;Enforced;NotEnforced;BackendNotReady;ConditionsNotFound;Unknown
 type ConditionReason string
 
 // Reason constants for status conditions and per-item statuses.

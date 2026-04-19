@@ -32,6 +32,9 @@ Environment variables (all optional unless noted):
   - E2E_DISTINCT_MODEL_ID: Model ID for first distinct model (default: test/e2e-distinct-model)
   - E2E_DISTINCT_MODEL_2_REF: Second distinct model ref (default: e2e-distinct-2-simulated)
   - E2E_DISTINCT_MODEL_2_ID: Model ID for second distinct model (default: test/e2e-distinct-model-2)
+  - E2E_TRLP_TEST_MODEL_REF: TRLP test model ref (default: e2e-trlp-test-simulated)                                                                                                   
+  - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
+  - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model) 
 """
 
 import base64
@@ -68,6 +71,9 @@ DISTINCT_MODEL_REF = os.environ.get("E2E_DISTINCT_MODEL_REF", "e2e-distinct-simu
 DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", "test/e2e-distinct-model")
 DISTINCT_MODEL_2_REF = os.environ.get("E2E_DISTINCT_MODEL_2_REF", "e2e-distinct-2-simulated")
 DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", "test/e2e-distinct-model-2")
+TRLP_TEST_MODEL_REF = os.environ.get("E2E_TRLP_TEST_MODEL_REF", "e2e-trlp-test-simulated")                                                                                            
+TRLP_TEST_MODEL_PATH = os.environ.get("E2E_TRLP_TEST_MODEL_PATH", "/llm/e2e-trlp-test-simulated")                                                                                     
+TRLP_TEST_MODEL_ID = os.environ.get("E2E_TRLP_TEST_MODEL_ID", "test/e2e-trlp-test-model") 
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +197,36 @@ def _get_cluster_token():
 # API Key Management
 # ---------------------------------------------------------------------------
 
+def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = None):
+    """Create an API key and return the raw response (for testing error cases).
+
+    Args:
+        oc_token: OC token for authentication with maas-api
+        name: Optional name for the key (auto-generated if not provided)
+        subscription: Optional MaaSSubscription name to bind (highest-priority auto-bind if omitted)
+
+    Returns:
+        requests.Response object
+    """
+    url = f"{_maas_api_url()}/v1/api-keys"
+    key_name = name or f"e2e-test-{uuid.uuid4().hex[:8]}"
+
+    body = {"name": key_name}
+    if subscription:
+        body["subscription"] = subscription
+
+    return requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {oc_token}",
+            "Content-Type": "application/json",
+        },
+        json=body,
+        timeout=TIMEOUT,
+        verify=TLS_VERIFY,
+    )
+
+
 def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -> str:
     """Create an API key using the MaaS API and return the plaintext key.
 
@@ -202,23 +238,7 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
     Returns:
         The plaintext API key (sk-oai-xxx format)
     """
-    url = f"{_maas_api_url()}/v1/api-keys"
-    key_name = name or f"e2e-test-{uuid.uuid4().hex[:8]}"
-
-    body = {"name": key_name}
-    if subscription:
-        body["subscription"] = subscription
-
-    r = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {oc_token}",
-            "Content-Type": "application/json",
-        },
-        json=body,
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
-    )
+    r = _create_api_key_raw(oc_token, name, subscription)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Failed to create API key: {r.status_code} {r.text}")
 
@@ -227,7 +247,7 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
     if not api_key:
         raise RuntimeError(f"API key response missing 'key' field: {data}")
 
-    log.info("Created API key '%s' bound to subscription '%s'", key_name, subscription)
+    log.info("Created API key '%s' bound to subscription '%s'", name, subscription)
     return api_key
 
 
@@ -739,6 +759,57 @@ def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=N
     )
 
 
+def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None, timeout=60):
+    """Wait for MaaSSubscription's TokenRateLimitPolicy status to reach expected ready state.
+
+    Args:
+        name: Name of the MaaSSubscription
+        expected_ready: Expected ready state for all TRLPs (True or False)
+        namespace: Namespace (defaults to _ns())
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Returns:
+        The subscription CR dict when all TRLPs reach the expected ready state
+
+    Raises:
+        TimeoutError: If TRLPs don't reach expected state within timeout
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    log.info(f"Waiting for MaaSSubscription {name} TRLP ready={expected_ready} (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("maassubscription", name, namespace)
+        if cr:
+            status = cr.get("status", {})
+            trlp_statuses = status.get("tokenRateLimitStatuses", [])
+
+            # If we expect ready and there are no TRLPs yet, keep waiting
+            if expected_ready and len(trlp_statuses) == 0:
+                log.debug(f"MaaSSubscription {name}: waiting for TRLP statuses to appear")
+                time.sleep(2)
+                continue
+
+            # Check if all TRLPs match expected ready state
+            if len(trlp_statuses) > 0:
+                all_match = all(trlp.get("ready") == expected_ready for trlp in trlp_statuses)
+                if all_match:
+                    log.info(f"✅ MaaSSubscription {name} has {len(trlp_statuses)} TRLP(s) with ready={expected_ready}")
+                    return cr
+                log.debug(f"MaaSSubscription {name}: TRLP statuses={trlp_statuses}")
+
+        time.sleep(2)
+
+    # Timeout - return current state for debugging
+    cr = _get_cr("maassubscription", name, namespace)
+    status = cr.get("status", {}) if cr else {}
+    trlp_statuses = status.get("tokenRateLimitStatuses", [])
+    raise TimeoutError(
+        f"MaaSSubscription {name} TRLPs did not reach ready={expected_ready} within {timeout}s "
+        f"(current TRLPs: {trlp_statuses})"
+    )
+
+
 def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=None, timeout=60,
                                 require_auth_policies=True, require_enforced=True):
     """Wait for MaaSAuthPolicy to reach a specific phase.
@@ -800,3 +871,142 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
         f"MaaSAuthPolicy {name} did not reach phase '{expected_phase}' within {timeout}s "
         f"(current: phase={status.get('phase')}, authPolicies={len(status.get('authPolicies', []))})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Controller scaling utilities
+# ---------------------------------------------------------------------------
+
+def _scale_controller(replicas, namespace=None, timeout=60):
+    """
+    Scale the maas-controller deployment.
+
+    Args:
+        replicas: Target replica count (0 to disable, 1+ to enable)
+        namespace: Deployment namespace (defaults to DEPLOYMENT_NAMESPACE env or 'opendatahub')
+        timeout: Max seconds to wait for scaling operation (default: 60)
+
+    Raises:
+        subprocess.CalledProcessError: If kubectl scale fails
+        TimeoutError: If pods don't reach desired state within timeout
+    """
+    namespace = namespace or os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+
+    log.info(f"Scaling maas-controller to {replicas} replicas in namespace {namespace}...")
+
+    # Scale the deployment
+    result = subprocess.run(
+        ["oc", "scale", "deployment", "maas-controller",
+         f"--replicas={replicas}", "-n", namespace],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout
+    )
+
+    # Wait for pods to reach desired state
+    if replicas == 0:
+        # Wait for all pods to terminate
+        log.debug(f"Waiting for maas-controller pods to terminate (timeout: {timeout}s)...")
+        subprocess.run(
+            ["oc", "wait", "--for=delete", "pod",
+             "-l", "app=maas-controller", "-n", namespace,
+             f"--timeout={timeout}s"],
+            check=False,  # Don't fail if no pods exist
+            capture_output=True,
+            text=True
+        )
+        log.info("✓ maas-controller scaled down to 0 replicas")
+    else:
+        # Wait for pods to become ready
+        log.debug(f"Waiting for maas-controller pods to become ready (timeout: {timeout}s)...")
+        try:
+            subprocess.run(
+                ["oc", "wait", "--for=condition=ready", "pod",
+                 "-l", "app=maas-controller", "-n", namespace,
+                 f"--timeout={timeout}s"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            log.info(f"✓ maas-controller scaled to {replicas} replica(s)")
+        except subprocess.CalledProcessError as e:
+            # Log but don't fail - sometimes pods need extra time
+            log.warning(f"Pods may not be ready yet: {e.stderr}")
+            time.sleep(5)  # Give it a bit more time
+
+
+def _scale_controller_down(namespace=None, timeout=60):
+    """Scale maas-controller to 0 replicas (convenience wrapper)."""
+    _scale_controller(0, namespace, timeout)
+
+
+def _scale_controller_up(namespace=None, timeout=60):
+    """Scale maas-controller to 1 replica (convenience wrapper)."""
+    _scale_controller(1, namespace, timeout)
+
+
+def _scale_kuadrant_controller(replicas, namespace="kuadrant-system", timeout=60):
+    """
+    Scale the kuadrant-operator deployment.
+
+    Args:
+        replicas: Target replica count (0 to disable, 1+ to enable)
+        namespace: Deployment namespace (default: kuadrant-system)
+        timeout: Max seconds to wait for scaling operation (default: 60)
+
+    Raises:
+        subprocess.CalledProcessError: If kubectl scale fails
+        TimeoutError: If pods don't reach desired state within timeout
+    """
+    log.info(f"Scaling kuadrant-operator to {replicas} replicas in namespace {namespace}...")
+
+    # Scale the deployment
+    result = subprocess.run(
+        ["oc", "scale", "deployment", "kuadrant-operator-controller-manager",
+         f"--replicas={replicas}", "-n", namespace],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout
+    )
+
+    # Wait for pods to reach desired state
+    if replicas == 0:
+        # Wait for all pods to terminate
+        log.debug(f"Waiting for kuadrant-operator pods to terminate (timeout: {timeout}s)...")
+        subprocess.run(
+            ["oc", "wait", "--for=delete", "pod",
+             "-l", "control-plane=controller-manager", "-n", namespace,
+             f"--timeout={timeout}s"],
+            check=False,  # Don't fail if no pods exist
+            capture_output=True,
+            text=True
+        )
+        log.info("✓ kuadrant-operator scaled down to 0 replicas")
+    else:
+        # Wait for pods to become ready
+        log.debug(f"Waiting for kuadrant-operator pods to become ready (timeout: {timeout}s)...")
+        try:
+            subprocess.run(
+                ["oc", "wait", "--for=condition=ready", "pod",
+                 "-l", "control-plane=controller-manager", "-n", namespace,
+                 f"--timeout={timeout}s"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            log.info(f"✓ kuadrant-operator scaled to {replicas} replica(s)")
+        except subprocess.CalledProcessError:
+            log.warning(f"Pods may not be ready yet (timeout: {timeout}s)")
+            raise
+
+
+def _scale_kuadrant_controller_down(namespace="kuadrant-system", timeout=60):
+    """Scale kuadrant-operator to 0 replicas (convenience wrapper)."""
+    _scale_kuadrant_controller(0, namespace, timeout)
+
+
+def _scale_kuadrant_controller_up(namespace="kuadrant-system", timeout=60):
+    """Scale kuadrant-operator to 1 replica (convenience wrapper)."""
+    _scale_kuadrant_controller(1, namespace, timeout)

@@ -3,35 +3,47 @@ kind: Kustomization
 
 metadata:
   name: maas-api-opendatahub
-  
-# Overlay to be used by OpenDataHub Operator to install MaaS component itself.
+
+# Overlay used by the Tenant reconciler (maas-controller) to render maas-api
+# platform workloads. CustomizeParams writes gateway, namespace, and audience
+# values into params.env before kustomize build; shared-patches then
+# substitutes them into Deployments, HTTPRoutes, and AuthPolicies.
 resources:
-- ../../../../deployment/base/maas-api
+- ../../../../deployment/base/maas-api/overlays/tls
+- ../../../../deployment/base/maas-controller/policies
 
 namespace: opendatahub
 
 labels:
-- includeSelectors: true
-  pairs:
+- pairs:
     app.kubernetes.io/component: api
     app.kubernetes.io/name: maas-api
 
-# This approach is used across ODH components to set the image through GitOps
+components:
+  - ../../../../deployment/components/shared-patches
+
 configMapGenerator:
-- name: maas-api-deployment-config
+- name: maas-parameters
   envs:
     - params.env
   options:
     disableNameSuffixHash: true
 
+generatorOptions:
+  disableNameSuffixHash: true
+
+# DestinationRule must live in the gateway namespace, not app namespace.
+# The overlay's `namespace:` directive overrides all resources to opendatahub,
+# so we fix it here (replacements run after namespace transformer).
 replacements:
 - source:
-    fieldPath: data.maas-api-image
     kind: ConfigMap
-    name: maas-api-deployment-config
+    version: v1
+    name: maas-parameters
+    fieldPath: data.gateway-namespace
   targets:
-  - fieldPaths:
-    - spec.template.spec.containers.[name=maas-api].image
-    select:
-      kind: Deployment
-      name: maas-api
+  - select:
+      kind: DestinationRule
+      name: maas-api-backend-tls
+    fieldPaths:
+    - metadata.namespace

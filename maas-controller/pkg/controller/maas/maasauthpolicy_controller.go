@@ -233,6 +233,11 @@ func (r *MaaSAuthPolicyReconciler) deriveAuthPolicyPhase(policy *maasv1alpha1.Ma
 		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d AuthPolicies not accepted/enforced", unhealthyPolicies, len(policy.Status.AuthPolicies))
 	}
 
+	// No AuthPolicies generated yet -> Degraded
+	if healthyPolicies == 0 {
+		return maasv1alpha1.PhaseDegraded, "no generated AuthPolicies attached to models"
+	}
+
 	return maasv1alpha1.PhaseActive, "successfully reconciled"
 }
 
@@ -456,12 +461,24 @@ allow {
 			},
 		}
 
-		// Fail-close: require successful subscription selection (name must be present)
+		// Fail-close: require successful subscription selection AND health checks
+		// Allowlist approach: only Active and Degraded phases are permitted
+		// Rejects Failed, Pending, empty (unreconciled), unknown phases, and deleting subscriptions
 		authRules["subscription-valid"] = map[string]any{
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]any{
-				"rego": `allow { object.get(input.auth.metadata["subscription-info"], "name", "") != "" }`,
+				"rego": `allow {
+	# Subscription name must be present (selector succeeded)
+	object.get(input.auth.metadata["subscription-info"], "name", "") != ""
+	# Error field must be empty (no validation errors from selector)
+	object.get(input.auth.metadata["subscription-info"], "error", "") == ""
+	# Allowlist: phase must be exactly "Active" or "Degraded" (reject empty/unreconciled)
+	phase := object.get(input.auth.metadata["subscription-info"], "phase", "")
+	any([phase == "Active", phase == "Degraded"])
+	# Subscription must not be deleting
+	object.get(input.auth.metadata["subscription-info"], "deletionTimestamp", "") == ""
+}`,
 			},
 			// Cache authorization result keyed by subscription selection inputs.
 			// Uses same key dimensions as subscription-info metadata to ensure cache coherence.

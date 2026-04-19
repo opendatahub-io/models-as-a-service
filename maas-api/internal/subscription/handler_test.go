@@ -62,6 +62,15 @@ func createTestSubscription(name string, groups []string, priority int32, orgID,
 					},
 				},
 			},
+			"status": map[string]any{
+				"phase": "Active",
+				"conditions": []any{
+					map[string]any{
+						"type":   "Ready",
+						"status": "True",
+					},
+				},
+			},
 		},
 	}
 }
@@ -307,6 +316,15 @@ func TestHandler_SelectSubscription_UserWithoutGroups(t *testing.T) {
 					},
 				},
 			},
+			"status": map[string]any{
+				"phase": "Active",
+				"conditions": []any{
+					map[string]any{
+						"type":   "Ready",
+						"status": "True",
+					},
+				},
+			},
 		},
 	}
 
@@ -474,6 +492,15 @@ func createTestSubscriptionWithLimit(name string, groups []string, priority int3
 					},
 				},
 			},
+			"status": map[string]any{
+				"phase": "Active",
+				"conditions": []any{
+					map[string]any{
+						"type":   "Ready",
+						"status": "True",
+					},
+				},
+			},
 		},
 	}
 }
@@ -619,6 +646,15 @@ func createTestSubscriptionWithModels(
 					},
 				},
 			},
+			"status": map[string]any{
+				"phase": "Active",
+				"conditions": []any{
+					map[string]any{
+						"type":   "Ready",
+						"status": "True",
+					},
+				},
+			},
 		},
 	}
 }
@@ -664,6 +700,15 @@ func createTestSubscriptionWithAnnotations(name string, groups []string, modelNa
 				},
 				"priority":  int64(10),
 				"modelRefs": modelRefs,
+			},
+			"status": map[string]any{
+				"phase": "Active",
+				"conditions": []any{
+					map[string]any{
+						"type":   "Ready",
+						"status": "True",
+					},
+				},
 			},
 		},
 	}

@@ -272,15 +272,23 @@ echo "16. Deleting MaaS RBAC..."
 kubectl delete clusterrolebinding maas-api maas-controller-rolebinding --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-api maas-controller-role --ignore-not-found 2>/dev/null || true
 
-# 17. Optionally delete CRDs
+# 17. Delete CRDs
+# Always delete KServe/MaaS CRDs to prevent storedVersions schema conflicts on reinstall.
+# ODH-internal CRDs are only deleted with --include-crds.
+echo "17. Deleting KServe/MaaS CRDs (always removed to prevent version conflicts)..."
+for crd in $(kubectl get crd -o name 2>/dev/null | grep -E 'serving\.kserve\.io|maas\.opendatahub\.io'); do
+    echo "   Deleting $crd"
+    kubectl delete "$crd" --ignore-not-found --timeout=30s 2>/dev/null || true
+done
+
 if $INCLUDE_CRDS; then
-    echo "17. Deleting ODH CRDs..."
-    kubectl delete crd datascienceclusters.datasciencecluster.opendatahub.io --ignore-not-found 2>/dev/null || true
-    kubectl delete crd dscinitializations.dscinitialization.opendatahub.io --ignore-not-found 2>/dev/null || true
-    kubectl delete crd datasciencepipelinesapplications.datasciencepipelinesapplications.opendatahub.io --ignore-not-found 2>/dev/null || true
-    # Add more CRDs as needed
+    echo "17b. Deleting all ODH CRDs..."
+    for crd in $(kubectl get crd -o name 2>/dev/null | grep -E 'opendatahub\.io|trustyai\.opendatahub'); do
+        echo "   Deleting $crd"
+        kubectl delete "$crd" --ignore-not-found --timeout=30s 2>/dev/null || true
+    done
 else
-    echo "17. Skipping CRD deletion (use --include-crds to remove CRDs)"
+    echo "17b. Skipping ODH-internal CRD deletion (use --include-crds to remove all)"
 fi
 
 echo ""
