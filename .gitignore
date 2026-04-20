@@ -56,6 +56,9 @@ apps/backend/.env
 CLAUDE.md
 .cursor/
 
+# Git worktrees
+.worktrees/
+
 # Docs build and site directories
 docs/build/
 docs/site/
