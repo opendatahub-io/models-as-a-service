@@ -548,7 +548,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			// The JWT's aud claim must match the OIDC client ID for security
 			jwtConfig := map[string]any{
 				"issuerUrl": oidcConfig.IssuerURL,
-				"audiences": []string{oidcConfig.ClientID},
+				"audiences": []any{oidcConfig.ClientID},
 			}
 
 			authenticationRules["oidc-identities"] = map[string]any{
