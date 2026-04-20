@@ -13,5 +13,5 @@ rules:
     verbs: ["get", "list", "watch"]
   # model-provider-resolver plugin: watches ExternalModel CRDs across namespaces
   - apiGroups: ["maas.opendatahub.io"]
-    resources: ["maasmodelrefs", "externalmodels"]
+    resources: ["externalmodels"]
     verbs: ["get", "list", "watch"]
