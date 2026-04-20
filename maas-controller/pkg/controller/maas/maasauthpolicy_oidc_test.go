@@ -188,10 +188,35 @@ func TestCELExpressions_SupportOIDC(t *testing.T) {
 	assert.Contains(t, celUserID, "auth.identity.user.username",
 		"celUserID should fall back to K8s user.username")
 
+	assert.Contains(t, celUsername, "auth.identity.preferred_username",
+		"celUsername should check for OIDC preferred_username")
+	assert.Contains(t, celUsername, "auth.identity.sub",
+		"celUsername should check for OIDC sub claim")
+	assert.Contains(t, celUsername, "auth.identity.user.username",
+		"celUsername should fall back to K8s user.username")
+
 	assert.Contains(t, celGroups, "auth.identity.groups",
 		"celGroups should check for OIDC groups claim")
 	assert.Contains(t, celGroups, "auth.identity.user.groups",
 		"celGroups should fall back to K8s user.groups")
+}
+
+func TestCELExpressions_UserIDVsUsername(t *testing.T) {
+	// Test that celUserID uses userId (UUID for cache keys)
+	assert.Contains(t, celUserID, "auth.metadata.apiKeyValidation.userId",
+		"celUserID should use userId for API key cache keys (UUID)")
+
+	// Test that celUsername uses username (service account name for authz)
+	assert.Contains(t, celUsername, "auth.metadata.apiKeyValidation.username",
+		"celUsername should use username for API key authorization (service account name)")
+
+	// Verify celUserID does NOT use .username (it should use .userId)
+	assert.NotContains(t, celUserID, "apiKeyValidation.username",
+		"celUserID should NOT use username field")
+
+	// Verify celUsername does NOT use .userId (it should use .username)
+	assert.NotContains(t, celUsername, "apiKeyValidation.userId",
+		"celUsername should NOT use userId field")
 }
 
 func TestCELExpressions_OrderMatters(t *testing.T) {

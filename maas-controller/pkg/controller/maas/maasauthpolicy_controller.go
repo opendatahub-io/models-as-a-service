@@ -182,11 +182,22 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 // These handle API keys, OIDC tokens, and Kubernetes tokens.
 const (
 	// celUserID extracts user ID from API key, OIDC, or K8s token
+	// Used for cache keys (UUID for API keys, username for others)
 	// API key: uses apiKeyValidation.userId (database UUID)
 	// OIDC: uses preferred_username or sub (from JWT claims)
 	// K8s: uses user.username (from TokenReview)
 	celUserID = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.userId ` +
+		`: (has(auth.identity.preferred_username) ? auth.identity.preferred_username ` +
+		`: (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))`
+
+	// celUsername extracts username for subscription ownership checks
+	// Unlike celUserID (which uses UUID for API key cache keys), this always uses the actual username
+	// API key: uses apiKeyValidation.username (service account name)
+	// OIDC: uses preferred_username or sub (from JWT claims)
+	// K8s: uses user.username (from TokenReview)
+	celUsername = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
+		`? auth.metadata.apiKeyValidation.username ` +
 		`: (has(auth.identity.preferred_username) ? auth.identity.preferred_username ` +
 		`: (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))`
 
@@ -463,7 +474,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
   "username": %s,
   "requestedSubscription": `+celSubscription+`,
   "requestedModel": "%s/%s"
-}`, celGroups, celUserID, ref.Namespace, ref.Name),
+}`, celGroups, celUsername, ref.Namespace, ref.Name),
 						},
 					},
 					// Cache subscription selection results keyed by user ID, groups, requested subscription, and model.
