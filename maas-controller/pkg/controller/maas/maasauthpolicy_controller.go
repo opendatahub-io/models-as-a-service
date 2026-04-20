@@ -70,7 +70,7 @@ type MaaSAuthPolicyReconciler struct {
 	AuthzCacheTTL int64
 }
 
-// oidcConfig holds OIDC configuration from ModelsAsService CR
+// oidcConfig holds OIDC configuration from Tenant CR
 type oidcConfig struct {
 	IssuerURL string
 	ClientID  string
@@ -228,7 +228,7 @@ func authzCacheKeySelector(ns, name string) string {
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
-//+kubebuilder:rbac:groups=components.platform.opendatahub.io,resources=modelsasservices,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
@@ -1145,12 +1145,12 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	generatedAuthPolicy := &unstructured.Unstructured{}
 	generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 
-	// Watch ModelsAsService so we re-reconcile when OIDC configuration changes.
-	modelsAsService := &unstructured.Unstructured{}
-	modelsAsService.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "components.platform.opendatahub.io",
+	// Watch Tenant so we re-reconcile when OIDC configuration changes.
+	tenant := &unstructured.Unstructured{}
+	tenant.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "maas.opendatahub.io",
 		Version: "v1alpha1",
-		Kind:    "ModelsAsService",
+		Kind:    "Tenant",
 	})
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -1171,20 +1171,20 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
 			r.mapGeneratedAuthPolicyToParent,
 		)).
-		// Watch ModelsAsService so OIDC configuration changes trigger reconciles.
-		Watches(modelsAsService, handler.EnqueueRequestsFromMapFunc(
-			r.mapModelsAsServiceToMaaSAuthPolicies,
+		// Watch Tenant so OIDC configuration changes trigger reconciles.
+		Watches(tenant, handler.EnqueueRequestsFromMapFunc(
+			r.mapTenantToMaaSAuthPolicies,
 		)).
 		Complete(r)
 }
 
-// mapModelsAsServiceToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources
-// when ModelsAsService changes (to pick up OIDC configuration changes).
-func (r *MaaSAuthPolicyReconciler) mapModelsAsServiceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+// mapTenantToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources
+// when Tenant changes (to pick up OIDC configuration changes).
+func (r *MaaSAuthPolicyReconciler) mapTenantToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
 	// List all MaaSAuthPolicy resources
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
 	if err := r.List(ctx, policyList); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for ModelsAsService change")
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for Tenant change")
 		return nil
 	}
 
