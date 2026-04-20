@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy MaaS platform locally on a Kind cluster (Mac only).
+# Deploy MaaS platform locally on a Kind cluster (macOS + Linux/WSL2).
 #
 # One-click deployment of: Kind + Istio + Gateway API + cert-manager +
 # Kuadrant (auth/rate-limiting) + PostgreSQL + MaaS controller + MaaS API.
@@ -95,7 +95,7 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       echo "Usage: $0 [--teardown | --status | --validate | --rebuild <component> | --help]"
       echo ""
-      echo "Deploy MaaS platform on a local Kind cluster (Mac only)."
+      echo "Deploy MaaS platform on a local Kind cluster (macOS + Linux/WSL2)."
       echo ""
       echo "Flags:"
       echo "  --teardown              Delete the Kind cluster and all resources"
@@ -382,16 +382,17 @@ fi
 
 step "Checking prerequisites"
 
-# Mac only
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  fail "This script only supports macOS. Detected: $(uname -s)"
+# Supported platforms: macOS and Linux (including WSL2)
+OS="$(uname -s)"
+if [[ "$OS" != "Darwin" && "$OS" != "Linux" ]]; then
+  fail "This script supports macOS and Linux. Detected: $OS"
   exit 1
 fi
-ok "macOS detected ($ARCH)"
+ok "$OS detected ($ARCH)"
 
-# Docker Desktop
+# Docker
 if ! docker info &>/dev/null; then
-  fail "Docker is not running. Start Docker Desktop and try again."
+  fail "Docker is not running. Start Docker (Desktop or daemon) and try again."
   exit 1
 fi
 
@@ -412,7 +413,11 @@ else
 fi
 
 # Check disk space
-DISK_FREE_GB=$(df -g / | tail -1 | awk '{print $4}')
+if [[ "$OS" == "Darwin" ]]; then
+  DISK_FREE_GB=$(df -g / | tail -1 | awk '{print $4}')
+else
+  DISK_FREE_GB=$(df --block-size=1G / | tail -1 | awk '{print $4}')
+fi
 if [[ "$DISK_FREE_GB" -lt 10 ]]; then
   warn "Only ${DISK_FREE_GB}GB free disk space. Recommend 10+ GB."
 else
@@ -429,7 +434,11 @@ done
 
 if [[ ${#MISSING[@]} -gt 0 ]]; then
   fail "Missing required tools: ${MISSING[*]}"
-  echo "  Install with: brew install ${MISSING[*]}"
+  if [[ "$OS" == "Darwin" ]]; then
+    echo "  Install with: brew install ${MISSING[*]}"
+  else
+    echo "  Install with your package manager (e.g., apt install ${MISSING[*]})"
+  fi
   exit 1
 fi
 ok "Tools: kind, kubectl, kustomize, helm, jq"
@@ -512,10 +521,15 @@ else
   fi
   kubectl wait --for=condition=Available deployment/controller -n metallb-system --timeout=120s
 
+  # Wait for webhook pod to be ready before applying config (avoids race condition)
+  kubectl wait --for=condition=Ready pod -l component=controller -n metallb-system --timeout=120s 2>/dev/null || true
+
   # Configure IP pool from Kind's docker network (extract IPv4 subnet)
   KIND_SUBNET=$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}' | tr ' ' '\n' | grep '\.')
   LB_BASE=$(echo "$KIND_SUBNET" | cut -d'.' -f1-3)
-  kubectl apply -f - <<EOF
+  _metallb_retries=0
+  while [[ $_metallb_retries -lt 6 ]]; do
+    if kubectl apply -f - <<EOF 2>/dev/null
 apiVersion: metallb.io/v1beta1
 kind: IPAddressPool
 metadata:
@@ -531,6 +545,13 @@ metadata:
   name: kind-l2
   namespace: metallb-system
 EOF
+    then
+      break
+    fi
+    echo "  MetalLB webhook not ready, retrying in 10s..."
+    sleep 10
+    _metallb_retries=$((_metallb_retries + 1))
+  done
   ok "MetalLB installed (LB range: ${LB_BASE}.200-250)"
 fi
 
@@ -544,6 +565,24 @@ else
   kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/v${CERTMANAGER_VERSION}/cert-manager.yaml"
   kubectl wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=120s
   kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=120s
+  # Wait for webhook to actually serve (deployment Available != TLS endpoint ready)
+  echo "  Waiting for cert-manager webhook to serve..."
+  _cm_retries=0
+  while [[ $_cm_retries -lt 12 ]]; do
+    if kubectl apply --dry-run=server -f - <<CMEOF 2>/dev/null
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: cert-manager-webhook-test
+spec:
+  selfSigned: {}
+CMEOF
+    then
+      break
+    fi
+    sleep 5
+    _cm_retries=$((_cm_retries + 1))
+  done
   ok "cert-manager v${CERTMANAGER_VERSION} installed"
 fi
 

@@ -1,6 +1,6 @@
 # MaaS Local Deployment Guide
 
-One-click local deployment of the full MaaS + BBR platform on Kind (Mac only).
+One-click local deployment of the full MaaS + BBR platform on Kind (macOS + Linux/WSL2).
 
 ## Quick Start
 
