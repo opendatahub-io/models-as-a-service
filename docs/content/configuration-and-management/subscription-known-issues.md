@@ -91,6 +91,6 @@ This limitation **remains in Models-as-a-Service v3.4**. The fix requiring merge
 ## Related Documentation
 
 - [Understanding Token Management](token-management.md)
-- [Access and Quota Overview](subscription-overview.md)
+- [Access and Quota Overview](../concepts/subscription-overview.md)
 - [Quota and Access Configuration](quota-and-access-configuration.md)
 - [MaaS Controller Overview](maas-controller-overview.md)

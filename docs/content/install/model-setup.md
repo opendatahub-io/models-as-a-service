@@ -11,7 +11,7 @@ Our sample models are packaged as Kustomize overlays that deploy:
 | **MaaSAuthPolicy** | Grants access to the model for specified groups (who can use it) |
 | **MaaSSubscription** | Defines rate limits (token quotas) for specific groups |
 
-For more detail on each resource, see [Access and Quota Overview](../configuration-and-management/subscription-overview.md).
+For more detail on each resource, see [Access and Quota Overview](../concepts/subscription-overview.md).
 
 !!! tip "Create llm namespace (optional)"
     Our example models deploy to the `llm` namespace. If it does not exist, create it before deploying the samples below (idempotent—safe to run even if it already exists):

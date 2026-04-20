@@ -74,8 +74,10 @@ type ModelSubscriptionRef struct {
 
 // TokenRateLimit defines a token rate limit
 type TokenRateLimit struct {
-	// Limit is the maximum number of tokens allowed
+	// Limit is the maximum number of tokens allowed within the window.
+	// Must be between 1 and 1,000,000,000 (1 billion).
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000000000
 	Limit int64 `json:"limit"`
 
 	// Window is the time window for rate limiting (e.g., "1m", "1h", "24h").

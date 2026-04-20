@@ -138,28 +138,6 @@ All models in the response include a `subscriptions` array with metadata for eac
 }
 ```
 
-### Deduplication Behavior
-
-Models are deduplicated by `(id, url, ownedBy)` key:
-
-- **Same id + same URL + same MaaSModelRef (ownedBy)**: Single entry with subscriptions aggregated into the `subscriptions` array
-- **Different id, URL, or MaaSModelRef**: Separate entries
-
-**User token authentication** (multiple subscriptions):
-- Model `gpt-3.5` from MaaSModelRef `namespace-a/model-a` at URL `https://example.com/gpt-3.5` is accessible via subscriptions A and B
-  - Result: One entry with `subscriptions: [{name: "A"}, {name: "B"}]`
-- Model `gpt-3.5` from MaaSModelRef `namespace-b/model-b` at the same URL is only in subscription B
-  - Result: Separate entry with `subscriptions: [{name: "B"}]` (different MaaSModelRef)
-- Model `gpt-3.5` at URL `https://example.com/gpt-3.5-premium` from `namespace-a/model-a` is only in subscription B
-  - Result: Separate entry with `subscriptions: [{name: "B"}]` (different URL)
-
-**API key authentication** (single subscription):
-- Deduplication handles edge cases where multiple MaaSModelRef resources point to the same model endpoint
-- Each unique MaaSModelRef resource appears as a separate entry
-
-!!! tip "Subscription metadata fields"
-    The `displayName` and `description` fields are read from the MaaSSubscription CRD's `spec.displayName` and `spec.description` fields. If these fields are not set in the CRD, they will be empty strings in the response.
-
 ## Registering models
 
 To have models appear via the **MaaSModelRef** flow:
@@ -195,4 +173,4 @@ You can use the [maas-system samples](https://github.com/opendatahub-io/models-a
 
 - [MaaS Controller README](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) — install and MaaSModelRef/MaaSAuthPolicy/MaaSSubscription
 - [Model setup](./model-setup.md) — configuring LLMInferenceServices (gateway reference) as backends for MaaSModelRef
-- [Architecture](../architecture.md) — overall MaaS architecture
+- [Architecture](../concepts/architecture.md) — overall MaaS architecture
