@@ -208,7 +208,7 @@ EOF
   fi
 fi
 
-# 7. Apply DataScienceCluster (modelsAsService Unmanaged - MaaS deployed separately)
+# 7. Apply DataScienceCluster (KServe + ModelsAsService Managed)
 echo "7. Applying DataScienceCluster..."
 if kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
   echo "   DataScienceCluster already exists, skipping"

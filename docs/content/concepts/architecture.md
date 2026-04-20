@@ -97,7 +97,7 @@ graph TB
 6. Only the hash and metadata (username, groups, name, `subscription` — the MaaSSubscription name bound at mint, `expiresAt`) are stored in PostgreSQL.
 7. The plaintext key is returned to the user **only in this minting response** (show-once), along with `expiresAt`; it is **not** exposed again on later reads. The diagram below stops at storage and does not show the HTTP response back to the user.
 
-Every key expires. With **operator-managed** MaaS, the cluster operator sets the maximum lifetime on the **`ModelsAsService`** CR: **`spec.apiKeys.maxExpirationDays`** (see [ModelsAsService CR](../install/maas-setup.md#modelsasservice-cr)). **`maas-api`** applies that cap as **`API_KEY_MAX_EXPIRATION_DAYS`** (for example 90 days by default when defaults apply). Omit **`expiresIn`** on create to use that maximum, or set a shorter **`expiresIn`** (e.g., `30d`, `90d`, `1h`) within the configured cap. The response always includes **`expiresAt`** (RFC3339).
+Every key expires. With **operator-managed** MaaS, the cluster operator sets the maximum lifetime on the **`Tenant`** CR: **`spec.apiKeys.maxExpirationDays`** (see [Tenant CR](../install/maas-setup.md#tenant-cr)). **`maas-api`** applies that cap as **`API_KEY_MAX_EXPIRATION_DAYS`** (for example 90 days by default when defaults apply). Omit **`expiresIn`** on create to use that maximum, or set a shorter **`expiresIn`** (e.g., `30d`, `90d`, `1h`) within the configured cap. The response always includes **`expiresAt`** (RFC3339).
 
 ```mermaid
 graph TB
