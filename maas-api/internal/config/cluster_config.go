@@ -112,7 +112,7 @@ func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.
 	// This aligns with RBAC from opendatahub-operator#3301 which grants admin groups CRUD access to MaaS resources.
 	// Results are cached for 30s to reduce K8s API server load under high traffic.
 	sarChecker := auth.NewSARAdminChecker(clientset, subscriptionNamespace)
-	adminCheckerVal := auth.NewCachedAdminChecker(sarChecker, 30*time.Second, nil)
+	adminCheckerVal := auth.NewCachedAdminChecker(sarChecker, 30*time.Second, nil, nil)
 
 	return &ClusterConfig{
 		ClientSet: clientset,

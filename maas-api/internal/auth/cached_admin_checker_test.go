@@ -11,6 +11,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	testingclock "k8s.io/utils/clock/testing"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -45,7 +46,7 @@ func counterValue(c prometheus.Counter) float64 {
 
 func newTestChecker(delegate *mockDelegate, ttl time.Duration) *auth.CachedAdminChecker {
 	reg := prometheus.NewRegistry()
-	return auth.NewCachedAdminChecker(delegate, ttl, reg)
+	return auth.NewCachedAdminChecker(delegate, ttl, reg, nil)
 }
 
 func TestCachedAdminChecker_CacheHit(t *testing.T) {
@@ -71,10 +72,8 @@ func TestCachedAdminChecker_CacheMiss(t *testing.T) {
 func TestCachedAdminChecker_TTLExpiry(t *testing.T) {
 	delegate := &mockDelegate{response: true}
 	reg := prometheus.NewRegistry()
-	checker := auth.NewCachedAdminChecker(delegate, 30*time.Second, reg)
-
-	now := time.Now()
-	checker.SetNowFunc(func() time.Time { return now })
+	fakeClock := testingclock.NewFakeClock(time.Now())
+	checker := auth.NewCachedAdminChecker(delegate, 30*time.Second, reg, fakeClock)
 
 	user := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 
@@ -84,7 +83,7 @@ func TestCachedAdminChecker_TTLExpiry(t *testing.T) {
 	checker.IsAdmin(context.Background(), user)
 	assert.Equal(t, 1, delegate.getCalls(), "should use cache before TTL")
 
-	checker.SetNowFunc(func() time.Time { return now.Add(31 * time.Second) })
+	fakeClock.Step(31 * time.Second)
 
 	checker.IsAdmin(context.Background(), user)
 	assert.Equal(t, 2, delegate.getCalls(), "should call delegate after TTL expiry")
@@ -156,7 +155,7 @@ func TestCachedAdminChecker_NilCheckerReturnsFalse(t *testing.T) {
 func TestCachedAdminChecker_Metrics(t *testing.T) {
 	delegate := &mockDelegate{response: true}
 	reg := prometheus.NewRegistry()
-	checker := auth.NewCachedAdminChecker(delegate, time.Minute, reg)
+	checker := auth.NewCachedAdminChecker(delegate, time.Minute, reg, nil)
 
 	user := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 
@@ -196,7 +195,7 @@ func TestCachedAdminChecker_ConcurrentAccess(t *testing.T) {
 func TestCachedAdminChecker_NilDelegatePanics(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	assert.Panics(t, func() {
-		auth.NewCachedAdminChecker(nil, time.Minute, reg)
+		auth.NewCachedAdminChecker(nil, time.Minute, reg, nil)
 	})
 }
 
@@ -204,7 +203,7 @@ func TestCachedAdminChecker_NonPositiveTTLPanics(t *testing.T) {
 	delegate := &mockDelegate{response: true}
 	reg := prometheus.NewRegistry()
 	assert.Panics(t, func() {
-		auth.NewCachedAdminChecker(delegate, 0, reg)
+		auth.NewCachedAdminChecker(delegate, 0, reg, nil)
 	})
 }
 
@@ -222,10 +221,8 @@ func TestCachedAdminChecker_FalseResultIsCached(t *testing.T) {
 func TestCachedAdminChecker_EvictsExpiredEntries(t *testing.T) {
 	delegate := &mockDelegate{response: true}
 	reg := prometheus.NewRegistry()
-	checker := auth.NewCachedAdminChecker(delegate, 10*time.Second, reg)
-
-	now := time.Now()
-	checker.SetNowFunc(func() time.Time { return now })
+	fakeClock := testingclock.NewFakeClock(time.Now())
+	checker := auth.NewCachedAdminChecker(delegate, 10*time.Second, reg, fakeClock)
 
 	user1 := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 	user2 := &token.UserContext{Username: "bob", Groups: []string{"admins"}}
@@ -235,7 +232,7 @@ func TestCachedAdminChecker_EvictsExpiredEntries(t *testing.T) {
 	require.Equal(t, 1, delegate.getCalls())
 
 	// At t=11s user1's entry is expired; calling user2 triggers eviction of user1
-	checker.SetNowFunc(func() time.Time { return now.Add(11 * time.Second) })
+	fakeClock.Step(11 * time.Second)
 	checker.IsAdmin(context.Background(), user2)
 	require.Equal(t, 2, delegate.getCalls())
 

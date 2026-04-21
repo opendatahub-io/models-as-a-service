@@ -9,6 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"k8s.io/utils/clock"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
@@ -25,7 +26,7 @@ type cacheEntry struct {
 type CachedAdminChecker struct {
 	delegate adminChecker
 	ttl      time.Duration
-	now      func() time.Time
+	clock    clock.Clock
 
 	mu    sync.RWMutex
 	cache map[string]cacheEntry
@@ -34,7 +35,7 @@ type CachedAdminChecker struct {
 	misses prometheus.Counter
 }
 
-func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, reg prometheus.Registerer) *CachedAdminChecker {
+func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, reg prometheus.Registerer, clk clock.Clock) *CachedAdminChecker {
 	if delegate == nil {
 		panic("delegate cannot be nil for CachedAdminChecker")
 	}
@@ -44,12 +45,15 @@ func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, reg prometh
 	if reg == nil {
 		reg = prometheus.DefaultRegisterer
 	}
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
 
 	factory := promauto.With(reg)
 	return &CachedAdminChecker{
 		delegate: delegate,
 		ttl:      ttl,
-		now:      time.Now,
+		clock:    clk,
 		cache:    make(map[string]cacheEntry),
 		hits: factory.NewCounter(prometheus.CounterOpts{
 			Name: "sar_cache_hits_total",
@@ -68,7 +72,7 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, user *token.UserContex
 	}
 
 	key := cacheKey(user)
-	now := c.now()
+	now := c.clock.Now()
 
 	c.mu.RLock()
 	entry, ok := c.cache[key]
@@ -91,10 +95,6 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, user *token.UserContex
 
 	c.misses.Inc()
 	return result
-}
-
-func (c *CachedAdminChecker) SetNowFunc(fn func() time.Time) {
-	c.now = fn
 }
 
 func (c *CachedAdminChecker) Metrics() (hits, misses prometheus.Counter) {
