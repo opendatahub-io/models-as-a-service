@@ -12,8 +12,6 @@
 #
 # Environment variables:
 #   NAMESPACE          Target namespace (default: opendatahub)
-#   POSTGRES_IMAGE     Override PostgreSQL image (default: resolved from operator CSV,
-#                      falls back to registry.redhat.io/rhel9/postgresql-16:latest)
 #   POSTGRES_USER      Database user (default: maas)
 #   POSTGRES_DB        Database name (default: maas)
 #   POSTGRES_PASSWORD  Database password (default: auto-generated)
@@ -41,8 +39,6 @@ DEFAULT_POSTGRES_IMAGE="registry.redhat.io/rhel9/postgresql-16:latest"
 
 # Resolve the PostgreSQL image from the RHOAI operator CSV's relatedImages.
 # Expects the RHOAI operator (or its CSV) to be installed on the cluster.
-# Replaces the registry prefix with registry.redhat.io so that IDMS can
-# redirect to the correct mirror in disconnected environments.
 # Falls back to DEFAULT_POSTGRES_IMAGE if the CSV is not found or the entry
 # is missing.
 resolve_postgres_image() {
@@ -51,9 +47,7 @@ resolve_postgres_image() {
     -o jsonpath='{.items[0].spec.relatedImages[?(@.name=="postgresql_16_image")].image}' 2>/dev/null) || true
 
   if [[ -n "${csv_image}" ]]; then
-    # Strip the registry host and prepend the canonical registry.redhat.io
-    # e.g., bastion.example.com:8443/rhel9/postgresql-16@sha256:abc → registry.redhat.io/rhel9/postgresql-16@sha256:abc
-    echo "registry.redhat.io/${csv_image#*/}"
+    echo "${csv_image}"
   else
     echo "${DEFAULT_POSTGRES_IMAGE}"
   fi
@@ -97,9 +91,7 @@ fi
 echo "  Creating PostgreSQL deployment..."
 echo "  ⚠️  Using POC configuration (ephemeral storage)"
 
-# Allow explicit override via POSTGRES_IMAGE env var; otherwise resolve from
-# the operator CSV, falling back to the default :latest tag.
-POSTGRES_IMAGE="${POSTGRES_IMAGE:-$(resolve_postgres_image)}"
+POSTGRES_IMAGE="$(resolve_postgres_image)"
 if [[ "${POSTGRES_IMAGE}" == "${DEFAULT_POSTGRES_IMAGE}" ]]; then
   echo "  Using default PostgreSQL image (operator CSV not available)"
 else
@@ -141,7 +133,7 @@ spec:
     spec:
       containers:
       - name: postgres
-        image: ${POSTGRES_IMAGE}
+        image: "${POSTGRES_IMAGE}"
         env:
         - name: POSTGRESQL_USER
           valueFrom:
