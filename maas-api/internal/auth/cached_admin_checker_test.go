@@ -182,13 +182,11 @@ func TestCachedAdminChecker_ConcurrentAccess(t *testing.T) {
 	var trueCount atomic.Int64
 
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if checker.IsAdmin(context.Background(), user) {
 				trueCount.Add(1)
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -232,15 +230,16 @@ func TestCachedAdminChecker_EvictsExpiredEntries(t *testing.T) {
 	user1 := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 	user2 := &token.UserContext{Username: "bob", Groups: []string{"admins"}}
 
+	// Cache user1 at t=0
 	checker.IsAdmin(context.Background(), user1)
+	require.Equal(t, 1, delegate.getCalls())
 
+	// At t=11s user1's entry is expired; calling user2 triggers eviction of user1
 	checker.SetNowFunc(func() time.Time { return now.Add(11 * time.Second) })
-
 	checker.IsAdmin(context.Background(), user2)
+	require.Equal(t, 2, delegate.getCalls())
 
-	require.Equal(t, 3, delegate.getCalls())
-
-	checker.SetNowFunc(func() time.Time { return now })
+	// user1's entry was evicted, so this should call the delegate again
 	checker.IsAdmin(context.Background(), user1)
-	assert.Equal(t, 4, delegate.getCalls(), "evicted entry should require fresh delegate call")
+	assert.Equal(t, 3, delegate.getCalls(), "evicted entry should require fresh delegate call")
 }
