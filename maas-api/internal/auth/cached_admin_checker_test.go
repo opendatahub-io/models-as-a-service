@@ -36,22 +36,21 @@ func (m *mockDelegate) getCalls() int {
 	return m.calls
 }
 
-func counterValue(c prometheus.Counter) float64 {
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
 	var m dto.Metric
-	if err := c.(prometheus.Metric).Write(&m); err != nil {
-		return 0
-	}
+	require.NoError(t, c.(prometheus.Metric).Write(&m))
 	return m.GetCounter().GetValue()
 }
 
-func newTestChecker(delegate *mockDelegate, ttl time.Duration) *auth.CachedAdminChecker {
+func newTestChecker(delegate *mockDelegate) *auth.CachedAdminChecker {
 	reg := prometheus.NewRegistry()
-	return auth.NewCachedAdminChecker(delegate, ttl, reg, nil)
+	return auth.NewCachedAdminChecker(delegate, time.Minute, reg, nil)
 }
 
 func TestCachedAdminChecker_CacheHit(t *testing.T) {
 	delegate := &mockDelegate{response: true}
-	checker := newTestChecker(delegate, time.Minute)
+	checker := newTestChecker(delegate)
 	user := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 
 	assert.True(t, checker.IsAdmin(context.Background(), user))
@@ -62,7 +61,7 @@ func TestCachedAdminChecker_CacheHit(t *testing.T) {
 
 func TestCachedAdminChecker_CacheMiss(t *testing.T) {
 	delegate := &mockDelegate{response: false}
-	checker := newTestChecker(delegate, time.Minute)
+	checker := newTestChecker(delegate)
 	user := &token.UserContext{Username: "bob", Groups: []string{"users"}}
 
 	assert.False(t, checker.IsAdmin(context.Background(), user))
@@ -91,7 +90,7 @@ func TestCachedAdminChecker_TTLExpiry(t *testing.T) {
 
 func TestCachedAdminChecker_DifferentUsers(t *testing.T) {
 	delegate := &mockDelegate{response: true}
-	checker := newTestChecker(delegate, time.Minute)
+	checker := newTestChecker(delegate)
 
 	alice := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 	bob := &token.UserContext{Username: "bob", Groups: []string{"admins"}}
@@ -104,7 +103,7 @@ func TestCachedAdminChecker_DifferentUsers(t *testing.T) {
 
 func TestCachedAdminChecker_SameUserDifferentGroups(t *testing.T) {
 	delegate := &mockDelegate{response: true}
-	checker := newTestChecker(delegate, time.Minute)
+	checker := newTestChecker(delegate)
 
 	adminAlice := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 	userAlice := &token.UserContext{Username: "alice", Groups: []string{"users"}}
@@ -117,7 +116,7 @@ func TestCachedAdminChecker_SameUserDifferentGroups(t *testing.T) {
 
 func TestCachedAdminChecker_GroupOrderIrrelevant(t *testing.T) {
 	delegate := &mockDelegate{response: true}
-	checker := newTestChecker(delegate, time.Minute)
+	checker := newTestChecker(delegate)
 
 	user1 := &token.UserContext{Username: "alice", Groups: []string{"b", "a", "c"}}
 	user2 := &token.UserContext{Username: "alice", Groups: []string{"c", "a", "b"}}
@@ -130,7 +129,7 @@ func TestCachedAdminChecker_GroupOrderIrrelevant(t *testing.T) {
 
 func TestCachedAdminChecker_NilUserReturnsFalse(t *testing.T) {
 	delegate := &mockDelegate{response: true}
-	checker := newTestChecker(delegate, time.Minute)
+	checker := newTestChecker(delegate)
 
 	assert.False(t, checker.IsAdmin(context.Background(), nil))
 	assert.Equal(t, 0, delegate.getCalls())
@@ -138,7 +137,7 @@ func TestCachedAdminChecker_NilUserReturnsFalse(t *testing.T) {
 
 func TestCachedAdminChecker_EmptyUsernameReturnsFalse(t *testing.T) {
 	delegate := &mockDelegate{response: true}
-	checker := newTestChecker(delegate, time.Minute)
+	checker := newTestChecker(delegate)
 
 	user := &token.UserContext{Username: "", Groups: []string{"admins"}}
 	assert.False(t, checker.IsAdmin(context.Background(), user))
@@ -162,18 +161,18 @@ func TestCachedAdminChecker_Metrics(t *testing.T) {
 	checker.IsAdmin(context.Background(), user)
 
 	hits, misses := checker.Metrics()
-	assert.Equal(t, float64(0), counterValue(hits))
-	assert.Equal(t, float64(1), counterValue(misses))
+	assert.InDelta(t, 0, counterValue(t, hits), 0)
+	assert.InDelta(t, 1, counterValue(t, misses), 0)
 
 	checker.IsAdmin(context.Background(), user)
 
-	assert.Equal(t, float64(1), counterValue(hits))
-	assert.Equal(t, float64(1), counterValue(misses))
+	assert.InDelta(t, 1, counterValue(t, hits), 0)
+	assert.InDelta(t, 1, counterValue(t, misses), 0)
 }
 
 func TestCachedAdminChecker_ConcurrentAccess(t *testing.T) {
 	delegate := &mockDelegate{response: true}
-	checker := newTestChecker(delegate, time.Minute)
+	checker := newTestChecker(delegate)
 
 	user := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 
@@ -209,7 +208,7 @@ func TestCachedAdminChecker_NonPositiveTTLPanics(t *testing.T) {
 
 func TestCachedAdminChecker_FalseResultIsCached(t *testing.T) {
 	delegate := &mockDelegate{response: false}
-	checker := newTestChecker(delegate, time.Minute)
+	checker := newTestChecker(delegate)
 	user := &token.UserContext{Username: "alice", Groups: []string{"users"}}
 
 	assert.False(t, checker.IsAdmin(context.Background(), user))

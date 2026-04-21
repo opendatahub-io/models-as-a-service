@@ -2,13 +2,13 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"k8s.io/utils/clock"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -49,20 +49,19 @@ func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, reg prometh
 		clk = clock.RealClock{}
 	}
 
-	factory := promauto.With(reg)
 	return &CachedAdminChecker{
 		delegate: delegate,
 		ttl:      ttl,
 		clock:    clk,
 		cache:    make(map[string]cacheEntry),
-		hits: factory.NewCounter(prometheus.CounterOpts{
+		hits: registerOrReuseCounter(reg, prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "sar_cache_hits_total",
 			Help: "Total number of SAR admin check cache hits.",
-		}),
-		misses: factory.NewCounter(prometheus.CounterOpts{
+		})),
+		misses: registerOrReuseCounter(reg, prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "sar_cache_misses_total",
 			Help: "Total number of SAR admin check cache misses.",
-		}),
+		})),
 	}
 }
 
@@ -97,6 +96,7 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, user *token.UserContex
 	return result
 }
 
+//nolint:ireturn // Prometheus counters are inherently interface-typed; callers need Counter to read values.
 func (c *CachedAdminChecker) Metrics() (hits, misses prometheus.Counter) {
 	return c.hits, c.misses
 }
@@ -107,6 +107,18 @@ func (c *CachedAdminChecker) evictExpiredLocked(now time.Time) {
 			delete(c.cache, k)
 		}
 	}
+}
+
+func registerOrReuseCounter(reg prometheus.Registerer, c prometheus.Counter) prometheus.Counter {
+	err := reg.Register(c)
+	if err == nil {
+		return c
+	}
+	var are prometheus.AlreadyRegisteredError
+	if errors.As(err, &are) {
+		return are.ExistingCollector.(prometheus.Counter)
+	}
+	panic(err)
 }
 
 func cacheKey(user *token.UserContext) string {
