@@ -91,7 +91,6 @@ SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 EXTERNAL_OIDC=${EXTERNAL_OIDC:-true}
-CI_DEBUG_CLUSTER_ACCESS=${CI_DEBUG_CLUSTER_ACCESS:-true}
 
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
@@ -698,32 +697,6 @@ run_e2e_tests() {
                 fi
                 echo "   Continuing to pytest (set OIDC_READINESS_STRICT=true to fail fast on this gate)."
                 echo "   External OIDC tests in test_external_oidc.py will be skipped unless FORCE_EXTERNAL_OIDC_E2E=true."
-
-                # Debug: pause for manual cluster investigation
-                if [[ "${CI_DEBUG_CLUSTER_ACCESS:-false}" == "true" ]]; then
-                    # Create a long-lived SA token for external login (oc whoami -t doesn't work with kubeconfig auth)
-                    local debug_sa="ci-debug-admin"
-                    oc create sa "$debug_sa" -n default 2>/dev/null || true
-                    oc adm policy add-cluster-role-to-user cluster-admin "system:serviceaccount:default:${debug_sa}" 2>/dev/null || true
-                    local debug_token
-                    debug_token=$(oc create token "$debug_sa" -n default --duration=2h 2>/dev/null || echo "FAILED")
-
-                    echo ""
-                    echo "========== CLUSTER ACCESS (CI_DEBUG_CLUSTER_ACCESS=true) =========="
-                    echo "API Server: $(oc whoami --show-server 2>/dev/null)"
-                    echo "Console: https://console-openshift-console.$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null)"
-                    echo ""
-                    echo "Login command:"
-                    echo "  oc login --token=${debug_token} --server=$(oc whoami --show-server 2>/dev/null) --insecure-skip-tls-verify"
-                    echo ""
-                    echo "Debug commands:"
-                    echo "  kubectl logs -n kuadrant-system -l app=authorino --tail=50 | grep -i oidc"
-                    echo "  kubectl run -n kuadrant-system curl-test --rm -i --restart=Never --image=curlimages/curl -- curl -sk ${OIDC_ISSUER_URL}/.well-known/openid-configuration"
-                    echo "==================================================================="
-                    local debug_wait="${CI_DEBUG_WAIT:-10800}"
-                    echo "Sleeping ${debug_wait}s for debugging (set CI_DEBUG_WAIT to change)..."
-                    sleep "$debug_wait"
-                fi
             fi
         else
             echo "❌ ERROR: Could not obtain OIDC token from ${OIDC_TOKEN_URL}"
