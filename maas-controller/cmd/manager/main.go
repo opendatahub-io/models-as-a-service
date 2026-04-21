@@ -472,6 +472,7 @@ func main() {
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		MaaSAPINamespace: maasAPINamespace,
+		TenantNamespace:  maasSubscriptionNamespace,
 		GatewayName:      gatewayName,
 		ClusterAudience:  clusterAudience,
 		MetadataCacheTTL: metadataCacheTTL,
