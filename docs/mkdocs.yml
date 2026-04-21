@@ -69,6 +69,7 @@ nav:
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
       - Model Setup (On Cluster): install/model-setup.md
+      - External Model Setup (Tech Preview): install/external-model-setup.md
       - Validation: install/validation.md
       - Troubleshooting: install/troubleshooting.md
   - Administration Guide:
