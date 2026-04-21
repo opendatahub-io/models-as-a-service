@@ -12,6 +12,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -132,6 +133,15 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 	for i := range objs {
 		u := objs[i].DeepCopy()
 
+		// Skip resources whose live cluster copy has opendatahub.io/managed=false.
+		// This allows deploy scripts to opt-out specific resources (e.g. AuthPolicy
+		// patched with OIDC config) from being overwritten on each reconcile.
+		if isLiveResourceUnmanaged(ctx, c, u) {
+			ctrl.LoggerFrom(ctx).V(1).Info("Skipping SSA for resource with opendatahub.io/managed=false on cluster",
+				"kind", u.GetKind(), "name", u.GetName(), "namespace", u.GetNamespace())
+			continue
+		}
+
 		if skipConfigControllerOwnerRef(u, appNs) {
 			setTenantTrackingLabels(u, tenant)
 		} else {
@@ -198,6 +208,20 @@ func isMaaSControllerDeployment(u *unstructured.Unstructured, appNs string) bool
 		return false
 	}
 	return strings.EqualFold(u.GetKind(), "Deployment") && u.GetName() == MaaSControllerDeploymentName
+}
+
+func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *unstructured.Unstructured) bool {
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(rendered.GroupVersionKind())
+	key := client.ObjectKeyFromObject(rendered)
+	if key.Name == "" {
+		return false
+	}
+	if err := c.Get(ctx, key, live); err != nil {
+		return false
+	}
+	ann := live.GetAnnotations()
+	return ann != nil && ann["opendatahub.io/managed"] == "false"
 }
 
 func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant *maasv1alpha1.Tenant) {

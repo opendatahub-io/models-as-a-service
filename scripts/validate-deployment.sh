@@ -60,6 +60,9 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
     echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
     echo "  MAAS_API_NAMESPACE        Namespace where MaaS API is deployed (default: opendatahub)"
+    echo "  OIDC_ISSUER_URL           When set, validates maas-api-auth-policy jwt.issuerUrl matches"
+    echo "                            (external OIDC; avoids deploy vs test issuer drift / HTTP 401)"
+    echo "  OIDC_CLIENT_ID            When set with OIDC_ISSUER_URL, checks oidc-client-bound client id"
     echo ""
     echo "Note: This script uses connection timeouts from curl (10s connect, 30s max)"
     echo "      For cluster-level timeouts, see deployment-helpers.sh timeout constants"
@@ -404,6 +407,18 @@ else
     print_fail "No AuthPolicy found" "Authentication may not be enforced" "Check: kubectl get authpolicy -A"
 fi
 
+if [ -n "${OIDC_ISSUER_URL:-}" ]; then
+    print_check "maas-api AuthPolicy OIDC issuer (OIDC_ISSUER_URL)"
+    if verify_maas_api_oidc_authpolicy "$MAAS_API_NAMESPACE"; then
+        print_success "maas-api-auth-policy jwt.issuerUrl matches OIDC_ISSUER_URL"
+    else
+        print_fail "maas-api AuthPolicy OIDC config does not match OIDC_ISSUER_URL / OIDC_CLIENT_ID" \
+            "Authorino will reject Keycloak JWTs (HTTP 401) until issuers align" \
+            "Deploy with the same OIDC_ISSUER_URL as tests: ./scripts/deploy.sh ... --external-oidc" \
+            "Check: kubectl get authpolicy maas-api-auth-policy -n $MAAS_API_NAMESPACE -o yaml"
+    fi
+fi
+
 print_check "TokenRateLimitPolicy"
 RATELIMIT_COUNT=$(kubectl get tokenratelimitpolicy -A --no-headers 2>/dev/null | wc -l || echo "0")
 if [ "$RATELIMIT_COUNT" -gt 0 ]; then
@@ -446,18 +461,32 @@ else
     fi
 
     # Create a MaaS API key using the OC token
+    # Retry on empty 403 (gateway propagation delay — Envoy may not have loaded AuthPolicy yet)
     if [ -n "$OC_TOKEN" ]; then
         print_check "MaaS API key creation"
         API_KEY_NAME="validate-test-$(date +%s)"
-        API_KEY_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 \
-            -H "Authorization: Bearer $OC_TOKEN" \
-            -H "Content-Type: application/json" \
-            -X POST \
-            -d "{\"expiresIn\": \"1h\", \"name\": \"$API_KEY_NAME\"}" \
-            -w "\n%{http_code}" \
-            "${HOST}/maas-api/v1/api-keys" 2>/dev/null || echo "")
-        API_KEY_HTTP_CODE=$(echo "$API_KEY_RESPONSE" | tail -n1)
-        API_KEY_BODY=$(echo "$API_KEY_RESPONSE" | sed '$d')
+        mint_retries=6
+        mint_delay=5
+        for mint_attempt in $(seq 1 $mint_retries); do
+            API_KEY_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer $OC_TOKEN" \
+                -H "Content-Type: application/json" \
+                -X POST \
+                -d "{\"expiresIn\": \"1h\", \"name\": \"$API_KEY_NAME\"}" \
+                -w "\n%{http_code}" \
+                "${HOST}/maas-api/v1/api-keys" 2>/dev/null || echo "")
+            API_KEY_HTTP_CODE=$(echo "$API_KEY_RESPONSE" | tail -n1)
+            API_KEY_BODY=$(echo "$API_KEY_RESPONSE" | sed '$d')
+            # Empty 403 = gateway propagation delay, retry
+            if [[ "$API_KEY_HTTP_CODE" == "403" ]] && [[ -z "$(echo "$API_KEY_BODY" | tr -d '[:space:]')" ]]; then
+                if [[ $mint_attempt -lt $mint_retries ]]; then
+                    echo "  Gateway returned empty 403 (attempt $mint_attempt/$mint_retries), retrying in ${mint_delay}s..."
+                    sleep $mint_delay
+                    continue
+                fi
+            fi
+            break
+        done
 
         if [ "$API_KEY_HTTP_CODE" = "201" ]; then
             TOKEN=$(echo "$API_KEY_BODY" | jq -r '.key // empty' 2>/dev/null)
