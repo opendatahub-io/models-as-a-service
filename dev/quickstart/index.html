@@ -2692,12 +2692,13 @@ to use the new release tag when a release is created. Use <code>"main"</code> on
 <p>The deployment script creates the following core resources:</p>
 <ul>
 <li><strong>Gateway</strong>: <code>maas-default-gateway</code> in <code>openshift-ingress</code> namespace</li>
-<li><strong>HTTPRoutes</strong>: <code>maas-api-route</code> in the <code>redhat-ods-applications</code> namespace (deployed by operator)</li>
+<li><strong>HTTPRoutes</strong>: <code>maas-api-route</code> in the application namespace (deployed by Tenant reconciler)</li>
 <li><strong>Policies</strong>:</li>
-<li><code>maas-api-auth-policy</code> (deployed by operator) - Protects MaaS API</li>
-<li><code>gateway-auth-policy</code> (deployed by script) - Protects Gateway/model inference</li>
-<li><code>TokenRateLimitPolicy</code>, <code>RateLimitPolicy</code> (deployed by script) - Usage limits</li>
-<li><strong>MaaS API</strong>: Deployment and service in <code>redhat-ods-applications</code> namespace (deployed by operator)</li>
+<li><code>maas-api-auth-policy</code> (deployed by Tenant reconciler) - Protects MaaS API</li>
+<li><code>gateway-default-auth</code> (deployed by Tenant reconciler) - Denies unauthenticated traffic</li>
+<li><code>gateway-default-deny</code> (deployed by Tenant reconciler) - Denies unsubscribed traffic</li>
+<li><strong>MaaS API</strong>: Deployment and service in the application namespace (deployed by Tenant reconciler)</li>
+<li><strong>Tenant CR</strong>: <code>default-tenant</code> in <code>models-as-a-service</code> namespace (self-bootstrapped by maas-controller)</li>
 <li><strong>Operators</strong>: Cert-manager, LWS, Red Hat Connectivity Link and Red Hat OpenShift AI.</li>
 </ul>
 <p>Check deployment status:</p>
@@ -2712,16 +2713,20 @@ to use the new release tag when a release is created. Use <code>"main"</code> on
 <a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tokenratelimitpolicy<span class="w"> </span>-A
 <a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>kubectl<span class="w"> </span>get<span class="w"> </span>ratelimitpolicy<span class="w"> </span>-A
 <a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># Check MaaS API (deployed by operator in redhat-ods-applications)</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>redhat-ods-applications<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>maas-api
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>redhat-ods-applications<span class="w"> </span>maas-api
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="c1"># Check Kuadrant operators</span>
-<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>kuadrant-system
-<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>
-<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="c1"># Check RHOAI/KServe</span>
-<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>kserve
-<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>redhat-ods-applications
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># Check MaaS API (deployed by Tenant reconciler in the application namespace)</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="c1"># APP_NS is &quot;opendatahub&quot; for ODH or &quot;redhat-ods-applications&quot; for RHOAI</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">APP_NS</span><span class="si">}</span><span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>maas-api
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">APP_NS</span><span class="si">}</span><span class="w"> </span>maas-api
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="c1"># Check Kuadrant operators</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>kuadrant-system
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="c1"># Check Tenant CR</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tenant<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="c1"># Check RHOAI/KServe</span>
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>kserve
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">APP_NS</span><span class="si">}</span>
 </code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">TLS Configuration</p>
@@ -2752,7 +2757,7 @@ to use the new release tag when a release is created. Use <code>"main"</code> on
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 21, 2026 16:12:19 UTC">April 21, 2026</span>
   </span>
 
     

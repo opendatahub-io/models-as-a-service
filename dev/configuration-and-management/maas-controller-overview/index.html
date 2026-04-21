@@ -1741,6 +1741,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#21-tenant-resource-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1. Tenant Resource Layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#3-request-flow-end-to-end" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2586,6 +2597,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#21-tenant-resource-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1. Tenant Resource Layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#3-request-flow-end-to-end" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2706,22 +2728,30 @@
 
 <h1 id="maas-controller-overview">MaaS Controller Overview</h1>
 <p>This document describes the <strong>MaaS Controller</strong>: what was built, how it fits into the Models-as-a-Service (MaaS) stack, and how the pieces work together. It is intended for presentations, onboarding, and technical deep-dives.</p>
-<div class="admonition todo">
-<p class="admonition-title">Documentation cleanup</p>
-<p>TODO: Clean up this documentation.</p>
-</div>
 <hr />
 <h2 id="1-what-is-the-maas-controller">1. What Is the MaaS Controller?</h2>
-<p>The <strong>MaaS Controller</strong> is a Kubernetes controller that provides a <strong>subscription-style control plane</strong> for Models-as-a-Service. It lets platform operators define:</p>
+<p>The <strong>MaaS Controller</strong> is a Kubernetes controller with two main responsibilities:</p>
+<ol>
+<li>
+<p><strong>Tenant reconciler</strong> — deploys and manages the MaaS platform workloads (<code>maas-api</code>, gateway policies, telemetry, DestinationRule) via the <strong><code>Tenant</code></strong> CR (<code>maas.opendatahub.io/v1alpha1</code>). On startup the controller self-bootstraps a <code>default-tenant</code> CR in the <code>models-as-a-service</code> namespace if one does not exist. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).</p>
+</li>
+<li>
+<p><strong>Subscription reconcilers</strong> — let platform operators define:</p>
 <ul>
 <li><strong>Which models</strong> are exposed through MaaS (via <strong>MaaSModelRef</strong>).</li>
 <li><strong>Who can access</strong> those models (via <strong>MaaSAuthPolicy</strong>).</li>
 <li><strong>Per-user/per-group token rate limits</strong> for those models (via <strong>MaaSSubscription</strong>).</li>
 </ul>
+</li>
+</ol>
 <p>The controller does not run inference. It <strong>reconciles</strong> your high-level MaaS CRs into the underlying Gateway API and Kuadrant resources (HTTPRoutes, AuthPolicies, TokenRateLimitPolicies) that enforce routing, authentication, and rate limiting at the gateway.</p>
 <hr />
 <h2 id="2-high-level-architecture">2. High-Level Architecture</h2>
 <pre class="mermaid"><code>flowchart TB
+    subgraph Platform["Platform lifecycle"]
+        Tenant["Tenant CR\n(default-tenant)"]
+    end
+
     subgraph Operator["Platform operator"]
         MaaSModelRef["MaaSModelRef"]
         MaaSAuthPolicy["MaaSAuthPolicy"]
@@ -2729,9 +2759,16 @@
     end
 
     subgraph Controller["maas-controller"]
+        TenantReconciler["Tenant\nReconciler"]
         ModelReconciler["MaaSModelRef\nReconciler"]
         AuthReconciler["MaaSAuthPolicy\nReconciler"]
         SubReconciler["MaaSSubscription\nReconciler"]
+    end
+
+    subgraph PlatformWorkloads["Platform Workloads"]
+        MaaSAPI["maas-api\n(Deployment, Service, HTTPRoute)"]
+        GatewayPolicies["Gateway default policies\n(AuthPolicy, TokenRateLimitPolicy)"]
+        Telemetry["TelemetryPolicy\nIstio Telemetry"]
     end
 
     subgraph GatewayStack["Gateway API + Kuadrant"]
@@ -2744,6 +2781,11 @@
         LLMIS["LLMInferenceService\n(KServe)"]
     end
 
+    Tenant --&gt; TenantReconciler
+    TenantReconciler --&gt; MaaSAPI
+    TenantReconciler --&gt; GatewayPolicies
+    TenantReconciler --&gt; Telemetry
+
     MaaSModelRef --&gt; ModelReconciler
     MaaSAuthPolicy --&gt; AuthReconciler
     MaaSSubscription --&gt; SubReconciler
@@ -2755,8 +2797,55 @@
     HTTPRoute --&gt; AuthPolicy
     HTTPRoute --&gt; TokenRateLimitPolicy
     HTTPRoute --&gt; LLMIS</code></pre>
-<p><strong>Summary:</strong> You declare intent with MaaS CRs; the controller turns that into Gateway/Kuadrant resources that attach to the same HTTPRoute and backend (e.g. KServe LLMInferenceService).</p>
+<p><strong>Summary:</strong> The controller has two sides: the <strong>Tenant reconciler</strong> deploys and manages the MaaS platform workloads (maas-api, gateway policies, telemetry) from the <code>Tenant</code> CR; the <strong>subscription reconcilers</strong> turn MaaS CRs into Gateway/Kuadrant resources that attach to per-model HTTPRoutes and backends (e.g. KServe LLMInferenceService).</p>
 <p>The <strong>MaaS API</strong> GET /v1/models endpoint uses MaaSModelRef CRs as its primary source: it reads them cluster-wide (all namespaces), then <strong>validates access</strong> by probing each model’s <code>/v1/models</code> endpoint with the client’s <strong>Authorization header</strong> (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is.</p>
+<hr />
+<h2 id="21-tenant-resource-layout">2.1. Tenant Resource Layout</h2>
+<p>The <code>Tenant</code> CR is namespace-scoped (lives in <code>models-as-a-service</code>). It owns resources across three scopes — same-namespace children use standard <code>ownerReference</code>, while cluster-scoped and cross-namespace children use <strong>tracking labels</strong> (Kubernetes rejects cross-namespace and namespaced-to-cluster ownerRefs).</p>
+<pre class="mermaid"><code>graph TB
+    subgraph "models-as-a-service namespace"
+        Tenant["Tenant CR&lt;br/&gt;default-tenant"]
+        API["maas-api Deployment"]
+        CM["ConfigMaps"]
+        SVC["Services"]
+        SA["ServiceAccounts"]
+        NP["NetworkPolicies"]
+        HR["HTTPRoutes"]
+        AP2["maas-api AuthPolicy"]
+    end
+
+    subgraph "openshift-ingress namespace"
+        AP["gateway AuthPolicy"]
+        DR["DestinationRule"]
+        TP["TelemetryPolicy"]
+        IT["Istio Telemetry"]
+    end
+
+    subgraph "Cluster-scoped"
+        CR["ClusterRoles"]
+        CRB["ClusterRoleBindings"]
+    end
+
+    Tenant --&gt;|ownerRef| API
+    Tenant --&gt;|ownerRef| CM
+    Tenant --&gt;|ownerRef| SVC
+    Tenant --&gt;|ownerRef| SA
+    Tenant --&gt;|ownerRef| NP
+    Tenant --&gt;|ownerRef| HR
+    Tenant --&gt;|ownerRef| AP2
+    Tenant -.-&gt;|tracking labels| CR
+    Tenant -.-&gt;|tracking labels| CRB
+    Tenant -.-&gt;|tracking labels| AP
+    Tenant -.-&gt;|tracking labels| DR
+    Tenant -.-&gt;|tracking labels| TP
+    Tenant -.-&gt;|tracking labels| IT
+
+    style Tenant fill:#4a90d9,color:#fff
+    style AP fill:#f5a623,color:#fff
+    style DR fill:#f5a623,color:#fff
+    style TP fill:#f5a623,color:#fff
+    style IT fill:#f5a623,color:#fff</code></pre>
+<p><strong>Solid arrows</strong> = standard ownerReference (automatic GC). <strong>Dashed arrows</strong> = tracking labels (finalizer-based cleanup). <strong>Orange resources</strong> = cross-namespace children that require tracking labels.</p>
 <hr />
 <h2 id="3-request-flow-end-to-end">3. Request Flow (End-to-End)</h2>
 <pre class="mermaid"><code>sequenceDiagram
@@ -2847,26 +2936,29 @@
     subgraph Cluster["Kubernetes cluster"]
         subgraph maas_controller["maas-controller (Deployment)"]
             Manager["Controller Manager"]
+            TenantReconciler["Tenant\nReconciler"]
             ModelReconciler["MaaSModelRef\nReconciler"]
             AuthReconciler["MaaSAuthPolicy\nReconciler"]
             SubReconciler["MaaSSubscription\nReconciler"]
         end
 
-        CRDs["CRDs: MaaSModelRef,\nMaaSAuthPolicy,\nMaaSSubscription"]
+        CRDs["CRDs: Tenant,\nMaaSModelRef,\nMaaSAuthPolicy,\nMaaSSubscription"]
         RBAC["RBAC: ClusterRole,\nServiceAccount, etc."]
     end
 
     Watch["Watch MaaS CRs,\nGateway API, Kuadrant,\nLLMInferenceService"]
+    Manager --&gt; TenantReconciler
     Manager --&gt; ModelReconciler
     Manager --&gt; AuthReconciler
     Manager --&gt; SubReconciler
+    TenantReconciler --&gt; Watch
     ModelReconciler --&gt; Watch
     AuthReconciler --&gt; Watch
     SubReconciler --&gt; Watch
     CRDs --&gt; Watch
     RBAC --&gt; maas_controller</code></pre>
 <ul>
-<li>Single binary: <strong>manager</strong> runs three reconcilers.</li>
+<li>Single binary: <strong>manager</strong> runs four reconcilers (Tenant + three subscription reconcilers).</li>
 <li>Registers <strong>Kubernetes core</strong>, <strong>Gateway API</strong>, <strong>KServe (v1alpha1)</strong>, and <strong>MaaS (v1alpha1)</strong> schemes; uses <strong>unstructured</strong> for Kuadrant resources.</li>
 <li>Reads/writes MaaS CRs, HTTPRoutes, Gateways, AuthPolicies, TokenRateLimitPolicies, and LLMInferenceServices (read-only for model metadata/routes).</li>
 </ul>
@@ -2905,7 +2997,8 @@
     Prereqs --&gt; Deploy
     Deploy --&gt; Examples</code></pre>
 <ul>
-<li><strong>Namespaces</strong>: MaaS API and controller default to <strong>opendatahub</strong> (configurable). MaaSAuthPolicy and MaaSSubscription default to <strong>models-as-a-service</strong> (configurable). MaaSModelRef must live in the <strong>same namespace</strong> as the model it references (e.g. <strong>llm</strong>).</li>
+<li><strong>Namespaces</strong>: MaaS API and controller default to <strong>opendatahub</strong> (configurable). The <strong>Tenant</strong> CR, MaaSAuthPolicy and MaaSSubscription default to <strong>models-as-a-service</strong> (configurable). MaaSModelRef must live in the <strong>same namespace</strong> as the model it references (e.g. <strong>llm</strong>).</li>
+<li><strong>Self-bootstrap</strong>: On startup, <code>maas-controller</code> creates a <code>default-tenant</code> CR in the <code>models-as-a-service</code> namespace if one does not exist. The Tenant reconciler then deploys <code>maas-api</code> and gateway policies via SSA.</li>
 <li><strong>Install</strong>: <code>./scripts/deploy.sh</code> installs the full stack including the controller. Optionally run <code>./scripts/install-examples.sh</code> for sample MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription.</li>
 </ul>
 <hr />
@@ -2945,15 +3038,15 @@
 <tbody>
 <tr>
 <td><strong>What</strong></td>
-<td>MaaS Controller = control plane that reconciles MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription into Gateway API and Kuadrant resources.</td>
+<td>MaaS Controller = control plane with a <strong>Tenant reconciler</strong> (deploys maas-api and gateway policies from a <code>Tenant</code> CR) and <strong>subscription reconcilers</strong> (reconcile MaaSModelRef, MaaSAuthPolicy, MaaSSubscription into Gateway API and Kuadrant resources).</td>
 </tr>
 <tr>
 <td><strong>Where</strong></td>
-<td>Single controller in <code>opendatahub</code>; MaaSAuthPolicy / MaaSSubscription default to <code>models-as-a-service</code>; MaaSModelRef and generated Kuadrant policies target their model’s namespace.</td>
+<td>Single controller in <code>opendatahub</code>; <code>Tenant</code> CR / MaaSAuthPolicy / MaaSSubscription default to <code>models-as-a-service</code>; MaaSModelRef and generated Kuadrant policies target their model’s namespace.</td>
 </tr>
 <tr>
 <td><strong>How</strong></td>
-<td>Three reconcilers watch MaaS CRs (and related resources); each creates/updates HTTPRoutes, AuthPolicies, or TokenRateLimitPolicies.</td>
+<td>Four reconcilers: Tenant reconciler deploys platform workloads via SSA; three subscription reconcilers watch MaaS CRs (and related resources) and create/update HTTPRoutes, AuthPolicies, or TokenRateLimitPolicies.</td>
 </tr>
 <tr>
 <td><strong>Identity bridge</strong></td>
@@ -2961,7 +3054,7 @@
 </tr>
 <tr>
 <td><strong>Deploy</strong></td>
-<td>Run <code>./scripts/deploy.sh</code>; optionally install examples.</td>
+<td>Run <code>./scripts/deploy.sh</code>; controller self-bootstraps <code>default-tenant</code>; optionally install examples.</td>
 </tr>
 </tbody>
 </table>
@@ -2988,7 +3081,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 31, 2026 18:33:48 UTC">March 31, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 21, 2026 16:12:19 UTC">April 21, 2026</span>
   </span>
 
     

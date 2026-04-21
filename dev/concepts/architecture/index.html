@@ -2783,7 +2783,7 @@
 <li>Only the hash and metadata (username, groups, name, <code>subscription</code> — the MaaSSubscription name bound at mint, <code>expiresAt</code>) are stored in PostgreSQL.</li>
 <li>The plaintext key is returned to the user <strong>only in this minting response</strong> (show-once), along with <code>expiresAt</code>; it is <strong>not</strong> exposed again on later reads. The diagram below stops at storage and does not show the HTTP response back to the user.</li>
 </ol>
-<p>Every key expires. With <strong>operator-managed</strong> MaaS, the cluster operator sets the maximum lifetime on the <strong><code>ModelsAsService</code></strong> CR: <strong><code>spec.apiKeys.maxExpirationDays</code></strong> (see <a href="../../install/maas-setup/#modelsasservice-cr">ModelsAsService CR</a>). <strong><code>maas-api</code></strong> applies that cap as <strong><code>API_KEY_MAX_EXPIRATION_DAYS</code></strong> (for example 90 days by default when defaults apply). Omit <strong><code>expiresIn</code></strong> on create to use that maximum, or set a shorter <strong><code>expiresIn</code></strong> (e.g., <code>30d</code>, <code>90d</code>, <code>1h</code>) within the configured cap. The response always includes <strong><code>expiresAt</code></strong> (RFC3339).</p>
+<p>Every key expires. With <strong>operator-managed</strong> MaaS, the cluster operator sets the maximum lifetime on the <strong><code>Tenant</code></strong> CR: <strong><code>spec.apiKeys.maxExpirationDays</code></strong> (see <a href="../../install/maas-setup/#tenant-cr">Tenant CR</a>). <strong><code>maas-api</code></strong> applies that cap as <strong><code>API_KEY_MAX_EXPIRATION_DAYS</code></strong> (for example 90 days by default when defaults apply). Omit <strong><code>expiresIn</code></strong> on create to use that maximum, or set a shorter <strong><code>expiresIn</code></strong> (e.g., <code>30d</code>, <code>90d</code>, <code>1h</code>) within the configured cap. The response always includes <strong><code>expiresAt</code></strong> (RFC3339).</p>
 <pre class="mermaid"><code>graph TB
     subgraph UserLayer["User"]
         U[User]
@@ -3020,7 +3020,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 31, 2026 18:33:48 UTC">March 31, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 21, 2026 16:12:19 UTC">April 21, 2026</span>
   </span>
 
     
