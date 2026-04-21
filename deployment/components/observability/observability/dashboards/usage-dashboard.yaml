@@ -81,7 +81,29 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: kuadrant-prometheus-datasource
-                  query: 'count(count by (user) (increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]) > 0)) or vector(0)'
+                  query: |-
+                    count(
+                      count by (user) (
+                        (
+                          (
+                            sum by (user, subscription, limitador_namespace) (
+                              increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                            )
+                            +
+                            sum by (user, subscription, limitador_namespace) (
+                              increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                            )
+                          )
+                          or
+                          sum by (user, subscription, limitador_namespace) (
+                            increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                          )
+                        )
+                        * on(user, subscription, limitador_namespace)
+                        (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                        > 0
+                      )
+                    ) or vector(0)
                   seriesNameFormat: Users
     successRate:
       kind: Panel
@@ -105,7 +127,41 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: kuadrant-prometheus-datasource
-                  query: '((sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))) / ((sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) + (sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0))) > 0)) or vector(1)'
+                  query: |-
+                    (
+                      (
+                        sum(
+                          sum by (user, subscription, limitador_namespace) (
+                            increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                          )
+                          * on(user, subscription, limitador_namespace)
+                          (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                        )
+                      )
+                      /
+                      (
+                        (
+                          sum(
+                            sum by (user, subscription, limitador_namespace) (
+                              increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                            )
+                            * on(user, subscription, limitador_namespace)
+                            (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                          )
+                          +
+                          (
+                            sum(
+                              sum by (user, subscription, limitador_namespace) (
+                                increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                              )
+                              * on(user, subscription, limitador_namespace)
+                              (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                            )
+                            or vector(0)
+                          )
+                        ) > 0
+                      )
+                    ) or vector(1)
                   seriesNameFormat: Success Rate
     tokenConsumptionByUser:
       kind: Panel
@@ -180,7 +236,15 @@ spec:
                   query: |-
                     round(
                       sum by (user, subscription, model) (
-                        sum by (user, subscription, limitador_namespace) (increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
+                        (
+                          (
+                            sum by (user, subscription, limitador_namespace) (increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
+                            +
+                            sum by (user, subscription, limitador_namespace) (increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
+                          )
+                          or
+                          sum by (user, subscription, limitador_namespace) (increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
+                        )
                         * on(user, subscription, limitador_namespace) group_left(model)
                         (0 * max by (user, subscription, limitador_namespace, model) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
                       )
@@ -228,7 +292,15 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: kuadrant-prometheus-datasource
-                  query: 'sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0)'
+                  query: |-
+                    sum(
+                      sum by (user, subscription, limitador_namespace) (
+                        increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                      )
+                      * on(user, subscription, limitador_namespace)
+                      (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                    )
+                    or vector(0)
                   seriesNameFormat: Errors
     totalRequests:
       kind: Panel
@@ -253,7 +325,28 @@ spec:
                   datasource:
                     kind: PrometheusDatasource
                     name: kuadrant-prometheus-datasource
-                  query: '(sum(increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0)) + (sum(increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])) or vector(0))'
+                  query: |-
+                    (
+                      sum(
+                        sum by (user, subscription, limitador_namespace) (
+                          increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                        )
+                        * on(user, subscription, limitador_namespace)
+                        (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                      )
+                      or vector(0)
+                    )
+                    +
+                    (
+                      sum(
+                        sum by (user, subscription, limitador_namespace) (
+                          increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                        )
+                        * on(user, subscription, limitador_namespace)
+                        (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                      )
+                      or vector(0)
+                    )
                   seriesNameFormat: Requests
     totalTokens:
       kind: Panel
