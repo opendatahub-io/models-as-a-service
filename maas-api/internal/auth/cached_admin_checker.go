@@ -96,7 +96,7 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, user *token.UserContex
 	return result
 }
 
-//nolint:ireturn // Prometheus counters are inherently interface-typed; callers need Counter to read values.
+//nolint:ireturn,nonamedreturns // Prometheus counters are inherently interface-typed; named returns clarify which is which.
 func (c *CachedAdminChecker) Metrics() (hits, misses prometheus.Counter) {
 	return c.hits, c.misses
 }
@@ -109,6 +109,7 @@ func (c *CachedAdminChecker) evictExpiredLocked(now time.Time) {
 	}
 }
 
+//nolint:ireturn // prometheus.Counter is the canonical type for counters.
 func registerOrReuseCounter(reg prometheus.Registerer, c prometheus.Counter) prometheus.Counter {
 	err := reg.Register(c)
 	if err == nil {
@@ -116,7 +117,11 @@ func registerOrReuseCounter(reg prometheus.Registerer, c prometheus.Counter) pro
 	}
 	var are prometheus.AlreadyRegisteredError
 	if errors.As(err, &are) {
-		return are.ExistingCollector.(prometheus.Counter)
+		existing, ok := are.ExistingCollector.(prometheus.Counter)
+		if !ok {
+			panic("existing collector is not a Counter")
+		}
+		return existing
 	}
 	panic(err)
 }

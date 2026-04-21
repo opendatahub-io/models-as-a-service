@@ -38,8 +38,10 @@ func (m *mockDelegate) getCalls() int {
 
 func counterValue(t *testing.T, c prometheus.Counter) float64 {
 	t.Helper()
+	metric, ok := c.(prometheus.Metric)
+	require.True(t, ok, "counter does not implement prometheus.Metric")
 	var m dto.Metric
-	require.NoError(t, c.(prometheus.Metric).Write(&m))
+	require.NoError(t, metric.Write(&m))
 	return m.GetCounter().GetValue()
 }
 
