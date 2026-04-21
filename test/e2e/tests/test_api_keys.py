@@ -65,6 +65,50 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Gateway propagation retry helper
+# ---------------------------------------------------------------------------
+# Kuadrant gateway propagation can lag behind MaaS CR readiness.
+# MaaSAuthPolicy "Active" means the controller created the Kuadrant AuthPolicy,
+# but Envoy may not have loaded it yet.  Retry on empty 403 (gateway rejection).
+GATEWAY_PROPAGATION_RETRIES = 6
+GATEWAY_PROPAGATION_DELAY = 5  # seconds
+
+
+def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
+    """Make an HTTP request, retrying on empty 403 from gateway propagation delay.
+
+    Empty 403 means Envoy hasn't loaded the AuthPolicy yet. Retries with
+    backoff and returns the last response — the caller's assertion will
+    surface the failure clearly if the gateway never becomes ready.
+    """
+    for attempt in range(1, retries + 1):
+        r = method(url, timeout=kwargs.pop("timeout", 30), verify=kwargs.pop("verify", TLS_VERIFY), **kwargs)
+        if r.status_code == 403 and not r.text.strip():
+            if attempt < retries:
+                log.info("Gateway returned empty 403 (attempt %d/%d), retrying in %ds...",
+                         attempt, retries, GATEWAY_PROPAGATION_DELAY)
+                time.sleep(GATEWAY_PROPAGATION_DELAY)
+                continue
+        return r
+    return r  # last attempt's response — assertion will catch the failure
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _warm_gateway(api_keys_base_url: str, headers: dict):
+    """Wait for the gateway to start forwarding requests before running tests.
+
+    Makes a single request with gateway retry to absorb the propagation delay.
+    All subsequent tests can then make requests directly without retry logic.
+    """
+    r = _request_with_gateway_retry(
+        requests.post,
+        api_keys_base_url,
+        headers=headers,
+        json={"name": "e2e-gateway-warmup"},
+    )
+    log.info("Gateway warm-up completed: HTTP %d", r.status_code)
+
 
 @pytest.fixture
 def model_completions_url(model_v1: str) -> str:
