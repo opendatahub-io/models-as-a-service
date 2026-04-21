@@ -20,6 +20,22 @@ The Tenant reconciler watches `Tenant` CRs and deploys `maas-api` into the targe
 
 The `RELATED_IMAGE_ODH_MAAS_API_IMAGE` environment variable controls which `maas-api` image the Tenant reconciler deploys. When set on the controller Deployment, it overrides the default image in the kustomize manifests.
 
+#### Design decisions
+
+**Namespace-scoped CR.** The `Tenant` CR is namespace-scoped (`models-as-a-service`), not cluster-scoped like other ODH component CRDs. CRD `spec.scope` is immutable — changing it after deployment requires deleting all CR instances and the CRD itself (brief MaaS outage, permanent operator migration code). Shipping namespace-scoped from `v1alpha1` avoids that cost entirely and enables future multi-tenancy (one `default-tenant` per namespace).
+
+**Self-bootstrap singleton.** The controller creates `default-tenant` on startup if it does not exist. A CEL validation rule (`self.metadata.name == 'default-tenant'`) enforces exactly one Tenant per namespace. This is consistent with the ODH component lifecycle (DSC enables → operator deploys controller → controller creates CR) while keeping the platform workload lifecycle inside `maas-controller`.
+
+**Cross-namespace ownership.** The Tenant CR lives in the app namespace but five resources are created in the gateway namespace (`openshift-ingress`): `AuthPolicy`, `TokenRateLimitPolicy`, `DestinationRule`, `TelemetryPolicy`, and `Istio Telemetry`. Kubernetes rejects cross-namespace `ownerReference`, so these use tracking labels instead:
+
+```yaml
+labels:
+  maas.opendatahub.io/tenant-name: default-tenant
+  maas.opendatahub.io/tenant-namespace: models-as-a-service
+```
+
+Same-namespace children use standard `ownerReference` (automatic GC). Cluster-scoped and cross-namespace children use tracking labels and are cleaned up by the Tenant finalizer via label queries.
+
 ### Subscription model
 
 The controller implements a **dual-gate** model where both gates must pass for a request to succeed:

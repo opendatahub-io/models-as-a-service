@@ -208,7 +208,9 @@ EOF
   fi
 fi
 
-# 7. Apply DataScienceCluster (modelsAsService Unmanaged - MaaS deployed separately)
+# 7. Apply DataScienceCluster (KServe + ModelsAsService Managed)
+# The manifest filename retains "unmanaged" for backward compat; contents include
+# modelsAsService.managementState: Managed so the operator deploys maas-controller.
 echo "7. Applying DataScienceCluster..."
 if kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
   echo "   DataScienceCluster already exists, skipping"
