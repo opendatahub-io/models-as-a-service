@@ -1574,6 +1574,60 @@ wait_authorino_ready() {
 }
 
 # ==========================================
+# External OIDC / AuthPolicy alignment
+# ==========================================
+
+# verify_maas_api_oidc_authpolicy <namespace>
+# When OIDC_ISSUER_URL is set, verify the live maas-api-auth-policy matches
+# deploy/test expectations so Authorino jwt.issuerUrl equals the issuer used to
+# mint tokens (avoids endless HTTP 401 from issuer drift).
+# Optional: OIDC_CLIENT_ID must match oidc-client-bound azp pattern when present.
+# Returns 0 if skipped (no OIDC_ISSUER_URL) or match; 1 on failure.
+verify_maas_api_oidc_authpolicy() {
+  local ns="${1:-opendatahub}"
+  if [[ -z "${OIDC_ISSUER_URL:-}" ]]; then
+    return 0
+  fi
+  if ! command -v jq &>/dev/null; then
+    echo "verify_maas_api_oidc_authpolicy: jq not found; skipping OIDC issuer check" >&2
+    return 0
+  fi
+  local json
+  if ! json=$(kubectl get authpolicy maas-api-auth-policy -n "$ns" -o json 2>/dev/null); then
+    echo "verify_maas_api_oidc_authpolicy: could not read authpolicy/maas-api-auth-policy in namespace $ns" >&2
+    return 1
+  fi
+  local policy_issuer
+  policy_issuer=$(echo "$json" | jq -r '.spec.rules.authentication["oidc-identities"].jwt.issuerUrl // empty')
+  if [[ -z "$policy_issuer" ]]; then
+    echo "verify_maas_api_oidc_authpolicy: AuthPolicy has no spec.rules.authentication[\"oidc-identities\"].jwt.issuerUrl" >&2
+    echo "  External OIDC merge patch may be missing; deploy with --external-oidc and OIDC_ISSUER_URL set." >&2
+    return 1
+  fi
+  local exp got
+  exp="${OIDC_ISSUER_URL%/}"
+  got="${policy_issuer%/}"
+  if [[ "$exp" != "$got" ]]; then
+    echo "verify_maas_api_oidc_authpolicy: OIDC issuer mismatch." >&2
+    echo "  Expected (OIDC_ISSUER_URL):        $exp" >&2
+    echo "  Live AuthPolicy jwt.issuerUrl:    $got" >&2
+    echo "  Fix: ensure configure_maas_api_authpolicy in deploy.sh runs with the same OIDC_ISSUER_URL as tests." >&2
+    return 1
+  fi
+  if [[ -n "${OIDC_CLIENT_ID:-}" ]]; then
+    local policy_client
+    policy_client=$(echo "$json" | jq -r '.spec.rules.authorization["oidc-client-bound"].patternMatching.patterns[0].value // empty')
+    if [[ -n "$policy_client" && "$policy_client" != "${OIDC_CLIENT_ID}" ]]; then
+      echo "verify_maas_api_oidc_authpolicy: OIDC client id mismatch." >&2
+      echo "  Expected (OIDC_CLIENT_ID):     ${OIDC_CLIENT_ID}" >&2
+      echo "  Live oidc-client-bound value: $policy_client" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# ==========================================
 # Database Secret Helpers
 # ==========================================
 
