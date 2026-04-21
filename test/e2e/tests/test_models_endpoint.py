@@ -65,6 +65,31 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+# Kuadrant gateway propagation can lag behind MaaS CR readiness.
+# MaaSAuthPolicy "Active" means the controller created the Kuadrant AuthPolicy,
+# but Envoy may not have loaded it yet.  Retry on empty 403 (gateway rejection).
+GATEWAY_PROPAGATION_RETRIES = 6
+GATEWAY_PROPAGATION_DELAY = 5  # seconds
+
+
+def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
+    """Make an HTTP request, retrying on empty 403 from gateway propagation delay.
+
+    Empty 403 means Envoy hasn't loaded the AuthPolicy yet. Retries with
+    backoff and returns the last response — the caller's assertion will
+    surface the failure clearly if the gateway never becomes ready.
+    """
+    for attempt in range(1, retries + 1):
+        r = method(url, timeout=TIMEOUT, verify=TLS_VERIFY, **kwargs)
+        if r.status_code == 403 and not r.text.strip():
+            if attempt < retries:
+                log.info(f"Gateway returned empty 403 (attempt {attempt}/{retries}), "
+                         f"retrying in {GATEWAY_PROPAGATION_DELAY}s...")
+                time.sleep(GATEWAY_PROPAGATION_DELAY)
+                continue
+        return r
+    return r  # last attempt's response — assertion will catch the failure
+
 
 class TestModelsEndpoint:
     """
@@ -383,14 +408,13 @@ class TestModelsEndpoint:
             # Expected: Returns models from simulator-subscription only
             log.info("Testing: GET /v1/models with K8s token and explicit subscription header: simulator-subscription")
             url = f"{_maas_api_url()}/v1/models"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={
                     "Authorization": f"Bearer {sa_token}",  # K8s token, not API key
                     "x-maas-subscription": SIMULATOR_SUBSCRIPTION,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200 with explicit subscription header, got {r.status_code}: {r.text}"
@@ -454,15 +478,7 @@ class TestModelsEndpoint:
             # Create SA and API key with access to only one subscription
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
 
-            api_key_response = requests.post(
-                f"{_maas_api_url()}/v1/api-keys",
-                headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-empty-header-test-key"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
-            )
-            assert api_key_response.status_code in (200, 201)
-            api_key = api_key_response.json().get("key")
+            api_key = _create_api_key(sa_token, name="e2e-empty-header-test-key")
 
             _wait_reconcile()
 
@@ -519,15 +535,7 @@ class TestModelsEndpoint:
             ], check=True)
 
             # Create API key
-            api_key_response = requests.post(
-                f"{_maas_api_url()}/v1/api-keys",
-                headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-filtered-test-key"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
-            )
-            assert api_key_response.status_code in (200, 201)
-            api_key = api_key_response.json().get("key")
+            api_key = _create_api_key(sa_token, name="e2e-filtered-test-key")
 
             _wait_reconcile()
 
@@ -680,15 +688,7 @@ class TestModelsEndpoint:
             _wait_for_maas_subscription_phase(subscription_name, namespace=maas_ns)
 
             # Create API key bound to our test subscription
-            api_key_response = requests.post(
-                f"{_maas_api_url()}/v1/api-keys",
-                headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-dedup-test-key", "subscription": subscription_name},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
-            )
-            assert api_key_response.status_code in (200, 201)
-            api_key = api_key_response.json().get("key")
+            api_key = _create_api_key(sa_token, name="e2e-dedup-test-key", subscription=subscription_name)
 
             # Wait for reconciliation
             _wait_reconcile()
@@ -848,15 +848,7 @@ class TestModelsEndpoint:
             _wait_for_maas_subscription_phase(subscription_name, namespace=maas_ns)
 
             # Create API key bound to our test subscription
-            api_key_response = requests.post(
-                f"{_maas_api_url()}/v1/api-keys",
-                headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-diff-refs-test-key", "subscription": subscription_name},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
-            )
-            assert api_key_response.status_code in (200, 201)
-            api_key = api_key_response.json().get("key")
+            api_key = _create_api_key(sa_token, name="e2e-diff-refs-test-key", subscription=subscription_name)
 
             _wait_reconcile()
 
@@ -1018,15 +1010,7 @@ class TestModelsEndpoint:
             _wait_for_maas_subscription_phase(subscription_name, namespace=maas_ns)
 
             # Create API key bound to our test subscription
-            api_key_response = requests.post(
-                f"{_maas_api_url()}/v1/api-keys",
-                headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-distinct-models-test-key", "subscription": subscription_name},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
-            )
-            assert api_key_response.status_code in (200, 201)
-            api_key = api_key_response.json().get("key")
+            api_key = _create_api_key(sa_token, name="e2e-distinct-models-test-key", subscription=subscription_name)
 
             _wait_reconcile()
 
@@ -1130,13 +1114,12 @@ class TestModelsEndpoint:
 
             # Query with user token (no X-MaaS-Subscription header)
             log.info("Querying /v1/models with user token (no header)")
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {sa_token}",
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -1204,14 +1187,13 @@ class TestModelsEndpoint:
 
             # Query with X-MaaS-Subscription header to filter
             log.info(f"Querying /v1/models with X-MaaS-Subscription: {subscription_name}")
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {oc_token}",
                     "X-MaaS-Subscription": subscription_name,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, \
@@ -1323,15 +1305,7 @@ class TestModelsEndpoint:
             # Create SA and API key
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
 
-            api_key_response = requests.post(
-                f"{_maas_api_url()}/v1/api-keys",
-                headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-schema-test-key"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
-            )
-            assert api_key_response.status_code in (200, 201)
-            api_key = api_key_response.json().get("key")
+            api_key = _create_api_key(sa_token, name="e2e-schema-test-key")
 
             _wait_reconcile()
 
@@ -1396,15 +1370,7 @@ class TestModelsEndpoint:
             # Create SA and API key
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
 
-            api_key_response = requests.post(
-                f"{_maas_api_url()}/v1/api-keys",
-                headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
-                json={"name": "e2e-metadata-test-key"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
-            )
-            assert api_key_response.status_code in (200, 201)
-            api_key = api_key_response.json().get("key")
+            api_key = _create_api_key(sa_token, name="e2e-metadata-test-key")
 
             _wait_reconcile()
 
@@ -1609,14 +1575,13 @@ class TestModelsEndpoint:
             # This simulates what would happen if an API key was bound to a subscription
             # the user doesn't have access to
             log.info("Querying /v1/models with user token and inaccessible subscription")
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {oc_token_user}",
                     "X-MaaS-Subscription": subscription_name,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             # Should return 403 because user doesn't have access to the subscription
@@ -1667,14 +1632,13 @@ class TestModelsEndpoint:
             invalid_sub = "nonexistent-subscription-xyz"
             log.info(f"Testing: GET /v1/models with invalid subscription header: {invalid_sub}")
             url = f"{_maas_api_url()}/v1/models"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={
                     "Authorization": f"Bearer {oc_token}",
                     "x-maas-subscription": invalid_sub,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 403, f"Expected 403 for invalid subscription, got {r.status_code}: {r.text}"
@@ -1735,14 +1699,13 @@ class TestModelsEndpoint:
             # Expected: 403 with "access denied" error
             log.info(f"Testing: GET /v1/models with inaccessible subscription: {other_subscription}")
             url = f"{_maas_api_url()}/v1/models"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={
                     "Authorization": f"Bearer {oc_token_user}",
                     "x-maas-subscription": other_subscription,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 403, f"Expected 403 for inaccessible subscription, got {r.status_code}: {r.text}"
@@ -1893,12 +1856,11 @@ class TestModelsEndpoint:
 
             # Create two API keys, each bound to a different subscription
             log.info(f"Creating API key 1 bound to {sub1_name}")
-            api_key1_response = requests.post(
+            api_key1_response = _request_with_gateway_retry(
+                requests.post,
                 f"{_maas_api_url()}/v1/api-keys",
                 headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
                 json={"name": "key1", "subscription": sub1_name},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
             assert api_key1_response.status_code in (200, 201)
             api_key1 = api_key1_response.json().get("key")
@@ -1906,12 +1868,11 @@ class TestModelsEndpoint:
             assert bound_sub1 == sub1_name, f"Key 1 should be bound to {sub1_name}, got {bound_sub1}"
 
             log.info(f"Creating API key 2 bound to {sub2_name}")
-            api_key2_response = requests.post(
+            api_key2_response = _request_with_gateway_retry(
+                requests.post,
                 f"{_maas_api_url()}/v1/api-keys",
                 headers={"Authorization": f"Bearer {sa_token}", "Content-Type": "application/json"},
                 json={"name": "key2", "subscription": sub2_name},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
             assert api_key2_response.status_code in (200, 201)
             api_key2 = api_key2_response.json().get("key")
@@ -2001,11 +1962,10 @@ class TestModelsEndpoint:
 
             # Query with K8s token (no header)
             log.info("Querying /v1/models with K8s token (no header) - should return models from both subscriptions")
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={"Authorization": f"Bearer {sa_token}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -2068,14 +2028,13 @@ class TestModelsEndpoint:
 
             # Query with K8s token and header specifying sub1
             log.info(f"Querying /v1/models with K8s token and header: {sub1_name}")
-            r1 = requests.get(
+            r1 = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {sa_token}",
                     "x-maas-subscription": sub1_name,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r1.status_code == 200, f"Expected 200, got {r1.status_code}: {r1.text}"
@@ -2088,14 +2047,13 @@ class TestModelsEndpoint:
 
             # Query with K8s token and header specifying sub2
             log.info(f"Querying /v1/models with K8s token and header: {sub2_name}")
-            r2 = requests.get(
+            r2 = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {sa_token}",
                     "x-maas-subscription": sub2_name,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r2.status_code == 200, f"Expected 200, got {r2.status_code}: {r2.text}"
