@@ -15,7 +15,7 @@ import (
 )
 
 type adminChecker interface {
-	IsAdmin(ctx context.Context, user *token.UserContext) bool
+	IsAdmin(ctx context.Context, user *token.UserContext) (bool, error)
 }
 
 type cacheEntry struct {
@@ -24,9 +24,10 @@ type cacheEntry struct {
 }
 
 type CachedAdminChecker struct {
-	delegate adminChecker
-	ttl      time.Duration
-	clock    clock.Clock
+	delegate    adminChecker
+	ttl         time.Duration
+	negativeTTL time.Duration
+	clock       clock.Clock
 
 	mu    sync.RWMutex
 	cache map[string]cacheEntry
@@ -35,12 +36,15 @@ type CachedAdminChecker struct {
 	misses prometheus.Counter
 }
 
-func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, reg prometheus.Registerer, clk clock.Clock) *CachedAdminChecker {
+func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, negativeTTL time.Duration, reg prometheus.Registerer, clk clock.Clock) *CachedAdminChecker {
 	if delegate == nil {
 		panic("delegate cannot be nil for CachedAdminChecker")
 	}
 	if ttl <= 0 {
 		panic("ttl must be positive for CachedAdminChecker")
+	}
+	if negativeTTL <= 0 {
+		panic("negativeTTL must be positive for CachedAdminChecker")
 	}
 	if reg == nil {
 		reg = prometheus.DefaultRegisterer
@@ -50,10 +54,11 @@ func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, reg prometh
 	}
 
 	return &CachedAdminChecker{
-		delegate: delegate,
-		ttl:      ttl,
-		clock:    clk,
-		cache:    make(map[string]cacheEntry),
+		delegate:    delegate,
+		ttl:         ttl,
+		negativeTTL: negativeTTL,
+		clock:       clk,
+		cache:       make(map[string]cacheEntry),
 		hits: registerOrReuseCounter(reg, prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "sar_cache_hits_total",
 			Help: "Total number of SAR admin check cache hits.",
@@ -65,9 +70,12 @@ func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, reg prometh
 	}
 }
 
-func (c *CachedAdminChecker) IsAdmin(ctx context.Context, user *token.UserContext) bool {
+func (c *CachedAdminChecker) IsAdmin(ctx context.Context, user *token.UserContext) (bool, error) {
 	if c == nil || user == nil || user.Username == "" {
-		return false
+		return false, nil
+	}
+	if ctx.Err() != nil {
+		return false, ctx.Err()
 	}
 
 	key := cacheKey(user)
@@ -79,21 +87,34 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, user *token.UserContex
 
 	if ok && now.Before(entry.expiresAt) {
 		c.hits.Inc()
-		return entry.isAdmin
+		return entry.isAdmin, nil
 	}
 
-	result := c.delegate.IsAdmin(ctx, user)
+	result, err := c.delegate.IsAdmin(ctx, user)
+
+	if err != nil || ctx.Err() != nil {
+		c.misses.Inc()
+		if err != nil {
+			return false, err
+		}
+		return false, ctx.Err()
+	}
+
+	ttl := c.ttl
+	if !result {
+		ttl = c.negativeTTL
+	}
 
 	c.mu.Lock()
 	c.cache[key] = cacheEntry{
 		isAdmin:   result,
-		expiresAt: now.Add(c.ttl),
+		expiresAt: now.Add(ttl),
 	}
 	c.evictExpiredLocked(now)
 	c.mu.Unlock()
 
 	c.misses.Inc()
-	return result
+	return result, nil
 }
 
 //nolint:ireturn,nonamedreturns // Prometheus counters are inherently interface-typed; named returns clarify which is which.
