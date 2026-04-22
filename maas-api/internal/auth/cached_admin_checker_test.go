@@ -48,7 +48,7 @@ func counterValue(t *testing.T, c prometheus.Counter) float64 {
 
 func newTestChecker(delegate *mockDelegate) *auth.CachedAdminChecker {
 	reg := prometheus.NewRegistry()
-	return auth.NewCachedAdminChecker(delegate, time.Minute, 2*time.Second, reg, nil)
+	return auth.NewCachedAdminChecker(delegate, time.Minute, 2*time.Second, 8192, reg, nil)
 }
 
 func TestCachedAdminChecker_CacheHit(t *testing.T) {
@@ -82,7 +82,7 @@ func TestCachedAdminChecker_TTLExpiry(t *testing.T) {
 	delegate := &mockDelegate{response: true}
 	reg := prometheus.NewRegistry()
 	fakeClock := testingclock.NewFakeClock(time.Now())
-	checker := auth.NewCachedAdminChecker(delegate, 30*time.Second, 2*time.Second, reg, fakeClock)
+	checker := auth.NewCachedAdminChecker(delegate, 30*time.Second, 2*time.Second, 8192, reg, fakeClock)
 
 	user := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 
@@ -173,7 +173,7 @@ func TestCachedAdminChecker_NilCheckerReturnsFalse(t *testing.T) {
 func TestCachedAdminChecker_Metrics(t *testing.T) {
 	delegate := &mockDelegate{response: true}
 	reg := prometheus.NewRegistry()
-	checker := auth.NewCachedAdminChecker(delegate, time.Minute, 2*time.Second, reg, nil)
+	checker := auth.NewCachedAdminChecker(delegate, time.Minute, 2*time.Second, 8192, reg, nil)
 
 	user := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 
@@ -215,7 +215,7 @@ func TestCachedAdminChecker_ConcurrentAccess(t *testing.T) {
 func TestCachedAdminChecker_NilDelegatePanics(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	assert.Panics(t, func() {
-		auth.NewCachedAdminChecker(nil, time.Minute, 2*time.Second, reg, nil)
+		auth.NewCachedAdminChecker(nil, time.Minute, 2*time.Second, 8192, reg, nil)
 	})
 }
 
@@ -223,7 +223,7 @@ func TestCachedAdminChecker_NonPositiveTTLPanics(t *testing.T) {
 	delegate := &mockDelegate{response: true}
 	reg := prometheus.NewRegistry()
 	assert.Panics(t, func() {
-		auth.NewCachedAdminChecker(delegate, 0, 2*time.Second, reg, nil)
+		auth.NewCachedAdminChecker(delegate, 0, 2*time.Second, 8192, reg, nil)
 	})
 }
 
@@ -231,8 +231,46 @@ func TestCachedAdminChecker_NonPositiveNegativeTTLPanics(t *testing.T) {
 	delegate := &mockDelegate{response: true}
 	reg := prometheus.NewRegistry()
 	assert.Panics(t, func() {
-		auth.NewCachedAdminChecker(delegate, time.Minute, 0, reg, nil)
+		auth.NewCachedAdminChecker(delegate, time.Minute, 0, 8192, reg, nil)
 	})
+}
+
+func TestCachedAdminChecker_NonPositiveMaxSizePanics(t *testing.T) {
+	delegate := &mockDelegate{response: true}
+	reg := prometheus.NewRegistry()
+	assert.Panics(t, func() {
+		auth.NewCachedAdminChecker(delegate, time.Minute, 2*time.Second, 0, reg, nil)
+	})
+}
+
+func TestCachedAdminChecker_MaxSizeEnforced(t *testing.T) {
+	delegate := &mockDelegate{response: true}
+	reg := prometheus.NewRegistry()
+	fakeClock := testingclock.NewFakeClock(time.Now())
+	checker := auth.NewCachedAdminChecker(delegate, time.Minute, 2*time.Second, 2, reg, fakeClock)
+
+	user1 := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
+	user2 := &token.UserContext{Username: "bob", Groups: []string{"admins"}}
+	user3 := &token.UserContext{Username: "charlie", Groups: []string{"admins"}}
+
+	// Fill cache to max (2 entries)
+	_, _ = checker.IsAdmin(context.Background(), user1)
+	_, _ = checker.IsAdmin(context.Background(), user2)
+	assert.Equal(t, 2, delegate.getCalls())
+
+	// Third user: cache is full, insert is skipped but result is still returned
+	result, err := checker.IsAdmin(context.Background(), user3)
+	require.NoError(t, err)
+	assert.True(t, result)
+	assert.Equal(t, 3, delegate.getCalls())
+
+	// user3 was not cached, so calling again should hit delegate
+	_, _ = checker.IsAdmin(context.Background(), user3)
+	assert.Equal(t, 4, delegate.getCalls(), "uncached entry should call delegate again")
+
+	// user1 is still cached
+	_, _ = checker.IsAdmin(context.Background(), user1)
+	assert.Equal(t, 4, delegate.getCalls(), "cached entry should not call delegate")
 }
 
 func TestCachedAdminChecker_FalseResultIsCached(t *testing.T) {
@@ -255,7 +293,7 @@ func TestCachedAdminChecker_EvictsExpiredEntries(t *testing.T) {
 	delegate := &mockDelegate{response: true}
 	reg := prometheus.NewRegistry()
 	fakeClock := testingclock.NewFakeClock(time.Now())
-	checker := auth.NewCachedAdminChecker(delegate, 10*time.Second, 2*time.Second, reg, fakeClock)
+	checker := auth.NewCachedAdminChecker(delegate, 10*time.Second, 2*time.Second, 8192, reg, fakeClock)
 
 	user1 := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 	user2 := &token.UserContext{Username: "bob", Groups: []string{"admins"}}
@@ -304,7 +342,7 @@ func TestCachedAdminChecker_AsymmetricTTL(t *testing.T) {
 	delegate := &mockDelegate{response: false}
 	reg := prometheus.NewRegistry()
 	fakeClock := testingclock.NewFakeClock(time.Now())
-	checker := auth.NewCachedAdminChecker(delegate, 30*time.Second, 2*time.Second, reg, fakeClock)
+	checker := auth.NewCachedAdminChecker(delegate, 30*time.Second, 2*time.Second, 8192, reg, fakeClock)
 
 	user := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 

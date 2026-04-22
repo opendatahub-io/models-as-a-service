@@ -27,6 +27,7 @@ type CachedAdminChecker struct {
 	delegate    adminChecker
 	ttl         time.Duration
 	negativeTTL time.Duration
+	maxSize     int
 	clock       clock.Clock
 
 	mu    sync.RWMutex
@@ -36,7 +37,7 @@ type CachedAdminChecker struct {
 	misses prometheus.Counter
 }
 
-func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, negativeTTL time.Duration, reg prometheus.Registerer, clk clock.Clock) *CachedAdminChecker {
+func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, negativeTTL time.Duration, maxSize int, reg prometheus.Registerer, clk clock.Clock) *CachedAdminChecker {
 	if delegate == nil {
 		panic("delegate cannot be nil for CachedAdminChecker")
 	}
@@ -45,6 +46,9 @@ func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, negativeTTL
 	}
 	if negativeTTL <= 0 {
 		panic("negativeTTL must be positive for CachedAdminChecker")
+	}
+	if maxSize <= 0 {
+		panic("maxSize must be positive for CachedAdminChecker")
 	}
 	if reg == nil {
 		reg = prometheus.DefaultRegisterer
@@ -57,6 +61,7 @@ func NewCachedAdminChecker(delegate adminChecker, ttl time.Duration, negativeTTL
 		delegate:    delegate,
 		ttl:         ttl,
 		negativeTTL: negativeTTL,
+		maxSize:     maxSize,
 		clock:       clk,
 		cache:       make(map[string]cacheEntry),
 		hits: registerOrReuseCounter(reg, prometheus.NewCounter(prometheus.CounterOpts{
@@ -106,11 +111,13 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, user *token.UserContex
 	}
 
 	c.mu.Lock()
-	c.cache[key] = cacheEntry{
-		isAdmin:   result,
-		expiresAt: now.Add(ttl),
-	}
 	c.evictExpiredLocked(now)
+	if len(c.cache) < c.maxSize {
+		c.cache[key] = cacheEntry{
+			isAdmin:   result,
+			expiresAt: now.Add(ttl),
+		}
+	}
 	c.mu.Unlock()
 
 	c.misses.Inc()

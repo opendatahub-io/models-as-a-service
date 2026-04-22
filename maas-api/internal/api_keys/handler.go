@@ -117,7 +117,7 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 	authorized, authErr := h.isAuthorizedForKey(c.Request.Context(), user, tok.Username)
 	if authErr != nil {
 		h.logger.Error("Failed to check admin status", "error", authErr)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 		return
 	}
 	if !authorized {
@@ -298,7 +298,7 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	authorized, authErr := h.isAuthorizedForKey(c.Request.Context(), user, keyMetadata.Username)
 	if authErr != nil {
 		h.logger.Error("Failed to check admin status", "error", authErr)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 		return
 	}
 	if !authorized {
