@@ -144,18 +144,19 @@ The observability stack consists of:
 
 There are two ways to enable deployment-based observability:
 
-1. **Operator-managed** (recommended): Enable via ModelsAsService CR
+1. **Operator-managed** (recommended): Enable via Tenant CR
 2. **Kustomize-based**: Deploy manifests directly
 
 ### Option 1: Operator-Managed Telemetry
 
-When using the ODH/RHOAI operator, telemetry can be enabled via the ModelsAsService CR:
+When using the ODH/RHOAI operator, telemetry can be enabled via the Tenant CR (self-bootstrapped by `maas-controller` in the `models-as-a-service` namespace):
 
 ```yaml
-apiVersion: components.platform.opendatahub.io/v1alpha1
-kind: ModelsAsService
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Tenant
 metadata:
-  name: default-modelsasservice
+  name: default-tenant
+  namespace: models-as-a-service
 spec:
   telemetry:
     enabled: true  # Enable TelemetryPolicy and Istio Telemetry
@@ -169,11 +170,11 @@ spec:
 Or patch an existing CR:
 
 ```bash
-kubectl patch modelsasservice default-modelsasservice --type=merge \
+kubectl patch tenant default-tenant -n models-as-a-service --type=merge \
   -p '{"spec":{"telemetry":{"enabled":true}}}'
 ```
 
-**What the operator creates when `telemetry.enabled: true`:**
+**What the Tenant reconciler creates when `telemetry.enabled: true`:**
 
 | Resource | Namespace | Purpose |
 |----------|-----------|---------|
@@ -181,13 +182,13 @@ kubectl patch modelsasservice default-modelsasservice --type=merge \
 | Istio Telemetry (`latency-per-subscription`) | Gateway namespace | Adds `subscription` label to gateway latency metrics |
 
 !!! note "Prerequisites for Operator-Managed Telemetry"
-    The operator-managed telemetry feature requires:
+    The Tenant reconciler telemetry feature requires:
 
     - **OpenShift Service Mesh (Istio)** 2.4+ — for Istio Telemetry CRD
     - **Kuadrant/RHCL** — for TelemetryPolicy CRD and AuthPolicy header injection
     - **Gateway deployed** — Telemetry targets the gateway via selector
 
-    The operator checks for CRD availability before creating resources. If a CRD is not present, that resource is silently skipped.
+    The Tenant reconciler checks for CRD availability before creating resources. If a CRD is not present, that resource is silently skipped.
 
 !!! warning "AuthPolicy Header Dependency"
     The Istio Telemetry reads the `subscription` value from the `X-MaaS-Subscription` header, which must be injected by AuthPolicy:

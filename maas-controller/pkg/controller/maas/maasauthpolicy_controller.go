@@ -54,6 +54,10 @@ type MaaSAuthPolicyReconciler struct {
 	// Used to construct the subscription selector endpoint URL.
 	MaaSAPINamespace string
 
+	// TenantNamespace is the namespace where the Tenant CR lives (configurable via flags).
+	// Defaults to "models-as-a-service".
+	TenantNamespace string
+
 	// GatewayName is the name of the Gateway used for model HTTPRoutes (configurable via flags).
 	GatewayName string
 
@@ -68,6 +72,12 @@ type MaaSAuthPolicyReconciler struct {
 	// AuthzCacheTTL is the TTL in seconds for Authorino OPA authorization caching.
 	// Applies to auth-valid, subscription-valid, and require-group-membership authorization evaluators.
 	AuthzCacheTTL int64
+}
+
+// oidcConfig holds OIDC configuration from Tenant CR
+type oidcConfig struct {
+	IssuerURL string
+	ClientID  string
 }
 
 func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
@@ -99,12 +109,114 @@ func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
 	return metadata
 }
 
+// fetchOIDCConfig fetches OIDC configuration from the Tenant CR.
+// Returns nil if Tenant CR doesn't exist or doesn't have externalOIDC configured.
+func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr.Logger) *oidcConfig {
+	// Tenant is a namespace-scoped singleton resource named "default-tenant"
+	// GVK: maas.opendatahub.io/v1alpha1, Kind: Tenant
+	tenant := &unstructured.Unstructured{}
+	tenant.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "maas.opendatahub.io",
+		Version: "v1alpha1",
+		Kind:    "Tenant",
+	})
+
+	// Get the singleton Tenant CR (name enforced by CRD validation)
+	tenantKey := client.ObjectKey{
+		Name:      maasv1alpha1.TenantInstanceName,
+		Namespace: r.TenantNamespace,
+	}
+
+	if err := r.Get(ctx, tenantKey, tenant); err != nil {
+		if apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+			log.V(1).Info("Tenant CRD not installed or Tenant not found, OIDC support disabled",
+				"tenantName", maasv1alpha1.TenantInstanceName,
+				"tenantNamespace", r.TenantNamespace)
+			return nil
+		}
+		log.Error(err, "failed to get Tenant resource",
+			"tenantName", maasv1alpha1.TenantInstanceName,
+			"tenantNamespace", r.TenantNamespace)
+		return nil
+	}
+
+	// Extract spec.externalOIDC if present
+	oidcSpec, found, err := unstructured.NestedMap(tenant.Object, "spec", "externalOIDC")
+	if err != nil {
+		log.Error(err, "failed to extract spec.externalOIDC from Tenant")
+		return nil
+	}
+	if !found || oidcSpec == nil {
+		log.V(1).Info("Tenant CR has no externalOIDC configuration")
+		return nil
+	}
+
+	// Extract issuerUrl and clientId
+	issuerURL, _, err := unstructured.NestedString(oidcSpec, "issuerUrl")
+	if err != nil {
+		log.Error(err, "Tenant externalOIDC.issuerUrl has invalid type (expected string)",
+			"oidcSpec", oidcSpec)
+		return nil
+	}
+
+	clientID, _, err := unstructured.NestedString(oidcSpec, "clientId")
+	if err != nil {
+		log.Error(err, "Tenant externalOIDC.clientId has invalid type (expected string)",
+			"oidcSpec", oidcSpec)
+		return nil
+	}
+
+	if issuerURL == "" {
+		log.V(1).Info("Tenant externalOIDC has no issuerUrl")
+		return nil
+	}
+
+	if clientID == "" {
+		log.Error(nil, "Tenant externalOIDC has no clientId - audience validation is required for security")
+		return nil
+	}
+
+	log.Info("OIDC configuration loaded from Tenant CR",
+		"issuerUrl", issuerURL,
+		"clientId", clientID)
+
+	return &oidcConfig{
+		IssuerURL: issuerURL,
+		ClientID:  clientID,
+	}
+}
+
 // CEL sub-expressions reused across Authorino cache-key selectors.
+// These handle API keys, OIDC tokens, and Kubernetes tokens.
 const (
+	// celUserID extracts user ID from API key, OIDC, or K8s token
+	// Used for cache keys (UUID for API keys, username for others)
+	// API key: uses apiKeyValidation.userId (database UUID)
+	// OIDC: uses preferred_username or sub (from JWT claims)
+	// K8s: uses user.username (from TokenReview)
 	celUserID = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
-		`? auth.metadata.apiKeyValidation.userId : auth.identity.user.username`
+		`? auth.metadata.apiKeyValidation.userId ` +
+		`: (has(auth.identity.preferred_username) ? auth.identity.preferred_username ` +
+		`: (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))`
+
+	// celUsername extracts username for subscription ownership checks
+	// Unlike celUserID (which uses UUID for API key cache keys), this always uses the actual username
+	// API key: uses apiKeyValidation.username (service account name)
+	// OIDC: uses preferred_username or sub (from JWT claims)
+	// K8s: uses user.username (from TokenReview)
+	celUsername = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
+		`? auth.metadata.apiKeyValidation.username ` +
+		`: (has(auth.identity.preferred_username) ? auth.identity.preferred_username ` +
+		`: (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))`
+
+	// celGroups extracts groups from API key, OIDC, or K8s token
+	// API key: uses apiKeyValidation.groups (snapshot at key creation)
+	// OIDC: uses groups claim (no .user. prefix)
+	// K8s: uses user.groups (from TokenReview)
 	celGroups = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
-		`? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups`
+		`? auth.metadata.apiKeyValidation.groups ` +
+		`: (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)`
+
 	celSubscription = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.subscription : ` +
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
@@ -135,12 +247,17 @@ func authzCacheKeySelector(ns, name string) string {
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
 
 func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSAuthPolicy", req.NamespacedName)
+
+	// Fetch OIDC configuration from Tenant CR (if present)
+	// This is checked on every reconcile to handle dynamic updates to the CR
+	oidcConfig := r.fetchOIDCConfig(ctx, log)
 
 	policy := &maasv1alpha1.MaaSAuthPolicy{}
 	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
@@ -168,7 +285,8 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Track missing models to include in status even when reconciliation skips them
 	missingModels := r.findMissingModelRefs(ctx, policy)
 
-	refs, err := r.reconcileModelAuthPolicies(ctx, log, policy)
+	refs, err := r.reconcileModelAuthPolicies(ctx, log, policy, oidcConfig)
+
 	if err != nil {
 		log.Error(err, "failed to reconcile model AuthPolicies")
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot)
@@ -248,7 +366,7 @@ type authPolicyRef struct {
 	ModelNamespace string
 }
 
-func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) ([]authPolicyRef, error) {
+func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy, oidcConfig *oidcConfig) ([]authPolicyRef, error) {
 	var refs []authPolicyRef
 	// Model-centric approach: for each model referenced by this auth policy,
 	// find ALL auth policies for that model and build a single aggregated AuthPolicy.
@@ -360,11 +478,11 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 						"method":      "POST",
 						"body": map[string]any{
 							"expression": fmt.Sprintf(`{
-  "groups": (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : auth.identity.user.groups,
-  "username": (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.username : auth.identity.user.username,
+  "groups": %s,
+  "username": %s,
   "requestedSubscription": `+celSubscription+`,
   "requestedModel": "%s/%s"
-}`, ref.Namespace, ref.Name),
+}`, celGroups, celUsername, ref.Namespace, ref.Name),
 						},
 					},
 					// Cache subscription selection results keyed by user ID, groups, requested subscription, and model.
@@ -427,12 +545,46 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			},
 		}
 
+		// Add OIDC authentication if configured in Tenant CR
+		if oidcConfig != nil && oidcConfig.IssuerURL != "" {
+			authenticationRules, ok := rule["authentication"].(map[string]any)
+			if !ok {
+				return nil, errors.New("failed to convert authentication rules to map[string]any")
+			}
+
+			// Build JWT config with issuer URL and audience (both required)
+			// The JWT's aud claim must match the OIDC client ID for security
+			jwtConfig := map[string]any{
+				"issuerUrl": oidcConfig.IssuerURL,
+				"audiences": []any{oidcConfig.ClientID},
+			}
+
+			authenticationRules["oidc-identities"] = map[string]any{
+				"jwt": jwtConfig,
+				"when": []any{
+					// Only for /v1/models endpoint
+					map[string]any{
+						"selector": "request.url_path",
+						"operator": "matches",
+						"value":    ".*/v1/models$",
+					},
+					// JWT pattern match (exclude API keys)
+					map[string]any{
+						"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+					},
+				},
+				"metrics":  false,
+				"priority": int64(2), // After kubernetes-tokens (priority 1)
+			}
+		}
+
 		// Build authorization rules
 		authRules := make(map[string]any)
 
-		// Validate authentication: API key must be valid, OR K8s token must be authenticated
+		// Validate authentication: API key must be valid, OR K8s token must be authenticated, OR OIDC token must be authenticated
 		// For API keys: check apiKeyValidation.valid == true (boolean)
 		// For K8s tokens: check that identity.username exists (TokenReview succeeded)
+		// For OIDC tokens: check that identity.sub exists (JWT validated)
 		authRules["auth-valid"] = map[string]any{
 			"metrics":  false,
 			"priority": int64(0),
@@ -446,16 +598,27 @@ allow {
 # Kubernetes token authentication: check identity exists
 allow {
   object.get(input.auth.identity, "user", {}).username != ""
+}
+
+# OIDC token authentication: check JWT subject exists
+allow {
+  object.get(input.auth.identity, "sub", "") != ""
 }`,
 			},
 			// Cache authorization result keyed by authentication source and identity.
 			// For API keys: uses the API key value
+			// For OIDC tokens: uses the JWT subject (sub claim)
 			// For K8s tokens: uses the username
 			// Key format: "auth-type|identity|model"
 			// TTL cannot exceed metadata TTL (auth-valid depends on apiKeyValidation metadata)
 			"cache": map[string]any{
 				"key": map[string]any{
-					"selector": fmt.Sprintf(`(has(auth.metadata.apiKeyValidation) ? "api-key|" + request.headers.authorization.replace("Bearer ", "") : "k8s-token|" + auth.identity.user.username) + "|%s/%s"`, ref.Namespace, ref.Name),
+					"selector": fmt.Sprintf(
+						`(has(auth.metadata.apiKeyValidation) ? "api-key|" + `+
+							`request.headers.authorization.replace("Bearer ", "") : `+
+							`(has(auth.identity.sub) ? "oidc|" + auth.identity.sub : `+
+							`"k8s-token|" + auth.identity.user.username)) + "|%s/%s"`,
+						ref.Namespace, ref.Name),
 				},
 				"ttl": r.authzCacheTTL(),
 			},
@@ -513,16 +676,22 @@ allow {
 allowed_groups := %s
 allowed_users := %s
 
-# Extract username from API key or K8s token
+# Extract username from API key, OIDC, or K8s token
 username := input.auth.metadata.apiKeyValidation.username
     { object.get(input.auth, "metadata", {}).apiKeyValidation.username != "" }
+else := input.auth.identity.preferred_username
+    { object.get(input.auth, "identity", {}).preferred_username != "" }
+else := input.auth.identity.sub
+    { object.get(input.auth, "identity", {}).sub != "" }
 else := input.auth.identity.user.username
     { object.get(input.auth, "identity", {}).user.username != "" }
 else := ""
 
-# Extract groups from API key or K8s token
+# Extract groups from API key, OIDC, or K8s token
 groups := input.auth.metadata.apiKeyValidation.groups
     { object.get(input.auth, "metadata", {}).apiKeyValidation.groups != [] }
+else := input.auth.identity.groups
+    { object.get(input.auth, "identity", {}).groups != [] }
 else := input.auth.identity.user.groups
     { object.get(input.auth, "identity", {}).user.groups != [] }
 else := []
@@ -995,6 +1164,14 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	generatedAuthPolicy := &unstructured.Unstructured{}
 	generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 
+	// Watch Tenant so we re-reconcile when OIDC configuration changes.
+	tenant := &unstructured.Unstructured{}
+	tenant.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "maas.opendatahub.io",
+		Version: "v1alpha1",
+		Kind:    "Tenant",
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaaSAuthPolicy{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
@@ -1013,7 +1190,34 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
 			r.mapGeneratedAuthPolicyToParent,
 		)).
+		// Watch Tenant so OIDC configuration changes trigger reconciles.
+		Watches(tenant, handler.EnqueueRequestsFromMapFunc(
+			r.mapTenantToMaaSAuthPolicies,
+		)).
 		Complete(r)
+}
+
+// mapTenantToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources
+// when Tenant changes (to pick up OIDC configuration changes).
+func (r *MaaSAuthPolicyReconciler) mapTenantToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	// List all MaaSAuthPolicy resources
+	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
+	if err := r.List(ctx, policyList); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for Tenant change")
+		return nil
+	}
+
+	// Enqueue reconcile requests for all policies
+	requests := make([]reconcile.Request, len(policyList.Items))
+	for i, policy := range policyList.Items {
+		requests[i] = reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      policy.Name,
+				Namespace: policy.Namespace,
+			},
+		}
+	}
+	return requests
 }
 
 // mapGeneratedAuthPolicyToParent maps a generated AuthPolicy back to any
