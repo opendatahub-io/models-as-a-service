@@ -145,7 +145,7 @@ func TestCachedAdminChecker_NilUserReturnsFalse(t *testing.T) {
 	checker := newTestChecker(delegate)
 
 	result, err := checker.IsAdmin(context.Background(), nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.False(t, result)
 	assert.Equal(t, 0, delegate.getCalls())
 }
@@ -156,7 +156,7 @@ func TestCachedAdminChecker_EmptyUsernameReturnsFalse(t *testing.T) {
 
 	user := &token.UserContext{Username: "", Groups: []string{"admins"}}
 	result, err := checker.IsAdmin(context.Background(), user)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.False(t, result)
 	assert.Equal(t, 0, delegate.getCalls())
 }
@@ -166,7 +166,7 @@ func TestCachedAdminChecker_NilCheckerReturnsFalse(t *testing.T) {
 	user := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 
 	result, err := checker.IsAdmin(context.Background(), user)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.False(t, result)
 }
 
@@ -201,7 +201,7 @@ func TestCachedAdminChecker_ConcurrentAccess(t *testing.T) {
 	for range 100 {
 		wg.Go(func() {
 			result, err := checker.IsAdmin(context.Background(), user)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			if result {
 				trueCount.Add(1)
 			}
@@ -321,7 +321,7 @@ func TestCachedAdminChecker_DelegateErrorNotCached(t *testing.T) {
 	user := &token.UserContext{Username: "alice", Groups: []string{"admins"}}
 
 	result, err := checker.IsAdmin(context.Background(), user)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.False(t, result)
 	assert.Equal(t, 1, delegate.getCalls())
 
@@ -333,7 +333,7 @@ func TestCachedAdminChecker_DelegateErrorNotCached(t *testing.T) {
 
 	// Should call delegate again since error result was not cached
 	result, err = checker.IsAdmin(context.Background(), user)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, result)
 	assert.Equal(t, 2, delegate.getCalls())
 }
@@ -390,6 +390,6 @@ func TestCachedAdminChecker_CanceledContextReturnsError(t *testing.T) {
 
 	result, err := checker.IsAdmin(ctx, user)
 	assert.False(t, result)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, 0, delegate.getCalls(), "delegate should not be called with canceled context")
 }

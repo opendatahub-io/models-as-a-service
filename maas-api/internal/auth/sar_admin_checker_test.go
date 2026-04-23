@@ -57,7 +57,7 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 		checker := auth.NewSARAdminChecker(client, testNamespace)
 
 		result, err := checker.IsAdmin(context.Background(), nil)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.False(t, result)
 	})
 
@@ -67,7 +67,7 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 		user := &token.UserContext{Username: "", Groups: []string{"admin-group"}}
 
 		result, err := checker.IsAdmin(context.Background(), user)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.False(t, result)
 	})
 
@@ -76,7 +76,7 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 		user := &token.UserContext{Username: "admin-user", Groups: []string{"admin-group"}}
 
 		result, err := checker.IsAdmin(context.Background(), user)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.False(t, result)
 	})
 
