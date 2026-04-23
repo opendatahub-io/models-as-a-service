@@ -57,11 +57,11 @@ func TestTLSMinVersion_Precedence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup: Clear and set environment variable if needed
 			if tt.envValue != "" {
-				os.Setenv("TLS_MIN_VERSION", tt.envValue)
+				t.Setenv("TLS_MIN_VERSION", tt.envValue)
 			} else {
 				os.Unsetenv("TLS_MIN_VERSION")
 			}
-			defer os.Unsetenv("TLS_MIN_VERSION")
+			// t.Setenv() automatically cleans up, no defer needed
 
 			// Load config (reads env var as fallback)
 			cfg := loadTLSConfig()
@@ -221,15 +221,9 @@ func TestLoadTLSConfig_EnvironmentVariables(t *testing.T) {
 
 			// Set test env vars
 			for key, value := range tt.env {
-				os.Setenv(key, value)
+				t.Setenv(key, value)
 			}
-
-			// Cleanup
-			defer func() {
-				for _, key := range envVars {
-					os.Unsetenv(key)
-				}
-			}()
+			// t.Setenv() automatically cleans up, no defer needed
 
 			// Load config
 			cfg := loadTLSConfig()
