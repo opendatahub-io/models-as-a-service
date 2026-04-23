@@ -66,11 +66,15 @@ func TestTLSMinVersion_Precedence(t *testing.T) {
 			// Load config (reads env var as fallback)
 			cfg := loadTLSConfig()
 
-			// Simulate CLI flag override (if provided)
+			// Simulate production flag binding/parsing.
+			fs := flag.NewFlagSet(tt.name, flag.ContinueOnError)
+			cfg.bindFlags(fs)
 			if tt.cliValue != "" {
-				if err := cfg.MinVersion.Set(tt.cliValue); err != nil {
-					t.Fatalf("Failed to set CLI value %q: %v", tt.cliValue, err)
+				if err := fs.Parse([]string{"--tls-min-version", tt.cliValue}); err != nil {
+					t.Fatalf("Failed to parse CLI value %q: %v", tt.cliValue, err)
 				}
+			} else if err := fs.Parse(nil); err != nil {
+				t.Fatalf("Failed to parse empty CLI args: %v", err)
 			}
 
 			// Validate (should NOT override MinVersion anymore)
