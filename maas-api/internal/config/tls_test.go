@@ -2,6 +2,7 @@ package config // nolint:testpackage // Testing unexported loadTLSConfig() funct
 
 import (
 	"crypto/tls"
+	"flag"
 	"os"
 	"testing"
 )
