@@ -1,4 +1,4 @@
-package config
+package config // nolint:testpackage // Testing unexported loadTLSConfig() function
 
 import (
 	"crypto/tls"
