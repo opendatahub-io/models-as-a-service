@@ -197,11 +197,12 @@ func TestCachedAdminChecker_ConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var trueCount atomic.Int64
+	errs := make(chan error, 100)
 
 	for range 100 {
 		wg.Go(func() {
 			result, err := checker.IsAdmin(context.Background(), user)
-			require.NoError(t, err)
+			errs <- err
 			if result {
 				trueCount.Add(1)
 			}
@@ -209,6 +210,10 @@ func TestCachedAdminChecker_ConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
 	assert.Equal(t, int64(100), trueCount.Load(), "all calls should return true")
 }
 

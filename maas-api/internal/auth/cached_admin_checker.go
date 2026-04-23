@@ -110,12 +110,14 @@ func (c *CachedAdminChecker) IsAdmin(ctx context.Context, user *token.UserContex
 		ttl = c.negativeTTL
 	}
 
+	storeTime := c.clock.Now()
+
 	c.mu.Lock()
-	c.evictExpiredLocked(now)
+	c.evictExpiredLocked(storeTime)
 	if len(c.cache) < c.maxSize {
 		c.cache[key] = cacheEntry{
 			isAdmin:   result,
-			expiresAt: now.Add(ttl),
+			expiresAt: storeTime.Add(ttl),
 		}
 	}
 	c.mu.Unlock()
