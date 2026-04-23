@@ -70,7 +70,6 @@ patches:
             - --gateway-namespace=$(GATEWAY_NAMESPACE)
             - --maas-api-namespace=$(MAAS_API_NAMESPACE)
             - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
-            - --cluster-audience=$(CLUSTER_AUDIENCE)
             - --metadata-cache-ttl=$(METADATA_CACHE_TTL)
             - --authz-cache-ttl=$(AUTHZ_CACHE_TTL)
             env:

@@ -31,7 +31,7 @@
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
 #   OPERATOR_TYPE             Operator type (rhoai/odh)
 #   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
-#   KUSTOMIZE_FORCE_CONFLICTS When true, use --force-conflicts on kubectl apply in kustomize mode
+#   FORCE_OVERWRITE           When true, re-apply manifests even if the resource already exists
 #
 # TIMEOUT CONFIGURATION (all in seconds, see deployment-helpers.sh for defaults):
 #   CUSTOM_RESOURCE_TIMEOUT   DataScienceCluster wait (default: 600)
@@ -109,7 +109,7 @@ OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-}"
 OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
-KUSTOMIZE_FORCE_CONFLICTS="${KUSTOMIZE_FORCE_CONFLICTS:-false}"
+FORCE_OVERWRITE="${FORCE_OVERWRITE:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 POSTGRES_CONNECTION="${POSTGRES_CONNECTION:-}"
 
@@ -203,7 +203,7 @@ ENVIRONMENT VARIABLES:
   EXTERNAL_OIDC            Enable external OIDC on maas-api (true/false)
   OIDC_ISSUER_URL          External OIDC issuer URL for maas-api AuthPolicy patching
   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
-  KUSTOMIZE_FORCE_CONFLICTS When true, pass --force-conflicts to kubectl apply in kustomize mode (default: false)
+  FORCE_OVERWRITE           When true, re-apply manifests even if the resource already exists (default: false)
   POSTGRES_CONNECTION       External PostgreSQL connection string (same as --postgres-connection)
 
 TIMEOUT CONFIGURATION (all values in seconds):
@@ -527,7 +527,7 @@ main() {
     return 1
   fi
 
-  if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
+  if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
     log_info "  Installing controller (CRDs, RBAC, deployment)..."
@@ -571,13 +571,6 @@ main() {
   if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
     log_info "  Configuring custom MaaS API image: $MAAS_API_IMAGE"
     env_patches+=("RELATED_IMAGE_ODH_MAAS_API_IMAGE=$MAAS_API_IMAGE")
-  fi
-  # Patch controller with correct audience for HyperShift/ROSA clusters.
-  local cluster_aud
-  cluster_aud=$(get_cluster_audience 2>/dev/null || echo "")
-  if [[ -n "$cluster_aud" && "$cluster_aud" != "https://kubernetes.default.svc" ]]; then
-    log_info "  Non-standard cluster audience detected: $cluster_aud"
-    env_patches+=("CLUSTER_AUDIENCE=$cluster_aud")
   fi
 
   if [[ ${#env_patches[@]} -gt 0 ]]; then
@@ -667,10 +660,9 @@ deploy_via_operator() {
     configure_tls_backend
   fi
 
-  # Custom maas-api image injection and cluster audience configuration
-  # are now handled by the Tenant reconciler in maas-controller (common
-  # block in main). The controller receives RELATED_IMAGE_ODH_MAAS_API_IMAGE
-  # and CLUSTER_AUDIENCE env vars and applies them during kustomize render.
+  # Custom maas-api image injection is now handled by the Tenant reconciler
+  # in maas-controller (common block in main). The controller receives
+  # RELATED_IMAGE_ODH_MAAS_API_IMAGE env var and applies it during kustomize render.
 
   log_info "Operator deployment completed"
 }
@@ -711,10 +703,10 @@ deploy_via_kustomize() {
     configure_tls_backend
   fi
 
-  # maas-api, gateway policies, AuthPolicy configuration, and cluster audience
-  # are now handled by the Tenant reconciler in maas-controller. After the
-  # controller starts it creates the default-tenant CR, which triggers the
-  # reconciler to apply maas-api manifests and gateway policies via SSA.
+  # maas-api, gateway policies, and AuthPolicy configuration are now handled
+  # by the Tenant reconciler in maas-controller. After the controller starts
+  # it creates the default-tenant CR, which triggers the reconciler to apply
+  # maas-api manifests and gateway policies via SSA.
 
   log_info "Kustomize prerequisite deployment completed"
 }
@@ -1560,106 +1552,6 @@ configure_maas_api_authpolicy() {
   fi
 
   log_info "  AuthPolicy patched successfully"
-}
-
-# configure_cluster_audience
-#   Configures the AuthPolicy with the correct OIDC audience for the cluster.
-#   This is required for Hypershift/ROSA clusters which use non-standard audiences.
-#
-#   Background:
-#   - Standard Kubernetes clusters use audience: https://kubernetes.default.svc
-#   - Hypershift/ROSA clusters use custom OIDC providers with different audiences
-#   - Without this patch, JWT validation fails with HTTP 401
-#
-#   This function:
-#   1. Detects the cluster's OIDC audience from a service account token
-#   2. If non-standard, patches the maas-api AuthPolicy with the cluster-specific audience
-#   3. Annotates the AuthPolicy to prevent operator from reverting the patch
-#
-#   Note: maas-controller audience patching is handled in the common subscription
-#   controller block (after the controller deployment exists) via CLUSTER_AUDIENCE env var.
-configure_cluster_audience() {
-  log_info "Checking cluster OIDC audience..."
-
-  # Get cluster audience using helper from deployment-helpers.sh
-  local cluster_aud
-  cluster_aud=$(get_cluster_audience 2>/dev/null || echo "")
-
-  if [[ -z "$cluster_aud" ]]; then
-    log_warn "Could not determine cluster audience, skipping audience configuration"
-    return 0
-  fi
-
-  log_debug "Detected cluster audience: $cluster_aud"
-
-  # Check if this is a non-standard audience (Hypershift/ROSA)
-  if [[ "$cluster_aud" == "https://kubernetes.default.svc" ]]; then
-    log_info "Standard Kubernetes audience detected, no patching needed"
-    return 0
-  fi
-
-  log_info "Configuring AuthPolicy for non-standard cluster audience..."
-  log_info "  Detected audience: $cluster_aud"
-
-  # Wait for AuthPolicy to be created by the operator
-  local authpolicy_name="maas-api-auth-policy"
-  local wait_timeout=120
-  local elapsed=0
-
-  log_info "  Waiting for AuthPolicy '$authpolicy_name' to be created (timeout: ${wait_timeout}s)..."
-  while [[ $elapsed -lt $wait_timeout ]]; do
-    if kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
-      log_info "  Found AuthPolicy '$authpolicy_name'"
-      break
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-
-  if ! kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
-    log_warn "AuthPolicy '$authpolicy_name' not found after ${wait_timeout}s, skipping audience configuration"
-    log_warn "Authentication may fail on Hypershift/ROSA clusters"
-    return 0
-  fi
-
-  # Step 1: Annotate to prevent operator reconciliation from reverting our patch
-  log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
-  kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
-    opendatahub.io/managed="false" --overwrite 2>/dev/null || true
-
-  # Step 2: Patch AuthPolicy with cluster-specific audience
-  log_info "  Patching AuthPolicy with cluster audience..."
-  if kubectl patch authpolicy "$authpolicy_name" -n "$NAMESPACE" --type=merge --patch-file <(cat <<EOF
-spec:
-  rules:
-    authentication:
-      openshift-identities:
-        kubernetesTokenReview:
-          audiences:
-            - $cluster_aud
-            - maas-default-gateway-sa
-EOF
-  ); then
-    log_info "  AuthPolicy '$authpolicy_name' patched with custom audience"
-  else
-    log_warn "  Failed to patch AuthPolicy with custom audience"
-    log_warn "  Authentication may fail on this cluster"
-    return 0
-  fi
-
-  # Step 3: Verify the patch persisted (operator might revert it)
-  sleep 3
-  local actual_aud
-  actual_aud=$(kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" \
-    -o jsonpath='{.spec.rules.authentication.openshift-identities.kubernetesTokenReview.audiences[0]}' 2>/dev/null || echo "")
-
-  if [[ "$actual_aud" == "$cluster_aud" ]]; then
-    log_info "  Verified: Custom audience configuration persisted"
-  else
-    log_warn "  WARNING: AuthPolicy audience may have been reverted to: ${actual_aud}"
-    log_warn "  This may cause authentication failures on Hypershift/ROSA clusters"
-  fi
-
 }
 
 #──────────────────────────────────────────────────────────────
