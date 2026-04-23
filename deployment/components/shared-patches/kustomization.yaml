@@ -100,6 +100,21 @@ replacements:
     fieldPaths:
     - spec.template.spec.containers.[name=manager].image
 
+# Replace API key cleanup CronJob image from params.env (ubi-minimal for curl).
+# Enables the operator to override the image with a pinned SHA digest for
+# disconnected environments via RELATED_IMAGE_UBI_MINIMAL_IMAGE.
+- source:
+    kind: ConfigMap
+    version: v1
+    name: maas-parameters
+    fieldPath: data.maas-api-key-cleanup-image
+  targets:
+  - select:
+      kind: CronJob
+      name: maas-api-key-cleanup
+    fieldPaths:
+    - spec.jobTemplate.spec.template.spec.containers.[name=cleanup].image
+
 # -----------------------------------------------------------------------------
 # 2. GATEWAY CONFIGURATION
 # -----------------------------------------------------------------------------
