@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/install/model-setup/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/install/external-model-setup/">
       
       
-        <link rel="prev" href="../maas-setup/">
+        <link rel="prev" href="../model-setup/">
       
       
-        <link rel="next" href="../external-model-setup/">
+        <link rel="next" href="../validation/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Model Setup (On Cluster) - ODH Models-as-a-Service Documentation</title>
+        <title>External Model Setup (Tech Preview) - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#deploy-sample-models" class="md-skip">
+        <a href="#external-model-setup-tech-preview" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Model Setup (On Cluster)
+              External Model Setup (Tech Preview)
             
           </span>
         </div>
@@ -1096,6 +1096,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../model-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Setup (On Cluster)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -1115,7 +1143,7 @@
   <span class="md-ellipsis">
     
   
-    Model Setup (On Cluster)
+    External Model Setup (Tech Preview)
   
 
     
@@ -1133,7 +1161,7 @@
   <span class="md-ellipsis">
     
   
-    Model Setup (On Cluster)
+    External Model Setup (Tech Preview)
   
 
     
@@ -1159,10 +1187,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-we-deploy" class="md-nav__link">
+  <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What We Deploy
+        Prerequisites
       
     </span>
   </a>
@@ -1170,22 +1198,88 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#understanding-the-deployment-flow" class="md-nav__link">
+  <a href="#architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Understanding the Deployment Flow
+        Architecture
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Understanding the Deployment Flow">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-1-deploy-inference-payload-processor-ipp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Deploy Inference Payload Processor (IPP)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-2-create-the-model-namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Create the Model Namespace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-3-create-the-provider-api-key-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Create the Provider API Key Secret
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-4-create-the-externalmodel-and-maasmodelref" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Create the ExternalModel and MaaSModelRef
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-5-configure-access-and-rate-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: Configure Access and Rate Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-6-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 6: Validate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 6: Validate">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#step-1-deploy-the-llminferenceservice-model" class="md-nav__link">
+  <a href="#mint-an-api-key" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 1: Deploy the LLMInferenceService (Model)
+        Mint an API Key
       
     </span>
   </a>
@@ -1193,10 +1287,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-2-deploy-the-maasmodelref" class="md-nav__link">
+  <a href="#run-inference" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 2: Deploy the MaaSModelRef
+        Run Inference
       
     </span>
   </a>
@@ -1204,10 +1298,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-3-deploy-the-maassubscription" class="md-nav__link">
+  <a href="#verify-auth-enforcement" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 3: Deploy the MaaSSubscription
+        Verify Auth Enforcement
       
     </span>
   </a>
@@ -1215,10 +1309,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-4-deploy-the-maasauthpolicy" class="md-nav__link">
+  <a href="#verify-model-listing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 4: Deploy the MaaSAuthPolicy
+        Verify Model Listing
       
     </span>
   </a>
@@ -1231,22 +1325,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#deploy-sample-models_1" class="md-nav__link">
+  <a href="#supported-providers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deploy Sample Models
+        Supported Providers
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Deploy Sample Models">
+    <nav class="md-nav" aria-label="Supported Providers">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#simulator-model-cpu" class="md-nav__link">
+  <a href="#openai" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Simulator Model (CPU)
+        OpenAI
       
     </span>
   </a>
@@ -1254,10 +1348,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#simulator-model-premium-cpu" class="md-nav__link">
+  <a href="#anthropic" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Simulator Model — Premium (CPU)
+        Anthropic
       
     </span>
   </a>
@@ -1265,10 +1359,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#facebook-opt-125m-model-cpu" class="md-nav__link">
+  <a href="#azure-openai" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Facebook OPT-125M Model (CPU)
+        Azure OpenAI
       
     </span>
   </a>
@@ -1276,10 +1370,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#qwen3-model-gpu-required" class="md-nav__link">
+  <a href="#aws-bedrock-openai-compatible" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Qwen3 Model (GPU Required)
+        AWS Bedrock (OpenAI-compatible)
       
     </span>
   </a>
@@ -1287,21 +1381,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#verify-model-deployment" class="md-nav__link">
+  <a href="#vertex-ai-openai-compatible" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verify Model Deployment
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#update-existing-models-optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Update Existing Models (Optional)
+        Vertex AI (OpenAI-compatible)
       
     </span>
   </a>
@@ -1314,10 +1397,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#next-steps" class="md-nav__link">
+  <a href="#cleanup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Next Steps
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
       
     </span>
   </a>
@@ -1328,34 +1422,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../external-model-setup/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    External Model Setup (Tech Preview)
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -2629,10 +2695,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-we-deploy" class="md-nav__link">
+  <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What We Deploy
+        Prerequisites
       
     </span>
   </a>
@@ -2640,22 +2706,88 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#understanding-the-deployment-flow" class="md-nav__link">
+  <a href="#architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Understanding the Deployment Flow
+        Architecture
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Understanding the Deployment Flow">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-1-deploy-inference-payload-processor-ipp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Deploy Inference Payload Processor (IPP)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-2-create-the-model-namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Create the Model Namespace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-3-create-the-provider-api-key-secret" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Create the Provider API Key Secret
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-4-create-the-externalmodel-and-maasmodelref" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 4: Create the ExternalModel and MaaSModelRef
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-5-configure-access-and-rate-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 5: Configure Access and Rate Limits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-6-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 6: Validate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 6: Validate">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#step-1-deploy-the-llminferenceservice-model" class="md-nav__link">
+  <a href="#mint-an-api-key" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 1: Deploy the LLMInferenceService (Model)
+        Mint an API Key
       
     </span>
   </a>
@@ -2663,10 +2795,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-2-deploy-the-maasmodelref" class="md-nav__link">
+  <a href="#run-inference" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 2: Deploy the MaaSModelRef
+        Run Inference
       
     </span>
   </a>
@@ -2674,10 +2806,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-3-deploy-the-maassubscription" class="md-nav__link">
+  <a href="#verify-auth-enforcement" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 3: Deploy the MaaSSubscription
+        Verify Auth Enforcement
       
     </span>
   </a>
@@ -2685,10 +2817,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#step-4-deploy-the-maasauthpolicy" class="md-nav__link">
+  <a href="#verify-model-listing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Step 4: Deploy the MaaSAuthPolicy
+        Verify Model Listing
       
     </span>
   </a>
@@ -2701,22 +2833,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#deploy-sample-models_1" class="md-nav__link">
+  <a href="#supported-providers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deploy Sample Models
+        Supported Providers
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Deploy Sample Models">
+    <nav class="md-nav" aria-label="Supported Providers">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#simulator-model-cpu" class="md-nav__link">
+  <a href="#openai" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Simulator Model (CPU)
+        OpenAI
       
     </span>
   </a>
@@ -2724,10 +2856,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#simulator-model-premium-cpu" class="md-nav__link">
+  <a href="#anthropic" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Simulator Model — Premium (CPU)
+        Anthropic
       
     </span>
   </a>
@@ -2735,10 +2867,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#facebook-opt-125m-model-cpu" class="md-nav__link">
+  <a href="#azure-openai" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Facebook OPT-125M Model (CPU)
+        Azure OpenAI
       
     </span>
   </a>
@@ -2746,10 +2878,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#qwen3-model-gpu-required" class="md-nav__link">
+  <a href="#aws-bedrock-openai-compatible" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Qwen3 Model (GPU Required)
+        AWS Bedrock (OpenAI-compatible)
       
     </span>
   </a>
@@ -2757,21 +2889,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#verify-model-deployment" class="md-nav__link">
+  <a href="#vertex-ai-openai-compatible" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verify Model Deployment
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#update-existing-models-optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Update Existing Models (Optional)
+        Vertex AI (OpenAI-compatible)
       
     </span>
   </a>
@@ -2784,10 +2905,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#next-steps" class="md-nav__link">
+  <a href="#cleanup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Next Steps
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
       
     </span>
   </a>
@@ -2814,173 +2946,362 @@
   
 
 
-<h1 id="deploy-sample-models">Deploy Sample Models</h1>
-<h2 id="what-we-deploy">What We Deploy</h2>
-<p>Our sample models are packaged as Kustomize overlays that deploy:</p>
+<h1 id="external-model-setup-tech-preview">External Model Setup (Tech Preview)</h1>
+<div class="admonition warning">
+<p class="admonition-title">Tech Preview</p>
+<p>ExternalModel support is a tech preview feature. APIs and behavior may change in future releases.</p>
+</div>
+<p>This guide walks through deploying an external AI/ML model (e.g., OpenAI, Anthropic) through the MaaS gateway. External models are hosted outside the cluster — MaaS handles authentication, rate limiting, and API key management while routing inference requests to the external provider.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+<li>MaaS platform deployed per the <a href="../maas-setup/">Installation Guide</a></li>
+<li><code>kubectl</code>/<code>oc</code> access as cluster-admin</li>
+<li>An API key from the external provider (e.g., OpenAI)</li>
+</ul>
+<h2 id="architecture">Architecture</h2>
+<p>An external model deployment involves the following resources:</p>
 <table>
 <thead>
 <tr>
 <th>Resource</th>
+<th>Created by</th>
 <th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>LLMInferenceService</strong></td>
-<td>The LLM workload — the actual inference service (simulator, vLLM, etc.)</td>
+<td><strong>ExternalModel</strong></td>
+<td>User</td>
+<td>Defines the external provider, endpoint, and credential reference</td>
 </tr>
 <tr>
 <td><strong>MaaSModelRef</strong></td>
-<td>Gives the MaaS system a reference to the model so it appears in the model catalog</td>
+<td>User</td>
+<td>Registers the model in the MaaS catalog</td>
 </tr>
 <tr>
 <td><strong>MaaSAuthPolicy</strong></td>
-<td>Grants access to the model for specified groups (who can use it)</td>
+<td>User</td>
+<td>Defines which groups can access the model</td>
 </tr>
 <tr>
 <td><strong>MaaSSubscription</strong></td>
-<td>Defines rate limits (token quotas) for specific groups</td>
+<td>User</td>
+<td>Defines token rate limits for the model</td>
+</tr>
+<tr>
+<td><strong>Service</strong> (ExternalName)</td>
+<td>ExternalModel reconciler</td>
+<td>Maps an in-cluster DNS name to the external FQDN</td>
+</tr>
+<tr>
+<td><strong>ServiceEntry</strong></td>
+<td>ExternalModel reconciler</td>
+<td>Registers the external host in the Istio mesh</td>
+</tr>
+<tr>
+<td><strong>DestinationRule</strong></td>
+<td>ExternalModel reconciler</td>
+<td>Configures TLS origination for the external endpoint</td>
+</tr>
+<tr>
+<td><strong>HTTPRoute</strong></td>
+<td>ExternalModel reconciler</td>
+<td>Routes gateway traffic to the external provider</td>
+</tr>
+<tr>
+<td><strong>Kuadrant AuthPolicy</strong></td>
+<td>MaaSAuthPolicy controller</td>
+<td>Per-route auth enforcement via Authorino</td>
+</tr>
+<tr>
+<td><strong>TokenRateLimitPolicy</strong></td>
+<td>MaaSSubscription controller</td>
+<td>Per-route rate limiting via Limitador</td>
 </tr>
 </tbody>
 </table>
-<p>For more detail on each resource, see <a href="../../concepts/subscription-overview/">Access and Quota Overview</a>.</p>
-<div class="admonition tip">
-<p class="admonition-title">Create llm namespace (optional)</p>
-<p>Our example models deploy to the <code>llm</code> namespace. If it does not exist, create it before deploying the samples below (idempotent—safe to run even if it already exists):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>kubectl<span class="w"> </span>create<span class="w"> </span>namespace<span class="w"> </span>llm<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<p>The Inference Payload Processor (IPP) component (ext-proc) handles API key injection, request translation (OpenAI ↔ provider-native format), and model routing.</p>
+<h2 id="step-1-deploy-inference-payload-processor-ipp">Step 1: Deploy Inference Payload Processor (IPP)</h2>
+<p>IPP is required for external models — it injects the provider API key and translates between OpenAI-compatible format and the provider's native API.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>If MaaS was deployed via the Tenant CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>payload-processing
 </code></pre></div>
+<p>If the pod is already running, skip to Step 2.</p>
 </div>
-<h2 id="understanding-the-deployment-flow">Understanding the Deployment Flow</h2>
-<p>Deploying a model through MaaS follows a specific order. Each resource depends on the previous one. The following walkthrough deploys the <strong>simulator model</strong> step by step so you can see what each resource does.</p>
-<p>Set the project root (run from the repository root):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">PROJECT_DIR</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>--show-toplevel<span class="k">)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># RBAC</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/deployment/base/payload-processing/rbac/serviceaccount.yaml
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/deployment/base/payload-processing/rbac/clusterrole.yaml
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/deployment/base/payload-processing/rbac/clusterrolebinding.yaml
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># ConfigMap, Service, DestinationRule, EnvoyFilter</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/deployment/base/payload-processing/manager/plugins-configmap.yaml
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/deployment/base/payload-processing/manager/service.yaml
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/deployment/base/payload-processing/manager/destination-rule.yaml
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/deployment/base/payload-processing/manager/envoy-filter.yaml
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="c1"># Deployment (substitute the image placeholder)</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>cat<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/deployment/base/payload-processing/manager/deployment.yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">  </span>sed<span class="w"> </span><span class="s1">&#39;s|image: payload-processing|image: quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable|&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">  </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="c1"># Verify</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>payload-processing
 </code></pre></div>
-<h3 id="step-1-deploy-the-llminferenceservice-model">Step 1: Deploy the LLMInferenceService (Model)</h3>
-<p>The LLMInferenceService is the actual inference workload. It must exist first and use the <code>maas-default-gateway</code> gateway reference so traffic flows through MaaS for authentication and rate limiting.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kustomize<span class="w"> </span>build<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/docs/samples/maas-system/free/llm/<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<p>The pod should be <code>1/1 Running</code>.</p>
+<h2 id="step-2-create-the-model-namespace">Step 2: Create the Model Namespace</h2>
+<p>External models deploy to a model namespace (e.g., <code>llm</code>). If it doesn't exist:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>create<span class="w"> </span>namespace<span class="w"> </span>llm
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>kubectl<span class="w"> </span>label<span class="w"> </span>namespace<span class="w"> </span>llm<span class="w"> </span>istio-injection<span class="o">=</span>enabled
 </code></pre></div>
-<p>This deploys the simulator workload (a lightweight mock that generates responses without a real LLM). The resource is named <code>facebook-opt-125m-simulated</code> in the <code>llm</code> namespace. Verify it is ready:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>llminferenceservice<span class="w"> </span>-n<span class="w"> </span>llm
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>llm
-</code></pre></div>
-<h3 id="step-2-deploy-the-maasmodelref">Step 2: Deploy the MaaSModelRef</h3>
-<p>The MaaSModelRef registers the model with MaaS so it appears in the catalog and the <code>/v1/models</code> API. It references the LLMInferenceService by name. The maas-controller watches MaaSModelRefs and populates <code>status.endpoint</code> and <code>status.phase</code> from the underlying LLMInferenceService.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/docs/samples/maas-system/free/maas/maas-model.yaml
-</code></pre></div>
-<p>After a short moment, the controller reconciles. Verify status is populated:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>facebook-opt-125m-simulated<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.phase}&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">echo</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>facebook-opt-125m-simulated<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.endpoint}&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">echo</span>
-</code></pre></div>
-<p><strong>Expected output:</strong> <code>status.phase</code> should be <code>Ready</code> and <code>status.endpoint</code> should be a non-empty URL. If either is missing, wait briefly and retry—the controller may still be reconciling (see <a href="#verify-model-deployment">Verify Model Deployment</a> below).</p>
-<h3 id="step-3-deploy-the-maassubscription">Step 3: Deploy the MaaSSubscription</h3>
-<p>The MaaSSubscription defines token rate limits (quotas) for groups. It references the MaaSModelRef by name and namespace. This controls how many tokens each group can consume per model.</p>
-<p>Create the <code>models-as-a-service</code> namespace if it does not exist, then apply:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>create<span class="w"> </span>namespace<span class="w"> </span>models-as-a-service<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/docs/samples/maas-system/free/maas/maas-subscription.yaml
-</code></pre></div>
-<p>This sample grants <code>system:authenticated</code> (all authenticated users) a limit of 100 tokens per minute for the simulator model.</p>
-<h3 id="step-4-deploy-the-maasauthpolicy">Step 4: Deploy the MaaSAuthPolicy</h3>
-<p>The MaaSAuthPolicy defines who can access the model. It references the MaaSModelRef by name and namespace. Without this, requests to the model are denied even if the user has a subscription.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/docs/samples/maas-system/free/maas/maas-auth-policy.yaml
-</code></pre></div>
-<p>This sample grants access to <code>system:authenticated</code>. The maas-controller creates per-model AuthPolicies and TokenRateLimitPolicies that enforce this.</p>
-<hr />
-<p>You have now deployed the full simulator stack manually. The sections below deploy all required objects (Model, ModelRef, Subscription, AuthPolicy) together using a single Kustomize command for each sample.</p>
-<h2 id="deploy-sample-models_1">Deploy Sample Models</h2>
-<h3 id="simulator-model-cpu">Simulator Model (CPU)</h3>
-<p>A lightweight mock service for testing that generates responses without running an actual language model. This sample deploys the full MaaS stack:</p>
+<h2 id="step-3-create-the-provider-api-key-secret">Step 3: Create the Provider API Key Secret</h2>
+<p>Store the external provider's API key in a Kubernetes Secret. The Secret must:</p>
 <ul>
-<li><strong>LLMInferenceService</strong> — Simulator workload</li>
-<li><strong>MaaSModelRef</strong> — Registers the model with MaaS</li>
-<li><strong>MaaSAuthPolicy</strong> — Access for <code>system:authenticated</code> (all authenticated users)</li>
-<li><strong>MaaSSubscription</strong> — Rate limit of 100 tokens/min for <code>system:authenticated</code></li>
+<li>Be in the same namespace as the ExternalModel</li>
+<li>Use the data key <code>api-key</code></li>
+<li>Have the label <code>inference.networking.k8s.io/bbr-managed=true</code> so IPP can read it</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">PROJECT_DIR</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>--show-toplevel<span class="k">)</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/docs/samples/maas-system/free/<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">TMP_KEY_FILE</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>mktemp<span class="k">)</span><span class="s2">&quot;</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">TMP_KEY_FILE</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>cat<span class="w"> </span>&gt;<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">TMP_KEY_FILE</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">&lt;&lt;&lt;</span><span class="w"> </span><span class="s2">&quot;YOUR_OPENAI_API_KEY&quot;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>generic<span class="w"> </span>openai-api-key<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--from-file<span class="o">=</span>api-key<span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">TMP_KEY_FILE</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>rm<span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">TMP_KEY_FILE</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>kubectl<span class="w"> </span>label<span class="w"> </span>secret<span class="w"> </span>openai-api-key<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>inference.networking.k8s.io/bbr-managed<span class="o">=</span><span class="nb">true</span>
 </code></pre></div>
-<h3 id="simulator-model-premium-cpu">Simulator Model — Premium (CPU)</h3>
-<p>Same simulator workload with premium access and higher rate limits:</p>
+<h2 id="step-4-create-the-externalmodel-and-maasmodelref">Step 4: Create the ExternalModel and MaaSModelRef</h2>
+<p>The ExternalModel defines the provider connection. The MaaSModelRef registers it in the MaaS catalog.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;&#39;EOF&#39;</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="s">apiVersion: maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="s">kind: ExternalModel</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="s">metadata:</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="s">  name: gpt-4o</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="s">  namespace: llm</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="s">spec:</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="s">  provider: openai</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="s">  endpoint: api.openai.com</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="s">  targetModel: gpt-4o</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="s">  credentialRef:</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="s">    name: openai-api-key</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="s">---</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="s">apiVersion: maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="s">kind: MaaSModelRef</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="s">metadata:</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="s">  name: gpt-4o</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="s">  namespace: llm</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="s">spec:</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="s">  modelRef:</span>
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="s">    kind: ExternalModel</span>
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="s">    name: gpt-4o</span>
+<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="s">EOF</span>
+</code></pre></div>
+<p>Verify the model is ready:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>llm
+</code></pre></div>
+<p>Expected output:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>NAME     PHASE   ENDPOINT                                    HTTPROUTE   GATEWAY
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>gpt-4o   Ready   https://maas.&lt;cluster-domain&gt;/llm/gpt-4o   gpt-4o      maas-default-gateway
+</code></pre></div>
+<h2 id="step-5-configure-access-and-rate-limits">Step 5: Configure Access and Rate Limits</h2>
+<p>Create a MaaSAuthPolicy (who can access) and MaaSSubscription (rate limits) in the <code>models-as-a-service</code> namespace:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;&#39;EOF&#39;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="s">apiVersion: maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="s">kind: MaaSAuthPolicy</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="s">metadata:</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="s">  name: gpt-4o-access</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="s">  namespace: models-as-a-service</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="s">spec:</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="s">  modelRefs:</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="s">  - name: gpt-4o</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="s">    namespace: llm</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="s">  subjects:</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="s">    groups:</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="s">    - name: &quot;system:authenticated&quot;</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="s">---</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="s">apiVersion: maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="s">kind: MaaSSubscription</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="s">metadata:</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="s">  name: gpt-4o-subscription</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="s">  namespace: models-as-a-service</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="s">spec:</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="s">  owner:</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="s">    groups:</span>
+<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="s">    - name: &quot;system:authenticated&quot;</span>
+<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="s">  modelRefs:</span>
+<a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a><span class="s">  - name: gpt-4o</span>
+<a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a><span class="s">    namespace: llm</span>
+<a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a><span class="s">    tokenRateLimits:</span>
+<a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a><span class="s">    - limit: 100000</span>
+<a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a><span class="s">      window: &quot;1h&quot;</span>
+<a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a><span class="s">EOF</span>
+</code></pre></div>
+<h2 id="step-6-validate">Step 6: Validate</h2>
+<h3 id="mint-an-api-key">Mint an API Key</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">GW_HOST</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>gateway<span class="w"> </span>maas-default-gateway<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.listeners[0].hostname}&#39;</span><span class="k">)</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="nv">TOKEN</span><span class="o">=</span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="nv">KEY</span><span class="o">=</span><span class="k">$(</span>curl<span class="w"> </span>-sSk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;https://</span><span class="si">${</span><span class="nv">GW_HOST</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;name&quot;:&quot;external-model-key&quot;,&quot;subscription&quot;:&quot;gpt-4o-subscription&quot;}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.key&#39;</span><span class="k">)</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;MaaS API key: </span><span class="si">${</span><span class="nv">KEY</span><span class="p">:</span><span class="nv">0</span><span class="p">:</span><span class="nv">20</span><span class="si">}</span><span class="s2">...&quot;</span>
+</code></pre></div>
+<h3 id="run-inference">Run Inference</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span><span class="s2">&quot;https://</span><span class="si">${</span><span class="nv">GW_HOST</span><span class="si">}</span><span class="s2">/llm/gpt-4o/v1/chat/completions&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;model&quot;:&quot;gpt-4o&quot;,&quot;messages&quot;:[{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:&quot;say hello&quot;}]}&#39;</span>
+</code></pre></div>
+<h3 id="verify-auth-enforcement">Verify Auth Enforcement</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Bogus key — expect 403</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-w<span class="w"> </span><span class="s2">&quot;HTTP: %{http_code}\n&quot;</span><span class="w"> </span><span class="s2">&quot;https://</span><span class="si">${</span><span class="nv">GW_HOST</span><span class="si">}</span><span class="s2">/llm/gpt-4o/v1/chat/completions&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer sk-oai-FAKE-KEY&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;model&quot;:&quot;gpt-4o&quot;,&quot;messages&quot;:[{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:&quot;hi&quot;}]}&#39;</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># No auth — expect 401</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-w<span class="w"> </span><span class="s2">&quot;HTTP: %{http_code}\n&quot;</span><span class="w"> </span><span class="s2">&quot;https://</span><span class="si">${</span><span class="nv">GW_HOST</span><span class="si">}</span><span class="s2">/llm/gpt-4o/v1/chat/completions&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;model&quot;:&quot;gpt-4o&quot;,&quot;messages&quot;:[{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:&quot;hi&quot;}]}&#39;</span>
+</code></pre></div>
+<h3 id="verify-model-listing">Verify Model Listing</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span><span class="s2">&quot;https://</span><span class="si">${</span><span class="nv">GW_HOST</span><span class="si">}</span><span class="s2">/v1/models&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.data[].id&#39;</span>
+</code></pre></div>
+<p>The model <code>gpt-4o</code> should appear in the list.</p>
+<h2 id="supported-providers">Supported Providers</h2>
+<p>The <code>spec.provider</code> field determines how IPP translates requests and injects credentials. Each provider has different authentication headers and API formats — IPP handles the translation automatically.</p>
+<table>
+<thead>
+<tr>
+<th>Provider</th>
+<th><code>spec.provider</code></th>
+<th>Translation</th>
+<th>Auth Header</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OpenAI</td>
+<td><code>openai</code></td>
+<td>Pass-through</td>
+<td><code>Authorization: Bearer</code></td>
+</tr>
+<tr>
+<td>Anthropic</td>
+<td><code>anthropic</code></td>
+<td>OpenAI ↔ Messages API</td>
+<td><code>x-api-key</code></td>
+</tr>
+<tr>
+<td>Azure OpenAI</td>
+<td><code>azure-openai</code></td>
+<td>Path rewrite + field stripping</td>
+<td><code>api-key</code></td>
+</tr>
+<tr>
+<td>Vertex AI</td>
+<td><code>vertex-openai</code></td>
+<td>Path rewrite + field stripping</td>
+<td><code>Authorization: Bearer</code> (OAuth)</td>
+</tr>
+<tr>
+<td>AWS Bedrock</td>
+<td><code>bedrock-openai</code></td>
+<td>Pass-through (Mantle)</td>
+<td><code>Authorization: Bearer</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="openai">OpenAI</h3>
+<p>Pass-through — no body translation needed. Auth uses <code>Authorization: Bearer</code>.</p>
 <ul>
-<li><strong>LLMInferenceService</strong> — Simulator workload</li>
-<li><strong>MaaSModelRef</strong> — Registers the model with MaaS</li>
-<li><strong>MaaSAuthPolicy</strong> — Access for <code>premium-user</code> group only</li>
-<li><strong>MaaSSubscription</strong> — Rate limit of 1000 tokens/min for <code>premium-user</code></li>
+<li>Set <code>endpoint: api.openai.com</code></li>
+<li>Models: <code>gpt-4o</code>, <code>gpt-4o-mini</code>, <code>gpt-4.1</code>, <code>gpt-4.1-mini</code>, <code>o1</code>, <code>o3-mini</code>, etc.</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nv">PROJECT_DIR</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>--show-toplevel<span class="k">)</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/docs/samples/maas-system/premium/<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
-</code></pre></div>
-<h3 id="facebook-opt-125m-model-cpu">Facebook OPT-125M Model (CPU)</h3>
-<p>An inference deployment that loads and runs a 125M parameter model without the need for a GPU. This sample deploys the full MaaS stack:</p>
+<p>See the <a href="https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/openai.md">OpenAI provider guide</a>.</p>
+<h3 id="anthropic">Anthropic</h3>
+<p>Translates OpenAI Chat Completions to Anthropic Messages API format. Auth uses <code>x-api-key</code> header (not <code>Authorization: Bearer</code>).</p>
 <ul>
-<li><strong>LLMInferenceService</strong> — vLLM CPU workload</li>
-<li><strong>MaaSModelRef</strong> — Registers the model with MaaS</li>
-<li><strong>MaaSAuthPolicy</strong> — Access for <code>system:authenticated</code> (all authenticated users)</li>
-<li><strong>MaaSSubscription</strong> — Rate limit of 100 tokens/min for <code>system:authenticated</code></li>
+<li>System messages extracted to top-level <code>system</code> field</li>
+<li><code>tools[]</code> converted to Anthropic format with <code>input_schema</code></li>
+<li><code>tool_choice</code> mapped: <code>auto</code> → <code>{"type":"auto"}</code>, <code>required</code> → <code>{"type":"any"}</code></li>
+<li><code>stream</code> field forwarded for streaming support</li>
+<li><code>anthropic-version: 2023-06-01</code> header added automatically</li>
+<li>Response <code>stop_reason</code> mapped back to OpenAI <code>finish_reason</code></li>
+<li>Unsupported parameters silently dropped: <code>frequency_penalty</code>, <code>presence_penalty</code>, <code>logprobs</code>, <code>n</code>, <code>response_format</code>, <code>seed</code></li>
+<li>Set <code>endpoint: api.anthropic.com</code></li>
+<li>Models: <code>claude-sonnet-4-20250514</code>, <code>claude-haiku-4-5-20251001</code>, <code>claude-opus-4-20250514</code></li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">PROJECT_DIR</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>--show-toplevel<span class="k">)</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/docs/samples/maas-system/facebook-opt-125m-cpu/<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
-</code></pre></div>
-<h3 id="qwen3-model-gpu-required">Qwen3 Model (GPU Required)</h3>
-<p>⚠️ This model requires GPU nodes with <code>nvidia.com/gpu</code> resources available in your cluster. This sample deploys the full MaaS stack:</p>
+<p>See the <a href="https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/anthropic.md">Anthropic provider guide</a>.</p>
+<h3 id="azure-openai">Azure OpenAI</h3>
+<p>Uses Azure's OpenAI-compatible endpoint with a different auth header and path. Auth uses <code>api-key</code> header (not <code>Authorization: Bearer</code>).</p>
 <ul>
-<li><strong>LLMInferenceService</strong> — vLLM GPU workload</li>
-<li><strong>MaaSModelRef</strong> — Registers the model with MaaS</li>
-<li><strong>MaaSAuthPolicy</strong> — Access for <code>system:authenticated</code> (all authenticated users)</li>
-<li><strong>MaaSSubscription</strong> — Rate limit of 100 tokens/min for <code>system:authenticated</code></li>
+<li>Path rewritten to <code>/openai/v1/chat/completions</code></li>
+<li>Response strips Azure-specific fields: <code>content_filter_results</code>, <code>prompt_filter_results</code></li>
+<li><code>targetModel</code> must match the deployment name in your Azure OpenAI resource</li>
+<li>Set <code>endpoint: &lt;resource&gt;.openai.azure.com</code> (e.g., <code>my-deployment.openai.azure.com</code>)</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nv">PROJECT_DIR</span><span class="o">=</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>--show-toplevel<span class="k">)</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span><span class="si">${</span><span class="nv">PROJECT_DIR</span><span class="si">}</span>/docs/samples/maas-system/qwen3/<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
-</code></pre></div>
-<h3 id="verify-model-deployment">Verify Model Deployment</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Check LLMInferenceService status</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>llminferenceservices<span class="w"> </span>-n<span class="w"> </span>llm
+<p>See the <a href="https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/azure-openai.md">Azure OpenAI provider guide</a>.</p>
+<h3 id="aws-bedrock-openai-compatible">AWS Bedrock (OpenAI-compatible)</h3>
+<p>Routes to AWS Bedrock's OpenAI-compatible Mantle endpoint. Pass-through — no body translation. Auth uses <code>Authorization: Bearer</code> with a Bedrock API Key (starts with <code>ABSK</code>, not AWS access keys).</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Use <code>bedrock-mantle.&lt;region&gt;.api.aws</code>, <strong>not</strong> <code>bedrock-runtime.&lt;region&gt;.amazonaws.com</code>. The IPP translator uses <code>/v1/chat/completions</code> which is only available on the Bedrock Mantle endpoint. Using <code>bedrock-runtime</code> will result in <code>404</code> errors.</p>
+</div>
+<ul>
+<li>Set <code>endpoint: bedrock-mantle.&lt;region&gt;.api.aws</code> (e.g., <code>bedrock-mantle.us-east-2.api.aws</code>)</li>
+<li>Models vary by region. List available models: <code>curl -sk "https://bedrock-mantle.&lt;region&gt;.api.aws/v1/models" -H "Authorization: Bearer &lt;KEY&gt;"</code></li>
+</ul>
+<p>See the <a href="https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/bedrock-openai.md">Bedrock provider guide</a>.</p>
+<h3 id="vertex-ai-openai-compatible">Vertex AI (OpenAI-compatible)</h3>
+<p>Routes to Google Vertex AI's OpenAI-compatible endpoint. Auth uses OAuth2 Bearer tokens.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Unlike other providers, <code>vertex-openai</code> requires IPP plugin configuration with your GCP project, location, and endpoint. Without this configuration, the translator will not be registered and requests will fail.</p>
+</div>
+<ul>
+<li>Requires plugin-level config: <code>project</code>, <code>location</code>, <code>endpoint</code> (set in Helm values or ConfigMap)</li>
+<li>OAuth2 tokens <strong>expire every hour</strong> — the Secret must be refreshed with <code>gcloud auth print-access-token</code></li>
+<li><code>targetModel</code> must use <code>publisher/model</code> format (e.g., <code>google/gemini-2.5-flash</code>, not <code>gemini-2.5-flash</code>)</li>
+<li>Response strips <code>usage.extra_properties</code></li>
+<li>Set <code>endpoint: &lt;region&gt;-aiplatform.googleapis.com</code> (e.g., <code>us-central1-aiplatform.googleapis.com</code>)</li>
+<li>Models: <code>google/gemini-2.5-flash</code>, <code>google/gemini-2.5-pro</code>, <code>google/gemini-2.0-flash</code></li>
+</ul>
+<p>See the <a href="https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/vertex-openai.md">Vertex AI provider guide</a>.</p>
+<p>For detailed per-provider configuration, examples, and troubleshooting, see the <a href="https://github.com/opendatahub-io/ai-gateway-payload-processing/tree/main/docs/providers">IPP provider guides</a>.</p>
+<h2 id="cleanup">Cleanup</h2>
+<p>To remove an external model and all its managed resources:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Delete the ExternalModel — OwnerReferences clean up Service, ServiceEntry, DR, HTTPRoute</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>externalmodel<span class="w"> </span>gpt-4o<span class="w"> </span>-n<span class="w"> </span>llm
 <a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># Check pods</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>llm
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1"># Delete the MaaSModelRef</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>maasmodelref<span class="w"> </span>gpt-4o<span class="w"> </span>-n<span class="w"> </span>llm
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="c1"># Delete auth and subscription</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>maasauthpolicy<span class="w"> </span>gpt-4o-access<span class="w"> </span>-n<span class="w"> </span>models-as-a-service
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>maassubscription<span class="w"> </span>gpt-4o-subscription<span class="w"> </span>-n<span class="w"> </span>models-as-a-service
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="c1"># Delete the provider secret</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>secret<span class="w"> </span>openai-api-key<span class="w"> </span>-n<span class="w"> </span>llm
 </code></pre></div>
-<p><strong>Validate MaaSModelRef status</strong> — The MaaS controller populates <code>status.endpoint</code> and <code>status.phase</code> on each MaaSModelRef from the LLMInferenceService. The MaaSModelRef <code>status.endpoint</code> should match the URL exposed by the LLMInferenceService (via the gateway). Verify:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Check MaaSModelRef status (same namespace as the LLMInferenceService, e.g. llm)</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>-o<span class="w"> </span>wide
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># Verify status.endpoint is populated and phase is Ready</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{range .items[*]}{.metadata.name}: phase={.status.phase} endpoint={.status.endpoint}{&quot;\n&quot;}{end}&#39;</span>
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="c1"># Compare with LLMInferenceService — status.endpoint should match the URL from LLMIS status.addresses or status.url</span>
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>kubectl<span class="w"> </span>get<span class="w"> </span>llminferenceservice<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s2">&quot;url:&quot;</span>
-</code></pre></div>
-<p>The <code>status.endpoint</code> on MaaSModelRef is derived from the LLMInferenceService (gateway-external URL, or <code>status.addresses</code>, or <code>status.url</code>). Both should show the same URL. You can also confirm via the <a href="../validation/">Validation</a> guide—the <code>/v1/models</code> API returns the same URL from MaaSModelRef <code>status.endpoint</code>. If phase is not <code>Ready</code> or endpoint is empty, the MaaS controller may still be reconciling—wait a minute and recheck.</p>
-<h3 id="update-existing-models-optional">Update Existing Models (Optional)</h3>
-<p>To expose an existing model through MaaS, you must:</p>
-<ol>
-<li>Ensure the <code>LLMInferenceService</code> uses the <code>maas-default-gateway</code> gateway</li>
-<li>Create a <strong>MaaSModelRef</strong> that references the LLMInferenceService</li>
-<li>Create <strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong> to define access and rate limits</li>
-</ol>
-<p>See <a href="../../configuration-and-management/quota-and-access-configuration/">Quota and Access Configuration</a> for step-by-step instructions.</p>
-<p><strong>Gateway reference</strong> — If the model does not yet use the MaaS gateway:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>llminferenceservice<span class="w"> </span>my-production-model<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>--type<span class="o">=</span><span class="s1">&#39;json&#39;</span><span class="w"> </span>-p<span class="o">=</span><span class="s1">&#39;[</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="s1">  {</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="s1">    &quot;op&quot;: &quot;add&quot;,</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="s1">    &quot;path&quot;: &quot;/spec/gateway/refs/-&quot;,</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="s1">    &quot;value&quot;: {</span>
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="s1">      &quot;name&quot;: &quot;maas-default-gateway&quot;,</span>
-<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="s1">      &quot;namespace&quot;: &quot;openshift-ingress&quot;</span>
-<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="s1">    }</span>
-<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="s1">  }</span>
-<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="s1">]&#39;</span>
-</code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">serving.kserve.io/v1alpha1</span>
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-production-model</span>
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">  </span><span class="nt">gateway</span><span class="p">:</span>
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">    </span><span class="nt">refs</span><span class="p">:</span>
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
-<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="w">        </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
-</code></pre></div>
-<h2 id="next-steps">Next Steps</h2>
-<p>Proceed to <a href="../validation/">Validation</a> to test and verify your deployment.</p>
+<h2 id="related">Related</h2>
+<ul>
+<li><a href="../../reference/crds/external-model/">ExternalModel CRD Reference</a></li>
+<li><a href="../../configuration-and-management/maas-model-kinds/">MaaS Model Kinds</a></li>
+<li><a href="../../configuration-and-management/quota-and-access-configuration/">Quota and Access Configuration</a></li>
+<li><a href="https://github.com/opendatahub-io/ai-gateway-payload-processing/tree/main/docs/providers">IPP Provider Guides</a></li>
+<li><a href="../validation/">Validation Guide</a></li>
+</ul>
 
 
 
@@ -3003,7 +3324,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 02:14:44 UTC">April 17, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 24, 2026 12:47:18 UTC">April 24, 2026</span>
   </span>
 
     
@@ -3013,7 +3334,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 24, 2026 12:47:18 UTC">April 24, 2026</span>
   </span>
 
     
