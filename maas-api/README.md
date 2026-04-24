@@ -292,12 +292,10 @@ The maas-api server is configured via **environment variables** or **CLI flags**
 | `TLS_CERT` | - | Path to TLS certificate file (PEM format). Required if `SECURE=true` and not using self-signed cert. |
 | `TLS_KEY` | - | Path to TLS private key file (PEM format). Required if `SECURE=true` and not using self-signed cert. |
 | `TLS_SELF_SIGNED` | `false` | Generate self-signed certificate. Alternative to providing `TLS_CERT`/`TLS_KEY`. |
+| `TLS_MIN_VERSION` | `1.2` | Minimum TLS version for HTTPS connections. Valid values: `1.2` or `1.3`. |
 
 !!! note "Database Configuration"
     The database connection URL is loaded from the Kubernetes secret `maas-db-config` (key: `DB_CONNECTION_URL`) in the same namespace as the maas-api pod. See [Database Configuration](#database-configuration) below.
-
-!!! note "TLS Minimum Version"
-    The minimum TLS version can be configured via the `--tls-min-version` CLI flag (default: `1.2`). Environment variable configuration is not currently supported.
 
 ### CLI Flags
 
@@ -317,7 +315,7 @@ Most environment variables have corresponding CLI flags. When both are provided,
 | `--tls-cert` | `TLS_CERT` | - | Path to TLS certificate. |
 | `--tls-key` | `TLS_KEY` | - | Path to TLS private key. |
 | `--tls-self-signed` | `TLS_SELF_SIGNED` | `false` | Generate self-signed certificate. |
-| `--tls-min-version` | - | `1.2` | Minimum TLS version (`1.2` or `1.3`). |
+| `--tls-min-version` | `TLS_MIN_VERSION` | `1.2` | Minimum TLS version (`1.2` or `1.3`). |
 
 
 ### Database Configuration
