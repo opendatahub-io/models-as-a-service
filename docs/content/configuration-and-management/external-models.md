@@ -48,6 +48,6 @@ flowchart LR
 
 ## Related documentation
 
-- [MaaSModelRef kinds — ExternalModel](maas-model-kinds.md#externalmodel) — reconciler responsibilities and optional annotations
+- [MaaSModelRef CRD — ExternalModel](../reference/crds/maas-model-ref.md#externalmodel) — reconciler responsibilities and optional annotations
 - [Model listing flow — Registering external models](model-listing-flow.md#registering-external-models) — numbered steps and catalog behavior
 - [On-cluster models](model-gateway-and-serving.md) — LLMInferenceService and `maas-default-gateway` (contrast with external routing)
