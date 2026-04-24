@@ -453,7 +453,7 @@ func main() {
 		setupLog.Info("auto-detected cluster service account issuer", "audience", detectedAudience)
 		clusterAudience = detectedAudience
 	} else if err != nil {
-		setupLog.Info("unable to auto-detect cluster service account issuer, using default", "error", err, "default", clusterAudience)
+		setupLog.Error(err, "unable to auto-detect cluster service account issuer, using default", "default", clusterAudience)
 	}
 
 	if err := (&maas.MaaSModelRefReconciler{
