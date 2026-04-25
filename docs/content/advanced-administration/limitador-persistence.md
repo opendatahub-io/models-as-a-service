@@ -40,30 +40,6 @@ The script deploys a basic Redis instance and outputs instructions for configuri
 
 ---
 
-## Validation
-
-To verify persistence works:
-
-1. Configure Limitador with persistent storage (see steps above)
-2. Send traffic to a rate-limited route until counters are non-zero
-3. Delete the Limitador pod: `kubectl delete pod <limitador-pod> -n <namespace>`
-4. Wait for the new pod to start
-5. Send another request to the same route
-
-The counter should continue from its previous value instead of resetting to 1.
-
-**Monitor counters** via Prometheus:
-
-```bash
-# Port-forward to Prometheus
-kubectl port-forward -n monitoring svc/prometheus-k8s 9091:9091
-
-# Query: authorized_hits
-# Open http://localhost:9091
-```
-
----
-
 ## Related Documentation
 
 - [Limitador Configuration](https://github.com/Kuadrant/limitador/blob/main/doc/server/configuration.md) - Storage backend options and configuration
