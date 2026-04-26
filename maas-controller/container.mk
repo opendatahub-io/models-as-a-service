@@ -15,13 +15,13 @@ endif
 .PHONY: build-image
 build-image: ##	Build container image (use REPO= and TAG= to specify image)
 	@echo "Building container image $(FULL_IMAGE)..."
-	$(CONTAINER_ENGINE) build $(DOCKER_BUILD_ARGS) $(CONTAINER_ENGINE_EXTRA_FLAGS) -f $(PROJECT_DIR)/Dockerfile -t "$(FULL_IMAGE)" $(PROJECT_DIR)/..
+	$(CONTAINER_ENGINE) build $(DOCKER_BUILD_ARGS) $(CONTAINER_ENGINE_EXTRA_FLAGS) -t "$(FULL_IMAGE)" .
 	@echo "Container image $(FULL_IMAGE) built successfully"
 
 .PHONY: build-image-konflux
 build-image-konflux: ##	Build container image with Dockerfile.konflux
 	@echo "Building container image $(FULL_IMAGE) using Dockerfile.konflux..."
-	$(CONTAINER_ENGINE) build $(DOCKER_BUILD_ARGS) $(CONTAINER_ENGINE_EXTRA_FLAGS) -f $(PROJECT_DIR)/Dockerfile.konflux -t "$(FULL_IMAGE)" $(PROJECT_DIR)/..
+	$(CONTAINER_ENGINE) build $(DOCKER_BUILD_ARGS) $(CONTAINER_ENGINE_EXTRA_FLAGS) -f Dockerfile.konflux -t "$(FULL_IMAGE)" .
 	@echo "Container image $(FULL_IMAGE) built successfully"
 
 .PHONY: push-image
