@@ -15,13 +15,14 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -52,7 +53,9 @@ func serve() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize)
+	metricsRegistry := prometheus.NewRegistry()
+
+	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
@@ -73,6 +76,21 @@ func serve() error {
 	}
 
 	router := gin.Default()
+
+	metricsRecorder, err := metrics.NewPrometheusRecorder(metricsRegistry)
+	if err != nil {
+		return fmt.Errorf("failed to create metrics recorder: %w", err)
+	}
+	router.Use(metrics.NewMiddleware(metricsRecorder))
+
+	metricsSrv := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
+	go func() {
+		log.Info("Metrics server starting", "address", cfg.MetricsAddress())
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("Metrics server failed", "error", err)
+		}
+	}()
+
 	if cfg.DebugMode {
 		log.Warn("Debug CORS policy active: allowing localhost origins only")
 		router.Use(cors.New(debugCORSConfig()))
@@ -125,6 +143,10 @@ func serve() error {
 		return fmt.Errorf("server forced to shutdown: %w", err)
 	}
 
+	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+		log.Error("Metrics server forced to shutdown", "error", err)
+	}
+
 	log.Info("Server exited gracefully")
 	return nil
 }
@@ -140,7 +162,6 @@ func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api
 
 func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
-	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
 		return errors.New("failed to sync informer caches")

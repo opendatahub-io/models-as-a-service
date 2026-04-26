@@ -13,6 +13,8 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
@@ -79,7 +81,7 @@ func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	return out, nil
 }
 
-func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.Duration, sarCacheMaxSize int) (*ClusterConfig, error) {
+func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.Duration, sarCacheMaxSize int, metricsRegisterer prometheus.Registerer) (*ClusterConfig, error) {
 	restConfig, err := LoadRestConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
@@ -112,7 +114,7 @@ func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.
 	// This aligns with RBAC from opendatahub-operator#3301 which grants admin groups CRUD access to MaaS resources.
 	// Results are cached for 30s to reduce K8s API server load under high traffic.
 	sarChecker := auth.NewSARAdminChecker(clientset, subscriptionNamespace)
-	adminCheckerVal := auth.NewCachedAdminChecker(sarChecker, 30*time.Second, 2*time.Second, sarCacheMaxSize, nil, nil)
+	adminCheckerVal := auth.NewCachedAdminChecker(sarChecker, 30*time.Second, 2*time.Second, sarCacheMaxSize, metricsRegisterer, nil)
 
 	return &ClusterConfig{
 		ClientSet: clientset,

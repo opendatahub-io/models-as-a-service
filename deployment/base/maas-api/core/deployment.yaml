@@ -17,6 +17,9 @@ spec:
         - containerPort: 8080
           name: http
           protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
         env:
         - name: NAMESPACE
           valueFrom:
@@ -26,6 +29,8 @@ spec:
           value: "false"
         - name: MAAS_SUBSCRIPTION_NAMESPACE
           value: "models-as-a-service"
+        - name: METRICS_PORT
+          value: "9090"
         resources:
           requests:
             memory: "64Mi"
