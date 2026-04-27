@@ -12,6 +12,7 @@ resources:
 - ../../../../deployment/base/maas-api/overlays/tls
 - ../../../../deployment/base/maas-controller/policies
 - ../../../../deployment/base/payload-processing/default
+- ../../../../deployment/components/observability/observability/dashboards
 
 namespace: opendatahub
 
