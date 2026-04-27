@@ -50,7 +50,9 @@ components:
   - ../../components/shared-patches
 
 # ODH-SPECIFIC PATCHES
-# Additional cache TTL configuration for maas-controller
+# Controller configuration: cache TTLs and cluster audience from maas-parameters ConfigMap.
+# RELATED_IMAGE_* env vars are in the base manager.yaml (used by both overlay and
+# AppendOperatorInstallManifests paths).
 patches:
 - patch: |-
     apiVersion: apps/v1
@@ -73,6 +75,12 @@ patches:
             - --metadata-cache-ttl=$(METADATA_CACHE_TTL)
             - --authz-cache-ttl=$(AUTHZ_CACHE_TTL)
             env:
+            - name: CLUSTER_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  key: cluster-audience
+                  name: maas-parameters
+                  optional: false
             - name: METADATA_CACHE_TTL
               valueFrom:
                 configMapKeyRef:
