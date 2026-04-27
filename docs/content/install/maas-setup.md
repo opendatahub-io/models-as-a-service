@@ -4,8 +4,8 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 
 **Installation flow:**
 
-1. [Database Setup](#database-setup) — Create the PostgreSQL connection Secret
-2. [Create Gateway](#create-gateway) — Deploy maas-default-gateway (required before modelsAsService)
+1. [Gateway Setup](gateway-setup.md) — Deploy maas-default-gateway (must be completed first)
+2. [Database Setup](#database-setup) — Create the PostgreSQL connection Secret
 3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable KServe and modelsAsService in your DataScienceCluster
 4. [Model Setup (On Cluster)](model-setup.md) — Deploy sample models
 5. [Validation](validation.md) — Verify the deployment
@@ -60,82 +60,13 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
 
     This is not required when the Secret exists before enabling modelsAsService in your DataScienceCluster.
 
-## Create Gateway
-
-The Gateway must exist before enabling modelsAsService in your DataScienceCluster. Create the MaaS Gateway:
-
-!!! warning "Example Gateway Configuration"
-    The Gateway configuration below is an example. You may need TLS certificates, specific listener settings, or custom infrastructure labels depending on your cluster. For TLS setup, see [TLS Configuration](../configuration-and-management/tls-configuration.md). To quickly apply Authorino TLS for maas-api communication, run:
-
-    ```bash
-    ./scripts/setup-authorino-tls.sh
-    ```
-
-    **Setting the namespace:** The script defaults to `kuadrant-system` (ODH with Kuadrant). Set `AUTHORINO_NAMESPACE` for RHOAI, which uses RHCL:
-
-    ```bash
-    AUTHORINO_NAMESPACE=rh-connectivity-link ./scripts/setup-authorino-tls.sh
-    ```
-
-!!! note "Required annotations"
-    The Gateway **must** include these annotations for MaaS to work correctly:
-
-    | Annotation | Purpose |
-    |------------|---------|
-    | `opendatahub.io/managed: "false"` | Read by **maas-controller**: allows it to manage AuthPolicies and related resources; prevents the ODH Model Controller from overwriting them. |
-    | `security.opendatahub.io/authorino-tls-bootstrap: "true"` | Used by the ODH platform (not maas-controller) to create the EnvoyFilter for Gateway → Authorino TLS when Authorino uses a TLS listener. Required when Authorino TLS is enabled (see [TLS Configuration](../configuration-and-management/tls-configuration.md)). |
-
-```yaml
-CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-# Use default ingress cert for HTTPS, or set CERT_NAME to your TLS secret name
-CERT_NAME=${CERT_NAME:-$(kubectl get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)}
-[[ -z "$CERT_NAME" ]] && CERT_NAME="router-certs-default"
-
-kubectl apply -f - <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: maas-default-gateway
-  namespace: openshift-ingress
-  annotations:
-    opendatahub.io/managed: "false"
-    security.opendatahub.io/authorino-tls-bootstrap: "true"
-spec:
-  gatewayClassName: openshift-default
-  listeners:
-   - name: http
-     hostname: maas.${CLUSTER_DOMAIN}
-     port: 80
-     protocol: HTTP
-     allowedRoutes:
-       namespaces:
-         from: All
-   - name: https
-     hostname: maas.${CLUSTER_DOMAIN}
-     port: 443
-     protocol: HTTPS
-     allowedRoutes:
-       namespaces:
-         from: All
-     tls:
-       certificateRefs:
-       - group: ""
-         kind: Secret
-         name: ${CERT_NAME}
-       mode: Terminate
-EOF
-```
-
-!!! note "TLS certificate"
-    The HTTPS listener uses a Secret in `openshift-ingress`. The script auto-detects the default ingress cert; if that fails, it uses `router-certs-default`. If the Gateway fails to program, ensure the Secret exists: `kubectl get secret -n openshift-ingress`. See [TLS Configuration](../configuration-and-management/tls-configuration.md) for custom certs.
-
-```shell
-kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=60s
-```
-
 ## Configure DataScienceCluster
 
-After creating the database Secret and Gateways, create or update your DataScienceCluster. Choose your deployment method:
+!!! warning "Gateway Required"
+    The `maas-default-gateway` must exist and be in `Programmed` state before proceeding.
+    If you have not created it yet, complete [Gateway Setup](gateway-setup.md) first.
+
+After creating the database Secret and Gateway, create or update your DataScienceCluster. Choose your deployment method:
 
 === "Managed (Recommended)"
 
