@@ -22,10 +22,16 @@ spec:
     ports:
     - protocol: TCP
       port: 8080
-  # Allow DNS resolution
+  # Allow DNS resolution. OVN-Kubernetes evaluates egress rules after DNAT;
+  # OpenShift CoreDNS listens on port 5353 (Service 53 → targetPort 5353),
+  # so both ports must be allowed.
   - to:
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
+    - protocol: UDP
+      port: 5353
+    - protocol: TCP
+      port: 5353

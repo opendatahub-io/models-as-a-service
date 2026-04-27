@@ -43,7 +43,6 @@ resources:
   - ../../base/maas-api/overlays/tls  # maas-api with TLS (includes DestinationRule + NetworkPolicy)
   - ../../base/maas-controller/default
   - ../../base/payload-processing/default  # BBR ext_proc for external model payload processing
-  - ../../components/observability/observability/dashboards/
 
 # Include shared-patches component for common configuration
 # This provides: env vars, image replacements, gateway config, URL placeholder fix
@@ -70,7 +69,6 @@ patches:
             - --gateway-namespace=$(GATEWAY_NAMESPACE)
             - --maas-api-namespace=$(MAAS_API_NAMESPACE)
             - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
-            - --cluster-audience=$(CLUSTER_AUDIENCE)
             - --metadata-cache-ttl=$(METADATA_CACHE_TTL)
             - --authz-cache-ttl=$(AUTHZ_CACHE_TTL)
             env:

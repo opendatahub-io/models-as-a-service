@@ -5,56 +5,24 @@ import (
 	"os"
 	"path/filepath"
 
+	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/kustomize/api/builtins" //nolint:staticcheck // no replacement until kustomize API v1
-	"sigs.k8s.io/kustomize/api/filters/namespace"
 	"sigs.k8s.io/kustomize/api/krusty"
-	"sigs.k8s.io/kustomize/api/types"
+	"sigs.k8s.io/kustomize/api/resmap"
+	"sigs.k8s.io/kustomize/api/resource"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
-	"sigs.k8s.io/kustomize/kyaml/resid"
+	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
-// createNamespaceApplierPlugin mirrors opendatahub-operator/pkg/plugins.CreateNamespaceApplierPlugin.
-func createNamespaceApplierPlugin(targetNamespace string) *builtins.NamespaceTransformerPlugin {
-	return &builtins.NamespaceTransformerPlugin{
-		ObjectMeta: types.ObjectMeta{
-			Name:      "maas-namespace-plugin",
-			Namespace: targetNamespace,
-		},
-		FieldSpecs: []types.FieldSpec{
-			{Gvk: resid.Gvk{}, Path: "metadata/namespace", CreateIfNotPresent: true},
-			{Gvk: resid.Gvk{Group: "rbac.authorization.k8s.io", Kind: "ClusterRoleBinding"}, Path: "subjects/namespace", CreateIfNotPresent: true},
-			{Gvk: resid.Gvk{Group: "rbac.authorization.k8s.io", Kind: "RoleBinding"}, Path: "subjects/namespace", CreateIfNotPresent: true},
-			{Gvk: resid.Gvk{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration"}, Path: "webhooks/clientConfig/service/namespace", CreateIfNotPresent: false},
-			{Gvk: resid.Gvk{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration"}, Path: "webhooks/clientConfig/service/namespace", CreateIfNotPresent: false},
-			{Gvk: resid.Gvk{Group: "apiextensions.k8s.io", Kind: "CustomResourceDefinition"}, Path: "spec/conversion/webhook/clientConfig/service/namespace", CreateIfNotPresent: false},
-		},
-		UnsetOnly:              false,
-		SetRoleBindingSubjects: namespace.AllServiceAccountSubjects,
-	}
-}
+// overlayDefaultNamespace is the namespace hardcoded in the overlay's
+// kustomization.yaml (namespace: opendatahub). postBuildTransform remaps
+// it to the actual appNamespace from the Tenant CR.
+const overlayDefaultNamespace = "opendatahub"
 
-func odhComponentLabels() map[string]string {
-	return map[string]string{
-		LabelODHAppPrefix + "/" + ComponentName: "true",
-		LabelK8sPartOf:                          "models-as-a-service",
-	}
-}
-
-func createSetLabelsPlugin(labels map[string]string) *builtins.LabelTransformerPlugin {
-	return &builtins.LabelTransformerPlugin{
-		Labels: labels,
-		FieldSpecs: []types.FieldSpec{
-			{Gvk: resid.Gvk{Kind: "Deployment"}, Path: "spec/template/metadata/labels", CreateIfNotPresent: true},
-			{Gvk: resid.Gvk{Kind: "Deployment"}, Path: "spec/selector/matchLabels", CreateIfNotPresent: true},
-			{Gvk: resid.Gvk{}, Path: "metadata/labels", CreateIfNotPresent: true},
-		},
-	}
-}
-
-// RenderKustomize runs kustomize build for the ODH maas-api overlay and applies ODH-equivalent namespace + labels.
+// RenderKustomize runs kustomize build for the ODH maas-api overlay and
+// applies ODH-equivalent namespace remapping and component labels.
 func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructured, error) {
 	kustomizationPath := manifestDir
 	if !fileExists(filepath.Join(manifestDir, "kustomization.yaml")) {
@@ -68,16 +36,8 @@ func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructu
 		return nil, fmt.Errorf("kustomize build %q: %w", kustomizationPath, err)
 	}
 
-	if appNamespace != "" {
-		plugin := createNamespaceApplierPlugin(appNamespace)
-		if err := plugin.Transform(resMap); err != nil {
-			return nil, fmt.Errorf("namespace transform: %w", err)
-		}
-	}
-
-	labelPlugin := createSetLabelsPlugin(odhComponentLabels())
-	if err := labelPlugin.Transform(resMap); err != nil {
-		return nil, fmt.Errorf("labels transform: %w", err)
+	if err := postBuildTransform(resMap, appNamespace); err != nil {
+		return nil, fmt.Errorf("post-build transform: %w", err)
 	}
 
 	rendered := resMap.Resources()
@@ -91,6 +51,99 @@ func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructu
 		out = append(out, unstructured.Unstructured{Object: m})
 	}
 	return out, nil
+}
+
+// postBuildTransform remaps the overlay's hardcoded default namespace to the
+// actual appNamespace and merges ODH component labels into metadata. Unlike the
+// blanket kustomize NamespaceTransformerPlugin + LabelTransformerPlugin, this:
+//   - Leaves cluster-scoped resources (no namespace) untouched
+//   - Preserves cross-namespace resources placed in a non-default namespace by
+//     kustomize replacements (e.g., payload-processing in the gateway namespace)
+//   - Preserves ClusterRoleBinding/RoleBinding subjects with non-default namespaces
+//   - Merges labels into metadata only (not into Deployment selectors, which are
+//     already correct from each base's own kustomization)
+func postBuildTransform(resMap resmap.ResMap, appNamespace string) error {
+	componentLabels := map[string]string{
+		LabelODHAppPrefix + "/" + ComponentName: "true",
+		LabelK8sPartOf:                          "models-as-a-service",
+	}
+
+	for _, res := range resMap.Resources() {
+		// --- namespace remapping (uses RNode API, persists directly) ---
+		if appNamespace != "" {
+			ns := res.GetNamespace()
+			if ns == overlayDefaultNamespace {
+				if err := res.SetNamespace(appNamespace); err != nil {
+					return fmt.Errorf("set namespace on %s %s: %w", res.GetKind(), res.GetName(), err)
+				}
+			}
+
+			if err := remapSubjectNamespaces(res, appNamespace); err != nil {
+				return fmt.Errorf("remap subjects on %s %s: %w", res.GetKind(), res.GetName(), err)
+			}
+		}
+
+		// --- ODH component labels (uses RNode API, persists directly) ---
+		labels := res.GetLabels()
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		for k, v := range componentLabels {
+			labels[k] = v
+		}
+		if err := res.SetLabels(labels); err != nil {
+			return fmt.Errorf("set labels on %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+	}
+	return nil
+}
+
+// remapSubjectNamespaces rewrites ClusterRoleBinding/RoleBinding subjects that
+// reference the overlay default namespace to use appNamespace instead. Uses the
+// RNode Pipe API to mutate the underlying YAML tree directly (res.Map() returns
+// a detached copy that would discard mutations).
+func remapSubjectNamespaces(res *resource.Resource, appNamespace string) error {
+	kind := res.GetKind()
+	if kind != "ClusterRoleBinding" && kind != "RoleBinding" {
+		return nil
+	}
+
+	m, err := res.Map()
+	if err != nil {
+		return fmt.Errorf("map: %w", err)
+	}
+	subjects, ok := m["subjects"].([]any)
+	if !ok {
+		return nil
+	}
+
+	changed := false
+	for _, s := range subjects {
+		subj, ok := s.(map[string]any)
+		if !ok {
+			continue
+		}
+		if sns, ok := subj["namespace"].(string); ok && sns == overlayDefaultNamespace {
+			subj["namespace"] = appNamespace
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+
+	// Write modified map back to the RNode via YAML round-trip.
+	m["subjects"] = subjects
+	b, err := yaml.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	node, err := kyaml.Parse(string(b))
+	if err != nil {
+		return fmt.Errorf("parse: %w", err)
+	}
+	res.ResetRNode((&resource.Resource{RNode: *node}))
+	return nil
 }
 
 // normalizeJSONTypes converts Go int values to int64 in an unstructured map.

@@ -29,7 +29,8 @@ type ClusterConfig struct {
 
 	// AdminChecker uses SubjectAccessReview to check if a user is an admin.
 	// Admin is determined by RBAC: can user create maasauthpolicies in the configured MaaS namespace?
-	AdminChecker *auth.SARAdminChecker
+	// Results are cached with a TTL to reduce Kubernetes API server load.
+	AdminChecker *auth.CachedAdminChecker
 
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})
@@ -78,7 +79,7 @@ func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	return out, nil
 }
 
-func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.Duration) (*ClusterConfig, error) {
+func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.Duration, sarCacheMaxSize int) (*ClusterConfig, error) {
 	restConfig, err := LoadRestConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
@@ -109,7 +110,9 @@ func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.
 	// SAR-based admin checker: uses SubjectAccessReview to check RBAC permissions.
 	// Admin is determined by: can user create maasauthpolicies in the MaaS namespace?
 	// This aligns with RBAC from opendatahub-operator#3301 which grants admin groups CRUD access to MaaS resources.
-	adminCheckerVal := auth.NewSARAdminChecker(clientset, subscriptionNamespace)
+	// Results are cached for 30s to reduce K8s API server load under high traffic.
+	sarChecker := auth.NewSARAdminChecker(clientset, subscriptionNamespace)
+	adminCheckerVal := auth.NewCachedAdminChecker(sarChecker, 30*time.Second, 2*time.Second, sarCacheMaxSize, nil, nil)
 
 	return &ClusterConfig{
 		ClientSet: clientset,
