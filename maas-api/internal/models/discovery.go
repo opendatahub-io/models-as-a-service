@@ -295,7 +295,7 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 		"service", meta.ServiceName,
 		"endpoint", meta.Endpoint,
 		"statusCode", resp.StatusCode,
-		"authHeaderLen", len(authHeader),
+		"authHeaderProvided", authHeader != "",
 		"subscriptionHeaderProvided", subscriptionHeader != "",
 	)
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
