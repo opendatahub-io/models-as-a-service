@@ -328,7 +328,7 @@ kubectl delete secret openai-api-key -n llm
 ## Related
 
 - [ExternalModel CRD Reference](../reference/crds/external-model.md)
-- [MaaS Model Kinds](../configuration-and-management/maas-model-kinds.md)
+- [MaaSModelRef CRD](../reference/crds/maas-model-ref.md)
 - [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md)
 - [IPP Provider Guides](https://github.com/opendatahub-io/ai-gateway-payload-processing/tree/main/docs/providers)
 - [Validation Guide](validation.md)

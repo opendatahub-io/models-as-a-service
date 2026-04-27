@@ -5,7 +5,7 @@ This page covers **on-cluster models**: point an **LLMInferenceService** at **`m
 **Related topics (canonical detail elsewhere):**
 
 - Catalog and **`GET /v1/models`** behavior: [Model listing flow](model-listing-flow.md)
-- **`spec.modelRef` kinds** (`LLMInferenceService`, `ExternalModel`): [MaaSModelRef kinds](maas-model-kinds.md)
+- **`spec.modelRef` kinds** (`LLMInferenceService`, `ExternalModel`): [MaaSModelRef CRD](../reference/crds/maas-model-ref.md#supported-kinds)
 - Access and quotas: [Quota and Access Configuration](quota-and-access-configuration.md)
 
 !!! tip "Subscription model"
@@ -13,7 +13,7 @@ This page covers **on-cluster models**: point an **LLMInferenceService** at **`m
 
 ## Backends at a glance
 
-On-cluster models typically use **LLMInferenceService** (for example vLLM via KServe). For **off-cluster** providers, see [External models](external-models.md). See [MaaSModelRef kinds](maas-model-kinds.md) for field semantics.
+On-cluster models typically use **LLMInferenceService** (for example vLLM via KServe). For **off-cluster** providers, see [External models](external-models.md). See [MaaSModelRef CRD](../reference/crds/maas-model-ref.md) for field semantics.
 
 ## Standard vs MaaS gateway
 
