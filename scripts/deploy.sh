@@ -609,6 +609,16 @@ main() {
     return 1
   fi
 
+  # External OIDC: merge-patch maas-api-auth-policy with Keycloak (or other IdP) JWT rules.
+  # The Tenant reconciler creates the base AuthPolicy; this must run after it exists.
+  # Operator mode uses ModelsAsService.spec.externalOIDC instead (see parse_arguments warning).
+  if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
+    if ! configure_maas_api_authpolicy; then
+      log_error "configure_maas_api_authpolicy failed — set OIDC_ISSUER_URL / OIDC_CLIENT_ID (or overlay params) and retry"
+      return 1
+    fi
+  fi
+
   log_info ""
   log_info "MaaS API and MaaS Controller deployment completed successfully!"
   local deployed_api_image deployed_ctrl_image
@@ -1478,18 +1488,53 @@ patch_authpolicy_from_template() {
   local maas_namespace="$3"
   local oidc_issuer_url="${4:-}"
   local oidc_client_id="${5:-}"
+  local cluster_audience="${6:-https://kubernetes.default.svc}"
 
-  local rendered_patch
-  rendered_patch="$(mktemp)"
-
-  sed \
+  # Render placeholders in the YAML template.
+  local rendered_rules
+  rendered_rules=$(sed \
     -e "s|__MAAS_NAMESPACE__|${maas_namespace}|g" \
     -e "s|__OIDC_ISSUER_URL__|${oidc_issuer_url}|g" \
     -e "s|__OIDC_CLIENT_ID__|${oidc_client_id}|g" \
-    "$template_file" > "$rendered_patch"
+    -e "s|__CLUSTER_AUDIENCE__|${cluster_audience}|g" \
+    "$template_file")
 
-  kubectl patch authpolicy "$authpolicy_name" -n "$NAMESPACE" --type=merge --patch-file "$rendered_patch"
-  rm -f "$rendered_patch"
+  # Use kubectl replace with a full manifest instead of merge patch.
+  # Merge patch cannot reliably delete "when" arrays or replace "selector"
+  # with "expression" inside CRD objects, causing stale fields to persist.
+  local resource_version
+  resource_version=$(kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+    -o jsonpath='{.metadata.resourceVersion}')
+
+  local when_predicate
+  when_predicate=$(kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.when[0].predicate}')
+
+  local manifest
+  manifest="$(mktemp)"
+  cat > "$manifest" <<MANIFEST_EOF
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: ${authpolicy_name}
+  namespace: ${NAMESPACE}
+  resourceVersion: "${resource_version}"
+  annotations:
+    opendatahub.io/managed: "false"
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: maas-api-route
+  when:
+    - predicate: '${when_predicate}'
+$(echo "$rendered_rules" | sed -n '/^  rules:/,$p')
+MANIFEST_EOF
+
+  kubectl replace -f "$manifest"
+  local rc=$?
+  rm -f "$manifest"
+  return $rc
 }
 
 # configure_maas_api_authpolicy
@@ -1544,9 +1589,14 @@ configure_maas_api_authpolicy() {
     return 1
   }
 
+  # Resolve cluster audience for TokenReview (HyperShift/ROSA use non-standard audiences).
+  local cluster_aud
+  cluster_aud=$(get_cluster_audience 2>/dev/null || echo "https://kubernetes.default.svc")
+  log_info "  Cluster audience: $cluster_aud"
+
   local oidc_patch="$project_root/scripts/data/maas-api-authpolicy-external-oidc-patch.yaml"
   log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url, clientId: $oidc_client_id"
-  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$NAMESPACE" "$oidc_issuer_url" "$oidc_client_id"; then
+  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$NAMESPACE" "$oidc_issuer_url" "$oidc_client_id" "$cluster_aud"; then
     log_error "  Failed to patch AuthPolicy with external OIDC configuration"
     return 1
   fi
