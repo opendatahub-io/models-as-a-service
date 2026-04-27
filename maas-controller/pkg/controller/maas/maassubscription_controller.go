@@ -614,7 +614,10 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 			"kind":  "HTTPRoute",
 			"name":  httpRouteName,
 		},
-		"limits": limitsMap,
+		"defaults": map[string]interface{}{
+			"strategy": "merge",
+			"limits":   limitsMap,
+		},
 	}
 	if err := unstructured.SetNestedMap(policy.Object, spec, "spec"); err != nil {
 		return fmt.Errorf("failed to set spec: %w", err)
@@ -750,7 +753,8 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 			log.Info("TokenRateLimitPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 			continue
 		}
-		log.Info("Deleting TokenRateLimitPolicy (no remaining parent subscriptions)", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
+		log.Info("Deleting TokenRateLimitPolicy (no remaining parent subscriptions)",
+			"name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete TokenRateLimitPolicy %s/%s: %w", p.GetNamespace(), p.GetName(), err)
 		}
