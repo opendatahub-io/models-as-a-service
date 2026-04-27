@@ -92,7 +92,7 @@ nav:
       - Subscription Cardinality: advanced-administration/subscription-cardinality.md
       - Authorino Caching: configuration-and-management/authorino-caching.md
   - User Guide:
-    - Self Service Model Access: user-guide/self-service-model-access.md
+    - Self-Service Model Access: user-guide/self-service-model-access.md
   - Contributing:
     - MaaS Testing and Contribution Guide: contributing/testing-guide.md
   - API Reference:
