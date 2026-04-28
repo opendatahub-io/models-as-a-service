@@ -117,6 +117,14 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return r.handleDeletion(ctx, log, model)
 	}
 
+	// Handle no spec (e.g. legacy resources created before spec was required).
+	// No finalizer needed — there are no generated resources to clean up.
+	if model.Spec.ModelRef.Kind == "" {
+		statusSnapshot := model.Status.DeepCopy()
+		r.updateStatus(ctx, model, "Failed", "spec.modelRef is required", statusSnapshot)
+		return ctrl.Result{}, nil
+	}
+
 	// Add finalizer if not present
 	if !controllerutil.ContainsFinalizer(model, maasModelFinalizer) {
 		controllerutil.AddFinalizer(model, maasModelFinalizer)

@@ -272,6 +272,14 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return r.handleDeletion(ctx, log, policy)
 	}
 
+	// Handle no spec (e.g. legacy resources created before spec was required).
+	// No finalizer needed — there are no AuthPolicies to clean up.
+	if len(policy.Spec.ModelRefs) == 0 {
+		statusSnapshot := policy.Status.DeepCopy()
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, "spec.modelRefs is required: at least one model reference must be specified", statusSnapshot)
+		return ctrl.Result{}, nil
+	}
+
 	// Add finalizer if not present
 	if !controllerutil.ContainsFinalizer(policy, maasAuthPolicyFinalizer) {
 		controllerutil.AddFinalizer(policy, maasAuthPolicyFinalizer)

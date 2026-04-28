@@ -119,7 +119,7 @@ type MaaSAuthPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   MaaSAuthPolicySpec   `json:"spec,omitempty"`
+	Spec   MaaSAuthPolicySpec   `json:"spec"`
 	Status MaaSAuthPolicyStatus `json:"status,omitempty"`
 }
 

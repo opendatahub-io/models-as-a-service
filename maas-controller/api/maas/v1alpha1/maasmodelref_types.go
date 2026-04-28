@@ -33,7 +33,7 @@ type MaaSModelRef struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   MaaSModelSpec   `json:"spec,omitempty"`
+	Spec   MaaSModelSpec   `json:"spec"`
 	Status MaaSModelStatus `json:"status,omitempty"`
 }
 

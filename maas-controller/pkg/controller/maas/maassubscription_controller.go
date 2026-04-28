@@ -339,6 +339,14 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return r.handleDeletion(ctx, log, subscription)
 	}
 
+	// Handle no spec (e.g. legacy resources created before spec was required).
+	// No finalizer needed — there are no TRLPs to clean up.
+	if len(subscription.Spec.ModelRefs) == 0 {
+		statusSnapshot := subscription.Status.DeepCopy()
+		r.updateStatus(ctx, subscription, maasv1alpha1.PhaseFailed, "spec.modelRefs is required: at least one model reference must be specified", statusSnapshot)
+		return ctrl.Result{}, nil
+	}
+
 	// Add finalizer if not present
 	if !controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
 		controllerutil.AddFinalizer(subscription, maasSubscriptionFinalizer)
