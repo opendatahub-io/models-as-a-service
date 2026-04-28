@@ -78,7 +78,6 @@ nav:
       - Token Management: configuration-and-management/token-management.md
       - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
-      - Subscription limitations & known issues: configuration-and-management/subscription-known-issues.md
     - Models:
       - Model Setup (On Cluster): configuration-and-management/model-setup.md
       - Model Listing Flow: configuration-and-management/model-listing-flow.md

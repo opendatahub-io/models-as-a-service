@@ -3,7 +3,7 @@
 This guide explains the authentication and credential management used to access models in the MaaS Platform.
 
 !!! tip "API keys (current)"
-    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time (optional `subscription` in the request body; if omitted, the **highest `spec.priority`** subscription you can access is chosen). See [Quota and Access Configuration](quota-and-access-configuration.md) and [Subscription limitations and known issues](subscription-known-issues.md).
+    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time (optional `subscription` in the request body; if omitted, the **highest `spec.priority`** subscription you can access is chosen). See [Quota and Access Configuration](quota-and-access-configuration.md).
 
 !!! note "Prerequisites"
     This document assumes you have configured subscriptions (MaaSAuthPolicy, MaaSSubscription).
@@ -273,6 +273,12 @@ Expired ephemeral keys are automatically deleted from the database by a **CronJo
 **Q: My subscription access is wrong. How do I fix it?**
 
 A: Your access is determined by your group membership in OpenShift at the time the API key was created. Those groups are stored with the key and used for authorization. The subscription name on the key is fixed at mint time; to use a different subscription, create another key with `"subscription": "<name>"`. If your groups have changed, create a new API key to pick up the new membership.
+
+---
+
+**Q: What happens if my group membership changes after I create an API key?**
+
+A: API keys store your groups and bound subscription name at creation time. If your group membership changes after the key was created, the key still carries the **old** groups and subscription until it is revoked and recreated. Subscription metadata for gateway inference uses the stored groups and subscription from validation. To pick up new groups or a different default subscription, revoke the old key and create a new one.
 
 ---
 

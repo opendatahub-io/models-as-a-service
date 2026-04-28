@@ -14,7 +14,7 @@ The **`Tenant`** CR (`maas.opendatahub.io/v1alpha1`) is the platform configurati
 
 ### Known limitations
 
-- **Shared HTTPRoute and token rate limits:** Multiple **MaaSModelRef** resources on the same **HTTPRoute** can yield multiple **TokenRateLimitPolicy** objects, but **only one limit set may be enforced** at the gateway until the controller change in [opendatahub-io/models-as-a-service#585](https://github.com/opendatahub-io/models-as-a-service/pull/585) is in your build. See [Subscription limitations and known issues](../configuration-and-management/subscription-known-issues.md#token-rate-limits-when-multiple-model-references-share-one-httproute).
+- **Shared HTTPRoute and token rate limits:** Multiple **MaaSModelRef** resources on the same **HTTPRoute** can yield multiple **TokenRateLimitPolicy** objects, but **only one limit set may be enforced** at the gateway until the controller change in [opendatahub-io/models-as-a-service#585](https://github.com/opendatahub-io/models-as-a-service/pull/585) is in your build. See [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md) for detection and workarounds.
 
 ---
 
