@@ -1,6 +1,6 @@
 # MaaSModelRef
 
-Identifies an AI/ML model on the cluster. Create MaaSModelRef in the **same namespace** as the backend resource.
+Identifies an AI/ML model for the MaaS platform. The backend may be on-cluster (`LLMInferenceService`) or external (`ExternalModel` for providers like OpenAI, Anthropic, Azure OpenAI that run outside the cluster). Create MaaSModelRef in the **same namespace** as the backend resource.
 
 ---
 
