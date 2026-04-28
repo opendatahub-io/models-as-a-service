@@ -87,7 +87,7 @@ nav:
       - Controller Overview: configuration-and-management/maas-controller-overview.md
       - CRD Annotations: configuration-and-management/crd-annotations.md
     - Advanced Administration:
-      - Observability: advanced-administration/observability.md
+      - Observability Dashboard: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
       - Subscription Cardinality: advanced-administration/subscription-cardinality.md
       - Authorino Caching: configuration-and-management/authorino-caching.md

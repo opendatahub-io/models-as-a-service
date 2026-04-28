@@ -1,4 +1,4 @@
-# Observability
+# Observability Dashboard
 
 This document covers the observability stack for the MaaS Platform, including metrics collection, monitoring, and visualization.
 
