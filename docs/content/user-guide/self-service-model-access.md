@@ -179,6 +179,6 @@ Common HTTP error codes:
 | Code | Meaning | Action |
 |------|---------|--------|
 | 401 | Invalid or malformed API key | Verify the key is correctly formatted: `Authorization: Bearer <key>` |
-| 403 | Expired/revoked key or insufficient permissions | Create a new API key, or check that your subscription includes this model |
+| 403 | Expired/revoked key or insufficient permissions | Create a new API key if expired/revoked, otherwise contact your administrator |
 | 429 | Rate limit exceeded | Wait before retrying, or contact your administrator to adjust limits |
 | 404 | Model not found | Verify the model ID exists in your subscription via `/v1/models` |
