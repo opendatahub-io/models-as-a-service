@@ -3,7 +3,7 @@
 This guide provides instructions for validating and testing your MaaS Platform deployment.
 
 !!! note "Prerequisite"
-    At least one model must be deployed to validate the installation. See [Model Setup (On Cluster)](model-setup.md) to deploy sample models.
+    At least one model must be deployed to validate the installation. See [Model Setup](model-setup.md) to deploy sample models.
 
 ## Manual Validation (Recommended)
 

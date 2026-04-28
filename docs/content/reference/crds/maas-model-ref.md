@@ -47,7 +47,7 @@ spec:
     name: granite-7b-instruct
 ```
 
-For complete setup instructions, see [Model Setup (On Cluster)](../../configuration-and-management/model-setup.md).
+For complete setup instructions, see [Model Setup](../../configuration-and-management/model-setup.md).
 
 ### ExternalModel
 
@@ -123,5 +123,5 @@ The controller still validates the backend resource (HTTPRoute exists, LLMInfere
 
 - [MaaSModelRef CRD Annotations](../../configuration-and-management/crd-annotations.md) - Display names, descriptions, use cases
 - [ExternalModel CRD](external-model.md) - External provider configuration
-- [Model Setup (On Cluster)](../../configuration-and-management/model-setup.md) - LLMInferenceService deployment
+- [Model Setup](../../configuration-and-management/model-setup.md) - LLMInferenceService deployment
 - [External Model Setup](../../install/external-model-setup.md) - External provider integration

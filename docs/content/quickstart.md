@@ -133,4 +133,4 @@ For detailed validation and troubleshooting, see the [Validation Guide](install/
 
 ## Next Steps
 
-After deployment, proceed to [Model Setup (On Cluster)](install/model-setup.md) to deploy sample models, then [Validation](install/validation.md) to test and verify your deployment.
+After deployment, proceed to [Model Setup](install/model-setup.md) to deploy sample models, then [Validation](install/validation.md) to test and verify your deployment.
