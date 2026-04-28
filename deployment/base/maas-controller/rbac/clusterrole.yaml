@@ -21,6 +21,7 @@ rules:
   resources:
   - endpoints
   - pods
+  - secrets
   verbs:
   - get
   - list
@@ -34,21 +35,6 @@ rules:
   - get
   - list
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resourceNames:
-  - maas-db-config
-  resources:
-  - secrets
-  verbs:
-  - get
 - apiGroups:
   - ""
   resources:
