@@ -46,6 +46,21 @@ func TestInFlightGauge(t *testing.T) {
 	assert.Equal(t, float64(1), testutil.ToFloat64(r.inFlight.WithLabelValues("GET")))
 }
 
+func TestNewPrometheusRecorderNilRegistry(t *testing.T) {
+	r, err := NewPrometheusRecorder(nil)
+	assert.Nil(t, r)
+	assert.Error(t, err)
+}
+
+func TestNewPrometheusRecorderDuplicateRegistration(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	_, err := NewPrometheusRecorder(reg)
+	require.NoError(t, err)
+
+	_, err = NewPrometheusRecorder(reg)
+	assert.Error(t, err)
+}
+
 func TestDurationHistogramObserved(t *testing.T) {
 	r, reg := newTestRecorder(t)
 

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"errors"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -13,6 +14,9 @@ type PrometheusRecorder struct {
 }
 
 func NewPrometheusRecorder(reg prometheus.Registerer) (*PrometheusRecorder, error) {
+	if reg == nil {
+		return nil, errors.New("nil prometheus.Registerer")
+	}
 	requestsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "maas_api_http_requests_total",
 		Help: "Total number of HTTP requests served.",

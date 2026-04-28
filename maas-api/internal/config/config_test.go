@@ -195,6 +195,42 @@ func TestValidate(t *testing.T) {
 			},
 			expectError: "must be at least 1",
 		},
+		{
+			name: "MetricsPort zero returns error",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				SARCacheMaxSize:           8192,
+				MetricsPort:               0,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+			},
+			expectError: "METRICS_PORT must be between 1 and 65535",
+		},
+		{
+			name: "MetricsPort negative returns error",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				SARCacheMaxSize:           8192,
+				MetricsPort:               -1,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+			},
+			expectError: "METRICS_PORT must be between 1 and 65535",
+		},
+		{
+			name: "MetricsPort above max returns error",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				SARCacheMaxSize:           8192,
+				MetricsPort:               65536,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+			},
+			expectError: "METRICS_PORT must be between 1 and 65535",
+		},
 	}
 
 	for _, tt := range tests {

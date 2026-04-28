@@ -83,12 +83,14 @@ func serve() error {
 	}
 	router.Use(metrics.NewMiddleware(metricsRecorder))
 
-	metricsSrv := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
+	metricsSrv, err := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
+	if err != nil {
+		return fmt.Errorf("failed to create metrics server: %w", err)
+	}
+	metricsErr := make(chan error, 1)
 	go func() {
 		log.Info("Metrics server starting", "address", cfg.MetricsAddress())
-		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("Metrics server failed", "error", err)
-		}
+		metricsErr <- metricsSrv.ListenAndServe()
 	}()
 
 	if cfg.DebugMode {
@@ -132,6 +134,10 @@ func serve() error {
 	case err := <-serverErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("server failed to start: %w", err)
+		}
+	case err := <-metricsErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("metrics server failed: %w", err)
 		}
 	case <-quit:
 		log.Info("Shutdown signal received, shutting down server...")

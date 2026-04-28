@@ -27,7 +27,8 @@ func TestMetricsServerIntegration(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	listener.Close()
 
-	srv := NewMetricsServer(fmt.Sprintf(":%d", port), reg)
+	srv, err := NewMetricsServer(fmt.Sprintf(":%d", port), reg)
+	require.NoError(t, err)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			t.Logf("metrics server error: %v", err)

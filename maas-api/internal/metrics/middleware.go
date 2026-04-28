@@ -8,6 +8,9 @@ import (
 )
 
 func NewMiddleware(recorder MetricsRecorder) gin.HandlerFunc {
+	if recorder == nil {
+		panic("metrics.NewMiddleware: nil MetricsRecorder")
+	}
 	return func(c *gin.Context) {
 		method := c.Request.Method
 		recorder.IncrementInFlight(method)

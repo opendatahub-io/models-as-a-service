@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -9,8 +10,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func NewMetricsServer(addr string, reg *prometheus.Registry) *http.Server {
-	reg.MustRegister(collectors.NewGoCollector())
+func NewMetricsServer(addr string, reg *prometheus.Registry) (*http.Server, error) {
+	if err := reg.Register(collectors.NewGoCollector()); err != nil {
+		return nil, fmt.Errorf("registering Go collector: %w", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
@@ -22,5 +25,5 @@ func NewMetricsServer(addr string, reg *prometheus.Registry) *http.Server {
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
-	}
+	}, nil
 }
