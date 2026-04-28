@@ -21,6 +21,6 @@ spec:
         proxy:
           kind: HTTPProxy
           spec:
-            secret: cluster-prometheus-datasource-secret
+            secret: kuadrant-prometheus-datasource-secret
             url: 'https://thanos-querier.openshift-monitoring.svc:9092?namespace=kuadrant-system'
         scrapeInterval: 30s

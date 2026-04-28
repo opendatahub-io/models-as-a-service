@@ -45,6 +45,30 @@ spec:
                 fieldPath: metadata.namespace
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
+          - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
+            valueFrom:
+              configMapKeyRef:
+                key: maas-api-image
+                name: maas-parameters
+                optional: true
+          - name: RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE
+            valueFrom:
+              configMapKeyRef:
+                key: maas-controller-image
+                name: maas-parameters
+                optional: true
+          - name: RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE
+            valueFrom:
+              configMapKeyRef:
+                key: payload-processing-image
+                name: maas-parameters
+                optional: true
+          - name: RELATED_IMAGE_UBI_MINIMAL_IMAGE
+            valueFrom:
+              configMapKeyRef:
+                key: maas-api-key-cleanup-image
+                name: maas-parameters
+                optional: true
         image: maas-controller
         name: manager
         imagePullPolicy: Always
