@@ -107,7 +107,7 @@ curl "${MAAS_API_URL}/v1/models" \
 
 !!! note "API key vs OpenShift token behavior"
     - **When authenticating with an API key** (bound to one subscription at creation time), only models from that subscription are returned
-    - **When authenticating with an OpenShift token**, models from all accessible subscriptions are returned; a model may list multiple subscriptions in its `subscriptions` array
+    - **When authenticating with an OpenShift token**, models from all accessible subscriptions are returned. Use the `x-maas-subscription` header to filter to a specific subscription; a model may list multiple subscriptions in its `subscriptions` array
 
 ## Making Inference Requests
 
@@ -178,7 +178,7 @@ Common HTTP error codes:
 
 | Code | Meaning | Action |
 |------|---------|--------|
-| 401 | Invalid or malformed API key | Verify the key is correctly formatted: `Authorization: Bearer <key>` |
+| 401 | Invalid or malformed API key or authorization header | Verify the key is correctly formatted: `Authorization: Bearer <key>` |
 | 403 | Expired/revoked key or insufficient permissions | Create a new API key if expired/revoked, otherwise contact your administrator |
 | 429 | Rate limit exceeded | Wait before retrying, or contact your administrator to adjust limits |
 | 404 | Model not found | Verify the model ID exists in your subscription via `/v1/models` |
