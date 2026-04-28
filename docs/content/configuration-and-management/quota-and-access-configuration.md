@@ -137,7 +137,7 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
 ```
 
 !!! warning "Multiple model references on one HTTPRoute"
-    More than one **MaaSModelRef** on the same route can break independent per-subscription limits. Only one **TokenRateLimitPolicy** is fully effective at the gateway. For **MaaSSubscription** readiness, the controller checks each TRLP’s **`Accepted`** condition; Kuadrant may still show **`Enforced`** and **`Overridden`** (or similar **`reason`**) when policies conflict on one route.
+    More than one **MaaSModelRef** on the same route can break independent per-subscription limits. Only one **TokenRateLimitPolicy** is fully effective at the gateway. For **MaaSSubscription** readiness, the controller checks each TRLP's **`Accepted`** condition; Kuadrant may still show **`Enforced`** and **`Overridden`** (or similar **`reason`**) when policies conflict on one route.
     
     **Detection:**
     
@@ -145,22 +145,22 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
     
     ```bash
     # List TRLPs that target an HTTPRoute (namespace/name → route name)
-    kubectl get tokenratelimitpolicy -A -o json | jq -r ‘.items[] | select(.spec.targetRef.kind==”HTTPRoute”) | “\(.metadata.namespace)/\(.metadata.name) → \(.spec.targetRef.name)”’ | sort
+    kubectl get tokenratelimitpolicy -A -o json | jq -r '.items[] | select(.spec.targetRef.kind=="HTTPRoute") | "\(.metadata.namespace)/\(.metadata.name) → \(.spec.targetRef.name)"' | sort
     
     # Accepted + Enforced condition status per TRLP (needs jq; if this fails, use kubectl describe on each TRLP)
-    kubectl get tokenratelimitpolicy -A -o json | jq -r ‘
-      .items[] | select(.spec.targetRef.kind == “HTTPRoute”)
+    kubectl get tokenratelimitpolicy -A -o json | jq -r '
+      .items[] | select(.spec.targetRef.kind == "HTTPRoute")
       | . as $i
-      | (($i.status.conditions // []) | map(select(.type == “Accepted”)) | .[0]) as $a
-      | (($i.status.conditions // []) | map(select(.type == “Enforced”)) | .[0]) as $e
+      | (($i.status.conditions // []) | map(select(.type == "Accepted")) | .[0]) as $a
+      | (($i.status.conditions // []) | map(select(.type == "Enforced")) | .[0]) as $e
       | [
           $i.metadata.namespace,
           $i.metadata.name,
           $i.spec.targetRef.name,
-          (($a // {}) | .status // “?”),
-          (($e // {}) | .status // “?”),
-          (($e // {}) | .reason // “”)
-        ] | @tsv’
+          (($a // {}) | .status // "?"),
+          (($e // {}) | .status // "?"),
+          (($e // {}) | .reason // "")
+        ] | @tsv'
     ```
     
     **How to recognize it:** Several TRLPs share the same `spec.targetRef.name`. Compare **`Accepted`** (what the MaaS controller uses for subscription readiness) and **`Enforced`** / **`reason`** (for example **`Overridden`**) on each policy—one route may show one TRLP fully effective and others superseded.
@@ -169,7 +169,7 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
     
     - **Dedicated routes per model** — Deploy each model with its own HTTPRoute to ensure independent rate limiting
     - **Shared subscription design** — If models share an **HTTPRoute**, use **one** **MaaSSubscription** that lists every **MaaSModelRef** on that route so you are not applying **different** subscription limits to the same route. The controller may still create **one TRLP per model ref**; **prefer dedicated routes** when each subscription must enforce limits independently until **Tracking** below ships.
-    - **Route consolidation by tier** — If **multiple** **MaaSModelRef** resources target the **same** **HTTPRoute**, you still get **multiple TRLPs**; grouping models by tier on shared routes does **not** change that by itself. Treat “premium” vs “free” as an operational label only. This pattern is **only** appropriate when **every** model on the route is meant to share **one** **MaaSSubscription** (and access policy) story—**not** when different teams or subscriptions each register their own model refs on one route. If you need **separate** subscriptions with **separate** limits on the same route, use **dedicated routes per model**.
+    - **Shared route limitations** — If **multiple** **MaaSModelRef** resources target the **same** **HTTPRoute**, you still get **multiple TRLPs**; grouping models on shared routes does **not** avoid this limitation. This pattern is **only** appropriate when **every** model on the route is meant to share **one** **MaaSSubscription** (and access policy)—**not** when different teams or subscriptions each register their own model refs on one route. If you need **separate** subscriptions with **separate** limits on the same route, use **dedicated routes per model**.
     
     **Status:** This limitation **remains in Models-as-a-Service v3.4**. The fix requiring merge strategy support for TokenRateLimitPolicy is not included. Plan your model deployment topology accordingly.
     
