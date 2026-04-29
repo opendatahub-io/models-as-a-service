@@ -1,6 +1,7 @@
-package metrics
+package metrics_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
 )
 
 type mockRecorder struct {
@@ -33,10 +36,10 @@ func (m *mockRecorder) DecrementInFlight(method string) {
 	m.inFlightDec = append(m.inFlightDec, method)
 }
 
-func setupTestRouter(rec MetricsRecorder) *gin.Engine {
+func setupTestRouter(rec metrics.MetricsRecorder) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(NewMiddleware(rec))
+	r.Use(metrics.NewMiddleware(rec))
 	r.GET("/v1/models", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 	r.POST("/v1/api-keys", func(c *gin.Context) { c.String(http.StatusCreated, "created") })
 	r.GET("/v1/api-keys/:id", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
@@ -48,7 +51,7 @@ func TestMiddlewareRecordsRequestDuration(t *testing.T) {
 	router := setupTestRouter(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/v1/models", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/models", nil)
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -64,7 +67,7 @@ func TestMiddlewareRecordsInFlight(t *testing.T) {
 	router := setupTestRouter(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/v1/api-keys", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/api-keys", nil)
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, []string{"POST"}, mock.inFlightInc)
@@ -76,7 +79,7 @@ func TestMiddlewareUsesRoutePatternNotRawPath(t *testing.T) {
 	router := setupTestRouter(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/v1/api-keys/abc-123", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/api-keys/abc-123", nil)
 	router.ServeHTTP(w, req)
 
 	assert.Len(t, mock.durations, 1)
@@ -88,7 +91,7 @@ func TestMiddlewareUnmatchedRoute(t *testing.T) {
 	router := setupTestRouter(mock)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/no/such/path", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/no/such/path", nil)
 	router.ServeHTTP(w, req)
 
 	assert.Len(t, mock.durations, 1)

@@ -1,12 +1,12 @@
-package metrics
+package metrics_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,20 +14,23 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
 )
 
 func TestMetricsServerIntegration(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	recorder, err := NewPrometheusRecorder(reg)
+	recorder, err := metrics.NewPrometheusRecorder(reg)
 	require.NoError(t, err)
 
-	// Find a free port for the metrics server
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	port := tcpAddr.Port
+	require.NoError(t, listener.Close())
 
-	srv, err := NewMetricsServer(fmt.Sprintf(":%d", port), reg)
+	srv, err := metrics.NewMetricsServer(fmt.Sprintf(":%d", port), reg)
 	require.NoError(t, err)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -36,9 +39,11 @@ func TestMetricsServerIntegration(t *testing.T) {
 	}()
 	t.Cleanup(func() { srv.Close() })
 
-	// Wait for the server to be ready
+	client := &http.Client{Timeout: 2 * time.Second}
+
 	require.Eventually(t, func() bool {
-		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/metrics", port), nil)
+		resp, err := client.Do(req)
 		if err != nil {
 			return false
 		}
@@ -46,19 +51,18 @@ func TestMetricsServerIntegration(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 2*time.Second, 50*time.Millisecond)
 
-	// Set up a Gin router with the metrics middleware and make a request
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(NewMiddleware(recorder))
+	router.Use(metrics.NewMiddleware(recorder))
 	router.GET("/v1/models", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/v1/models", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/models", nil)
 	router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	// Scrape the metrics endpoint and verify content
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
+	scrapeReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/metrics", port), nil)
+	resp, err := client.Do(scrapeReq)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -67,5 +71,5 @@ func TestMetricsServerIntegration(t *testing.T) {
 	bodyStr := string(body)
 
 	assert.Contains(t, bodyStr, `maas_api_http_requests_total{method="GET",route="/v1/models",status="200"} 1`)
-	assert.True(t, strings.Contains(bodyStr, "maas_api_http_request_duration_seconds"), "histogram metric missing")
+	assert.Contains(t, bodyStr, "maas_api_http_request_duration_seconds")
 }
