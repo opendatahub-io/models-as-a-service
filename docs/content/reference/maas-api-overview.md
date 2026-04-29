@@ -78,4 +78,4 @@ Use the base URL appropriate for your deployment when calling these endpoints.
 
 - **[MaaS API (Swagger)](api-reference.md)** — Interactive API documentation with full schemas and "Try it out"
 - **[API Key Management](../user-guide/api-key-management.md)** — How to create and use API keys
-- **[Self-Service Model Access](../user-guide/model-access.md)** — End-user guide for getting an API key and calling models
+- **[Model Access](../user-guide/model-access.md)** — End-user guide for getting an API key and calling models

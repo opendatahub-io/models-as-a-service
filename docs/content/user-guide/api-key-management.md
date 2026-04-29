@@ -237,7 +237,7 @@ A: For interactive use or long-running integrations, keys with long TTL (e.g., 9
 
 **Q: Can I have multiple active API keys at once?**
 
-A: Yes. Each call to `POST /v1/api-keys` creates a new, independent key. You can list and manage them via `POST /v1/api-keys/search` (with optional filters and pagination) or `GET /v1/api-keys/:id` for a specific key.
+A: Yes. Each call to `POST /v1/api-keys` creates a new, independent key. You can list and manage them via `POST /v1/api-keys/search` (with optional filters and pagination) or `GET /v1/api-keys/{id}` for a specific key.
 
 ---
 
