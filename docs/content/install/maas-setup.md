@@ -139,7 +139,7 @@ After creating the database Secret and Gateways, create or update your DataScien
 
 === "Managed (Recommended)"
 
-    The operator deploys and manages the MaaS API. Create or update your DataScienceCluster with `modelsAsService` in Managed state:
+    The operator deploys `maas-controller`, which self-bootstraps a `default-tenant` CR and reconciles the MaaS platform workloads (maas-api, gateway policies, telemetry). Create or update your DataScienceCluster with `modelsAsService` in Managed state:
 
     ```yaml
     kubectl apply -f - <<EOF
@@ -179,23 +179,30 @@ After creating the database Secret and Gateways, create or update your DataScien
     kubectl rollout status deployment/maas-api -n opendatahub --timeout=120s
     ```
 
-    The operator will automatically deploy:
+    The `maas-controller` (deployed by the operator) will automatically create a `default-tenant` CR and reconcile:
 
     - **MaaS API** (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)
     - **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
+    - **Gateway default AuthPolicy** (gateway-default-auth) - Denies unauthenticated traffic
+    - **Gateway default TokenRateLimitPolicy** (gateway-default-deny) - Denies unsubscribed traffic
+    - **TelemetryPolicy and Istio Telemetry** (when telemetry is enabled)
+    - **DestinationRule** (when TLS is enabled)
     - **NetworkPolicy** (maas-authorino-allow) - Allows Authorino to reach MaaS API
 
-    ### ModelsAsService CR
+    ### Tenant CR
 
-    With `modelsAsService` **Managed**, the [Open Data Hub operator](https://github.com/opendatahub-io/opendatahub-operator) reconciles a **cluster-scoped** `ModelsAsService` object. The resource name **must** be `default-modelsasservice` (only one instance per cluster). The authoritative API definition is in the operator repo: [`modelsasservice_types.go`](https://github.com/opendatahub-io/opendatahub-operator/blob/main/api/components/v1alpha1/modelsasservice_types.go).
+    With `modelsAsService` **Managed**, the [Open Data Hub operator](https://github.com/opendatahub-io/opendatahub-operator) deploys `maas-controller`, which self-bootstraps a **namespace-scoped** `Tenant` object on startup. The resource name **must** be `default-tenant` (enforced via CEL validation). The `Tenant` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`tenant_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go).
 
-    **Nothing in `spec` is required for a default install.** If you omit `spec`, the operator uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below.
+    **Nothing in `spec` is required for a default install.** If you omit `spec`, the controller uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below.
 
     | Field | What to set |
     | ----- | ----------- |
     | `spec.gatewayRef.namespace` | Namespace of your Gateway API `Gateway` (default `openshift-ingress`). |
     | `spec.gatewayRef.name` | Name of that `Gateway` (default `maas-default-gateway`). Set these if your MaaS hostname is exposed through a different Gateway than the default. |
-    | `spec.apiKeys.maxExpirationDays` | Maximum allowed API key lifetime in **days**. When set, users cannot mint keys with a longer lifetime than this value (via `expiresIn`). Optional; if unset, the operator does not apply a cap through this field (see also `maas-api` / `API_KEY_MAX_EXPIRATION_DAYS` in your deployment). |
+    | `spec.apiKeys.maxExpirationDays` | Maximum allowed API key lifetime in **days**. When set, users cannot mint keys with a longer lifetime than this value (via `expiresIn`). Optional; if unset, the controller does not apply a cap through this field (see also `maas-api` / `API_KEY_MAX_EXPIRATION_DAYS` in your deployment). |
+    | `spec.externalOIDC.issuerUrl` | OIDC issuer URL for external identity provider (optional; enables OIDC on the maas-api AuthPolicy). |
+    | `spec.externalOIDC.clientId` | OIDC client ID (required when `issuerUrl` is set). |
+    | `spec.telemetry.enabled` | Enable TelemetryPolicy and Istio Telemetry (default `true`). |
     | `spec.telemetry.metrics.captureOrganization` | Include `organization_id` on metrics (default `true`). |
     | `spec.telemetry.metrics.captureUser` | Include user labels on metrics (default `false`; privacy-sensitive). |
     | `spec.telemetry.metrics.captureGroup` | Include group labels on metrics (default `false`; higher cardinality). |
@@ -204,10 +211,11 @@ After creating the database Secret and Gateways, create or update your DataScien
     Example (patch common values):
 
     ```yaml
-    apiVersion: components.platform.opendatahub.io/v1alpha1
-    kind: ModelsAsService
+    apiVersion: maas.opendatahub.io/v1alpha1
+    kind: Tenant
     metadata:
-      name: default-modelsasservice
+      name: default-tenant
+      namespace: models-as-a-service
     spec:
       gatewayRef:
         namespace: openshift-ingress
@@ -215,14 +223,15 @@ After creating the database Secret and Gateways, create or update your DataScien
       apiKeys:
         maxExpirationDays: 90
       telemetry:
+        enabled: true
         metrics:
           captureUser: false
           captureGroup: false
     ```
 
     ```bash
-    kubectl apply -f modelsasservice.yaml
-    kubectl get modelsasservice default-modelsasservice -o yaml
+    kubectl apply -f tenant.yaml
+    kubectl get tenant default-tenant -n models-as-a-service -o yaml
     ```
 
 === "Kustomize"

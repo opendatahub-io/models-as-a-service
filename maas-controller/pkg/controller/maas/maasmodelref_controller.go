@@ -84,7 +84,6 @@ func (r *MaaSModelRefReconciler) gatewayNamespace() string {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
-//+kubebuilder:rbac:groups="",resources=secrets,verbs=get
 
 const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
 

@@ -37,7 +37,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--operator-type <odh|rhoai>` - Which operator to install (default: odh)
 - `--deployment-mode <operator|kustomize>` - Deployment method (default: operator)
 - `--namespace <namespace>` - Target namespace for deployment
-- `--external-oidc` - Enable external OIDC on the `maas-api` AuthPolicy (kustomize mode only; in operator mode, configure `spec.externalOIDC` on the `ModelsAsService` CR)
+- `--external-oidc` - Enable external OIDC on the `maas-api` AuthPolicy (kustomize mode only; in operator mode, configure `spec.externalOIDC` on the `Tenant` CR)
 - `--enable-keycloak` - Deploy a Keycloak instance for external OIDC testing
 - `--enable-tls-backend` - Enable TLS backend (default)
 - `--disable-tls-backend` - Disable TLS backend
@@ -155,8 +155,8 @@ Results:
 
 External OIDC can be enabled in two ways:
 
-**Operator mode:** Edit the `ModelsAsService` CR to add `spec.externalOIDC` with
-`issuerUrl` and `clientId`. The operator patches the AuthPolicy automatically.
+**Operator mode:** Edit the `Tenant` CR to add `spec.externalOIDC` with
+`issuerUrl` and `clientId`. The Tenant reconciler patches the AuthPolicy automatically.
 
 **Kustomize mode:** Use `--external-oidc` with env vars:
 ```bash

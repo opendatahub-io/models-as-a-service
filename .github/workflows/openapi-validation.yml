@@ -32,9 +32,6 @@ jobs:
         run: npm install -g @stoplight/spectral-cli@6.13.1
 
       - name: Validate OpenAPI Spec
-        # NOTE: continue-on-error is temporary until existing errors are fixed in PR #694
-        # Once #694 merges, remove this line to enforce strict validation
-        continue-on-error: true
         run: |
           echo "🔍 Validating OpenAPI specification..."
           spectral lint maas-api/openapi3.yaml --format stylish --verbose
@@ -118,7 +115,8 @@ jobs:
           # Run breaking change detection
           oasdiff breaking base-spec.yaml maas-api/openapi3.yaml > breaking-changes.txt || true
 
-          if [ -s breaking-changes.txt ]; then
+          # Check if actual breaking changes were detected (not just "No changes detected" message)
+          if [ -s breaking-changes.txt ] && ! grep -q "^No changes detected$" breaking-changes.txt; then
             echo "has_breaking_changes=true" >> $GITHUB_OUTPUT
             echo "## ⚠️  Breaking Changes Detected" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -142,10 +140,6 @@ jobs:
 
       - name: Fail on Breaking Changes
         if: steps.breaking_changes.outputs.has_breaking_changes == 'true'
-        # NOTE: continue-on-error is temporary to allow PR #693 to merge
-        # This establishes the validation infrastructure. Once #694 fixes existing issues,
-        # remove this line to enforce strict breaking change checks
-        continue-on-error: true
         run: |
           echo "❌ Breaking changes detected. If intentional, document in PR and get approval."
           echo "   Consider:"

@@ -2,18 +2,18 @@
 
 This document describes the **MaaS Controller**: what was built, how it fits into the Models-as-a-Service (MaaS) stack, and how the pieces work together. It is intended for presentations, onboarding, and technical deep-dives.
 
-!!! todo "Documentation cleanup"
-    TODO: Clean up this documentation.
-
 ---
 
 ## 1. What Is the MaaS Controller?
 
-The **MaaS Controller** is a Kubernetes controller that provides a **subscription-style control plane** for Models-as-a-Service. It lets platform operators define:
+The **MaaS Controller** is a Kubernetes controller with two main responsibilities:
 
-- **Which models** are exposed through MaaS (via **MaaSModelRef**).
-- **Who can access** those models (via **MaaSAuthPolicy**).
-- **Per-user/per-group token rate limits** for those models (via **MaaSSubscription**).
+1. **Tenant reconciler** — deploys and manages the MaaS platform workloads (`maas-api`, gateway policies, telemetry, DestinationRule) via the **`Tenant`** CR (`maas.opendatahub.io/v1alpha1`). On startup the controller self-bootstraps a `default-tenant` CR in the `models-as-a-service` namespace if one does not exist. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).
+
+2. **Subscription reconcilers** — let platform operators define:
+    - **Which models** are exposed through MaaS (via **MaaSModelRef**).
+    - **Who can access** those models (via **MaaSAuthPolicy**).
+    - **Per-user/per-group token rate limits** for those models (via **MaaSSubscription**).
 
 The controller does not run inference. It **reconciles** your high-level MaaS CRs into the underlying Gateway API and Kuadrant resources (HTTPRoutes, AuthPolicies, TokenRateLimitPolicies) that enforce routing, authentication, and rate limiting at the gateway.
 
@@ -23,6 +23,10 @@ The controller does not run inference. It **reconciles** your high-level MaaS CR
 
 ```mermaid
 flowchart TB
+    subgraph Platform["Platform lifecycle"]
+        Tenant["Tenant CR\n(default-tenant)"]
+    end
+
     subgraph Operator["Platform operator"]
         MaaSModelRef["MaaSModelRef"]
         MaaSAuthPolicy["MaaSAuthPolicy"]
@@ -30,9 +34,16 @@ flowchart TB
     end
 
     subgraph Controller["maas-controller"]
+        TenantReconciler["Tenant\nReconciler"]
         ModelReconciler["MaaSModelRef\nReconciler"]
         AuthReconciler["MaaSAuthPolicy\nReconciler"]
         SubReconciler["MaaSSubscription\nReconciler"]
+    end
+
+    subgraph PlatformWorkloads["Platform Workloads"]
+        MaaSAPI["maas-api\n(Deployment, Service, HTTPRoute)"]
+        GatewayPolicies["Gateway default policies\n(AuthPolicy, TokenRateLimitPolicy)"]
+        Telemetry["TelemetryPolicy\nIstio Telemetry"]
     end
 
     subgraph GatewayStack["Gateway API + Kuadrant"]
@@ -44,6 +55,11 @@ flowchart TB
     subgraph Backend["Backend"]
         LLMIS["LLMInferenceService\n(KServe)"]
     end
+
+    Tenant --> TenantReconciler
+    TenantReconciler --> MaaSAPI
+    TenantReconciler --> GatewayPolicies
+    TenantReconciler --> Telemetry
 
     MaaSModelRef --> ModelReconciler
     MaaSAuthPolicy --> AuthReconciler
@@ -58,9 +74,63 @@ flowchart TB
     HTTPRoute --> LLMIS
 ```
 
-**Summary:** You declare intent with MaaS CRs; the controller turns that into Gateway/Kuadrant resources that attach to the same HTTPRoute and backend (e.g. KServe LLMInferenceService).
+**Summary:** The controller has two sides: the **Tenant reconciler** deploys and manages the MaaS platform workloads (maas-api, gateway policies, telemetry) from the `Tenant` CR; the **subscription reconcilers** turn MaaS CRs into Gateway/Kuadrant resources that attach to per-model HTTPRoutes and backends (e.g. KServe LLMInferenceService).
 
 The **MaaS API** GET /v1/models endpoint uses MaaSModelRef CRs as its primary source: it reads them cluster-wide (all namespaces), then **validates access** by probing each model’s `/v1/models` endpoint with the client’s **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is.
+
+---
+
+## 2.1. Tenant Resource Layout
+
+The `Tenant` CR is namespace-scoped (lives in `models-as-a-service`). It owns resources across three scopes — same-namespace children use standard `ownerReference`, while cluster-scoped and cross-namespace children use **tracking labels** (Kubernetes rejects cross-namespace and namespaced-to-cluster ownerRefs).
+
+```mermaid
+graph TB
+    subgraph "models-as-a-service namespace"
+        Tenant["Tenant CR<br/>default-tenant"]
+        API["maas-api Deployment"]
+        CM["ConfigMaps"]
+        SVC["Services"]
+        SA["ServiceAccounts"]
+        NP["NetworkPolicies"]
+        HR["HTTPRoutes"]
+        AP2["maas-api AuthPolicy"]
+    end
+
+    subgraph "openshift-ingress namespace"
+        AP["gateway AuthPolicy"]
+        DR["DestinationRule"]
+        TP["TelemetryPolicy"]
+        IT["Istio Telemetry"]
+    end
+
+    subgraph "Cluster-scoped"
+        CR["ClusterRoles"]
+        CRB["ClusterRoleBindings"]
+    end
+
+    Tenant -->|ownerRef| API
+    Tenant -->|ownerRef| CM
+    Tenant -->|ownerRef| SVC
+    Tenant -->|ownerRef| SA
+    Tenant -->|ownerRef| NP
+    Tenant -->|ownerRef| HR
+    Tenant -->|ownerRef| AP2
+    Tenant -.->|tracking labels| CR
+    Tenant -.->|tracking labels| CRB
+    Tenant -.->|tracking labels| AP
+    Tenant -.->|tracking labels| DR
+    Tenant -.->|tracking labels| TP
+    Tenant -.->|tracking labels| IT
+
+    style Tenant fill:#4a90d9,color:#fff
+    style AP fill:#f5a623,color:#fff
+    style DR fill:#f5a623,color:#fff
+    style TP fill:#f5a623,color:#fff
+    style IT fill:#f5a623,color:#fff
+```
+
+**Solid arrows** = standard ownerReference (automatic GC). **Dashed arrows** = tracking labels (finalizer-based cleanup). **Orange resources** = cross-namespace children that require tracking labels.
 
 ---
 
@@ -149,19 +219,22 @@ flowchart TB
     subgraph Cluster["Kubernetes cluster"]
         subgraph maas_controller["maas-controller (Deployment)"]
             Manager["Controller Manager"]
+            TenantReconciler["Tenant\nReconciler"]
             ModelReconciler["MaaSModelRef\nReconciler"]
             AuthReconciler["MaaSAuthPolicy\nReconciler"]
             SubReconciler["MaaSSubscription\nReconciler"]
         end
 
-        CRDs["CRDs: MaaSModelRef,\nMaaSAuthPolicy,\nMaaSSubscription"]
+        CRDs["CRDs: Tenant,\nMaaSModelRef,\nMaaSAuthPolicy,\nMaaSSubscription"]
         RBAC["RBAC: ClusterRole,\nServiceAccount, etc."]
     end
 
     Watch["Watch MaaS CRs,\nGateway API, Kuadrant,\nLLMInferenceService"]
+    Manager --> TenantReconciler
     Manager --> ModelReconciler
     Manager --> AuthReconciler
     Manager --> SubReconciler
+    TenantReconciler --> Watch
     ModelReconciler --> Watch
     AuthReconciler --> Watch
     SubReconciler --> Watch
@@ -169,7 +242,7 @@ flowchart TB
     RBAC --> maas_controller
 ```
 
-- Single binary: **manager** runs three reconcilers.
+- Single binary: **manager** runs four reconcilers (Tenant + three subscription reconcilers).
 - Registers **Kubernetes core**, **Gateway API**, **KServe (v1alpha1)**, and **MaaS (v1alpha1)** schemes; uses **unstructured** for Kuadrant resources.
 - Reads/writes MaaS CRs, HTTPRoutes, Gateways, AuthPolicies, TokenRateLimitPolicies, and LLMInferenceServices (read-only for model metadata/routes).
 
@@ -216,7 +289,8 @@ flowchart LR
     Deploy --> Examples
 ```
 
-- **Namespaces**: MaaS API and controller default to **opendatahub** (configurable). MaaSAuthPolicy and MaaSSubscription default to **models-as-a-service** (configurable). MaaSModelRef must live in the **same namespace** as the model it references (e.g. **llm**).
+- **Namespaces**: MaaS API and controller default to **opendatahub** (configurable). The **Tenant** CR, MaaSAuthPolicy and MaaSSubscription default to **models-as-a-service** (configurable). MaaSModelRef must live in the **same namespace** as the model it references (e.g. **llm**).
+- **Self-bootstrap**: On startup, `maas-controller` creates a `default-tenant` CR in the `models-as-a-service` namespace if one does not exist. The Tenant reconciler then deploys `maas-api` and gateway policies via SSA.
 - **Install**: `./scripts/deploy.sh` installs the full stack including the controller. Optionally run `./scripts/install-examples.sh` for sample MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription.
 
 ---
@@ -263,10 +337,10 @@ Model workloads (vLLM, Llama.cpp, etc.) do not require strong identity claims in
 
 | Topic | Summary |
 |-------|---------|
-| **What** | MaaS Controller = control plane that reconciles MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription into Gateway API and Kuadrant resources. |
-| **Where** | Single controller in `opendatahub`; MaaSAuthPolicy / MaaSSubscription default to `models-as-a-service`; MaaSModelRef and generated Kuadrant policies target their model’s namespace. |
-| **How** | Three reconcilers watch MaaS CRs (and related resources); each creates/updates HTTPRoutes, AuthPolicies, or TokenRateLimitPolicies. |
+| **What** | MaaS Controller = control plane with a **Tenant reconciler** (deploys maas-api and gateway policies from a `Tenant` CR) and **subscription reconcilers** (reconcile MaaSModelRef, MaaSAuthPolicy, MaaSSubscription into Gateway API and Kuadrant resources). |
+| **Where** | Single controller in `opendatahub`; `Tenant` CR / MaaSAuthPolicy / MaaSSubscription default to `models-as-a-service`; MaaSModelRef and generated Kuadrant policies target their model’s namespace. |
+| **How** | Four reconcilers: Tenant reconciler deploys platform workloads via SSA; three subscription reconcilers watch MaaS CRs (and related resources) and create/update HTTPRoutes, AuthPolicies, or TokenRateLimitPolicies. |
 | **Identity bridge** | AuthPolicy exposes all user groups as a comma-separated `groups_str`; TokenRateLimitPolicy uses `groups_str.split(",").exists(...)` for subscription matching (the “string trick”). |
-| **Deploy** | Run `./scripts/deploy.sh`; optionally install examples. |
+| **Deploy** | Run `./scripts/deploy.sh`; controller self-bootstraps `default-tenant`; optionally install examples. |
 
 This overview should be enough to explain what was created and how it works in talks or written docs.

@@ -83,8 +83,11 @@ spec:
                         description: TokenRateLimit defines a token rate limit
                         properties:
                           limit:
-                            description: Limit is the maximum number of tokens allowed
+                            description: |-
+                              Limit is the maximum number of tokens allowed within the window.
+                              Must be between 1 and 1,000,000,000 (1 billion).
                             format: int64
+                            maximum: 1000000000
                             minimum: 1
                             type: integer
                           window:

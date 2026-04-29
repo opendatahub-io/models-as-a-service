@@ -1248,7 +1248,7 @@ func TestMaaSSubscriptionReconciler_WindowValuesInTRLP(t *testing.T) {
 		{"seconds", "30s"},      // short window, typical for burst limits
 		{"minutes", "5m"},       // default-like value used across the codebase
 		{"hours", "24h"},        // common replacement for the now-removed "1d"
-		{"max digits", "9999h"}, // upper bound of the 4-digit numeric cap
+		{"max digits", "8784h"}, // upper bound: 366 days (leap year) in hours
 	}
 
 	for _, tc := range tests {

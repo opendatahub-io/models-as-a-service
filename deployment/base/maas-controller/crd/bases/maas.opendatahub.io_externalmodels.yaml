@@ -82,15 +82,8 @@ spec:
                 pattern: ^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$
                 type: string
               provider:
-                description: |-
-                  Provider identifies the API format and auth type for the external model.
-                  The allowed values are: "openai", "anthropic", "azure-openai", "vertex" and "bedrock-openai".
-                enum:
-                - openai
-                - anthropic
-                - azure-openai
-                - vertex
-                - bedrock-openai
+                description: Provider identifies the API format and auth type for
+                  the external model.
                 maxLength: 63
                 minLength: 1
                 type: string
