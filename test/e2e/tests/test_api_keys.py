@@ -1046,8 +1046,8 @@ class TestEphemeralKeyCleanup:
 
         cleanup_result = sp.run(
             ["oc", "exec", pod_name, "-n", deployment_namespace, "--",
-             "curl", "-sf", "-X", "POST",
-             "http://localhost:8080/internal/v1/api-keys/cleanup"],
+             "curl", "-skf", "-X", "POST",
+             "https://localhost:8443/internal/v1/api-keys/cleanup"],
             capture_output=True, text=True, timeout=30,
         )
 
@@ -1055,8 +1055,8 @@ class TestEphemeralKeyCleanup:
             # curl may not be available in the maas-api container; try wget
             cleanup_result = sp.run(
                 ["oc", "exec", pod_name, "-n", deployment_namespace, "--",
-                 "wget", "-q", "-O-", "--post-data=",
-                 "http://localhost:8080/internal/v1/api-keys/cleanup"],
+                 "wget", "-q", "--no-check-certificate", "-O-", "--post-data=",
+                 "https://localhost:8443/internal/v1/api-keys/cleanup"],
                 capture_output=True, text=True, timeout=30,
             )
 

@@ -75,16 +75,16 @@ func newMockAdminChecker() *mockAdminChecker {
 	}
 }
 
-func (m *mockAdminChecker) IsAdmin(_ context.Context, user *token.UserContext) bool {
+func (m *mockAdminChecker) IsAdmin(_ context.Context, user *token.UserContext) (bool, error) {
 	if user == nil {
-		return false
+		return false, nil
 	}
 	for _, userGroup := range user.Groups {
 		if slices.Contains(m.adminGroups, userGroup) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // executeSearchRequest is a test helper that executes a search request and returns the parsed response.
@@ -114,17 +114,23 @@ func TestIsAuthorizedForKey(t *testing.T) {
 
 	t.Run("OwnerCanAccess", func(t *testing.T) {
 		user := &token.UserContext{Username: "alice", Groups: []string{"users"}}
-		assert.True(t, h.isAuthorizedForKey(ctx, user, "alice"))
+		result, err := h.isAuthorizedForKey(ctx, user, "alice")
+		require.NoError(t, err)
+		assert.True(t, result)
 	})
 
 	t.Run("NonOwnerCannotAccess", func(t *testing.T) {
 		user := &token.UserContext{Username: "bob", Groups: []string{"users"}}
-		assert.False(t, h.isAuthorizedForKey(ctx, user, "alice"))
+		result, err := h.isAuthorizedForKey(ctx, user, "alice")
+		require.NoError(t, err)
+		assert.False(t, result)
 	})
 
 	t.Run("AdminCanAccessAnyKey", func(t *testing.T) {
 		admin := &token.UserContext{Username: "admin", Groups: []string{"admin-users"}}
-		assert.True(t, h.isAuthorizedForKey(ctx, admin, "alice"))
+		result, err := h.isAuthorizedForKey(ctx, admin, "alice")
+		require.NoError(t, err)
+		assert.True(t, result)
 	})
 }
 

@@ -2,25 +2,6 @@
 
 This document describes known issues and operational considerations for the subscription-based MaaS Platform.
 
-## Subscription Selection Caching
-
-### Cache TTL for Subscription Selection
-
-**Impact:** Medium
-
-**Description:**
-
-Authorino caches the result of the MaaS API subscription selection call (e.g., 60 second TTL). If a user's group membership changes:
-
-- Within the cache window, the old subscription selection may still apply
-- After cache expiry, the new group membership is used
-- Restarting Authorino pods forces immediate cache invalidation (disruptive)
-
-**Workaround:**
-
-- Wait for cache TTL for changes to fully propagate
-- For immediate effect, restart Authorino pods (disruptive; use during maintenance windows)
-
 ## API Key vs OpenShift Token
 
 ### Group Snapshot in API Keys
