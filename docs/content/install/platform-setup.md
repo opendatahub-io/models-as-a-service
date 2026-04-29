@@ -454,7 +454,7 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
     Wait for the operator webhook to be ready:
 
     ```shell
-    kubectl wait --for=condition=Available --timeout=120s deployment/rhods-operator-controller-manager -n redhat-ods-operator
+    kubectl wait --for=condition=Available --timeout=120s deployment/rhods-operator -n redhat-ods-operator
     ```
 
     Once ready, the RHOAI Operator automatically creates a `DSCInitialization` resource.
