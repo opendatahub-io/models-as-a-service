@@ -1,13 +1,12 @@
-# Understanding Token Management
+# API Key Management
 
-This guide explains the authentication and credential management used to access models in the MaaS Platform.
+This guide explains how to create and manage API keys for accessing models through the MaaS platform.
 
-!!! tip "API keys (current)"
-    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time (optional `subscription` in the request body; if omitted, the **highest `spec.priority`** subscription you can access is chosen). See [Quota and Access Configuration](quota-and-access-configuration.md) and [Subscription limitations and known issues](subscription-known-issues.md).
+!!! tip "API keys for model access"
+    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time (optional `subscription` in the request body; if omitted, the **highest `spec.priority`** subscription you can access is chosen).
 
 !!! note "Prerequisites"
-    This document assumes you have configured subscriptions (MaaSAuthPolicy, MaaSSubscription).
-    See [Quota and Access Configuration](quota-and-access-configuration.md) for setup.
+    This document assumes your administrator has configured subscriptions (MaaSAuthPolicy, MaaSSubscription) that grant you access to models.
 
 ---
 
@@ -17,8 +16,8 @@ This guide explains the authentication and credential management used to access 
 1. [How API Key Creation Works](#how-api-key-creation-works)
 1. [How API Key Validation Works](#how-api-key-validation-works)
 1. [Model Discovery](#model-discovery)
-1. [Practical Usage](#practical-usage)
-1. [API Key Lifecycle Management](#api-key-lifecycle-management)
+1. [Creating and Using API Keys](#creating-and-using-api-keys)
+1. [Managing Your API Keys](#managing-your-api-keys)
 1. [Frequently Asked Questions (FAQ)](#frequently-asked-questions-faq)
 1. [Related Documentation](#related-documentation)
 
@@ -47,7 +46,7 @@ When you create an API key, you trade your OpenShift identity for a long-lived c
 
 ### Key Concepts
 
-- **Subscription binding**: Each key stores a MaaSSubscription name resolved at mint time. You can set it explicitly with the optional JSON field `subscription` on `POST /v1/api-keys`. If you omit it, the API selects your **highest-priority** accessible subscription (ties break deterministically—see operator notes below).
+- **Subscription binding**: Each key stores a MaaSSubscription name resolved at mint time. You can set it explicitly with the optional JSON field `subscription` on `POST /v1/api-keys`. If you omit it, the API selects your **highest-priority** accessible subscription (ties break deterministically).
 - **Subscription access**: Your access is still determined by MaaSAuthPolicy and MaaSSubscription, which map groups to models and rate limits. The bound name is used for gateway subscription resolution and metering.
 - **User Groups**: At creation time, your current group membership is stored with the key. These groups are used for subscription-based authorization when the key is validated.
 - **API Key**: A cryptographically secure string with `sk-oai-*` prefix. The plaintext is shown once; only the SHA-256 hash is stored in PostgreSQL.
@@ -157,9 +156,9 @@ This preserves compatibility with the current model-route policy while allowing 
 
 ---
 
-## Practical Usage
+## Creating and Using API Keys
 
-For step-by-step instructions on obtaining and using API keys to access models, including practical examples and troubleshooting, see the [Self-Service Model Access Guide](../user-guide/self-service-model-access.md).
+For step-by-step instructions on obtaining and using API keys to access models, including practical examples and troubleshooting, see the [Model Access Guide](model-access.md).
 
 That guide provides:
 
@@ -170,9 +169,7 @@ That guide provides:
 
 ---
 
-## API Key Lifecycle Management
-
-API keys are long-lived by default but support expiration and revocation.
+## Managing Your API Keys
 
 ### Key Expiration
 
@@ -183,7 +180,7 @@ Keys have a configurable TTL:
 
 When a key expires, validation returns `valid: false` with reason `"key revoked or expired"`. Create a new key to continue.
 
-### Key Revocation
+### Revoking Your Keys
 
 **Revoke a single key:** Send a `DELETE` request to `/v1/api-keys/:id`.
 
@@ -192,19 +189,7 @@ curl -sSk -X DELETE "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   -H "Authorization: Bearer $(oc whoami -t)"
 ```
 
-**Bulk revoke all keys for a user:** Send a `POST` request to `/v1/api-keys/bulk-revoke`.
-
-```bash
-curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
-  -H "Authorization: Bearer $(oc whoami -t)" \
-  -H "Content-Type: application/json" \
-  -d '{"username": "alice"}'
-```
-
 Revocation updates the key status to `revoked` in the database. The next validation request will reject the key. Authorino may cache validation results briefly; revocation is effective as soon as the cache expires.
-
-!!! warning "Important"
-    **For Platform Administrators**: Admins can revoke any user's keys via `DELETE /v1/api-keys/:id` (if they own or have admin access) or `POST /v1/api-keys/bulk-revoke` with the target username. This is an effective way to immediately cut off access for a specific user in response to a security event.
 
 ### Ephemeral Keys
 
@@ -226,45 +211,7 @@ curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys" \
   -d '{"ephemeral": true, "expiresIn": "30m"}'
 ```
 
-### Ephemeral Key Cleanup
-
-Expired ephemeral keys are automatically deleted from the database by a **CronJob** (`maas-api-key-cleanup`) that runs every 15 minutes. This prevents unbounded accumulation of expired short-lived credentials.
-
-**How it works:**
-
-1. The CronJob sends `POST /internal/v1/api-keys/cleanup` to the maas-api Service
-2. The endpoint deletes ephemeral keys that expired **more than 30 minutes ago** (grace period)
-3. Regular (non-ephemeral) keys are **never** deleted by cleanup — they remain until manually revoked
-
-**Grace period:** A 30-minute grace period after expiration ensures that recently-expired keys are not deleted while in-flight requests may still reference them. Only keys expired for longer than 30 minutes are removed.
-
-**Security:** The cleanup endpoint is cluster-internal only:
-
-- It is registered under `/internal/v1/` and is **not exposed** on the external Service or Route
-- A `NetworkPolicy` (`maas-api-cleanup-restrict`) restricts cleanup pods to communicate only with `maas-api:8080` and DNS
-- No authentication is required on the endpoint itself — access control is enforced at the network layer
-
-!!! tip "Troubleshooting cleanup"
-    **Check CronJob status:**
-    ```bash
-    oc get cronjob maas-api-key-cleanup -n <namespace>
-    oc get jobs -n <namespace> -l app=maas-api-cleanup --sort-by=.metadata.creationTimestamp
-    ```
-
-    **View cleanup logs:**
-    ```bash
-    # Latest CronJob run
-    oc logs job/$(oc get jobs -n <namespace> -l app=maas-api-cleanup \
-      --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}') \
-      -n <namespace>
-    ```
-
-    **Manually trigger cleanup** (from an allowed pod or via oc exec):
-    ```bash
-    oc exec deploy/maas-api -n <namespace> -- \
-      curl -sf -X POST http://localhost:8080/internal/v1/api-keys/cleanup
-    ```
-    Response: `{"deletedCount": N, "message": "Successfully deleted N expired ephemeral key(s)"}`
+Expired ephemeral keys are automatically cleaned up by the platform. See [API Key Administration](../configuration-and-management/api-key-administration.md) for details.
 
 ---
 
@@ -276,9 +223,9 @@ A: Your access is determined by your group membership in OpenShift at the time t
 
 ---
 
-**Q: What if two MaaSSubscriptions use the same `spec.priority`?**
+**Q: What happens if my group membership changes after I create an API key?**
 
-A: API key mint and subscription selection use a deterministic order when priorities tie (e.g. token limit, then name). Operators should still assign distinct priorities when possible. The MaaSSubscription controller sets status condition `SpecPriorityDuplicate` and logs when another subscription shares the same priority—use that to clean up configuration.
+A: API keys store your groups and bound subscription name at creation time. If your group membership changes after the key was created, the key still carries the **old** groups and subscription until it is revoked and recreated. Subscription metadata for gateway inference uses the stored groups and subscription from validation. To pick up new groups or a different default subscription, revoke the old key and create a new one.
 
 ---
 
@@ -326,7 +273,5 @@ A: Only the SHA-256 hash of your key is stored in PostgreSQL. The plaintext key 
 
 ## Related Documentation
 
-- **[Quota and Access Configuration](quota-and-access-configuration.md)**: For operators - subscription setup, access control, and rate limiting
-- **[Self-Service Model Access](../user-guide/self-service-model-access.md)**: Step-by-step guide for creating and using API keys
-
----
+- **[Model Access](model-access.md)**: Step-by-step guide for creating and using API keys
+- **[API Key Administration](../configuration-and-management/api-key-administration.md)**: For administrators - bulk revocation and cleanup operations

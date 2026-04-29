@@ -9,7 +9,7 @@ The Models-as-a-Service (MaaS) platform provides access to AI models through a s
 ## Getting Your API Key
 
 !!! tip
-    For a detailed explanation of how API key authentication works, including the underlying architecture and security model, see [Understanding Token Management](../configuration-and-management/token-management.md).
+    For a detailed explanation of how API key authentication works, including the underlying architecture and security model, see [API Key Management](api-key-management.md).
 
 ### Step 1: Get Your OpenShift Authentication Token
 
@@ -55,7 +55,7 @@ Replace `simulator-subscription` with your MaaSSubscription metadata name, or re
 
 ### API Key Lifecycle
 
-- **Expiration**: Omit `expiresIn` to use the operator maximum (`API_KEY_MAX_EXPIRATION_DAYS`; see [Token Management](../configuration-and-management/token-management.md)), or set `expiresIn` (e.g., `"90d"`, `"1h"`, `"30d"`) up to that maximum
+- **Expiration**: Omit `expiresIn` to use the operator maximum (`API_KEY_MAX_EXPIRATION_DAYS`; see [API Key Management](api-key-management.md)), or set `expiresIn` (e.g., `"90d"`, `"1h"`, `"30d"`) up to that maximum
 - **Subscription**: Fixed at creation; mint a new key to change it
 - **Revocation**: Revoke via `DELETE /v1/api-keys/{id}` if compromised
 
