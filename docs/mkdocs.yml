@@ -77,6 +77,7 @@ nav:
       - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
       - Token Management: configuration-and-management/token-management.md
       - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
+      - Payload Processing Namespace Configuration: configuration-and-management/payload-processing-namespace-configuration.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
       - Subscription limitations & known issues: configuration-and-management/subscription-known-issues.md
     - Models:
