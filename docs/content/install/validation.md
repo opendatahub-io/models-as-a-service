@@ -24,29 +24,16 @@ HOST="https://maas.${CLUSTER_DOMAIN}" && \
 echo "Gateway endpoint: $HOST"
 ```
 
-Extract the cluster CA certificate so that `curl` can verify TLS without the `-k` flag:
-
-```bash
-CA_CERT="/tmp/cluster-ca.crt"
-oc get configmap kube-root-ca.crt -n openshift-config \
-  -o jsonpath='{.data.ca-bundle\.crt}' > "$CA_CERT"
-echo "CA certificate saved to $CA_CERT"
-```
-
-??? success "Expected output"
-    ```text
-    Gateway endpoint: https://maas.apps.your-cluster.example.com
-    CA certificate saved to /tmp/cluster-ca.crt
-    ```
-
 !!! note
     If you don't have cluster-reader permissions, set the gateway URL directly:
     ```bash
     HOST="https://maas.apps.your-cluster.example.com"
     ```
 
-!!! tip "If CA extraction fails"
-    If you cannot extract the CA certificate (e.g., missing permissions or non-OpenShift cluster), you can fall back to `curl -k` to skip TLS verification. This is acceptable for one-off debugging but should not be used in automation or shared environments, as it disables certificate validation.
+??? success "Expected output"
+    ```text
+    Gateway endpoint: https://maas.apps.your-cluster.example.com
+    ```
 
 **If this fails:**
 
@@ -55,7 +42,7 @@ echo "CA certificate saved to $CA_CERT"
 !!! note "Optional"
     List MaaSSubscriptions you can access (authenticate with your OpenShift token; requires `HOST` from above):
     ```bash
-    curl -sS --cacert "$CA_CERT" -H "Authorization: Bearer $(oc whoami -t)" \
+    curl -sS -k -H "Authorization: Bearer $(oc whoami -t)" \
       "${HOST}/maas-api/v1/subscriptions" | jq .
     ```
 
@@ -64,14 +51,19 @@ echo "CA certificate saved to $CA_CERT"
 Create an API key using your OpenShift token:
 
 ```bash
-API_KEY_RESPONSE=$(curl -sS --cacert "$CA_CERT" \
+API_KEY_RESPONSE=$(curl -sS -k \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{"name": "validation-key", "description": "Key for validation", "expiresIn": "1h", "subscription": "simulator-subscription"}' \
   "${HOST}/maas-api/v1/api-keys")
 API_KEY=$(echo "$API_KEY_RESPONSE" | jq -r '.key')
-echo "API key obtained successfully."
+if [ -z "$API_KEY" ] || [ "$API_KEY" = "null" ]; then
+  echo "Failed to obtain API key. Raw response:"
+  echo "$API_KEY_RESPONSE"
+else
+  echo "API key obtained successfully."
+fi
 ```
 
 ??? success "Expected output"
@@ -85,7 +77,7 @@ echo "API key obtained successfully."
 !!! note "Optional"
     List your API keys (metadata only; plaintext secrets are never returned):
     ```bash
-    curl -sS --cacert "$CA_CERT" \
+    curl -sS -k \
       -H "Authorization: Bearer $(oc whoami -t)" \
       -H "Content-Type: application/json" \
       -X POST \
@@ -110,7 +102,7 @@ echo "API key obtained successfully."
 Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models` with an API key returns only models from that subscription. With an OpenShift token instead of an API key, you can send `X-MaaS-Subscription` to filter when you have access to multiple subscriptions.
 
 ```bash
-MODELS=$(curl -sS --cacert "$CA_CERT" \
+MODELS=$(curl -sS -k \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" \
     "${HOST}/maas-api/v1/models")
@@ -148,7 +140,7 @@ echo "Model URL: $MODEL_URL"
 Send a chat completion request to the model. You should get a 200 OK response with generated text:
 
 ```bash
-RESPONSE=$(curl -sS --cacert "$CA_CERT" \
+RESPONSE=$(curl -sS -k \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
@@ -184,7 +176,7 @@ echo "$RESPONSE" | jq .
 !!! note
     Some models only support `/v1/completions` (prompt-based) instead of `/v1/chat/completions`. If you get a 404 or 400, try the completions endpoint:
     ```bash
-    RESPONSE=$(curl -sS --cacert "$CA_CERT" \
+    RESPONSE=$(curl -sS -k \
       -H "Authorization: Bearer $API_KEY" \
       -H "Content-Type: application/json" \
       -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
@@ -204,7 +196,7 @@ echo "$RESPONSE" | jq .
 Send a request without any credentials. You should get a 401 Unauthorized response:
 
 ```bash
-curl -sS --cacert "$CA_CERT" -o /dev/null -w "HTTP status: %{http_code}\n" \
+curl -sS -k -o /dev/null -w "HTTP status: %{http_code}\n" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
   "${MODEL_URL}/v1/chat/completions"
@@ -225,7 +217,7 @@ Send multiple requests to trigger the rate limit. After a few successful request
 
 ```bash
 for i in {1..16}; do
-  curl -sS --cacert "$CA_CERT" -o /dev/null -w "%{http_code} " \
+  curl -sS -k -o /dev/null -w "%{http_code} " \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
@@ -248,6 +240,15 @@ For more troubleshooting, see [Troubleshooting](troubleshooting.md).
 
 ## Automated Validation
 
+!!! note "Non-admin users"
+    The script reads the cluster ingress config to find the gateway URL. If you don't have cluster-reader permissions, set the URL manually:
+    ```bash
+    export MAAS_GATEWAY_HOST="https://maas.apps.your-cluster.example.com"
+    ```
+
+!!! note "OpenShift required"
+    The validation script requires an OpenShift cluster. For non-OpenShift environments, use the step-by-step validation above.
+
 Run the validation script to check all components in one pass:
 
 ```bash
@@ -257,18 +258,8 @@ Run the validation script to check all components in one pass:
 To validate a specific model:
 
 ```bash
-./scripts/validate-deployment.sh <model-name>
+./scripts/validate-deployment.sh MODEL_NAME
 ```
-
-!!! note "Non-admin users"
-    The script reads the cluster ingress config to find the gateway URL. If you don't have cluster-reader permissions, set the URL manually:
-    ```bash
-    export MAAS_GATEWAY_HOST="https://maas.apps.your-cluster.example.com"
-    ./scripts/validate-deployment.sh
-    ```
-
-!!! note "OpenShift required"
-    The validation script requires an OpenShift cluster. For non-OpenShift environments, use the step-by-step validation above.
 
 ### What the script checks
 
@@ -279,34 +270,9 @@ The script runs four groups of checks:
 3. **Policy status** -- AuthPolicy is enforced, TokenRateLimitPolicy is configured
 4. **API endpoint tests** -- authentication token works, API key creation works, models endpoint responds, model inference returns a result, rate limiting kicks in, unauthorized requests are rejected
 
-### Reading the output
-
-Each check shows PASS, FAIL, or WARNING. At the end, the script prints a summary:
-
-```text
-Validation Summary
-
-Results:
-  Passed: 15
-  Failed: 0
-  Warnings: 0
-
-All critical checks passed!
-```
-
-When a check fails, the script prints the reason and a suggestion. For example:
-
-```text
-FAIL: Models endpoint failed (HTTP 403)
-  Reason: Response empty
-  Suggestion: Check MaaS API service and logs
-```
-
 For the full list of script options and flags, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#validate-deploymentsh).
 
-### If checks fail
-
-Use the step-by-step validation above to isolate which component is broken. For common error patterns, see [Troubleshooting](troubleshooting.md).
+If checks fail, use the step-by-step validation above to isolate which component is broken. For common error patterns, see [Troubleshooting](troubleshooting.md).
 
 ## TLS Verification
 
