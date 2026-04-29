@@ -224,8 +224,16 @@ A: Your access is determined by your group membership in OpenShift at the time t
 ---
 
 **Q: What happens if my group membership changes after I create an API key?**
+<<<<<<< HEAD:docs/content/user-guide/api-key-management.md
+=======
 
 A: API keys store your groups and bound subscription name at creation time. If your group membership changes after the key was created, the key still carries the **old** groups and subscription until it is revoked and recreated. Subscription metadata for gateway inference uses the stored groups and subscription from validation. To pick up new groups or a different default subscription, revoke the old key and create a new one.
+
+---
+
+**Q: What if two MaaSSubscriptions use the same `spec.priority`?**
+
+A: API key mint and subscription selection use a deterministic order when priorities tie (e.g. token limit, then name). Operators should still assign distinct priorities when possible. The MaaSSubscription controller sets status condition `SpecPriorityDuplicate` and logs when another subscription shares the same priority—use that to clean up configuration.
 
 ---
 
