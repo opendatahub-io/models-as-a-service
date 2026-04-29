@@ -248,6 +248,42 @@ if [ -n "$REQUESTED_MODEL" ]; then
 fi
 
 # ==========================================
+# 0. Prerequisite Checks
+# ==========================================
+print_header "0️⃣ Prerequisite Checks"
+
+# Check cert-manager
+print_check "cert-manager"
+if kubectl get namespace cert-manager &>/dev/null; then
+    CERT_MANAGER_PODS=$(kubectl get pods -n cert-manager --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+    if [ "$CERT_MANAGER_PODS" -ge 3 ]; then
+        print_success "cert-manager has $CERT_MANAGER_PODS running pod(s)"
+    elif [ "$CERT_MANAGER_PODS" -gt 0 ]; then
+        print_warning "cert-manager has only $CERT_MANAGER_PODS running pod(s) (expected 3)" "Check: kubectl get pods -n cert-manager"
+    else
+        print_fail "No cert-manager pods running" "cert-manager is required for TLS certificate provisioning" "Install cert-manager: see docs/content/install/platform-setup.md#install-cert-manager"
+    fi
+elif kubectl get namespace cert-manager-operator &>/dev/null; then
+    # OpenShift cert-manager operator uses a different namespace
+    CERT_MANAGER_PODS=$(kubectl get pods -n cert-manager-operator --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+    if [ "$CERT_MANAGER_PODS" -gt 0 ]; then
+        print_success "cert-manager operator has $CERT_MANAGER_PODS running pod(s)"
+    else
+        print_fail "No cert-manager operator pods running" "cert-manager is required for TLS certificate provisioning" "Check: kubectl get pods -n cert-manager-operator"
+    fi
+else
+    print_fail "cert-manager not found" "Neither cert-manager nor cert-manager-operator namespace exists" "Install cert-manager: see docs/content/install/platform-setup.md#install-cert-manager"
+fi
+
+# Check cert-manager CRDs
+print_check "cert-manager CRDs"
+if kubectl get crd certificates.cert-manager.io &>/dev/null; then
+    print_success "cert-manager CRDs are established"
+else
+    print_fail "cert-manager CRDs not found" "certificates.cert-manager.io CRD is missing" "Install cert-manager before proceeding with MaaS deployment"
+fi
+
+# ==========================================
 # 1. Component Status Checks
 # ==========================================
 print_header "1️⃣ Component Status Checks"

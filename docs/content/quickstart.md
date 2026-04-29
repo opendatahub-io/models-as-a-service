@@ -9,6 +9,7 @@ This guide provides quickstart instructions for deploying the MaaS Platform infr
 
 - **OpenShift cluster** (4.19.9+) with kubectl/oc access
       - **Recommended** 16 vCPUs, 32GB RAM, 100GB storage
+- **cert-manager**: Required for TLS certificate provisioning. The `deploy.sh` script installs it automatically; for manual installs see [Platform Setup](install/platform-setup.md#install-cert-manager).
 - **ODH/RHOAI requirements**:
       - RHOAI 3.0 +
       - ODH 3.0 +

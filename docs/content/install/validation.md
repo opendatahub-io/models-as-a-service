@@ -5,6 +5,26 @@ This guide provides instructions for validating and testing your MaaS Platform d
 !!! note "Prerequisite"
     At least one model must be deployed to validate the installation. See [Model Setup (On Cluster)](model-setup.md) to deploy sample models.
 
+## Prerequisite Check: cert-manager
+
+Before validating MaaS, confirm that cert-manager is installed and running. cert-manager
+provisions the TLS certificates used by webhooks and service-to-service communication.
+
+```bash
+# Verify cert-manager pods are running
+kubectl get pods -n cert-manager
+```
+
+All three pods (`cert-manager`, `cert-manager-cainjector`, `cert-manager-webhook`) must
+show `Running` status. If the namespace or pods are missing, install cert-manager before
+proceeding — see [Platform Setup](platform-setup.md#install-cert-manager).
+
+You can also confirm the cert-manager CRDs are established:
+
+```bash
+kubectl get crd certificates.cert-manager.io
+```
+
 ## Manual Validation (Recommended)
 
 Follow these steps to validate your deployment and understand each component:

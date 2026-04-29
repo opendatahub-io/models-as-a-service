@@ -28,6 +28,30 @@ The following tools are used across the installation guides:
 * `kustomize` — used for Gateway AuthPolicy (MaaS Components)
 * `envsubst` — used for policy templates (MaaS Components)
 
+## Cluster Prerequisites
+
+### cert-manager
+
+cert-manager is **required** for TLS certificate provisioning across the MaaS platform.
+It must be installed before LeaderWorkerSet and other operators that depend on webhook
+certificates. The automated `deploy.sh` script installs cert-manager automatically; if
+you follow the manual install path, install it as the first step in
+[Platform Setup](platform-setup.md#install-cert-manager).
+
+* **ODH (OpenShift):** Install the `openshift-cert-manager-operator` from OperatorHub
+  (`redhat-operators` catalog, `stable-v1` channel).
+* **Upstream Kubernetes:** Install [cert-manager](https://cert-manager.io/docs/installation/)
+  v1.12 or later.
+
+To verify cert-manager is running:
+
+```shell
+kubectl get pods -n cert-manager
+```
+
+All pods (`cert-manager`, `cert-manager-cainjector`, `cert-manager-webhook`) must be
+`Running` before proceeding.
+
 ## Requirements for Open Data Hub project
 
 MaaS requires Open Data Hub version 3.0 or later, with the Model Serving component

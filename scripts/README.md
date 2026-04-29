@@ -24,7 +24,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 
 **What it does:**
 - Validates configuration and prerequisites
-- Installs optional operators (cert-manager, LeaderWorkerSet) with auto-detection
+- Installs required operators (cert-manager, LeaderWorkerSet) with auto-detection
 - Installs rate limiter (RHCL or upstream Kuadrant)
 - Installs primary operator (RHOAI or ODH) or deploys via kustomize
 - Applies custom resources (DSC, DSCI)
@@ -49,6 +49,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 
 **Requirements:**
 - OpenShift cluster (4.19.9+)
+- **cert-manager** — installed automatically by the script; required for TLS certificate provisioning (webhook certs, service-to-service TLS). See [Platform Setup](../docs/content/install/platform-setup.md#install-cert-manager) if installing manually.
 - `oc` CLI installed and logged in
 - `kubectl` installed
 - `jq` installed
@@ -319,6 +320,7 @@ All scripts require:
 - `jq` for JSON parsing
 - `kustomize` for manifest generation
 - Access to an OpenShift or Kubernetes cluster
+- **cert-manager** installed on the cluster (for TLS certificate provisioning)
 - Appropriate RBAC permissions (cluster-admin recommended)
 
 ## Environment Variables

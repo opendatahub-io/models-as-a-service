@@ -15,6 +15,7 @@ You need a Red Hat OpenShift cluster version 4.19.9 or later. Older OpenShift ve
 
 This section walks through the installation of the required Operators:
 
+* cert-manager
 * LeaderWorkerSet
 * Kuadrant (or RHCL)
 * Platform operator (ODH or RHOAI)
@@ -24,6 +25,79 @@ This section walks through the installation of the required Operators:
 
     - **ODH**: Refer to [Kuadrant documentation](https://docs.kuadrant.io)
     - **RHOAI**: Refer to [Red Hat documentation](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed)
+
+## Install cert-manager
+
+cert-manager handles TLS certificate lifecycle for webhooks and service-to-service
+communication. It must be installed before LeaderWorkerSet and other operators that
+rely on cert-manager-issued webhook certificates.
+
+!!! note "Automated install"
+    The `deploy.sh` script installs cert-manager automatically. Follow these steps only
+    if you are installing the platform manually.
+
+=== "OpenShift (OperatorHub)"
+
+    Install the Red Hat cert-manager Operator from the built-in OperatorHub:
+
+    ```yaml
+    kubectl apply -f - <<EOF
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: cert-manager-operator
+    ---
+    apiVersion: operators.coreos.com/v1
+    kind: OperatorGroup
+    metadata:
+      name: cert-manager-operator
+      namespace: cert-manager-operator
+    ---
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: openshift-cert-manager-operator
+      namespace: cert-manager-operator
+    spec:
+      channel: stable-v1
+      installPlanApproval: Automatic
+      name: openshift-cert-manager-operator
+      source: redhat-operators
+      sourceNamespace: openshift-marketplace
+    EOF
+    ```
+
+    Wait for the subscription to install successfully:
+
+    ```shell
+    kubectl wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/openshift-cert-manager-operator -n cert-manager-operator --timeout=300s
+    ```
+
+=== "Upstream Kubernetes"
+
+    Install cert-manager v1.12 or later using the upstream manifests:
+
+    ```shell
+    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+    ```
+
+### Verification
+
+Check that cert-manager pods are running:
+
+```shell
+kubectl get pods -n cert-manager
+```
+
+```
+NAME                                      READY   STATUS    RESTARTS   AGE
+cert-manager-7f8d4dc55c-abc12             1/1     Running   0          60s
+cert-manager-cainjector-5f44b5b5f-def34   1/1     Running   0          60s
+cert-manager-webhook-6b7b8d6c7d-ghi56     1/1     Running   0          60s
+```
+
+All three pods (`cert-manager`, `cert-manager-cainjector`, `cert-manager-webhook`) must
+be `Running` before proceeding to the next step.
 
 ## Install LeaderWorkerSet API
 
