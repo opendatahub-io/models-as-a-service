@@ -28,7 +28,7 @@ Identifies an AI/ML model for the MaaS platform. The backend may be on-cluster (
 
 ### LLMInferenceService
 
-References models deployed on the cluster via the LLMInferenceService CRD (e.g., vLLM, TGI via KServe). The alias `llmisvc` is also accepted for backwards compatibility.
+References models deployed on the cluster via the LLMInferenceService CRD (e.g., vLLM, TGI via KServe).
 
 The controller:
 - Sets `status.endpoint` from the LLMInferenceService status
@@ -98,7 +98,7 @@ spec:
   endpointOverride: "https://correct-hostname.example.com/my-model"
 ```
 
-The controller still validates the backend resource (HTTPRoute exists, LLMInferenceService is ready, etc.)—the override only affects the final endpoint URL written to `status.endpoint`.
+The override does not bypass backend validation. The controller still checks that the backend is ready (HTTPRoute accepted, LLMInferenceService ready, etc.). The override only determines the final value written to `status.endpoint` **after** the backend becomes ready. While the backend is not ready, the controller clears `status.endpoint` (sets it to empty string) and sets `status.phase` to `Pending`, regardless of the override value.
 
 ---
 
@@ -108,7 +108,7 @@ The controller still validates the backend resource (HTTPRoute exists, LLMInfere
 
 | Field | Type | Description |
 |-------|------|-------------|
-| phase | string | One of: `Pending`, `Ready`, `Unhealthy`, `Failed` |
+| phase | string | One of: `Pending`, `Ready`, `Failed` |
 | endpoint | string | Endpoint URL for the model (auto-discovered or from `endpointOverride`) |
 | httpRouteName | string | Name of the HTTPRoute associated with this model |
 | httpRouteNamespace | string | Namespace of the HTTPRoute |
