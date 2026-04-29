@@ -37,6 +37,7 @@ Use this platform to streamline the deployment of your models, monitor usage, an
 - **[Prerequisites](install/prerequisites.md)** - Requirements and database setup
 - **[Platform Setup](install/platform-setup.md)** - Install ODH/RHOAI with MaaS
 - **[MaaS Setup](install/maas-setup.md)** - Gateway AuthPolicy and policies
+- **[Enable Observability](install/maas-setup.md#enable-observability-recommended)** - Metrics, dashboards, and usage tracking
 - **[Validation](install/validation.md)** - Verify your deployment
 
 ### 🔄 Migration

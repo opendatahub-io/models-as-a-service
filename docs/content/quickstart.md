@@ -131,6 +131,36 @@ kubectl get pods -n ${APP_NS}
 
 For detailed validation and troubleshooting, see the [Validation Guide](install/validation.md).
 
+## Enable Observability
+
+After the core deployment is running, enable observability to get usage metrics, rate-limiting visibility, and dashboards. Without this step, MaaS functions normally but you will have no visibility into token consumption, rate limiting, or model performance.
+
+**Minimum setup** (two commands):
+
+```bash
+# 1. Enable User Workload Monitoring (cluster admin required)
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+EOF
+
+# 2. Enable Kuadrant observability
+kubectl patch kuadrant kuadrant -n kuadrant-system --type=merge \
+  -p '{"spec":{"observability":{"enable":true}}}'
+```
+
+For the full observability setup — including ServiceMonitors, Grafana dashboards, and PromQL queries — see:
+
+- [Observability Prerequisites and Setup](install/maas-setup.md#enable-observability-recommended) in the install guide
+- [Full Observability Guide](advanced-administration/observability.md) for detailed configuration
+- [RHOAI Observability](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai) for RHOAI-specific monitoring
+
 ## Next Steps
 
 After deployment, proceed to [Model Setup (On Cluster)](install/model-setup.md) to deploy sample models, then [Validation](install/validation.md) to test and verify your deployment.

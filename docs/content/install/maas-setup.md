@@ -268,6 +268,73 @@ After creating the database Secret and Gateways, create or update your DataScien
 !!! tip "Troubleshooting"
     If components do not become ready, run `kubectl describe datasciencecluster default-dsc` to inspect conditions and events.
 
+## Enable Observability (Recommended)
+
+Observability provides metrics, dashboards, and usage tracking for MaaS. While not strictly required for basic inference, enabling it is **strongly recommended** because:
+
+- **Tenant status checks** rely on metrics pipelines — without them, some status conditions may report incomplete data.
+- **Rate limiting visibility** (who is being throttled, token consumption per user/model) requires Limitador metrics to be scraped.
+- **Dashboards and showback** will have no data without the prerequisites below.
+
+If you skip this step, MaaS will still serve inference requests, but you will have no visibility into usage, rate limiting, or model performance. You can enable observability later by following the [full Observability guide](../advanced-administration/observability.md).
+
+### Quick Setup
+
+Two platform prerequisites must be configured before MaaS metrics flow into Prometheus:
+
+**1. Enable User Workload Monitoring** (cluster admin required)
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+EOF
+```
+
+Verify:
+
+```bash
+kubectl get pods -n openshift-user-workload-monitoring
+# Expected: prometheus-user-workload-0 and prometheus-user-workload-1 in Running state
+```
+
+**2. Enable Kuadrant Observability**
+
+```bash
+kubectl patch kuadrant kuadrant -n kuadrant-system --type=merge \
+  -p '{"spec":{"observability":{"enable":true}}}'
+```
+
+Verify:
+
+```bash
+kubectl get podmonitor -n kuadrant-system
+# Expected: kuadrant-limitador-monitor should be listed
+```
+
+**3. (Optional) Deploy ServiceMonitors and Dashboards**
+
+For additional metrics (Authorino auth evaluation, gateway latency, model inference) and Grafana dashboards:
+
+```bash
+# Deploy ServiceMonitors for MaaS components
+./scripts/observability/install-observability.sh
+
+# Deploy Grafana dashboards (requires a Grafana instance)
+./scripts/observability/install-grafana-dashboards.sh
+```
+
+For the full observability stack configuration, including Grafana setup, metric details, and PromQL queries, see the [Observability guide](../advanced-administration/observability.md).
+
+!!! info "RHOAI users"
+    For Red Hat OpenShift AI, also refer to the [RHOAI Observability documentation](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai) for platform-level monitoring configuration.
+
 ## Next steps
 
 * **Deploy models.** See [Model Setup (On Cluster)](model-setup.md) for sample model deployments.

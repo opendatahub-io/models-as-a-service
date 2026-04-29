@@ -462,4 +462,5 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
 ## Next Steps
 
 1. [Install MaaS Components](maas-setup.md) - Database, Gateways, and Configure DataScienceCluster
-2. [Deploy a Model](../configuration-and-management/model-setup.md) - Deploy your first model
+2. [Enable Observability](maas-setup.md#enable-observability-recommended) - Configure metrics, dashboards, and usage tracking (recommended)
+3. [Deploy a Model](../configuration-and-management/model-setup.md) - Deploy your first model
