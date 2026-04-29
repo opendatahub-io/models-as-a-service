@@ -54,8 +54,8 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "Unknown option: $1"
-      echo "Use --help for usage information"
+      echo "Unknown option: $1" >&2
+      echo "Use --help for usage information" >&2
       exit 1
       ;;
   esac
@@ -113,9 +113,9 @@ echo ""
 
 # Check cluster connection
 if ! kubectl cluster-info &>/dev/null; then
-  echo "✗ ERROR: Not connected to a cluster"
-  echo ""
-  echo "Please run 'oc login' or configure kubectl first."
+  echo "✗ ERROR: Not connected to a cluster" >&2
+  echo "" >&2
+  echo "Please run 'oc login' or configure kubectl first." >&2
   exit 1
 fi
 
@@ -299,7 +299,7 @@ elif [[ "$dsc_validated" == "false" ]]; then
       echo ""
       echo "Action required:"
       echo "  1. Edit the DataScienceCluster:"
-      echo "     kubectl edit datasciencecluster $dsc_name"
+      echo "     kubectl edit datasciencecluster \"$dsc_name\""
       echo ""
       echo "  2. Fix the configuration mismatches shown above"
       echo ""
@@ -310,7 +310,7 @@ elif [[ "$dsc_validated" == "false" ]]; then
   else
     echo "Action required:"
     echo "  1. Edit the DataScienceCluster:"
-    echo "     kubectl edit datasciencecluster $dsc_name"
+    echo "     kubectl edit datasciencecluster \"$dsc_name\""
     echo ""
     echo "  2. Fix the configuration mismatches shown above"
     echo ""
