@@ -80,6 +80,7 @@ nav:
       - API Key Administration: configuration-and-management/api-key-administration.md
       - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
       - Troubleshooting ExternalModel RBAC: configuration-and-management/troubleshooting-external-model-rbac.md
+      - Payload Processing Namespace Configuration: configuration-and-management/payload-processing-namespace-configuration.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
       - Gateway Patterns: configuration-and-management/gateway-patterns.md
     - Models:
