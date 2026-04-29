@@ -18,7 +18,7 @@ import (
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
-// PostRender mutates rendered resources the same way as ODH modelsasservice post-kustomize actions.
+// PostRender mutates rendered resources after kustomize (gateway targeting, OIDC, telemetry, config hash).
 func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) ([]unstructured.Unstructured, error) {
 	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
 	gatewayName := tenant.Spec.GatewayRef.Name
@@ -405,8 +405,8 @@ func hashConfigMapData(data map[string]string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// CustomizeParams writes gateway/app-namespace/cluster-audience and optional API key days into overlay params.env
-// (same keys as ODH customizeManifests; images use RELATED_IMAGE_* like ODH Init + ApplyParams).
+// CustomizeParams writes gateway/app-namespace/cluster-audience and optional API key days into overlay params.env.
+// Images use RELATED_IMAGE_* env vars via ApplyParams.
 func CustomizeParams(manifestDir string, tenant *maasv1alpha1.Tenant, appNamespace string, clusterAudience string) error {
 	params := map[string]string{
 		"gateway-namespace": tenant.Spec.GatewayRef.Namespace,

@@ -148,7 +148,7 @@ type TenantStatus struct {
 	Phase string `json:"phase,omitempty"`
 
 	// Conditions represent the latest available observations.
-	// Types mirror ODH modelsasservice / internal controller status for DSC aggregation: Ready,
+	// Types align with ODH internal/controller/status for DSC aggregation: Ready,
 	// DependenciesAvailable, MaaSPrerequisitesAvailable, DeploymentsAvailable, Degraded.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`

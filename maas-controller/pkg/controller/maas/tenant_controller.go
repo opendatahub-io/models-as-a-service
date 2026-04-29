@@ -38,8 +38,9 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
-// TenantReconciler reconciles cluster Tenant (platform singleton).
-// Platform manifest logic mirrors opendatahub-operator modelsasservice (kustomize + post-render + SSA apply).
+// TenantReconciler reconciles the Tenant CR (platform singleton).
+// Platform manifest logic follows the ODH operator's component deploy pattern (kustomize + post-render + SSA apply).
+// The Tenant CR is the runtime object; DSC.modelsAsService controls only enablement.
 type TenantReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -89,7 +90,8 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
 
-// Reconcile drives Tenant platform lifecycle (ODH no longer runs the modelsasservice deploy pipeline).
+// Reconcile drives the Tenant platform lifecycle. ODH deploys maas-controller; the controller
+// owns the full deploy pipeline via the Tenant CR (no standalone ModelsAsService instance CR exists).
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	return r.reconcile(ctx, req)
 }
@@ -103,7 +105,7 @@ func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Obje
 	}}}
 }
 
-// crdLabeledForMaaSComponent matches ODH modelsasservice watch: app.opendatahub.io/modelsasservice=true.
+// crdLabeledForMaaSComponent matches CRDs labeled app.opendatahub.io/modelsasservice=true.
 func crdLabeledForMaaSComponent() predicate.Predicate {
 	key := tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {

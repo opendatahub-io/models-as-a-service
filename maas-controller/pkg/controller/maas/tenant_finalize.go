@@ -42,9 +42,8 @@ import (
 // deletePropagation is used for child deletes so the Tenant finalizer does not block on foreground chains.
 var deletePropagation = client.PropagationPolicy(metav1.DeletePropagationBackground)
 
-// optionalPlatformGVKs are extension resources created by the legacy ODH modelsasservice pipeline (and future
-// maas-controller apply) that may reference Tenant as controller owner. List failures are ignored when the
-// API is not installed.
+// optionalPlatformGVKs are extension resources created by the Tenant reconciler that may reference
+// Tenant as controller owner. List failures are ignored when the API is not installed.
 var optionalPlatformGVKs = []schema.GroupVersionKind{
 	{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"},
 	{Group: "kuadrant.io", Version: "v1", Kind: "RateLimitPolicy"},
