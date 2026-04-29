@@ -3,197 +3,194 @@
 This guide explains how to create and manage API keys for accessing models through the MaaS platform.
 
 !!! tip "API keys for model access"
-    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time (optional `subscription` in the request body; if omitted, the **highest `spec.priority`** subscription you can access is chosen).
+    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time.
 
 !!! note "Prerequisites"
     This document assumes your administrator has configured subscriptions (MaaSAuthPolicy, MaaSSubscription) that grant you access to models.
 
 ---
 
-## Table of Contents
+## Creating API Keys
 
-1. [Overview](#overview)
-1. [How API Key Creation Works](#how-api-key-creation-works)
-1. [How API Key Validation Works](#how-api-key-validation-works)
-1. [Model Discovery](#model-discovery)
-1. [Creating and Using API Keys](#creating-and-using-api-keys)
-1. [Managing Your API Keys](#managing-your-api-keys)
-1. [Frequently Asked Questions (FAQ)](#frequently-asked-questions-faq)
-1. [Related Documentation](#related-documentation)
+### Get Your OpenShift Token
 
----
+First, obtain your OpenShift authentication token:
 
-## Overview
-
-The platform uses a secure, API key–based authentication system. You authenticate with your OpenShift credentials to create long-lived API keys, which are stored as SHA-256 hashes in a PostgreSQL database. This approach provides several key benefits:
-
-- **Long-Lived Credentials**: API keys remain valid until you revoke them or they expire (configurable), unlike short-lived Kubernetes tokens.
-- **Subscription-Based Access Control**: Keys inherit your group membership at creation time; the gateway uses these groups for subscription lookup and rate limits.
-- **Auditability**: Every request is tied to a specific key and identity; `last_used_at` tracks usage.
-- **Show-Once Security**: The plaintext key is returned only at creation; only the hash is stored.
-
-The process is simple:
-
-```text
-Authenticate with OpenShift → Create an API key via POST /v1/api-keys → Use the key with Authorization: Bearer for model access
+```bash
+OC_TOKEN=$(oc whoami -t)
 ```
 
----
+### Set Platform URL
 
-## How API Key Creation Works
+Get the MaaS API URL for your cluster:
 
-When you create an API key, you trade your OpenShift identity for a long-lived credential that can be used for programmatic access.
-
-### Key Concepts
-
-- **Subscription binding**: Each key stores a MaaSSubscription name resolved at mint time. You can set it explicitly with the optional JSON field `subscription` on `POST /v1/api-keys`. If you omit it, the API selects your **highest-priority** accessible subscription (ties break deterministically).
-- **Subscription access**: Your access is still determined by MaaSAuthPolicy and MaaSSubscription, which map groups to models and rate limits. The bound name is used for gateway subscription resolution and metering.
-- **User Groups**: At creation time, your current group membership is stored with the key. These groups are used for subscription-based authorization when the key is validated.
-- **API Key**: A cryptographically secure string with `sk-oai-*` prefix. The plaintext is shown once; only the SHA-256 hash is stored in PostgreSQL.
-- **Expiration**: Keys have a configurable TTL via `expiresIn` (e.g., `30d`, `90d`, `1h`). If omitted, the key defaults to the configured maximum (e.g., 90 days).
-
-The create response includes a `subscription` field echoing the bound subscription name.
-
-### API Key Creation Flow
-
-This diagram illustrates the process of creating an API key.
-
-```mermaid
-sequenceDiagram
-    participant User as OpenShift User
-    participant Gateway
-    participant AuthPolicy as AuthPolicy (Authorino)
-    participant MaaS as maas-api
-    participant DB as PostgreSQL
-
-    Note over User,MaaS: API Key Creation
-    User->>Gateway: 1. POST /v1/api-keys (Bearer OpenShift token)
-    Gateway->>AuthPolicy: Route request
-    AuthPolicy->>AuthPolicy: Validate OpenShift token (TokenReview)
-    AuthPolicy->>MaaS: 2. Forward request + user context (username, groups)
-    MaaS->>MaaS: Generate sk-oai-* key, hash with SHA-256
-    MaaS->>MaaS: Resolve subscription (explicit or highest priority)
-    MaaS->>DB: 3. Store hash + metadata (username, groups, subscription, name, expiresAt)
-    DB-->>MaaS: Stored
-    MaaS-->>User: 4. Return plaintext key ONCE (never stored)
-
-    Note over User,DB: Key is ready for model access
+```bash
+CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+MAAS_API_URL="https://maas.${CLUSTER_DOMAIN}"
 ```
 
----
+### Create an API Key
 
-## How API Key Validation Works
+Create a new API key with a name, description, and expiration:
 
-When you use an API key for inference, the gateway validates it via the MaaS API before allowing the request.
+```bash
+API_KEY_RESPONSE=$(curl -sSk \
+  -H "Authorization: Bearer ${OC_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"name": "my-api-key", "description": "Key for model access", "expiresIn": "90d"}' \
+  "${MAAS_API_URL}/maas-api/v1/api-keys")
 
-### Validation Flow
-
-```mermaid
-sequenceDiagram
-    participant User as Client
-    participant Gateway
-    participant AuthPolicy as MaaSAuthPolicy (Authorino)
-    participant MaaS as maas-api
-    participant DB as PostgreSQL
-    participant Model as Model Backend
-
-    Note over User,MaaS: Inference Request
-    User->>Gateway: 1. Request with Authorization: Bearer sk-oai-*
-    Gateway->>AuthPolicy: Route to MaaSAuthPolicy
-    AuthPolicy->>MaaS: 2. POST /internal/v1/api-keys/validate (key)
-    MaaS->>MaaS: Hash key, lookup by hash
-    MaaS->>DB: 3. SELECT by key_hash
-    DB-->>MaaS: username, groups, subscription, status
-    MaaS->>MaaS: Check status (active/revoked/expired)
-    MaaS-->>AuthPolicy: 4. valid: true, userId, groups, subscription
-    AuthPolicy->>AuthPolicy: Subscription check, inject headers, rate limits
-    AuthPolicy->>Model: 5. Authorized request (identity headers)
-    Model-->>Gateway: Response
-    Gateway-->>User: Response
+API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
+echo "API Key: ${API_KEY}"
 ```
 
-The validation endpoint (`/internal/v1/api-keys/validate`) is called by Authorino on every request that bears an `sk-oai-*` token. It:
+!!! warning "API key shown only once"
+    The plaintext API key is returned **only at creation time**. Store it securely when displayed. If you lose it, you must create a new key.
 
-1. Hashes the incoming key and looks it up in the database
-2. Returns `valid: true` with `userId`, `groups`, and `subscription` if the key is active and not expired
-3. Returns `valid: false` with a reason if the key is invalid, revoked, or expired
+**Request body fields:**
 
----
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Human-friendly name for the key (e.g., "production-bot") |
+| `description` | No | Optional description |
+| `expiresIn` | No | TTL string (e.g., `90d`, `30d`, `1h`). Omit to use configured maximum. |
+| `subscription` | No | MaaSSubscription name to bind. Omit to auto-select highest priority. |
+| `ephemeral` | No | Set to `true` for short-lived keys (max 1 hour). See [Ephemeral Keys](#ephemeral-keys). |
 
-## Model Discovery
+**Response:**
 
-The `/v1/models` endpoint allows you to discover which models you're authorized to access. The API forwards the same `Authorization` header you send to each model route, so the result depends on what those model routes accept.
-
-### How It Works
-
-When you call **GET /v1/models** with an **Authorization** header, the API passes that header **as-is** to each model's `/v1/models` endpoint to validate access. Only models that return 2xx or 405 are included in the list. No token exchange or modification is performed; the same header you send is used for the probe.
-
-```mermaid
-flowchart LR
-    A[Your Request\nAuthorization header] --> B[List MaaSModelRefs]
-    B --> C[Probe each model endpoint\nwith same header]
-    C --> D[Return only models\nthat allow access]
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "key": "sk-oai-...",
+  "name": "my-api-key",
+  "subscription": "premium-subscription",
+  "expiresAt": "2026-07-27T12:00:00Z"
+}
 ```
 
-This means you can:
+### Subscription Binding
 
-1. **Use an API key** — this is the most portable option because the current model-route AuthPolicies already validate `sk-oai-*` keys.
-2. **Use an identity token directly** — only when the model routes themselves accept that token type.
-3. **Create a key first for the interim OIDC flow** — when OIDC is enabled only on the `maas-api` route, use your OIDC token to call `POST /v1/api-keys`, then call `/v1/models` with the minted API key.
+Each API key binds to one MaaSSubscription at creation, determining which models you can access and what rate limits apply.
 
-!!! note "Inference vs listing"
-    Inference (calls to each model's chat/completions URL) requires an API key in `Authorization: Bearer` only. Do not send `X-MaaS-Subscription` on inference—the subscription is the one bound at API key mint time. `GET /v1/models` accepts either an API key or an OpenShift token; with a user token, `X-MaaS-Subscription` remains supported for filtering.
+- **Automatic** (omit `subscription`): Platform selects your highest-priority subscription
+- **Explicit** (set `subscription`): Bind to a specific subscription by name
 
-### Interim OIDC Flow
+The response includes the bound `subscription` name.
 
-When the `maas-api` AuthPolicy is configured for OIDC but model HTTPRoutes still use the existing API-key-only policy, the flow is:
-
-1. Authenticate to your IdP and obtain an OIDC access token.
-2. Call `POST /v1/api-keys` with that OIDC token.
-3. Use the returned `sk-oai-*` key for `GET /v1/models` and inference requests.
-
-This preserves compatibility with the current model-route policy while allowing non-OpenShift identities to onboard through `maas-api`.
-
----
-
-## Creating and Using API Keys
-
-For step-by-step instructions on obtaining and using API keys to access models, including practical examples and troubleshooting, see the [Model Access Guide](model-access.md).
-
-That guide provides:
-
-- Complete walkthrough for getting your OpenShift token
-- How to create an API key via `POST /v1/api-keys`
-- Examples of making inference requests with your API key
-- Troubleshooting common authentication issues
+!!! info "Learn more"
+    For technical details, see [API Key Authentication](../concepts/api-key-authentication.md#subscription-binding-and-priority).
 
 ---
 
 ## Managing Your API Keys
 
-### Key Expiration
+### Listing Your Keys
 
-Keys have a configurable TTL:
-
-- **Default**: Omit `expiresIn` in the create request; the key uses the configured maximum (e.g., 90 days).
-- **Custom TTL**: Set `expiresIn` when creating (e.g., `"90d"`, `"30d"`, `"1h"`). The response includes `expiresAt` (RFC3339).
-
-When a key expires, validation returns `valid: false` with reason `"key revoked or expired"`. Create a new key to continue.
-
-### Revoking Your Keys
-
-**Revoke a single key:** Send a `DELETE` request to `/v1/api-keys/:id`.
+Search for your API keys with optional filters:
 
 ```bash
+curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "active",
+    "limit": 10,
+    "offset": 0
+  }' | jq .
+```
+
+**Filter options:**
+
+| Field | Description |
+|-------|-------------|
+| `status` | Filter by status: `active`, `revoked`, `expired` |
+| `limit` | Number of results per page (default: 10) |
+| `offset` | Offset for pagination (default: 0) |
+| `includeEphemeral` | Include ephemeral keys (default: false) |
+
+### Get Key Details
+
+Get metadata for a specific key by ID:
+
+```bash
+KEY_ID="550e8400-e29b-41d4-a716-446655440000"
+curl -sSk "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
+  -H "Authorization: Bearer $(oc whoami -t)" | jq .
+```
+
+**Response:**
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "my-api-key",
+  "description": "Key for model access",
+  "status": "active",
+  "subscription": "premium-subscription",
+  "createdAt": "2026-04-28T12:00:00Z",
+  "expiresAt": "2026-07-27T12:00:00Z",
+  "lastUsedAt": "2026-04-29T10:30:00Z"
+}
+```
+
+---
+
+## Key Expiration
+
+Set `expiresIn` to a duration string (`"90d"`, `"30d"`, `"1h"`), or omit it to use the platform maximum. Expired keys return `valid: false` on validation—create a new key to continue access.
+
+**Best practices:** Long TTL (90d) for stable integrations, short TTL (30d or less) for security-conscious environments, ephemeral keys (≤1h) for temporary access.
+
+---
+
+## Revoking Keys
+
+### Revoke a Single Key
+
+```bash
+KEY_ID="550e8400-e29b-41d4-a716-446655440000"
 curl -sSk -X DELETE "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   -H "Authorization: Bearer $(oc whoami -t)"
 ```
 
-Revocation updates the key status to `revoked` in the database. The next validation request will reject the key. Authorino may cache validation results briefly; revocation is effective as soon as the cache expires.
+Revocation takes effect immediately (Authorino may cache briefly).
 
-### Ephemeral Keys
+### Revoke All Your Keys
 
-Ephemeral keys are short-lived credentials designed for temporary programmatic access (e.g., playground sessions). They differ from regular keys:
+Revoke all active keys for your user:
+
+```bash
+curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" | jq .
+```
+
+**Response:**
+
+```json
+{
+  "revokedCount": 5,
+  "message": "Successfully revoked 5 API key(s)"
+}
+```
+
+**When to revoke all keys:**
+- Security incident (compromised credentials)
+- Your groups changed and you need fresh group membership
+- Rotating all credentials as part of security policy
+
+!!! note "Administrator bulk revocation"
+    Administrators can revoke keys for any user. See [API Key Administration](../configuration-and-management/api-key-administration.md#bulk-revocation).
+
+---
+
+## Ephemeral Keys
+
+Ephemeral keys are short-lived credentials for temporary access (e.g., playground sessions, demos).
+
+**Differences from regular keys:**
 
 | Property | Regular Key | Ephemeral Key |
 |----------|-------------|---------------|
@@ -201,39 +198,46 @@ Ephemeral keys are short-lived credentials designed for temporary programmatic a
 | Maximum expiration | Configured maximum | 1 hour |
 | Name required | Yes | No (auto-generated if omitted) |
 | Visible in default search | Yes | No (`includeEphemeral: true` required) |
+| Auto-cleanup | No | Yes (30-minute grace after expiry) |
 
-Create an ephemeral key:
+**Create an ephemeral key:**
 
 ```bash
 curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys" \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
-  -d '{"ephemeral": true, "expiresIn": "30m"}'
+  -d '{"ephemeral": true, "expiresIn": "30m"}' | jq .
 ```
 
-Expired ephemeral keys are automatically cleaned up by the platform. See [API Key Administration](../configuration-and-management/api-key-administration.md) for details.
+Expired ephemeral keys are automatically cleaned up by a CronJob. See [API Key Administration](../configuration-and-management/api-key-administration.md#ephemeral-key-cleanup) for details.
 
 ---
 
-## Frequently Asked Questions (FAQ)
+## Frequently Asked Questions
 
 **Q: My subscription access is wrong. How do I fix it?**
 
-A: Your access is determined by your group membership in OpenShift at the time the API key was created. Those groups are stored with the key and used for authorization. The subscription name on the key is fixed at mint time; to use a different subscription, create another key with `"subscription": "<name>"`. If your groups have changed, create a new API key to pick up the new membership.
+A: Your access is determined by your group membership at the time the API key was created. Those groups are stored with the key. If your groups have changed, create a new API key to pick up the new membership.
 
 ---
 
 **Q: What happens if my group membership changes after I create an API key?**
-<<<<<<< HEAD:docs/content/user-guide/api-key-management.md
-=======
 
-A: API keys store your groups and bound subscription name at creation time. If your group membership changes after the key was created, the key still carries the **old** groups and subscription until it is revoked and recreated. Subscription metadata for gateway inference uses the stored groups and subscription from validation. To pick up new groups or a different default subscription, revoke the old key and create a new one.
+A: API keys store your groups and bound subscription name at creation time. If your group membership changes, the key retains the **old** groups until it is revoked. To pick up new groups or a different subscription, revoke the old key and create a new one.
+
+For technical details, see [Group Membership Snapshots](../concepts/api-key-authentication.md#group-membership-snapshots).
 
 ---
 
 **Q: What if two MaaSSubscriptions use the same `spec.priority`?**
 
 A: API key mint and subscription selection use a deterministic order when priorities tie (e.g. token limit, then name). Operators should still assign distinct priorities when possible. The MaaSSubscription controller sets status condition `SpecPriorityDuplicate` and logs when another subscription shares the same priority—use that to clean up configuration.
+
+---
+
+**Q: What's the difference between my OpenShift/OIDC token and an API key?**
+
+A: Your **OpenShift/OIDC token** is your identity token from authentication. An **API key** is a long-lived credential created via `POST /v1/api-keys` and stored as a hash in PostgreSQL. The API passes your `Authorization` header as-is to each model endpoint, so use whichever credential type the model route accepts. In the current interim OIDC rollout, use the OIDC token to mint an API key first, then use that key for `/v1/models` and inference.
 
 ---
 
@@ -245,7 +249,7 @@ A: For interactive use or long-running integrations, keys with long TTL (e.g., 9
 
 **Q: Can I have multiple active API keys at once?**
 
-A: Yes. Each call to `POST /v1/api-keys` creates a new, independent key. You can list and manage them via `POST /v1/api-keys/search` (with optional filters and pagination) or `GET /v1/api-keys/{id}` for a specific key.
+A: Yes. Each call to `POST /v1/api-keys` creates a new, independent key. You can list and manage them via `POST /v1/api-keys/search` or `GET /v1/api-keys/{id}`.
 
 ---
 
@@ -261,25 +265,19 @@ A: Yes. Your API key is bound to a subscription at creation time. If that subscr
 
 ---
 
-**Q: What's the difference between my OpenShift/OIDC token and an API key?**
-
-A: Your **OpenShift/OIDC token** is your identity token from authentication. An **API key** is a long-lived credential created via `POST /v1/api-keys` and stored as a hash in PostgreSQL. The API passes your `Authorization` header as-is to each model endpoint, so use whichever credential type the model route accepts. In the current interim OIDC rollout, use the OIDC token to mint an API key first, then use that key for `/v1/models` and inference.
-
----
-
-**Q: Do I need an API key to list available models?**
-
-A: Not always. If the target model routes accept your OpenShift or OIDC token directly, call **GET /v1/models** with that token. If only the `maas-api` route is OIDC-enabled and the model routes still use API-key auth, mint an API key with `POST /v1/api-keys` first and then call **GET /v1/models** with the returned key.
-
----
-
 **Q: Where is my API key stored?**
 
 A: Only the SHA-256 hash of your key is stored in PostgreSQL. The plaintext key is returned once at creation and is never stored. If you lose it, you must create a new key.
 
 ---
 
+## Next Steps
+
+- **[Model Discovery](model-discovery.md)** - List available models
+
 ## Related Documentation
 
-- **[Model Access](model-access.md)**: Step-by-step guide for creating and using API keys
-- **[API Key Administration](../configuration-and-management/api-key-administration.md)**: For administrators - bulk revocation and cleanup operations
+- **[Inference](inference.md)** - Make inference requests with your API key
+- **[API Key Authentication](../concepts/api-key-authentication.md)** - Technical deep dive into how authentication works
+- **[API Key Administration](../configuration-and-management/api-key-administration.md)** - For administrators: bulk revocation and cleanup operations
+- **[Access and Quota Overview](../concepts/subscription-overview.md)** - How policies and subscriptions work together

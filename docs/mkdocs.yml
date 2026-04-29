@@ -61,6 +61,8 @@ nav:
     - Personas: concepts/personas.md
     - Access and Quota Overview: concepts/subscription-overview.md
     - Model Reference: concepts/model-reference.md
+    - API Key Authentication: concepts/api-key-authentication.md
+    - Model Access Control: concepts/model-access-control.md
   - Install:
     - Quick Start: quickstart.md
     - Prerequisites:
@@ -91,7 +93,8 @@ nav:
       - Authorino Caching: configuration-and-management/authorino-caching.md
   - User Guide:
     - API Key Management: user-guide/api-key-management.md
-    - Model Access: user-guide/model-access.md
+    - Model Discovery: user-guide/model-discovery.md
+    - Inference: user-guide/inference.md
   - Contributing:
     - MaaS Testing and Contribution Guide: contributing/testing-guide.md
   - API Reference:

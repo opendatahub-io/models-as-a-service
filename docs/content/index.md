@@ -16,7 +16,8 @@ Use this platform to streamline the deployment of your models, monitor usage, an
 ### 👤 User Guide
 
 - **[API Key Management](user-guide/api-key-management.md)** - Creating and managing API keys
-- **[Model Access](user-guide/model-access.md)** - Accessing models with your API key
+- **[Model Discovery](user-guide/model-discovery.md)** - Listing available models
+- **[Inference](user-guide/inference.md)** - Making inference requests
 
 ### ⚙️ Administration
 
