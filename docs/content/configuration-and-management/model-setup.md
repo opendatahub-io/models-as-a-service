@@ -152,7 +152,7 @@ After configuring your model, verify it's accessible.
     Both model kinds require **MaaSModelRef** for registration, **MaaSAuthPolicy** for access control, and **MaaSSubscription** for rate limits. See [Quota and Access Configuration](quota-and-access-configuration.md) for complete policy setup.
 
 !!! note "API Key Required"
-    These verification steps require an API key. See [Self-Service Model Access](../user-guide/self-service-model-access.md#getting-your-api-key) for how to create one.
+    These verification steps require an API key. See [API Key Management](../user-guide/api-key-management.md#creating-api-keys) for how to create one.
 
 **1. Check the model appears in the catalog:**
 
