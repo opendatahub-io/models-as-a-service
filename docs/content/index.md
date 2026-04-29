@@ -13,21 +13,24 @@ Use this platform to streamline the deployment of your models, monitor usage, an
 - **[QuickStart Guide](quickstart.md)** - Complete platform deployment instructions
 - **[Architecture](concepts/architecture.md)** - Overview of the MaaS Platform architecture
 
-### ⚙️ Configuration & Management
+### 👤 User Guide
 
-- **[Access and Quota Overview](concepts/subscription-overview.md)** - Policies (access) and subscriptions (quota) for model access
+- **[API Key Management](user-guide/api-key-management.md)** - Creating and managing API keys
+- **[Model Discovery](user-guide/model-discovery.md)** - Listing available models
+- **[Inference](user-guide/inference.md)** - Making inference requests
+
+### ⚙️ Administration
+
+- **[Access and Quota Overview](concepts/subscription-overview.md)** - Configuring policies and subscriptions
 - **[Model Setup](configuration-and-management/model-setup.md)** - Setting up models for MaaS
+- **[API Key Administration](configuration-and-management/api-key-administration.md)** - Bulk revocation and cleanup
+- **[Observability](advanced-administration/observability.md)** - Monitoring, metrics, and dashboards
+- **[Limitador Persistence](advanced-administration/limitador-persistence.md)** - Redis backend for rate-limit counters
+- **[TLS Configuration](configuration-and-management/tls-configuration.md)** - Configuring TLS
 
 ### 📋 Release Notes
 
 - **[Release notes](release-notes/index.md)** - Version highlights and known limitations by release
-
-### 🔧 Advanced Administration
-
-- **[Observability](advanced-administration/observability.md)** - Monitoring, metrics, and dashboards
-- **[Limitador Persistence](advanced-administration/limitador-persistence.md)** - Redis backend for persistent rate-limit counters
-- **[TLS Configuration](configuration-and-management/tls-configuration.md)** - Configuring TLS for MaaS API, Authorino, and Gateway
-- **[Token Management](configuration-and-management/token-management.md)** - Token authentication system and lifecycle
 
 ### 📖 Installation Guide
 

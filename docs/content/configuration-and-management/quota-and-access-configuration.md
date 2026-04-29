@@ -257,7 +257,7 @@ Users will get subscription access on their next request (after group membership
 
 ## Multiple Subscriptions per User
 
-When a user belongs to multiple groups that each have a subscription, the access depends on the API key used. A subscription is bound to each API key at minting (explicit or highest priority). See [Understanding Token Management](token-management.md).
+When a user belongs to multiple groups that each have a subscription, the access depends on the API key used. A subscription is bound to each API key at minting (explicit or highest priority). See [API Key Management](../user-guide/api-key-management.md).
 
 ## Troubleshooting
 
@@ -298,5 +298,5 @@ kubectl wait --for=condition=Enforced=true tokenratelimitpolicy/<policy-name> -n
 
 - [Access and Quota Overview](../concepts/subscription-overview.md) — How policies and subscriptions work together
 - [Model Reference](../concepts/model-reference.md) — Conceptual overview
-- [Token Management](token-management.md)
+- [API Key Management](../user-guide/api-key-management.md)
 - [Validation](../install/validation.md)
