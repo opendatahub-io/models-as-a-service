@@ -30,6 +30,22 @@ This updates the status of all API keys belonging to the specified user to `revo
 
 ---
 
+## Group Membership Changes
+
+API keys store the user's group membership at creation time. When a user's groups change (role changes, offboarding, etc.), their existing API keys retain the old group membership and permissions until revoked.
+
+### When to Revoke Keys
+
+Revoke all keys for a user immediately when:
+
+- **User leaves the organization** - Offboarding requires immediate revocation
+- **Role or group changes** - User moves to a different team or loses access to certain models
+- **Security incident** - Compromised credentials or unauthorized access detected
+
+Use the bulk revoke endpoint to revoke all keys for the affected user, then notify them to create new keys with updated permissions.
+
+---
+
 ## Ephemeral Key Cleanup
 
 Expired ephemeral keys are automatically deleted from the database by a **CronJob** (`maas-api-key-cleanup`) that runs every 15 minutes. This prevents unbounded accumulation of expired short-lived credentials.
