@@ -2969,7 +2969,7 @@ MaaS requires RHOAI v3.0 or later:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.state}&#39;</span><span class="o">=</span>AtLatestKnown<span class="w"> </span>subscription/rhoai3-operator<span class="w"> </span>-n<span class="w"> </span>redhat-ods-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
 </code></pre></div>
 <p>Wait for the operator webhook to be ready:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>Available<span class="w"> </span>--timeout<span class="o">=</span>120s<span class="w"> </span>deployment/rhods-operator-controller-manager<span class="w"> </span>-n<span class="w"> </span>redhat-ods-operator
+<div class="highlight"><pre><span></span><code><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>Available<span class="w"> </span>--timeout<span class="o">=</span>120s<span class="w"> </span>deployment/rhods-operator<span class="w"> </span>-n<span class="w"> </span>redhat-ods-operator
 </code></pre></div>
 <p>Once ready, the RHOAI Operator automatically creates a <code>DSCInitialization</code> resource.</p>
 </div>
@@ -3002,7 +3002,7 @@ MaaS requires RHOAI v3.0 or later:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 13:41:24 UTC">April 17, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 29, 2026 19:29:24 UTC">April 29, 2026</span>
   </span>
 
     
