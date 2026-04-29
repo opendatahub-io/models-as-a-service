@@ -17,7 +17,15 @@
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/concepts/api-key-authentication/</loc>
+         <lastmod>2026-04-29</lastmod>
+    </url>
+    <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/concepts/architecture/</loc>
+         <lastmod>2026-04-29</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/concepts/model-access-control/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
@@ -30,6 +38,10 @@
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/concepts/subscription-overview/</loc>
+         <lastmod>2026-04-29</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/api-key-administration/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
@@ -74,10 +86,6 @@
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/tls-configuration/</loc>
-         <lastmod>2026-04-29</lastmod>
-    </url>
-    <url>
-         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/token-management/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
@@ -149,7 +157,15 @@
          <lastmod>2026-04-29</lastmod>
     </url>
     <url>
-         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/user-guide/self-service-model-access/</loc>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/user-guide/api-key-management/</loc>
+         <lastmod>2026-04-29</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/user-guide/inference/</loc>
+         <lastmod>2026-04-29</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/user-guide/model-discovery/</loc>
          <lastmod>2026-04-29</lastmod>
     </url>
 </urlset>

@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/namespace-rbac/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/user-guide/api-key-management/">
       
       
-        <link rel="prev" href="../api-key-administration/">
+        <link rel="prev" href="../../configuration-and-management/authorino-caching/">
       
       
-        <link rel="next" href="../tls-configuration/">
+        <link rel="next" href="../model-discovery/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Namespace User Permissions (RBAC) - ODH Models-as-a-Service Documentation</title>
+        <title>API Key Management - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#namespace-user-permissions" class="md-skip">
+        <a href="#api-key-management" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Namespace User Permissions (RBAC)
+              API Key Management
             
           </span>
         </div>
@@ -289,8 +289,6 @@
   
   
   
-    
-  
   
     
     
@@ -298,13 +296,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../quota-and-access-configuration/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../configuration-and-management/quota-and-access-configuration/" class="md-tabs__link">
           
   
   
@@ -323,11 +319,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../user-guide/api-key-management/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
           
   
   
@@ -1272,31 +1270,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -1314,7 +1309,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1329,31 +1324,28 @@
                 
   
   
-    
   
   
-  
     
     
     
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
         
           
-          
         
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" checked>
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
         
           
-          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
             
   
   
@@ -1371,7 +1363,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_1">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1389,7 +1381,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../quota-and-access-configuration/" class="md-nav__link">
+      <a href="../../configuration-and-management/quota-and-access-configuration/" class="md-nav__link">
         
   
   
@@ -1417,7 +1409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-key-administration/" class="md-nav__link">
+      <a href="../../configuration-and-management/api-key-administration/" class="md-nav__link">
         
   
   
@@ -1442,37 +1434,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Namespace User Permissions (RBAC)
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/namespace-rbac/" class="md-nav__link">
         
   
   
@@ -1488,165 +1453,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#clusterroles" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ClusterRoles
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#permission-matrix" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Permission Matrix
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Permission Matrix">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#included-resources" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Included Resources
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#excluded-resources" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Excluded Resources
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#verification" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Verification
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Verification">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#for-namespace-users" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        For Namespace Users
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#for-platform-administrators" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        For Platform Administrators
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Troubleshooting
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Troubleshooting">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#forbidden-error-when-creating-maasmodelref" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        "Forbidden" Error When Creating MaaSModelRef
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cannot-create-maassubscription" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cannot Create MaaSSubscription
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related Documentation
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1659,7 +1465,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tls-configuration/" class="md-nav__link">
+      <a href="../../configuration-and-management/tls-configuration/" class="md-nav__link">
         
   
   
@@ -1701,13 +1507,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1716,7 +1519,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
         
           
-          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
             
   
   
@@ -1752,7 +1555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../model-setup/" class="md-nav__link">
+      <a href="../../configuration-and-management/model-setup/" class="md-nav__link">
         
   
   
@@ -1780,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../model-listing-flow/" class="md-nav__link">
+      <a href="../../configuration-and-management/model-listing-flow/" class="md-nav__link">
         
   
   
@@ -1808,7 +1611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../maas-model-kinds/" class="md-nav__link">
+      <a href="../../configuration-and-management/maas-model-kinds/" class="md-nav__link">
         
   
   
@@ -1850,13 +1653,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1865,7 +1665,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_3" >
         
           
-          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
             
   
   
@@ -1901,7 +1701,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../maas-controller-overview/" class="md-nav__link">
+      <a href="../../configuration-and-management/maas-controller-overview/" class="md-nav__link">
         
   
   
@@ -1929,7 +1729,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../crd-annotations/" class="md-nav__link">
+      <a href="../../configuration-and-management/crd-annotations/" class="md-nav__link">
         
   
   
@@ -1971,13 +1771,10 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
@@ -1986,7 +1783,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_4" >
         
           
-          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
             
   
   
@@ -2078,7 +1875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../authorino-caching/" class="md-nav__link">
+      <a href="../../configuration-and-management/authorino-caching/" class="md-nav__link">
         
   
   
@@ -2118,28 +1915,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
-        
-          
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
             
   
   
@@ -2157,7 +1957,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -2172,10 +1972,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../user-guide/api-key-management/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Key Management
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -2191,6 +2018,220 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#creating-api-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating API Keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Creating API Keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#get-your-openshift-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Get Your OpenShift Token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set-platform-url" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set Platform URL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#create-an-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create an API Key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subscription-binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subscription Binding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managing-your-api-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managing Your API Keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Managing Your API Keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#listing-your-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Listing Your Keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#get-key-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Get Key Details
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-expiration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Expiration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#revoking-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revoking Keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revoking Keys">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#revoke-a-single-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revoke a Single Key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revoke-all-your-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revoke All Your Keys
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ephemeral-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ephemeral Keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frequently-asked-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frequently Asked Questions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next Steps
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2203,7 +2244,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/model-discovery/" class="md-nav__link">
+      <a href="../model-discovery/" class="md-nav__link">
         
   
   
@@ -2231,7 +2272,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../user-guide/inference/" class="md-nav__link">
+      <a href="../inference/" class="md-nav__link">
         
   
   
@@ -2666,33 +2707,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#clusterroles" class="md-nav__link">
+  <a href="#creating-api-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
-        ClusterRoles
+        Creating API Keys
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#permission-matrix" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Permission Matrix
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Permission Matrix">
+    <nav class="md-nav" aria-label="Creating API Keys">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#included-resources" class="md-nav__link">
+  <a href="#get-your-openshift-token" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Included Resources
+        Get Your OpenShift Token
       
     </span>
   </a>
@@ -2700,10 +2730,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#excluded-resources" class="md-nav__link">
+  <a href="#set-platform-url" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Excluded Resources
+        Set Platform URL
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#create-an-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Create an API Key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#subscription-binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subscription Binding
       
     </span>
   </a>
@@ -2716,22 +2768,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#verification" class="md-nav__link">
+  <a href="#managing-your-api-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verification
+        Managing Your API Keys
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Verification">
+    <nav class="md-nav" aria-label="Managing Your API Keys">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#for-namespace-users" class="md-nav__link">
+  <a href="#listing-your-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
-        For Namespace Users
+        Listing Your Keys
       
     </span>
   </a>
@@ -2739,10 +2791,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#for-platform-administrators" class="md-nav__link">
+  <a href="#get-key-details" class="md-nav__link">
     <span class="md-ellipsis">
       
-        For Platform Administrators
+        Get Key Details
       
     </span>
   </a>
@@ -2755,22 +2807,33 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
+  <a href="#key-expiration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Troubleshooting
+        Key Expiration
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Troubleshooting">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#revoking-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Revoking Keys
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Revoking Keys">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#forbidden-error-when-creating-maasmodelref" class="md-nav__link">
+  <a href="#revoke-a-single-key" class="md-nav__link">
     <span class="md-ellipsis">
       
-        "Forbidden" Error When Creating MaaSModelRef
+        Revoke a Single Key
       
     </span>
   </a>
@@ -2778,10 +2841,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#cannot-create-maassubscription" class="md-nav__link">
+  <a href="#revoke-all-your-keys" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cannot Create MaaSSubscription
+        Revoke All Your Keys
       
     </span>
   </a>
@@ -2790,6 +2853,39 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ephemeral-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ephemeral Keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frequently-asked-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frequently Asked Questions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next Steps
+      
+    </span>
+  </a>
   
 </li>
       
@@ -2824,83 +2920,277 @@
   
 
 
-<h1 id="namespace-user-permissions">Namespace User Permissions</h1>
-<p>This page describes the RBAC permissions for MaaS custom resources in user namespaces.</p>
-<h2 id="clusterroles">ClusterRoles</h2>
-<p>MaaS provides two aggregated ClusterRoles that extend the standard Kubernetes/OpenShift roles with permissions for MaaS resources:</p>
-<ul>
-<li><strong><code>maas-owner-role</code></strong> - Aggregates to <code>admin</code> and <code>edit</code> roles</li>
-<li><strong><code>maas-viewer-role</code></strong> - Aggregates to <code>view</code>, <code>admin</code>, and <code>edit</code> roles</li>
-</ul>
-<p>This allows namespace admins and contributors to create and manage MaaS resources without requiring cluster-admin intervention.</p>
-<h2 id="permission-matrix">Permission Matrix</h2>
+<h1 id="api-key-management">API Key Management</h1>
+<p>This guide explains how to create and manage API keys for accessing models through the MaaS platform.</p>
+<div class="admonition tip">
+<p class="admonition-title">API keys for model access</p>
+<p>The platform uses <strong>API keys</strong> (<code>sk-oai-*</code>) stored in PostgreSQL for programmatic access. Create keys via <code>POST /v1/api-keys</code> (authenticate with your OpenShift token) and use them with the <code>Authorization: Bearer</code> header. Each key is bound to one MaaSSubscription at creation time.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Prerequisites</p>
+<p>This document assumes your administrator has configured subscriptions (MaaSAuthPolicy, MaaSSubscription) that grant you access to models.</p>
+</div>
+<hr />
+<h2 id="creating-api-keys">Creating API Keys</h2>
+<h3 id="get-your-openshift-token">Get Your OpenShift Token</h3>
+<p>First, obtain your OpenShift authentication token:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">OC_TOKEN</span><span class="o">=</span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span>
+</code></pre></div>
+<h3 id="set-platform-url">Set Platform URL</h3>
+<p>Get the MaaS API URL for your cluster:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">CLUSTER_DOMAIN</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>ingresses.config.openshift.io<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.domain}&#39;</span><span class="k">)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">MAAS_API_URL</span><span class="o">=</span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">&quot;</span>
+</code></pre></div>
+<h3 id="create-an-api-key">Create an API Key</h3>
+<p>Create a new API key with a name, description, and expiration:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">API_KEY_RESPONSE</span><span class="o">=</span><span class="k">$(</span>curl<span class="w"> </span>-sSk<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="si">${</span><span class="nv">OC_TOKEN</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;name&quot;: &quot;my-api-key&quot;, &quot;description&quot;: &quot;Key for model access&quot;, &quot;expiresIn&quot;: &quot;90d&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MAAS_API_URL</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys&quot;</span><span class="k">)</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nv">API_KEY</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="nv">$API_KEY_RESPONSE</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>.key<span class="k">)</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;API Key: </span><span class="si">${</span><span class="nv">API_KEY</span><span class="si">}</span><span class="s2">&quot;</span>
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">API key shown only once</p>
+<p>The plaintext API key is returned <strong>only at creation time</strong>. Store it securely when displayed. If you lose it, you must create a new key.</p>
+</div>
+<p><strong>Request body fields:</strong></p>
 <table>
 <thead>
 <tr>
-<th>User Role</th>
-<th>Resources</th>
-<th>Permissions</th>
+<th>Field</th>
+<th>Required</th>
+<th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>admin</strong></td>
-<td><code>MaaSModelRef</code>, <code>ExternalModel</code></td>
-<td><code>create</code>, <code>delete</code>, <code>get</code>, <code>list</code>, <code>patch</code>, <code>update</code>, <code>watch</code></td>
+<td><code>name</code></td>
+<td>Yes</td>
+<td>Human-friendly name for the key (e.g., "production-bot")</td>
 </tr>
 <tr>
-<td><strong>edit</strong></td>
-<td><code>MaaSModelRef</code>, <code>ExternalModel</code></td>
-<td><code>create</code>, <code>delete</code>, <code>get</code>, <code>list</code>, <code>patch</code>, <code>update</code>, <code>watch</code></td>
+<td><code>description</code></td>
+<td>No</td>
+<td>Optional description</td>
 </tr>
 <tr>
-<td><strong>view</strong></td>
-<td><code>MaaSModelRef</code>, <code>ExternalModel</code></td>
-<td><code>get</code>, <code>list</code>, <code>watch</code></td>
+<td><code>expiresIn</code></td>
+<td>No</td>
+<td>TTL string (e.g., <code>90d</code>, <code>30d</code>, <code>1h</code>). Omit to use configured maximum.</td>
+</tr>
+<tr>
+<td><code>subscription</code></td>
+<td>No</td>
+<td>MaaSSubscription name to bind. Omit to auto-select highest priority.</td>
+</tr>
+<tr>
+<td><code>ephemeral</code></td>
+<td>No</td>
+<td>Set to <code>true</code> for short-lived keys (max 1 hour). See <a href="#ephemeral-keys">Ephemeral Keys</a>.</td>
 </tr>
 </tbody>
 </table>
-<h3 id="included-resources">Included Resources</h3>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;550e8400-e29b-41d4-a716-446655440000&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sk-oai-...&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-api-key&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">&quot;subscription&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;premium-subscription&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">&quot;expiresAt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-27T12:00:00Z&quot;</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="subscription-binding">Subscription Binding</h3>
+<p>Each API key binds to one MaaSSubscription at creation, determining which models you can access and what rate limits apply.</p>
 <ul>
-<li><strong>MaaSModelRef</strong> - References to model backends (LLMInferenceService or ExternalModel backend)</li>
-<li><strong>ExternalModel</strong> - External LLM provider definitions (OpenAI, Anthropic, etc.)</li>
+<li><strong>Automatic</strong> (omit <code>subscription</code>): Platform selects your highest-priority subscription</li>
+<li><strong>Explicit</strong> (set <code>subscription</code>): Bind to a specific subscription by name</li>
 </ul>
-<h3 id="excluded-resources">Excluded Resources</h3>
-<p>The following platform-managed resources are <strong>not</strong> included:
-- <strong>MaaSSubscription</strong> - Managed in the <code>models-as-a-service</code> namespace by platform admins
-- <strong>MaaSAuthPolicy</strong> - Managed in the <code>models-as-a-service</code> namespace by platform admins</p>
-<h2 id="verification">Verification</h2>
-<h3 id="for-namespace-users">For Namespace Users</h3>
-<p>To verify your permissions in a namespace:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Check if you can create MaaSModelRef</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>kubectl<span class="w"> </span>auth<span class="w"> </span>can-i<span class="w"> </span>create<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>my-models
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Check if you can list MaaSModelRef</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>kubectl<span class="w"> </span>auth<span class="w"> </span>can-i<span class="w"> </span>list<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>my-models
+<p>The response includes the bound <code>subscription</code> name.</p>
+<div class="admonition info">
+<p class="admonition-title">Learn more</p>
+<p>For technical details, see <a href="../../concepts/api-key-authentication/#subscription-binding-and-priority">API Key Authentication</a>.</p>
+</div>
+<hr />
+<h2 id="managing-your-api-keys">Managing Your API Keys</h2>
+<h3 id="listing-your-keys">Listing Your Keys</h3>
+<p>Search for your API keys with optional filters:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MAAS_API_URL</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys/search&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="s1">    &quot;status&quot;: &quot;active&quot;,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="s1">    &quot;limit&quot;: 10,</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="s1">    &quot;offset&quot;: 0</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="s1">  }&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </code></pre></div>
-<h3 id="for-platform-administrators">For Platform Administrators</h3>
-<p>To verify the ClusterRoles are correctly installed and aggregated, run the RBAC verification script at <code>scripts/verify-rbac-aggregation.sh</code> in the repository root:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./scripts/verify-rbac-aggregation.sh
+<p><strong>Filter options:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>status</code></td>
+<td>Filter by status: <code>active</code>, <code>revoked</code>, <code>expired</code></td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>Number of results per page (default: 10)</td>
+</tr>
+<tr>
+<td><code>offset</code></td>
+<td>Offset for pagination (default: 0)</td>
+</tr>
+<tr>
+<td><code>includeEphemeral</code></td>
+<td>Include ephemeral keys (default: false)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="get-key-details">Get Key Details</h3>
+<p>Get metadata for a specific key by ID:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">KEY_ID</span><span class="o">=</span><span class="s2">&quot;550e8400-e29b-41d4-a716-446655440000&quot;</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>curl<span class="w"> </span>-sSk<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MAAS_API_URL</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys/</span><span class="si">${</span><span class="nv">KEY_ID</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </code></pre></div>
-<h2 id="troubleshooting">Troubleshooting</h2>
-<h3 id="forbidden-error-when-creating-maasmodelref">"Forbidden" Error When Creating MaaSModelRef</h3>
-<p><strong>Problem:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Error from server (Forbidden): maasmodelrefs.maas.opendatahub.io is forbidden: 
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>User &quot;user@example.com&quot; cannot create resource &quot;maasmodelrefs&quot; in API group 
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>&quot;maas.opendatahub.io&quot; in the namespace &quot;my-models&quot;
-</code></pre></div></p>
-<p><strong>Solution:</strong></p>
-<p>You need the <code>admin</code> or <code>edit</code> role in the namespace. Ask your platform administrator to grant you access:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>create<span class="w"> </span>rolebinding<span class="w"> </span>my-models-admin<span class="w"> </span>--clusterrole<span class="o">=</span>admin<span class="w"> </span>--user<span class="o">=</span>user@example.com<span class="w"> </span>-n<span class="w"> </span>my-models
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;550e8400-e29b-41d4-a716-446655440000&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;my-api-key&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Key for model access&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;active&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;subscription&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;premium-subscription&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">&quot;createdAt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-28T12:00:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="nt">&quot;expiresAt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-27T12:00:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span><span class="nt">&quot;lastUsedAt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-29T10:30:00Z&quot;</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="p">}</span>
 </code></pre></div>
-<h3 id="cannot-create-maassubscription">Cannot Create MaaSSubscription</h3>
-<p><strong>Problem:</strong> You get a "Forbidden" error when trying to create a MaaSSubscription.</p>
-<p><strong>Solution:</strong> This is expected. <code>MaaSSubscription</code> and <code>MaaSAuthPolicy</code> are platform-managed resources and can only be created by cluster administrators. Contact your platform administrator if you need a new subscription.</p>
+<hr />
+<h2 id="key-expiration">Key Expiration</h2>
+<p>Set <code>expiresIn</code> to a duration string (<code>"90d"</code>, <code>"30d"</code>, <code>"1h"</code>), or omit it to use the platform maximum. Expired keys return <code>valid: false</code> on validation—create a new key to continue access.</p>
+<p><strong>Best practices:</strong> Long TTL (90d) for stable integrations, short TTL (30d or less) for security-conscious environments, ephemeral keys (≤1h) for temporary access.</p>
+<hr />
+<h2 id="revoking-keys">Revoking Keys</h2>
+<h3 id="revoke-a-single-key">Revoke a Single Key</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">KEY_ID</span><span class="o">=</span><span class="s2">&quot;550e8400-e29b-41d4-a716-446655440000&quot;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-X<span class="w"> </span>DELETE<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MAAS_API_URL</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys/</span><span class="si">${</span><span class="nv">KEY_ID</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span>
+</code></pre></div>
+<p>Revocation takes effect immediately (Authorino may cache briefly).</p>
+<h3 id="revoke-all-your-keys">Revoke All Your Keys</h3>
+<p>Revoke all active keys for your user:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MAAS_API_URL</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys/bulk-revoke&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</code></pre></div>
+<p><strong>Response:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;revokedCount&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Successfully revoked 5 API key(s)&quot;</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="p">}</span>
+</code></pre></div>
+<p><strong>When to revoke all keys:</strong>
+- Security incident (compromised credentials)
+- Your groups changed and you need fresh group membership
+- Rotating all credentials as part of security policy</p>
+<div class="admonition note">
+<p class="admonition-title">Administrator bulk revocation</p>
+<p>Administrators can revoke keys for any user. See <a href="../../configuration-and-management/api-key-administration/#bulk-revocation">API Key Administration</a>.</p>
+</div>
+<hr />
+<h2 id="ephemeral-keys">Ephemeral Keys</h2>
+<p>Ephemeral keys are short-lived credentials for temporary access (e.g., playground sessions, demos).</p>
+<p><strong>Differences from regular keys:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Regular Key</th>
+<th>Ephemeral Key</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Default expiration</td>
+<td>Configured maximum (e.g., 90 days)</td>
+<td>1 hour</td>
+</tr>
+<tr>
+<td>Maximum expiration</td>
+<td>Configured maximum</td>
+<td>1 hour</td>
+</tr>
+<tr>
+<td>Name required</td>
+<td>Yes</td>
+<td>No (auto-generated if omitted)</td>
+</tr>
+<tr>
+<td>Visible in default search</td>
+<td>Yes</td>
+<td>No (<code>includeEphemeral: true</code> required)</td>
+</tr>
+<tr>
+<td>Auto-cleanup</td>
+<td>No</td>
+<td>Yes (30-minute grace after expiry)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Create an ephemeral key:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MAAS_API_URL</span><span class="si">}</span><span class="s2">/maas-api/v1/api-keys&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;ephemeral&quot;: true, &quot;expiresIn&quot;: &quot;30m&quot;}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</code></pre></div>
+<p>Expired ephemeral keys are automatically cleaned up by a CronJob. See <a href="../../configuration-and-management/api-key-administration/#ephemeral-key-cleanup">API Key Administration</a> for details.</p>
+<hr />
+<h2 id="frequently-asked-questions">Frequently Asked Questions</h2>
+<p><strong>Q: My subscription access is wrong. How do I fix it?</strong></p>
+<p>A: Your access is determined by your group membership at the time the API key was created. Those groups are stored with the key. If your groups have changed, create a new API key to pick up the new membership.</p>
+<hr />
+<p><strong>Q: What happens if my group membership changes after I create an API key?</strong></p>
+<p>A: API keys store your groups and bound subscription name at creation time. If your group membership changes, the key retains the <strong>old</strong> groups until it is revoked. To pick up new groups or a different subscription, revoke the old key and create a new one.</p>
+<p>For technical details, see <a href="../../concepts/api-key-authentication/#group-membership-snapshots">Group Membership Snapshots</a>.</p>
+<hr />
+<p><strong>Q: What if two MaaSSubscriptions use the same <code>spec.priority</code>?</strong></p>
+<p>A: API key mint and subscription selection use a deterministic order when priorities tie (e.g. token limit, then name). Operators should still assign distinct priorities when possible. The MaaSSubscription controller sets status condition <code>SpecPriorityDuplicate</code> and logs when another subscription shares the same priority—use that to clean up configuration.</p>
+<hr />
+<p><strong>Q: What's the difference between my OpenShift/OIDC token and an API key?</strong></p>
+<p>A: Your <strong>OpenShift/OIDC token</strong> is your identity token from authentication. An <strong>API key</strong> is a long-lived credential created via <code>POST /v1/api-keys</code> and stored as a hash in PostgreSQL. The API passes your <code>Authorization</code> header as-is to each model endpoint, so use whichever credential type the model route accepts. In the current interim OIDC rollout, use the OIDC token to mint an API key first, then use that key for <code>/v1/models</code> and inference.</p>
+<hr />
+<p><strong>Q: How long should my API keys be valid for?</strong></p>
+<p>A: For interactive use or long-running integrations, keys with long TTL (e.g., 90d) or the default maximum are common. For higher security, use shorter TTLs (e.g., 30d) and rotate keys periodically.</p>
+<hr />
+<p><strong>Q: Can I have multiple active API keys at once?</strong></p>
+<p>A: Yes. Each call to <code>POST /v1/api-keys</code> creates a new, independent key. You can list and manage them via <code>POST /v1/api-keys/search</code> or <code>GET /v1/api-keys/{id}</code>.</p>
+<hr />
+<p><strong>Q: What happens if the maas-api service is down?</strong></p>
+<p>A: You will not be able to create or validate API keys. Inference requests that use API keys will fail until the service is back.</p>
+<hr />
+<p><strong>Q: Can I use one API key to access multiple different models?</strong></p>
+<p>A: Yes. Your API key is bound to a subscription at creation time. If that subscription provides access to multiple models, a single key works for all of them. To access models from a different subscription, create a new API key bound to that subscription.</p>
+<hr />
+<p><strong>Q: Where is my API key stored?</strong></p>
+<p>A: Only the SHA-256 hash of your key is stored in PostgreSQL. The plaintext key is returned once at creation and is never stored. If you lose it, you must create a new key.</p>
+<hr />
+<h2 id="next-steps">Next Steps</h2>
+<ul>
+<li><strong><a href="../model-discovery/">Model Discovery</a></strong> - List available models</li>
+</ul>
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
-<li><a href="../model-setup/">Model Setup Guide</a> - How to configure models for MaaS</li>
-<li><a href="../quota-and-access-configuration/">Quota and Access Configuration</a> - Platform admin guide for subscriptions</li>
-<li><a href="../../user-guide/api-key-management/">API Key Management</a> - End user guide for creating API keys and using models</li>
+<li><strong><a href="../inference/">Inference</a></strong> - Make inference requests with your API key</li>
+<li><strong><a href="../../concepts/api-key-authentication/">API Key Authentication</a></strong> - Technical deep dive into how authentication works</li>
+<li><strong><a href="../../configuration-and-management/api-key-administration/">API Key Administration</a></strong> - For administrators: bulk revocation and cleanup operations</li>
+<li><strong><a href="../../concepts/subscription-overview/">Access and Quota Overview</a></strong> - How policies and subscriptions work together</li>
 </ul>
 
 
@@ -2934,7 +3224,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 11, 2026 15:10:21 UTC">April 11, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 29, 2026 19:59:56 UTC">April 29, 2026</span>
   </span>
 
     
