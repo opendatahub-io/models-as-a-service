@@ -281,9 +281,13 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 
 	// Route through the cluster-internal gateway service so probes work on
 	// disconnected clusters where the external LB address is unreachable.
-	// The original Host header is preserved for Envoy routing and Authorino ext-authz.
+	// The original Host header is preserved for gateway routing and Authorino ext-authz.
+	// We switch to HTTP because the gateway's HTTPS listener filters by TLS SNI
+	// (per Gateway API spec), and the SNI won't match when connecting to the
+	// internal address. The HTTP listener matches on the Host header instead.
 	if m.gatewayInternalHost != "" {
 		originalHost := req.URL.Host
+		req.URL.Scheme = "http"
 		req.URL.Host = m.gatewayInternalHost
 		req.Host = originalHost
 	}

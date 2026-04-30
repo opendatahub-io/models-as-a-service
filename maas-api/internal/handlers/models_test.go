@@ -1291,8 +1291,10 @@ func TestGatewayInternalHostRouting(t *testing.T) {
 	// Strip the scheme to get just host:port for the gatewayInternalHost config.
 	internalAddr := strings.TrimPrefix(internalServer.URL, "http://")
 
-	// Build a model whose URL uses the unreachable external hostname.
-	externalEndpoint := "http://" + externalHost + "/llm/routed-model"
+	// Build a model whose URL uses the unreachable external hostname with HTTPS.
+	// The fix must downgrade to HTTP for internal routing (the gateway's HTTPS
+	// listener filters by TLS SNI which won't match the internal address).
+	externalEndpoint := "https://" + externalHost + "/llm/routed-model"
 	maasModelRefItems := []*unstructured.Unstructured{
 		maasModelRefUnstructured("routed-model", fixtures.TestNamespace, externalEndpoint, true, nil),
 	}
