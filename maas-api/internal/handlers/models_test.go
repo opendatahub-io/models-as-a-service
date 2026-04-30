@@ -148,6 +148,28 @@ func makeModelsResponse(modelIDs ...string) []byte {
 	return fmt.Appendf(nil, `{"object":"list","data":[%s]}`, strings.Join(data, ","))
 }
 
+// createMockModelServerWithHostCheck creates a test server that validates the Host header
+// matches expectedHost and returns a valid /v1/models response.
+func createMockModelServerWithHostCheck(t *testing.T, modelID string, expectedHost string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Host != expectedHost {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") && len(authHeader) > 7 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(makeModelsResponse(modelID))
+		} else {
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
 // createMockModelServer creates a test server that returns a valid /v1/models response.
 func createMockModelServer(t *testing.T, modelID string) *httptest.Server {
 	t.Helper()
@@ -332,7 +354,7 @@ func TestListingModels(t *testing.T) {
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15)
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "")
 	require.NoError(t, errMgr)
 
 	// Set up test fixtures
@@ -447,7 +469,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15)
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "")
 	require.NoError(t, errMgr)
 
 	_, cleanup := fixtures.StubTokenProviderAPIs(t)
@@ -675,7 +697,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15)
+	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
@@ -864,7 +886,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15)
+	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
@@ -982,7 +1004,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15)
+	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
@@ -1089,7 +1111,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15)
+	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
@@ -1195,7 +1217,7 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15)
+	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
@@ -1250,4 +1272,65 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		assert.True(t, subscriptionNames["sub-a"], "Should have model with sub-a")
 		assert.True(t, subscriptionNames["sub-b"], "Should have model with sub-b")
 	})
+}
+
+// TestGatewayInternalHostRouting verifies that model access probes are routed
+// through the cluster-internal gateway service when gatewayInternalHost is set.
+// This is the fix for RHOAIENG-60455: on disconnected clusters the external LB
+// address is unreachable, causing FilterModelsByAccess to return an empty list.
+func TestGatewayInternalHostRouting(t *testing.T) {
+	testLogger := logger.Development()
+
+	// The "external" hostname that would normally be unreachable on a disconnected cluster.
+	const externalHost = "maas.apps.disconnected-cluster.example.com"
+
+	// Create a mock server that verifies the Host header is set to the external hostname.
+	// This simulates the cluster-internal gateway service that uses the Host header for routing.
+	internalServer := createMockModelServerWithHostCheck(t, "routed-model", externalHost)
+
+	// Strip the scheme to get just host:port for the gatewayInternalHost config.
+	internalAddr := strings.TrimPrefix(internalServer.URL, "http://")
+
+	// Build a model whose URL uses the unreachable external hostname.
+	externalEndpoint := "http://" + externalHost + "/llm/routed-model"
+	maasModelRefItems := []*unstructured.Unstructured{
+		maasModelRefUnstructured("routed-model", fixtures.TestNamespace, externalEndpoint, true, nil),
+	}
+	maasModelRefLister := fakeMaaSModelRefLister{fixtures.TestNamespace: maasModelRefItems}
+
+	// Create a Manager with gatewayInternalHost pointing to our mock server.
+	modelMgr, err := models.NewManager(testLogger, 15, internalAddr)
+	require.NoError(t, err)
+
+	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, config)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
+	defer cleanup()
+
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{})
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	w := httptest.NewRecorder()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+	req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response pagination.Page[models.Model]
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	// The probe should have been routed through the internal server and succeeded.
+	// Without the fix, this would be empty because the external host is unreachable.
+	require.Len(t, response.Data, 1, "Expected 1 model routed through internal gateway")
+	assert.Equal(t, "routed-model", response.Data[0].ID)
 }
