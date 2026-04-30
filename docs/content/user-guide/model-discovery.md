@@ -18,7 +18,7 @@ MAAS_API_URL="https://maas.${CLUSTER_DOMAIN}"
 API_KEY="sk-oai-..."  # Your API key from api-key-management
 
 # List models
-curl "${MAAS_API_URL}/v1/models" \
+curl "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${API_KEY}" | jq .
 ```
@@ -117,7 +117,7 @@ If a model doesn't appear in the list, check:
 Extract the URL for a specific model:
 
 ```bash
-MODEL_URL=$(curl -s "${MAAS_API_URL}/v1/models" \
+MODEL_URL=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
     jq -r '.data[] | select(.id=="llama-2-7b-chat") | .url')
 
@@ -129,7 +129,7 @@ echo "Model URL: ${MODEL_URL}"
 Filter for only ready models:
 
 ```bash
-curl "${MAAS_API_URL}/v1/models" \
+curl "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
     jq '.data[] | select(.ready==true)'
 ```
@@ -139,7 +139,7 @@ curl "${MAAS_API_URL}/v1/models" \
 See which subscription provides access to each model:
 
 ```bash
-curl "${MAAS_API_URL}/v1/models" \
+curl "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
     jq '.data[] | {id, subscriptions: .subscriptions[].name}'
 ```

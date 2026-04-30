@@ -19,7 +19,7 @@ MAAS_API_URL="https://maas.${CLUSTER_DOMAIN}"
 API_KEY="sk-oai-..."  # Your API key
 
 # Get the first available model
-MODELS=$(curl -s "${MAAS_API_URL}/v1/models" \
+MODELS=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}")
 MODEL_URL=$(echo $MODELS | jq -r '.data[0].url')
 MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id')

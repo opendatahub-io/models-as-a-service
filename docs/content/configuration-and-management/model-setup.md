@@ -187,7 +187,7 @@ curl -sSk -H "Authorization: Bearer $API_KEY" \
 
 ## Troubleshooting
 
-### Model Not Appearing in /v1/models
+### Model Not Appearing in /maas-api/v1/models
 
 - Verify gateway reference: `name: maas-default-gateway`, `namespace: openshift-ingress`
 - Check model status shows ready
