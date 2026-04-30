@@ -189,7 +189,7 @@ See [MaaSModelRef CRD reference](../reference/crds/maas-model-ref.md) for comple
 
 MaaSModelRef annotations (`openshift.io/display-name`, `openshift.io/description`, `opendatahub.io/genai-use-case`, `opendatahub.io/context-window`) are consumed by both the OpenShift console and the MaaS API `/v1/models` endpoint (`modelDetails` field).
 
-See [CRD annotations](crd-annotations.md) for the complete list and examples.
+See [MaaSModelRef annotations](../reference/crds/maas-model-ref.md#annotations) for the complete list and examples.
 
 ---
 
