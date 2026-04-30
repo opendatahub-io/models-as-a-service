@@ -48,13 +48,7 @@ test/e2e/
 
 ## Architecture Documentation
 
-Before contributing, familiarize yourself with the controller's internal architecture:
-
-- **[Controller Architecture](../architecture-internals/controller-architecture.md)** — High-level design, components, and data model
-- **[Reconciliation Flow](../architecture-internals/reconciliation-flow.md)** — Watch triggers, status transitions, and lifecycle behavior
-- **[Authentication Internals](../architecture-internals/authentication-internals.md)** — Identity flow and the "string trick"
-
-These documents explain how the controller works internally, which is essential context for writing unit tests and understanding reconciler behavior.
+For controller internals before contributing, see the [Architecture & Internals](../architecture-internals/controller-architecture.md) section above.
 
 ## Running Tests
 
