@@ -27,6 +27,7 @@ Use this platform to streamline the deployment of your models, monitor usage, an
 - **[Observability](advanced-administration/observability.md)** - Monitoring, metrics, and dashboards
 - **[Limitador Persistence](advanced-administration/limitador-persistence.md)** - Redis backend for rate-limit counters
 - **[TLS Configuration](configuration-and-management/tls-configuration.md)** - Configuring TLS
+- **[Gateway Patterns](configuration-and-management/gateway-patterns.md)** - Curated Gateway API deployment patterns
 
 ### 📋 Release Notes
 
