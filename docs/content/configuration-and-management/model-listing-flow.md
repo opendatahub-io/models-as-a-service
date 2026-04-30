@@ -25,7 +25,7 @@ When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service
 
 3. **Access validation**: The API probes each model’s `/v1/models` endpoint with the **exact Authorization header** the client sent (passed through as-is). Only models that return **2xx** or **405** are included in the response. This ensures the list only shows models the client is authorized to use.
 
-4. For each model, the API reads **annotations** from the MaaSModelRef to populate `modelDetails` in the response (display name, description, use case, context window). See [CRD annotations](crd-annotations.md) for the full list.
+4. For each model, the API reads **annotations** from the MaaSModelRef to populate `modelDetails` in the response (display name, description, use case, context window). See [MaaSModelRef annotations](../reference/crds/maas-model-ref.md#annotations) for the full list.
 
 5. The filtered list is returned to the client.
 

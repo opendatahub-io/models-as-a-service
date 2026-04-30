@@ -213,4 +213,3 @@ curl -sSk -H "Authorization: Bearer $API_KEY" \
 - [Model Listing Flow](model-listing-flow.md) - How models appear in the catalog
 - [External Model Setup](../install/external-model-setup.md) - Complete guide for external models
 - [MaaSModelRef CRD](../reference/crds/maas-model-ref.md) - CRD reference and field details
-- [CRD Annotations](crd-annotations.md) - Available annotations for display metadata

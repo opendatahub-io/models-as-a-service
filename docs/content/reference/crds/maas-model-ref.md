@@ -119,9 +119,63 @@ The override does not bypass backend validation. The controller still checks tha
 
 ---
 
+## Annotations
+
+MaaSModelRef supports standard Kubernetes and OpenShift annotations. The MaaS API reads these annotations and returns them in the `modelDetails` field of the `GET /v1/models` response.
+
+| Annotation | Description | Returned in API | Example |
+| ---------- | ----------- | --------------- | ------- |
+| `openshift.io/display-name` | Human-readable model name | `modelDetails.displayName` | `"Llama 2 7B Chat"` |
+| `openshift.io/description` | Model description | `modelDetails.description` | `"A large language model optimized for chat"` |
+| `opendatahub.io/genai-use-case` | GenAI use case category | `modelDetails.genaiUseCase` | `"chat"` |
+| `opendatahub.io/context-window` | Context window size | `modelDetails.contextWindow` | `"4096"` |
+
+### Example with annotations
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: llama-2-7b-chat
+  namespace: opendatahub
+  annotations:
+    openshift.io/display-name: "Llama 2 7B Chat"
+    openshift.io/description: "A large language model optimized for chat use cases"
+    opendatahub.io/genai-use-case: "chat"
+    opendatahub.io/context-window: "4096"
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: llama-2-7b-chat
+```
+
+### API response
+
+When annotations are set, the `GET /v1/models` response includes a `modelDetails` object:
+
+```json
+{
+  "id": "llama-2-7b-chat",
+  "object": "model",
+  "created": 1672531200,
+  "owned_by": "opendatahub",
+  "ready": true,
+  "url": "https://...",
+  "modelDetails": {
+    "displayName": "Llama 2 7B Chat",
+    "description": "A large language model optimized for chat use cases",
+    "genaiUseCase": "chat",
+    "contextWindow": "4096"
+  }
+}
+```
+
+When no annotations are set (or all values are empty), `modelDetails` is omitted from the response.
+
+---
+
 ## Related Documentation
 
-- [MaaSModelRef CRD Annotations](../../configuration-and-management/crd-annotations.md) - Display names, descriptions, use cases
 - [ExternalModel CRD](external-model.md) - External provider configuration
 - [Model Setup](../../configuration-and-management/model-setup.md) - LLMInferenceService deployment
 - [External Model Setup](../../install/external-model-setup.md) - External provider integration
