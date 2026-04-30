@@ -3,10 +3,6 @@
 A Gateway API pattern that uses a **ClusterIP** service (no external LoadBalancer) with an
 **OpenShift Route** providing external ingress and **re-encrypt** TLS termination.
 
-This pattern is derived from and aligned with the reference gist at
-<https://gist.github.com/lphiri/83ce1ecb17f7aa7efb76275560554d32>.
-Product samples may differ after review and alignment with supported OpenShift AI / ODH versions.
-
 ## When to use
 
 - OpenShift clusters where you want the platform Router to handle external TLS

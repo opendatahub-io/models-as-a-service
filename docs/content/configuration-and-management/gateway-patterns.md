@@ -4,13 +4,6 @@ This page provides curated Gateway API deployment patterns for MaaS on OpenShift
 Each pattern includes copy-pasteable YAML manifests, prerequisites, verification steps,
 and troubleshooting guidance for common failure modes.
 
-!!! info "Source material"
-    These patterns were derived from or aligned with a
-    [reference gist](https://gist.github.com/lphiri/83ce1ecb17f7aa7efb76275560554d32)
-    that demonstrates a working ClusterIP Gateway API setup with OpenShift Route
-    ingress and re-encrypt TLS. Product samples may differ after review and
-    alignment with supported OpenShift AI / ODH versions.
-
 **Related topics:**
 
 - Default MaaS Gateway setup: [Install MaaS Components — Create Gateway](../install/maas-setup.md#create-gateway)
