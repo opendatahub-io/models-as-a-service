@@ -71,9 +71,9 @@ graph LR
 
 ### Prerequisites
 
-- OpenShift 4.19.9 or later
-- GatewayClass `openshift-default` accepted (see [Platform Setup](../install/platform-setup.md#install-gateway-api-controller))
-- Kuadrant or RHCL operator installed (see [Platform Setup](../install/platform-setup.md#install-gateway-api-controller))
+- OpenShift cluster with Gateway API support (see [Prerequisites](../install/prerequisites.md))
+- GatewayClass `openshift-default` accepted (see [Install Gateway API Controller](../install/platform-setup.md#install-gateway-api-controller))
+- Kuadrant or RHCL operator installed (see [Install Gateway API Controller](../install/platform-setup.md#install-gateway-api-controller))
 - Access to the `openshift-ingress` namespace
 
 ### Manifests

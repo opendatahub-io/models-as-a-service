@@ -41,7 +41,7 @@ Client ──HTTPS──▶ OpenShift Router ──re-encrypt──▶ Gateway S
 
 ## Prerequisites
 
-- OpenShift 4.19.9+
+- OpenShift cluster with Gateway API support
 - Gateway API CRDs installed (included with OpenShift)
 - Kuadrant / RHCL operator installed (see [Platform Setup](../../../content/install/platform-setup.md))
 - `openshift-ingress` namespace accessible
