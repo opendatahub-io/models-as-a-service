@@ -55,6 +55,7 @@ On startup, the controller automatically creates a `default-tenant` CR in the `m
 
 ### Installation
 
+<!-- markdownlint-disable MD046 -->
 ```bash
 # Deploy complete MaaS stack (from repository root)
 ./scripts/deploy.sh --operator-type odh     # Deploy with ODH operator
@@ -67,6 +68,7 @@ On startup, the controller automatically creates a `default-tenant` CR in the `m
 # Optional: Install example MaaS CRs
 ./scripts/install-examples.sh
 ```
+<!-- markdownlint-enable MD046 -->
 
 See the [Installation Guide](../install/maas-setup.md) and [Validation](../install/validation.md) for detailed deployment instructions.
 
@@ -89,6 +91,7 @@ Use **API keys only** for inference requests (e.g., `/llm/<model>/v1/chat/comple
 
 **Creating an API key:**
 
+<!-- markdownlint-disable MD046 -->
 ```bash
 # Get your OpenShift token
 TOKEN=$(oc whoami -t)
@@ -101,6 +104,7 @@ curl -H "Authorization: Bearer $TOKEN" \
   -d '{"name":"my-key","description":"test key","expiresIn":"90d"}' \
   "${HOST}/maas-api/v1/api-keys"
 ```
+<!-- markdownlint-enable MD046 -->
 
 The response includes the API key (shown only once). Save it securely.
 
@@ -144,12 +148,15 @@ See [Namespace User Permissions (RBAC)](./namespace-rbac.md) for guidance on set
 
 ### Check Controller Logs
 
+<!-- markdownlint-disable MD046 -->
 ```bash
 kubectl logs deployment/maas-controller -n opendatahub --tail=50
 ```
+<!-- markdownlint-enable MD046 -->
 
 ### Check MaaS Resources
 
+<!-- markdownlint-disable MD046 -->
 ```bash
 # Check MaaS CRs
 kubectl get maasmodelref -n llm
@@ -158,6 +165,7 @@ kubectl get maasauthpolicy,maassubscription -n models-as-a-service
 # Check generated Kuadrant policies
 kubectl get authpolicy,tokenratelimitpolicy -n llm
 ```
+<!-- markdownlint-enable MD046 -->
 
 ### Understanding Status Phases
 
@@ -172,6 +180,7 @@ MaaSSubscription, MaaSAuthPolicy, and MaaSModelRef use these phases:
 
 Check per-item status to identify specific issues:
 
+<!-- markdownlint-disable MD046 -->
 ```bash
 # Find MaaSSubscriptions with issues
 kubectl get maassubscription -n models-as-a-service \
@@ -181,6 +190,7 @@ kubectl get maassubscription -n models-as-a-service \
 kubectl get maassubscription my-subscription -n models-as-a-service \
   -o jsonpath='{.status.modelRefStatuses}' | jq .
 ```
+<!-- markdownlint-enable MD046 -->
 
 See [Troubleshooting](../install/troubleshooting.md) for common issues and solutions.
 

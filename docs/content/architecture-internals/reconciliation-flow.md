@@ -68,8 +68,8 @@ sequenceDiagram
     participant TRLP as TokenRateLimitPolicy
     participant Backend as LLMInferenceService
 
-    User->>Gateway: POST /llm/<model>/v1/chat/completions (Bearer token)
-    Gateway->>AuthPolicy: Validate token (TokenReview)
+    User->>Gateway: POST /llm/<model>/v1/chat/completions (API key)
+    Gateway->>AuthPolicy: Validate API key
     AuthPolicy->>AuthPolicy: Check groups/users, build identity
     Note over AuthPolicy: Writes identity (userid, groups_str)
     AuthPolicy-->>Gateway: Identity attached to request

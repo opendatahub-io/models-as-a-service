@@ -78,6 +78,14 @@ flowchart TB
 
 The **MaaS API** GET /v1/models endpoint uses MaaSModelRef CRs as its primary source: it reads them cluster-wide (all namespaces), then **validates access** by probing each model's `/v1/models` endpoint with the client's **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is.
 
+!!! warning "Trust Boundary: Model Discovery"
+    The GET /v1/models endpoint forwards raw Authorization headers to model workloads during access validation. This creates a trust boundary:
+    
+    - **Model workloads must not log or forward raw Authorization headers** during discovery probes
+    - **Operators should only register models trusted to handle credentials safely** via MaaSModelRef
+    - For additional protections on model inference routes, see [Authentication Internals](./authentication-internals.md)
+    - Future enhancements may include token exchange or credential mediation to reduce exposure during discovery
+
 ---
 
 ## Component Diagram (Controller Internals)
