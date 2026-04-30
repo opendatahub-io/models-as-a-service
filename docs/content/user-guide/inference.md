@@ -113,7 +113,7 @@ Common parameters for chat completions:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `model` | string | Yes | Model identifier from `/v1/models` |
+| `model` | string | Yes | Model identifier from `/maas-api/v1/models` |
 | `messages` | array | Yes | Array of message objects with `role` and `content` |
 | `max_tokens` | integer | No | Maximum tokens to generate (default varies by model) |
 | `temperature` | float | No | Sampling temperature (0-2, default 1.0). Higher = more random. |
@@ -185,7 +185,7 @@ Common HTTP error codes:
 | 401 | Invalid or malformed API key or authorization header | Verify the key is correctly formatted: `Authorization: Bearer <key>` |
 | 403 | Expired/revoked key or insufficient permissions | Create a new API key if expired/revoked, otherwise contact your administrator |
 | 429 | Rate limit exceeded | Wait before retrying, or contact your administrator to adjust limits |
-| 404 | Model not found | Verify the model ID exists in your subscription via `/v1/models` |
+| 404 | Model not found | Verify the model ID exists in your subscription via `/maas-api/v1/models` |
 | 500 | Internal server error | Check model backend status, contact your administrator if persistent |
 
 ### Handling Rate Limits

@@ -141,7 +141,7 @@ See which subscription provides access to each model:
 ```bash
 curl "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
-    jq '.data[] | {id, subscriptions: .subscriptions[].name}'
+    jq '.data[] | {id, subscriptions: (.subscriptions // [] | map(.name))}'
 ```
 
 ---

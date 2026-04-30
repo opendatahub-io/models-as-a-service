@@ -52,7 +52,7 @@ To enable MaaS policies for an LLMInferenceService:
 
 1. **Set gateway reference** - Add `spec.router.gateway.refs` pointing to `maas-default-gateway`
 2. **Create MaaSModelRef** - Register the model in the MaaS catalog
-3. **Add display metadata** (optional) - Annotations for `/v1/models` API response
+3. **Add display metadata** (optional) - Annotations for `/maas-api/v1/models` API response
 
 Without the gateway reference, the model uses the standard gateway and MaaS policies do not apply.
 
