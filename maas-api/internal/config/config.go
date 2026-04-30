@@ -57,9 +57,10 @@ type Config struct {
 	SARCacheMaxSize int
 
 	// GatewayInternalHost is the cluster-internal address for model access probes.
-	// Probes are routed here instead of through the external load balancer, which
-	// is unreachable from disconnected clusters or pods blocked by network policy.
-	// Defaults to <GatewayName>-istio.<GatewayNamespace>.svc.cluster.local.
+	// When set, probes are routed here instead of through the external load balancer,
+	// which may be unreachable from disconnected clusters or pods blocked by network
+	// policy. The original Host header is preserved for gateway routing.
+	// Example: maas-default-gateway-openshift-default.openshift-ingress.svc.cluster.local
 	GatewayInternalHost string
 
 	// Deprecated flag (backward compatibility with pre-TLS version)
@@ -165,10 +166,6 @@ func (c *Config) Validate() error {
 
 	if c.AccessCheckTimeoutSeconds < 1 {
 		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
-	}
-
-	if c.GatewayInternalHost == "" {
-		c.GatewayInternalHost = c.GatewayName + "-istio." + c.GatewayNamespace + ".svc.cluster.local"
 	}
 
 	return nil
