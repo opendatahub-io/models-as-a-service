@@ -68,7 +68,7 @@ type ModelReference struct {
 // MaaSModelStatus defines the observed state of MaaSModelRef
 type MaaSModelStatus struct {
 	// Phase represents the current phase of the model
-	// +kubebuilder:validation:Enum=Pending;Ready;Unhealthy;Failed
+	// +kubebuilder:validation:Enum=Pending;Ready;Unhealthy;Failed;Invalid
 	Phase string `json:"phase,omitempty"`
 
 	// Endpoint is the endpoint URL for the model

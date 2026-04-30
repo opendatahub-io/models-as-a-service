@@ -181,6 +181,7 @@ spec:
                 - Ready
                 - Unhealthy
                 - Failed
+                - Invalid
                 type: string
             type: object
         required:

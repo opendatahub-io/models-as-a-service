@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -274,9 +275,9 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Handle no spec (e.g. legacy resources created before spec was required).
 	// No finalizer needed — there are no AuthPolicies to clean up.
-	if len(policy.Spec.ModelRefs) == 0 {
+	if reflect.DeepEqual(policy.Spec, maasv1alpha1.MaaSAuthPolicySpec{}) {
 		statusSnapshot := policy.Status.DeepCopy()
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, "spec.modelRefs is required: at least one model reference must be specified", statusSnapshot)
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
 		return ctrl.Result{}, nil
 	}
 
@@ -1116,6 +1117,9 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 	case maasv1alpha1.PhaseFailed:
 		status = metav1.ConditionFalse
 		reason = maasv1alpha1.ReasonReconcileFailed
+	case maasv1alpha1.PhaseInvalid:
+		status = metav1.ConditionFalse
+		reason = maasv1alpha1.ReasonInvalidSpec
 	default:
 		status = metav1.ConditionUnknown
 		reason = maasv1alpha1.ReasonUnknown

@@ -1348,8 +1348,7 @@ func TestMaaSSubscriptionReconciler_WindowValuesInTRLP(t *testing.T) {
 }
 
 // TestMaaSSubscriptionReconciler_NoSpec verifies that a legacy subscription created
-// without a spec field (before spec was made required in the CRD) is marked Failed
-// without adding a finalizer, instead of entering an infinite requeue loop.
+// without a spec field is marked Failed without adding a finalizer.
 func TestMaaSSubscriptionReconciler_NoSpec(t *testing.T) {
 	const namespace = "default"
 
@@ -1380,8 +1379,8 @@ func TestMaaSSubscriptionReconciler_NoSpec(t *testing.T) {
 		t.Errorf("expected no finalizers, got %v", got.Finalizers)
 	}
 
-	if got.Status.Phase != maasv1alpha1.PhaseFailed {
-		t.Errorf("phase = %q, want %q", got.Status.Phase, maasv1alpha1.PhaseFailed)
+	if got.Status.Phase != maasv1alpha1.PhaseInvalid {
+		t.Errorf("phase = %q, want %q", got.Status.Phase, maasv1alpha1.PhaseInvalid)
 	}
 
 	ready := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
@@ -1391,7 +1390,10 @@ func TestMaaSSubscriptionReconciler_NoSpec(t *testing.T) {
 	if ready.Status != metav1.ConditionFalse {
 		t.Errorf("Ready.Status = %q, want %q", ready.Status, metav1.ConditionFalse)
 	}
-	if !strings.Contains(ready.Message, "modelRefs") {
-		t.Errorf("Ready.Message = %q, expected it to mention modelRefs", ready.Message)
+	if ready.Reason != string(maasv1alpha1.ReasonInvalidSpec) {
+		t.Errorf("Ready.Reason = %q, want %q", ready.Reason, maasv1alpha1.ReasonInvalidSpec)
+	}
+	if !strings.Contains(ready.Message, "spec is required") {
+		t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
 	}
 }

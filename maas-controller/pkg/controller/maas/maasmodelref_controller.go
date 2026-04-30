@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
@@ -119,9 +120,9 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Handle no spec (e.g. legacy resources created before spec was required).
 	// No finalizer needed — there are no generated resources to clean up.
-	if model.Spec.ModelRef.Kind == "" {
+	if reflect.DeepEqual(model.Spec, maasv1alpha1.MaaSModelSpec{}) {
 		statusSnapshot := model.Status.DeepCopy()
-		r.updateStatus(ctx, model, "Failed", "spec.modelRef is required", statusSnapshot)
+		r.updateStatus(ctx, model, "Invalid", "spec is required", statusSnapshot)
 		return ctrl.Result{}, nil
 	}
 
@@ -272,6 +273,8 @@ func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, mod
 			condReason = reason
 		} else if phase == "Failed" {
 			condReason = "ReconcileFailed"
+		} else if phase == "Invalid" {
+			condReason = "InvalidSpec"
 		} else {
 			condReason = "BackendNotReady"
 		}

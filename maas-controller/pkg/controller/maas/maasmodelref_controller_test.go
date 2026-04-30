@@ -850,9 +850,9 @@ func TestMaaSModelRefReconciler_NoSpec(t *testing.T) {
 		t.Errorf("expected no finalizers, got %v", got.Finalizers)
 	}
 
-	if got.Status.Phase != "Failed" {
-		t.Errorf("phase = %q, want %q", got.Status.Phase, "Failed")
+	if got.Status.Phase != "Invalid" {
+		t.Errorf("phase = %q, want %q", got.Status.Phase, "Invalid")
 	}
 
-	assertReadyCondition(t, got.Status.Conditions, metav1.ConditionFalse, "ReconcileFailed")
+	assertReadyCondition(t, got.Status.Conditions, metav1.ConditionFalse, "InvalidSpec")
 }
