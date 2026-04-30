@@ -52,6 +52,8 @@ var optionalPlatformGVKs = []schema.GroupVersionKind{
 	{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"},
 	{Group: "networking.istio.io", Version: "v1alpha3", Kind: "EnvoyFilter"},
 	{Group: "telemetry.istio.io", Version: "v1", Kind: "Telemetry"},
+	tenantreconcile.GVKPersesDashboard,
+	tenantreconcile.GVKPersesDatasource,
 }
 
 func (r *TenantReconciler) operatorNamespace() string {
