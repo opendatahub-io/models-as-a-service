@@ -81,6 +81,19 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get podmonitor -n kuadrant-system
       ```
 
+9. **RHOAI Dashboard Observability tab returns `503 Service Unavailable`**: The Dashboard cannot reach the Perses backend.
+
+      The error typically appears as `{"statusCode": 503, "code": "FST_REPLY_FROM_SERVICE_UNAVAILABLE", ...}`.
+      This is a Fastify/Dashboard-level error (not a gateway 503) indicating the monitoring stack
+      is not deployed or Perses is not running. The most common causes are missing operators (COO,
+      OpenTelemetry) or DSCI `monitoring.metrics` not being configured.
+
+      See [RHOAI Dashboard Observability Tab](../advanced-administration/observability.md#rhoai-dashboard-observability-tab) for the full prerequisites and verification checklist.
+
+10. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
+
+      See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
+
 ## Additional Resources
 
 - [Validation Guide](validation.md) — Manual validation steps

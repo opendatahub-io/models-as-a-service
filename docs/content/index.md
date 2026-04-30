@@ -34,9 +34,9 @@ Use this platform to streamline the deployment of your models, monitor usage, an
 
 ### 📖 Installation Guide
 
-- **[Prerequisites](install/prerequisites.md)** - Requirements and database setup
+- **[Prerequisites](install/prerequisites.md)** - Requirements, database setup, observability and GenAI Studio prerequisites
 - **[Platform Setup](install/platform-setup.md)** - Install ODH/RHOAI with MaaS
-- **[MaaS Setup](install/maas-setup.md)** - Gateway AuthPolicy and policies
+- **[MaaS Setup](install/maas-setup.md)** - Gateway, DataScienceCluster, OdhDashboardConfig feature flags
 - **[Validation](install/validation.md)** - Verify your deployment
 
 ### 🔄 Migration

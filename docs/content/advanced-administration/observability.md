@@ -110,6 +110,28 @@ curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
 !!! note "Cluster Admin Permissions"
     Configuring User Workload Monitoring requires cluster admin permissions to create ConfigMaps in the `openshift-monitoring` namespace. If you don't have these permissions, contact your cluster administrator.
 
+## RHOAI Dashboard Observability Tab
+
+The RHOAI Dashboard includes a built-in **Observability** tab that displays Perses-based dashboards
+for platform monitoring. This is separate from the MaaS-specific Grafana dashboards described later
+in this document.
+
+The following must be in place for the Observability tab to work:
+
+- **Cluster Observability Operator (COO)** and **OpenTelemetry Operator** — install both from OperatorHub
+- **DSCI `monitoring.metrics`** — see [Platform Setup](../install/platform-setup.md#install-platform-operator) for DSCI configuration
+- **`observabilityDashboard: true`** on OdhDashboardConfig — see [Feature Flags](../install/maas-setup.md#odhdashboardconfig-feature-flags)
+
+**Quick verification:**
+
+```bash
+kubectl get csv -A | grep -E 'cluster-observability|opentelemetry'
+kubectl get dsciinitialization default-dsci -o jsonpath='{.spec.monitoring}' | jq .
+kubectl get pods -n redhat-ods-monitoring | grep perses
+```
+
+For the full setup procedure, see [Managing observability (RHOAI 3.4)](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai).
+
 ## Overview
 
 As part of Dev Preview, MaaS Platform includes a basic observability stack that provides insights into system performance, usage patterns, and operational health.

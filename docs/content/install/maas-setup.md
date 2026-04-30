@@ -156,8 +156,16 @@ After creating the database Secret and Gateways, create or update your DataScien
             managementState: Managed
         dashboard:
           managementState: Managed
+        llamastackoperator:
+          managementState: Managed
     EOF
     ```
+
+    !!! tip "LlamaStack Operator (GenAI Studio)"
+        The `llamastackoperator` component is required for **GenAI Studio** functionality.
+        If you do not need GenAI Studio, you can omit it or set it to `Removed`.
+        You also need to enable the `genAiStudio` feature flag on `OdhDashboardConfig` —
+        see [OdhDashboardConfig Feature Flags](#odhdashboardconfig-feature-flags) below.
 
     !!! note "Connectivity Link warning (ODH with Kuadrant)"
         When using ODH with Kuadrant (upstream), you may see `Warning: Red Hat Connectivity Link is not installed, LLMInferenceService cannot be used` in the Kserve status initially. This typically resolves after a few minutes as the operator reconciles. If it persists, apply the `scripts/workaround-odh-rhcl-check.yaml` workaround.
@@ -267,6 +275,35 @@ After creating the database Secret and Gateways, create or update your DataScien
 
 !!! tip "Troubleshooting"
     If components do not become ready, run `kubectl describe datasciencecluster default-dsc` to inspect conditions and events.
+
+## OdhDashboardConfig Feature Flags
+
+The RHOAI Dashboard uses feature flags in the `OdhDashboardConfig` resource to control which tabs
+and features are visible in the UI. The operator creates this resource automatically when the
+Dashboard component is deployed, but the following flags may need to be enabled manually.
+
+Patch the `OdhDashboardConfig` in your applications namespace (typically `redhat-ods-applications`
+for RHOAI or `opendatahub` for ODH):
+
+```bash
+kubectl patch odhdashboardconfig odh-dashboard-config \
+  -n redhat-ods-applications --type=merge \
+  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"observabilityDashboard":true}}}'
+```
+
+| Flag | Effect | Prerequisites |
+|------|--------|---------------|
+| `genAiStudio: true` | Shows the **GenAI Studio** tab in the Dashboard | `llamastackoperator` set to `Managed` in DSC |
+| `observabilityDashboard: true` | Shows the **Observability** tab in the Dashboard | COO, OpenTelemetry Operator installed; DSCI `monitoring.metrics` configured |
+
+!!! note "Namespace"
+    For ODH installations, replace `redhat-ods-applications` with `opendatahub` (or your configured
+    applications namespace from DSCI `spec.applicationsNamespace`).
+
+!!! note "Flag names"
+    These flags are defined in the odh-dashboard source. The `OdhDashboardConfig` CRD is of
+    API version `opendatahub.io/v1alpha`. The operator re-creates this resource with factory
+    defaults if it is deleted, but does not overwrite user changes to existing fields.
 
 ## Next steps
 
