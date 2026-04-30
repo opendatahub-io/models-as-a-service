@@ -11,10 +11,11 @@ Kuadrant's TokenRateLimitPolicy CEL predicates do not always support array field
 ### How It Works
 
 1. **AuthPolicy (controller-generated)**  
-   - In the success response identity, the controller adds a property **`groups_str`** with a CEL expression that takes **all** user groups (unfiltered) and **joins them with a comma**:  
-     `auth.identity.user.groups.join(",")`  
-   - So the identity object has both `groups` (array) and **`groups_str`** (string, e.g. `"system:authenticated,free-user,premium-user"`).  
+   - In the `filters.identity` section, the controller adds a property **`groups_str`** with a CEL expression that takes **all** user groups from API key validation (unfiltered) and **joins them with a comma**:  
+     `auth.metadata.apiKeyValidation.groups.join(",")`  
+   - So the identity object has both `groups` (array from `auth.metadata.apiKeyValidation.groups`) and **`groups_str`** (string, e.g. `"system:authenticated,free-user,premium-user"`).  
    - Groups are passed unfiltered so that TRLP predicates can match against subscription groups, which may differ from auth policy groups.
+   - This is implemented in `maasauthpolicy_controller.go` in the controller-generated AuthPolicy response.
 
 2. **TokenRateLimitPolicy (controller-generated)**  
    - For each subscription owner group, the controller generates a CEL predicate that **splits** `groups_str` and checks membership, e.g.  
@@ -31,8 +32,8 @@ So: **AuthPolicy** turns the user-groups array into a **comma-separated string**
 **Example CEL expressions:**
 
 ```cel
-// In AuthPolicy identity response
-auth.identity.groups_str = auth.identity.user.groups.join(",")
+// In AuthPolicy filters.identity (controller-generated)
+auth.identity.groups_str = auth.metadata.apiKeyValidation.groups.join(",")
 
 // In TokenRateLimitPolicy predicate
 auth.identity.groups_str.split(",").exists(g, g == "premium-users")
