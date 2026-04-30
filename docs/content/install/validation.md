@@ -143,12 +143,15 @@ kubectl get secret maas-api-serving-cert -n <application-namespace> \
 ### Test HTTPS Endpoint
 
 ```bash
-# From within the cluster
-kubectl run curl --rm -it --image=curlimages/curl -- \
-  curl -vk https://maas-api.<application-namespace>.svc:8443/health
+# Start port-forward (runs in foreground, use a separate terminal for the
+# commands below)
+kubectl port-forward -n <application-namespace> svc/maas-api 8443:8443
+
+# Test health endpoint
+curl -vk https://localhost:8443/health
 
 # Check certificate chain
-openssl s_client -connect maas-api.<application-namespace>.svc:8443 \
+openssl s_client -connect localhost:8443 \
   -servername maas-api.<application-namespace>.svc
 ```
 
