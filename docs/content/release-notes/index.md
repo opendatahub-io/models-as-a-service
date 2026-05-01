@@ -13,7 +13,7 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 **Required `tokenRateLimits` field**
 - All `MaaSSubscription` resources must now include inline `tokenRateLimits` specification
 - The `tokenRateLimitRef` field has been removed
-- **Migration:** Update subscriptions to define rate limits directly in the `spec.tokenRateLimits` field
+- **Migration:** Update subscriptions to define rate limits directly in the `spec.tokenRateLimits` field. See [Migration Guide: Tier-Based to Subscription Model](../migration/tier-to-subscription.md) for subscription examples
 
 ### New Features
 
