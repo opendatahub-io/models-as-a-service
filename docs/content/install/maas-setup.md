@@ -7,7 +7,7 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 1. [Database Setup](#database-setup) — Create the PostgreSQL connection Secret
 2. [Create Gateway](#create-gateway) — Deploy maas-default-gateway (required before modelsAsService)
 3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable KServe and modelsAsService in your DataScienceCluster
-4. [Model Setup (On Cluster)](model-setup.md) — Deploy sample models
+4. [Model Setup](model-setup.md) — Deploy sample models
 5. [Validation](validation.md) — Verify the deployment
 
 ## Database Setup
@@ -309,6 +309,6 @@ kubectl patch odhdashboardconfig odh-dashboard-config \
 
 ## Next steps
 
-* **Deploy models.** See [Model Setup (On Cluster)](model-setup.md) for sample model deployments.
+* **Deploy models.** See [Model Setup](model-setup.md) for sample model deployments.
 * **Perform validation.** Follow the [validation guide](validation.md) to verify that
   MaaS is working correctly.

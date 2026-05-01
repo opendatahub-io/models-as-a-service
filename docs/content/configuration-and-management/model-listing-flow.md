@@ -25,10 +25,10 @@ When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service
 
 3. **Access validation**: The API probes each model’s `/v1/models` endpoint with the client’s Authorization header. Models returning **2xx** or **405** are included; **401/403/404** are excluded.
 
-   !!! note "ExternalModel bypass"
-       ExternalModel kinds are included if `status.phase == "Ready"` without probe validation.
+    !!! note "ExternalModel bypass"
+        ExternalModel kinds are included if `status.phase == "Ready"` without probe validation.
 
-4. The API reads **annotations** from the MaaSModelRef to populate `modelDetails` in the response. See [CRD annotations](crd-annotations.md).
+4. For each model, the API reads **annotations** from the MaaSModelRef to populate `modelDetails` in the response (display name, description, use case, context window). See [MaaSModelRef annotations](../reference/crds/maas-model-ref.md#annotations) for the full list.
 
 5. The filtered list is returned to the client.
 
@@ -189,7 +189,7 @@ See [MaaSModelRef CRD reference](../reference/crds/maas-model-ref.md) for comple
 
 MaaSModelRef annotations (`openshift.io/display-name`, `openshift.io/description`, `opendatahub.io/genai-use-case`, `opendatahub.io/context-window`) are consumed by both the OpenShift console and the MaaS API `/v1/models` endpoint (`modelDetails` field).
 
-See [CRD annotations](crd-annotations.md) for the complete list and examples.
+See [MaaSModelRef annotations](../reference/crds/maas-model-ref.md#annotations) for the complete list and examples.
 
 ---
 
