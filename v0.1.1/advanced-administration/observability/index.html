@@ -1,0 +1,5345 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/v0.1.1/advanced-administration/observability/">
+      
+      
+        <link rel="prev" href="../../configuration-and-management/crd-annotations/">
+      
+      
+        <link rel="next" href="../limitador-persistence/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/favicon.ico">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Observability Dashboard - ODH Models-as-a-Service Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="white" data-md-color-accent="blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#observability-dashboard" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="ODH Models-as-a-Service Documentation" class="md-header__button md-logo" aria-label="ODH Models-as-a-Service Documentation" data-md-component="logo">
+      
+  <img src="../../assets/favicon.ico" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ODH Models-as-a-Service Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Observability Dashboard
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="white" data-md-color-accent="blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/opendatahub-io/models-as-a-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    opendatahub-io/models-as-a-service
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../.." class="md-tabs__link">
+          
+  
+  
+  Home
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/architecture/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../quickstart/" class="md-tabs__link">
+          
+  
+  
+  Install
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../configuration-and-management/quota-and-access-configuration/" class="md-tabs__link">
+          
+  
+  
+  Administration Guide
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user-guide/api-key-management/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../contributing/testing-guide/" class="md-tabs__link">
+          
+  
+  
+  Contributing
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/maas-api-overview/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="ODH Models-as-a-Service Documentation" class="md-nav__button md-logo" aria-label="ODH Models-as-a-Service Documentation" data-md-component="logo">
+      
+  <img src="../../assets/favicon.ico" alt="logo">
+
+    </a>
+    ODH Models-as-a-Service Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/opendatahub-io/models-as-a-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    opendatahub-io/models-as-a-service
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Home
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS Platform Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../release-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_1_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_1_3" id="__nav_1_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/tier-to-subscription/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tier to Subscription
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/personas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Personas
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/subscription-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Access and Quota Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/model-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/api-key-authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Key Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/model-access-control/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Access Control
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prerequisites
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Prerequisites
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/prerequisites/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/platform-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Installation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/maas-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models-as-a-Service
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/model-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Setup (On Cluster)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/external-model-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    External Model Setup (Tech Preview)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administration Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administration Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration & Management
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration & Management
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/quota-and-access-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quota and Access Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/api-key-administration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Key Administration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/namespace-rbac/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Namespace User Permissions (RBAC)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/tls-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Models
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/model-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Setup (On Cluster)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/model-listing-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Listing Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/maas-model-kinds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS Model Kinds
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS Controller
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    MaaS Controller
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/maas-controller-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Controller Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/crd-annotations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CRD Annotations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Administration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Advanced Administration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability Dashboard
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability Dashboard
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prerequisites">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#user-workload-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        User Workload Monitoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kuadrant-observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kuadrant Observability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites Summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rhoai-dashboard-observability-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RHOAI Dashboard Observability Tab
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#component-metrics-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Component Metrics Status
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Installation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-operator-managed-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Operator-Managed Telemetry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-kustomize-based-installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Kustomize-Based Installation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Option 2: Kustomize-Based Installation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#kustomize-entrypoint-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kustomize Entrypoint Map
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dry-run-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-Run Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-to-a-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deploy to a Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-vs-kustomize-drift-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator vs Kustomize Drift Reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keeping-docs-accurate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping Docs Accurate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-collection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Collection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics Collection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#limitador-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitador Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Limitador Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-limitador-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Limitador Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maas-usage-metrics-limitador-telemetrypolicy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaaS Usage Metrics (Limitador + TelemetryPolicy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authorino-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authorino Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vllm-model-server-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vLLM / Model Server Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="vLLM / Model Server Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vllm-metrics-port-8000" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vLLM Metrics (port 8000)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llm-d-epp-endpoint-picker-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        llm-d EPP (Endpoint Picker) Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboard-metric-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard Metric Queries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servicemonitor-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ServiceMonitor Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-availability-for-maas-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Availability for MaaS Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High Availability for MaaS Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-high-availability-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why High Availability Matters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setting-up-persistent-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setting Up Persistent Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#visualization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Visualization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Visualization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#included-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Included Dashboards
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Included Dashboards">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#platform-admin-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform Admin Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ai-engineer-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI Engineer Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploying-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deploying Dashboards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sample-dashboard-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sample Dashboard JSON
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-metrics-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Metrics Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Key Metrics Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#token-and-request-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token and Request Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#latency-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Latency Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Latency Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-subscription-latency-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Subscription Latency Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Queries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Maintenance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Maintenance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#grafana-datasource-token-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grafana Datasource Token Rotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known Limitations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Known Limitations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#currently-blocked-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Currently Blocked Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#available-per-user-and-per-subscription-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Per-User and Per-Subscription Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#requirements-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements Alignment
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../limitador-persistence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limitador Persistence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/authorino-caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authorino Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/api-key-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Key Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/model-discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/inference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/testing-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS Testing and Contribution Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/maas-api-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS API Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS API (Swagger)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_3" id="__nav_7_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS CRDs
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    MaaS CRDs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/crds/maas-model-ref/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaSModelRef
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/crds/external-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ExternalModel
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/crds/maas-auth-policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaSAuthPolicy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/crds/maas-subscription/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaSSubscription
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prerequisites">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#user-workload-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        User Workload Monitoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kuadrant-observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kuadrant Observability
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites Summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rhoai-dashboard-observability-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RHOAI Dashboard Observability Tab
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#component-metrics-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Component Metrics Status
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Installation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-operator-managed-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Operator-Managed Telemetry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-kustomize-based-installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Kustomize-Based Installation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Option 2: Kustomize-Based Installation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#kustomize-entrypoint-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kustomize Entrypoint Map
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dry-run-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry-Run Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-to-a-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deploy to a Cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-vs-kustomize-drift-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator vs Kustomize Drift Reference
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keeping-docs-accurate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping Docs Accurate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-collection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Collection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics Collection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#limitador-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitador Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Limitador Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-limitador-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Limitador Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maas-usage-metrics-limitador-telemetrypolicy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaaS Usage Metrics (Limitador + TelemetryPolicy)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authorino-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authorino Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vllm-model-server-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vLLM / Model Server Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="vLLM / Model Server Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vllm-metrics-port-8000" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vLLM Metrics (port 8000)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llm-d-epp-endpoint-picker-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        llm-d EPP (Endpoint Picker) Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboard-metric-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard Metric Queries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#servicemonitor-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ServiceMonitor Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-availability-for-maas-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Availability for MaaS Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="High Availability for MaaS Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-high-availability-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why High Availability Matters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setting-up-persistent-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setting Up Persistent Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#visualization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Visualization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Visualization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#included-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Included Dashboards
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Included Dashboards">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#platform-admin-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Platform Admin Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ai-engineer-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AI Engineer Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploying-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deploying Dashboards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sample-dashboard-json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sample Dashboard JSON
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-metrics-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Metrics Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Key Metrics Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#token-and-request-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token and Request Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#latency-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Latency Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Latency Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-subscription-latency-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Subscription Latency Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Queries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maintenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Maintenance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Maintenance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#grafana-datasource-token-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grafana Datasource Token Rotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known Limitations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Known Limitations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#currently-blocked-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Currently Blocked Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#available-per-user-and-per-subscription-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Per-User and Per-Subscription Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#requirements-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements Alignment
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="observability-dashboard">Observability Dashboard</h1>
+<p>This document covers the observability stack for the MaaS Platform, including metrics collection, monitoring, and visualization.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<p>Before deploying the observability stack, ensure the following platform prerequisites are configured. Without these, metrics pipelines for dashboards and showback will not function.</p>
+<h3 id="user-workload-monitoring">User Workload Monitoring</h3>
+<p><a href="https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm">User Workload Monitoring</a> must be enabled for Prometheus to scrape metrics from MaaS components.</p>
+<div class="admonition warning">
+<p class="admonition-title">Required for metrics collection</p>
+<p>Without User Workload Monitoring enabled, ServiceMonitors deployed by MaaS will not be processed and no metrics will be collected.</p>
+</div>
+<p><strong>Step 1: Create or update the cluster-monitoring-config ConfigMap</strong></p>
+<p>The ConfigMap must exist in the <code>openshift-monitoring</code> namespace (not the MaaS application namespace). Cluster admin permissions are required.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cluster-monitoring-config</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-monitoring</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">data</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">config.yaml</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="no">enableUserWorkload: true</span>
+</code></pre></div>
+<p>Apply with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;EOF</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="s">apiVersion: v1</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="s">kind: ConfigMap</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="s">metadata:</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="s">  name: cluster-monitoring-config</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="s">  namespace: openshift-monitoring</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="s">data:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="s">  config.yaml: |</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="s">    enableUserWorkload: true</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="s">EOF</span>
+</code></pre></div>
+<p><strong>Step 2: Verify User Workload Monitoring is active</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Check that prometheus-user-workload pods are running</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>openshift-user-workload-monitoring
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Expected output: prometheus-user-workload-0 and prometheus-user-workload-1 in Running state</span>
+</code></pre></div>
+<p>If pods are not present, wait a few minutes for the monitoring operator to reconcile.</p>
+<h3 id="kuadrant-observability">Kuadrant Observability</h3>
+<p>The Kuadrant CR must have <code>observability.enabled</code> set to <code>true</code> for the operator to create the necessary PodMonitor that scrapes Limitador metrics.</p>
+<div class="admonition warning">
+<p class="admonition-title">Required for rate-limiting and usage metrics</p>
+<p>Without Kuadrant observability enabled, metrics like <code>authorized_hits</code>, <code>authorized_calls</code>, and <code>limited_calls</code> will not be scraped into Prometheus. Dashboards showing token consumption and rate limiting will have no data.</p>
+</div>
+<p><strong>Step 1: Enable observability on the Kuadrant CR</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>kuadrant<span class="w"> </span>kuadrant<span class="w"> </span>-n<span class="w"> </span>kuadrant-system<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;observability&quot;:{&quot;enable&quot;:true}}}&#39;</span>
+</code></pre></div>
+<p>Or edit the Kuadrant CR directly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kuadrant.io/v1beta1</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Kuadrant</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kuadrant</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kuadrant-system</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">observability</span><span class="p">:</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="nt">enable</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">  </span><span class="c1"># Required for PodMonitor creation</span>
+</code></pre></div>
+<p><strong>Step 2: Verify the PodMonitor exists</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Check that the Kuadrant-created PodMonitor exists</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>podmonitor<span class="w"> </span>-n<span class="w"> </span>kuadrant-system
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># Expected: kuadrant-limitador-monitor should be listed</span>
+</code></pre></div>
+<p><strong>Step 3: Verify Limitador metrics are being scraped</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Query Prometheus for Limitador metrics</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>curl<span class="w"> </span>-sk<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="s2">&quot;https://thanos-querier-openshift-monitoring.&lt;cluster&gt;/api/v1/query?query=limitador_up&quot;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Should return data with limitador_up = 1</span>
+</code></pre></div>
+<h3 id="prerequisites-summary">Prerequisites Summary</h3>
+<table>
+<thead>
+<tr>
+<th>Prerequisite</th>
+<th>Namespace</th>
+<th>How to Enable</th>
+<th>Verification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>User Workload Monitoring</strong></td>
+<td><code>openshift-monitoring</code></td>
+<td>Create <code>cluster-monitoring-config</code> ConfigMap with <code>enableUserWorkload: true</code></td>
+<td><code>kubectl get pods -n openshift-user-workload-monitoring</code> shows running Prometheus pods</td>
+</tr>
+<tr>
+<td><strong>Kuadrant Observability</strong></td>
+<td><code>kuadrant-system</code></td>
+<td>Set <code>spec.observability.enable: true</code> on Kuadrant CR</td>
+<td><code>kubectl get podmonitor -n kuadrant-system</code> shows <code>kuadrant-limitador-monitor</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Cluster Admin Permissions</p>
+<p>Configuring User Workload Monitoring requires cluster admin permissions to create ConfigMaps in the <code>openshift-monitoring</code> namespace. If you don't have these permissions, contact your cluster administrator.</p>
+</div>
+<h2 id="rhoai-dashboard-observability-tab">RHOAI Dashboard Observability Tab</h2>
+<p>The RHOAI Dashboard includes a built-in <strong>Observability</strong> tab that displays Perses-based dashboards
+for platform monitoring. This is separate from the MaaS-specific Grafana dashboards described later
+in this document.</p>
+<p>The following must be in place for the Observability tab to work:</p>
+<ul>
+<li><strong>Cluster Observability Operator (COO)</strong> and <strong>OpenTelemetry Operator</strong> — install both from OperatorHub</li>
+<li><strong>DSCI <code>monitoring.metrics</code></strong> — see <a href="../../install/platform-setup/#install-platform-operator">Platform Setup</a> for DSCI configuration</li>
+<li><strong><code>observabilityDashboard: true</code></strong> on OdhDashboardConfig — see <a href="../../install/maas-setup/#odhdashboardconfig-feature-flags">Feature Flags</a></li>
+</ul>
+<p><strong>Quick verification:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>csv<span class="w"> </span>-A<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;cluster-observability|opentelemetry&#39;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>dsciinitialization<span class="w"> </span>default-dsci<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.monitoring}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>redhat-ods-monitoring<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>perses
+</code></pre></div>
+<p>For the full setup procedure, see <a href="https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai">Managing observability (RHOAI 3.4)</a>.</p>
+<h2 id="overview">Overview</h2>
+<p>As part of Dev Preview, MaaS Platform includes a basic observability stack that provides insights into system performance, usage patterns, and operational health.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The observability stack will be enhanced in future releases.</p>
+</div>
+<p>The observability stack consists of:</p>
+<ul>
+<li><strong>Limitador</strong>: Rate limiting service that exposes usage and rate-limit metrics (with labels from TelemetryPolicy)</li>
+<li><strong>Authorino</strong>: Authentication/authorization service that exposes auth evaluation metrics (<code>auth_server_*</code>)</li>
+<li><strong>Istio Telemetry</strong>: Adds <code>subscription</code> to gateway latency metrics for per-subscription latency (P50/P95/P99)</li>
+<li><strong>vLLM / llm-d / Simulator</strong>: Expose inference metrics (TTFT, ITL, queue depth, token throughput, KV-cache usage); llm-d also exposes EPP routing metrics</li>
+<li><strong>Prometheus</strong>: Metrics collection and storage (uses OpenShift platform Prometheus)</li>
+<li><strong>ServiceMonitors</strong>: Deployed to configure Prometheus metric scraping</li>
+<li><strong>Visualization</strong>: Grafana dashboards (see <a href="https://grafana.com/docs/grafana/latest/">Grafana documentation</a>)</li>
+</ul>
+<h3 id="component-metrics-status">Component Metrics Status</h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Exposes Metrics?</th>
+<th>Scraped into Prometheus?</th>
+<th>In Dashboards?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Limitador</strong></td>
+<td>Yes (<code>/metrics</code>)</td>
+<td>Yes (Kuadrant PodMonitor or MaaS ServiceMonitor)</td>
+<td>Yes — 16 panels use <code>authorized_hits</code>, <code>authorized_calls</code>, <code>limited_calls</code>, <code>limitador_up</code></td>
+</tr>
+<tr>
+<td><strong>Authorino</strong></td>
+<td>Yes (<code>/metrics</code> + <code>/server-metrics</code>)</td>
+<td>Yes — <code>/metrics</code> via Kuadrant operator; <code>/server-metrics</code> via MaaS <code>authorino-server-metrics</code> ServiceMonitor</td>
+<td>Yes — Auth Evaluation Latency (P50/P95/P99), Auth Success/Deny Rate, plus pod-up check</td>
+</tr>
+<tr>
+<td><strong>Istio Gateway</strong></td>
+<td>Yes (Envoy <code>/stats/prometheus</code>)</td>
+<td>Yes (<code>istio-gateway-metrics</code> ServiceMonitor)</td>
+<td>Yes — latency histograms, request counts, error rates</td>
+</tr>
+<tr>
+<td><strong>maas-api</strong></td>
+<td><strong>No</strong> — returns 404 on <code>/metrics</code></td>
+<td>No</td>
+<td>Only pod-up check via <code>kube_pod_status_phase</code></td>
+</tr>
+<tr>
+<td><strong>vLLM / llm-d / Simulator</strong></td>
+<td>Yes (vLLM metrics on <code>/metrics</code> port 8000; llm-d EPP metrics on port 9090)</td>
+<td>Yes — vLLM metrics via <code>kserve-llm-models</code> ServiceMonitor; EPP metrics require separate scrape config</td>
+<td>Yes — TTFT, ITL, queue depth, latency, tokens, cache, prompt/generation ratio, queue wait time (EPP metrics not yet in MaaS dashboards)</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">maas-api Metrics Gap</p>
+<p>The maas-api Go service does <strong>not</strong> expose a <code>/metrics</code> endpoint. Metrics such as API key creation rate, token issuance rate, model discovery latency, and request handler durations are not available in Prometheus. Adding Prometheus instrumentation (e.g. <code>promhttp</code> handler + application-specific counters/histograms) to the Go service is a recommended future improvement.</p>
+</div>
+<h2 id="installation">Installation</h2>
+<p>There are two ways to enable deployment-based observability:</p>
+<ol>
+<li><strong>Operator-managed</strong> (recommended): Enable via Tenant CR</li>
+<li><strong>Kustomize-based</strong>: Deploy manifests directly</li>
+</ol>
+<h3 id="option-1-operator-managed-telemetry">Option 1: Operator-Managed Telemetry</h3>
+<p>When using the ODH/RHOAI operator, telemetry can be enabled via the Tenant CR (self-bootstrapped by <code>maas-controller</code> in the <code>models-as-a-service</code> namespace):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Tenant</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default-tenant</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models-as-a-service</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">telemetry</span><span class="p">:</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">  </span><span class="c1"># Enable TelemetryPolicy and Istio Telemetry</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">    </span><span class="nt">metrics</span><span class="p">:</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">      </span><span class="nt">captureOrganization</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">      </span><span class="nt">captureUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">      </span><span class="c1"># Disabled by default (GDPR)</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">      </span><span class="nt">captureGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">     </span><span class="c1"># High cardinality</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">      </span><span class="nt">captureModelUsage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre></div>
+<p>Or patch an existing CR:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>tenant<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;telemetry&quot;:{&quot;enabled&quot;:true}}}&#39;</span>
+</code></pre></div>
+<p><strong>What the Tenant reconciler creates when <code>telemetry.enabled: true</code>:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Namespace</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TelemetryPolicy (<code>maas-telemetry</code>)</td>
+<td>Gateway namespace</td>
+<td>Adds <code>user</code>, <code>subscription</code>, <code>model</code> labels to Limitador usage metrics</td>
+</tr>
+<tr>
+<td>Istio Telemetry (<code>latency-per-subscription</code>)</td>
+<td>Gateway namespace</td>
+<td>Adds <code>subscription</code> label to gateway latency metrics</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Prerequisites for Operator-Managed Telemetry</p>
+<p>The Tenant reconciler telemetry feature requires:</p>
+<ul>
+<li><strong>OpenShift Service Mesh (Istio)</strong> 2.4+ — for Istio Telemetry CRD</li>
+<li><strong>Kuadrant/RHCL</strong> — for TelemetryPolicy CRD and AuthPolicy header injection</li>
+<li><strong>Gateway deployed</strong> — Telemetry targets the gateway via selector</li>
+</ul>
+<p>The Tenant reconciler checks for CRD availability before creating resources. If a CRD is not present, that resource is silently skipped.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">AuthPolicy Header Dependency</p>
+<p>The Istio Telemetry reads the <code>subscription</code> value from the <code>X-MaaS-Subscription</code> header, which must be injected by AuthPolicy:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">response</span><span class="p">:</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">success</span><span class="p">:</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="nt">headers</span><span class="p">:</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">      </span><span class="nt">X-MaaS-Subscription</span><span class="p">:</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">        </span><span class="nt">plain</span><span class="p">:</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">          </span><span class="nt">expression</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;auth.metadata.apiKeyValidation.subscription&#39;</span>
+</code></pre></div>
+<p>Without this header injection, the <code>subscription</code> label on latency metrics will be empty.</p>
+</div>
+<p><strong>Verify the feature is working:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Check Istio Telemetry was created</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>telemetry<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>latency-per-subscription
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># Query Prometheus for subscription label</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>curl<span class="w"> </span>-sk<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="s2">&quot;https://thanos-querier-openshift-monitoring.&lt;cluster&gt;/api/v1/label/subscription/values&quot;</span>
+</code></pre></div>
+<h3 id="option-2-kustomize-based-installation">Option 2: Kustomize-Based Installation</h3>
+<div class="admonition warning">
+<p class="admonition-title">Development/Testing Only</p>
+<p><strong>This is not the standard customer install.</strong> The production path is operator-managed via ODH/RHOAI (Option 1 above).</p>
+<p>These Kustomize entrypoints exist so the team can install, iterate, and test observability without a full operator-driven deployment.</p>
+</div>
+<h4 id="kustomize-entrypoint-map">Kustomize Entrypoint Map</h4>
+<p>The observability stack is defined across multiple Kustomize directories. Each can be built and applied independently:</p>
+<table>
+<thead>
+<tr>
+<th>Entrypoint (kustomize build target)</th>
+<th>What it deploys</th>
+<th>Operator-owned equivalent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>deployment/base/observability/</code></td>
+<td>TelemetryPolicy + Istio Telemetry (conditional ServiceMonitors applied only via script)</td>
+<td>Operator installs TelemetryPolicy as part of the MaaS stack; Kuadrant operator owns ServiceMonitors when <code>spec.observability.enable: true</code></td>
+</tr>
+<tr>
+<td><code>deployment/components/observability/grafana/</code></td>
+<td>GrafanaDashboard CRs (Platform Admin, AI Engineer)</td>
+<td>Operator does not manage Grafana dashboards; same CRs are used in both paths</td>
+</tr>
+<tr>
+<td><code>deployment/components/observability/prometheus/</code></td>
+<td>Standalone Prometheus + RBAC + ServiceMonitors in <code>llm-observability</code> namespace</td>
+<td>OpenShift User Workload Monitoring (built-in Prometheus) — operator path relies on this instead</td>
+</tr>
+<tr>
+<td><code>deployment/components/observability/observability/</code></td>
+<td>Aggregator that pulls in <code>prometheus/</code> above</td>
+<td>Same as above — this is a convenience wrapper</td>
+</tr>
+<tr>
+<td><code>deployment/components/observability/observability/dashboards/</code></td>
+<td>Perses PersesDashboard + Prometheus datasource</td>
+<td>No operator equivalent — Perses is optional in both paths</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Base observability resources</strong> (<code>deployment/base/observability/</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>TelemetryPolicy</strong> (<code>gateway-telemetry-policy.yaml</code>)</td>
+<td>Adds <code>user</code>, <code>subscription</code>, and <code>model</code> labels to Limitador metrics. The <code>model</code> label (from <code>responseBodyJSON</code>) is available on <code>authorized_hits</code>; <code>authorized_calls</code> and <code>limited_calls</code> carry <code>user</code> and <code>subscription</code>.</td>
+</tr>
+<tr>
+<td><strong>Istio Telemetry</strong> (<code>istio-gateway-telemetry.yaml</code>)</td>
+<td>Adds <code>subscription</code> label to gateway latency (<code>istio_request_duration_milliseconds_bucket</code>) via the <code>X-MaaS-Subscription</code> header injected by the controller-generated AuthPolicy. Enables per-subscription latency tracking (P50/P95/P99).</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Conditional resources</strong> (not in kustomization.yaml, applied only by <code>install-observability.sh</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Applied when…</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>limitador-servicemonitor.yaml</code></td>
+<td>No Kuadrant PodMonitor scraping Limitador <code>/metrics</code></td>
+</tr>
+<tr>
+<td><code>authorino-server-metrics-servicemonitor.yaml</code></td>
+<td>No existing monitor scraping Authorino <code>/server-metrics</code></td>
+</tr>
+<tr>
+<td><code>istio-gateway-service.yaml</code></td>
+<td>Gateway deployment exists in <code>openshift-ingress</code></td>
+</tr>
+<tr>
+<td><code>istio-gateway-servicemonitor.yaml</code></td>
+<td>Gateway deployment exists (paired with the Service above)</td>
+</tr>
+</tbody>
+</table>
+<h4 id="dry-run-verification">Dry-Run Verification</h4>
+<p>Validate that every kustomization builds cleanly without applying to a cluster:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Base telemetry (TelemetryPolicy + Istio Telemetry)</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/base/observability<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="c1"># Grafana dashboards</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/grafana<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="c1"># Standalone Prometheus stack</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/prometheus<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="c1"># Prometheus aggregator (same content as prometheus/ above)</span>
+<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/observability<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>
+<a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a><span class="c1"># Perses dashboards</span>
+<a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/observability/dashboards<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>--dry-run<span class="o">=</span>client<span class="w"> </span>-f<span class="w"> </span>-
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">CI Validation</p>
+<p>CI runs <code>scripts/ci/validate-manifests.sh</code> on every PR that touches <code>deployment/**</code>, which runs <code>kustomize build</code> against all <code>kustomization.yaml</code> files. Files with <code>kind: Component</code> are skipped (they must be included via a parent's <code>components:</code> field), but directories whose kustomization.yaml declares <code>kind: Kustomization</code> can build standalone and are validated by CI dry-run.</p>
+</div>
+<h4 id="deploy-to-a-cluster">Deploy to a Cluster</h4>
+<p><strong>Quick deployment</strong> (recommended):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Deploys base telemetry + conditional ServiceMonitors</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>./scripts/observability/install-observability.sh<span class="w"> </span><span class="o">[</span>--namespace<span class="w"> </span>NAMESPACE<span class="o">]</span>
+</code></pre></div>
+<p><strong>Manual deployment</strong> (step-by-step):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># 1. Base telemetry (requires Gateway + AuthPolicy to exist first)</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/base/observability<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># 2. Conditional ServiceMonitors (Limitador, Authorino, Gateway, LLM models)</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="c1">#    Use the install script — it detects existing Kuadrant monitors to avoid duplicates:</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>./scripts/observability/install-observability.sh
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="c1"># 3. Grafana dashboards (discovers Grafana instance cluster-wide)</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>./scripts/observability/install-grafana-dashboards.sh
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="c1"># 4. (Optional) Standalone Prometheus — only if NOT using OpenShift User Workload Monitoring</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/observability<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="c1"># 5. (Optional) Perses dashboards</span>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/observability/dashboards<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+</code></pre></div>
+<p>When using the full deployment script, this is applied automatically:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>./scripts/deploy.sh
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Prerequisites</p>
+<ul>
+<li><strong>Tools</strong>: <code>kubectl</code>, <code>kustomize</code>, <code>jq</code>, <code>yq</code> must be installed</li>
+<li><strong>Cluster state</strong>: Gateway, AuthPolicy (gateway-auth-policy), and subscription selection must be deployed first. The AuthPolicy injects <code>X-MaaS-Subscription</code>, which Istio Telemetry reads to label latency by subscription. Without it, the <code>subscription</code> label on gateway latency will be empty.</li>
+<li><strong>Namespace</strong>: Use <code>--namespace</code> if your MaaS API is deployed to a namespace other than <code>maas-api</code> (e.g. <code>--namespace opendatahub</code>)</li>
+</ul>
+</div>
+<h4 id="operator-vs-kustomize-drift-reference">Operator vs Kustomize Drift Reference</h4>
+<p>When updating manifests in <code>deployment/base/observability/</code> or <code>deployment/components/observability/</code>, check whether the operator path produces equivalent resources. Drift between the two is expected in some areas (e.g., the standalone Prometheus stack has no operator equivalent) but should be tracked for the telemetry CRs and ServiceMonitors.</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Kustomize source</th>
+<th>Operator creates?</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TelemetryPolicy</td>
+<td><code>base/observability/gateway-telemetry-policy.yaml</code></td>
+<td>Yes</td>
+<td>Keep in sync — labels must match</td>
+</tr>
+<tr>
+<td>Istio Telemetry</td>
+<td><code>base/observability/istio-gateway-telemetry.yaml</code></td>
+<td>Yes</td>
+<td>Keep in sync — header extraction must match</td>
+</tr>
+<tr>
+<td>Limitador ServiceMonitor</td>
+<td><code>base/observability/limitador-servicemonitor.yaml</code></td>
+<td>Kuadrant PodMonitor when <code>observability.enable: true</code></td>
+<td>Script skips ours if Kuadrant's exists</td>
+</tr>
+<tr>
+<td>Authorino /server-metrics</td>
+<td><code>base/observability/authorino-server-metrics-servicemonitor.yaml</code></td>
+<td>Not yet (Kuadrant only scrapes <code>/metrics</code>)</td>
+<td>MaaS supplements the operator gap</td>
+</tr>
+<tr>
+<td>Istio Gateway ServiceMonitor</td>
+<td><code>base/observability/istio-gateway-servicemonitor.yaml</code></td>
+<td>No</td>
+<td>MaaS-only; applied conditionally</td>
+</tr>
+<tr>
+<td>Grafana Dashboards</td>
+<td><code>components/observability/grafana/</code></td>
+<td>No</td>
+<td>Same CRs used in both paths</td>
+</tr>
+<tr>
+<td>Standalone Prometheus</td>
+<td><code>components/observability/prometheus/</code></td>
+<td>No (uses OpenShift UWM instead)</td>
+<td>Dev/test only — not for production</td>
+</tr>
+<tr>
+<td>Perses Dashboards</td>
+<td><code>components/observability/observability/dashboards/</code></td>
+<td>No</td>
+<td>Optional in both paths</td>
+</tr>
+</tbody>
+</table>
+<h4 id="keeping-docs-accurate">Keeping Docs Accurate</h4>
+<p>When you change any YAML under <code>deployment/base/observability/</code> or <code>deployment/components/observability/</code>:</p>
+<ol>
+<li>Verify the build still passes: <code>kustomize build &lt;dir&gt; | kubectl apply --dry-run=client -f -</code></li>
+<li>Update the <strong>entrypoint map table above</strong> if you add, remove, or rename an entrypoint</li>
+<li>Update this document if the change affects user-facing instructions (metrics, ServiceMonitor behavior, dashboard content)</li>
+</ol>
+<h2 id="metrics-collection">Metrics Collection</h2>
+<h3 id="limitador-metrics">Limitador Metrics</h3>
+<p>Limitador exposes the following Prometheus metrics (verified against <a href="https://github.com/Kuadrant/limitador/blob/main/limitador-server/src/prometheus_metrics.rs">Limitador source code</a>):</p>
+<h4 id="core-limitador-metrics">Core Limitador Metrics</h4>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Labels</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>limitador_up</code></td>
+<td>Gauge</td>
+<td>—</td>
+<td>Limitador is running (1 = up)</td>
+</tr>
+<tr>
+<td><code>datastore_partitioned</code></td>
+<td>Gauge</td>
+<td>—</td>
+<td>Limitador is partitioned from backing datastore (0 = healthy)</td>
+</tr>
+<tr>
+<td><code>datastore_latency</code></td>
+<td>Histogram</td>
+<td>—</td>
+<td>Latency to the underlying counter datastore</td>
+</tr>
+</tbody>
+</table>
+<h4 id="maas-usage-metrics-limitador-telemetrypolicy">MaaS Usage Metrics (Limitador + TelemetryPolicy)</h4>
+<p>When Kuadrant TelemetryPolicy and TokenRateLimitPolicy are applied, Limitador exposes these counters with custom labels injected by the wasm-shim from auth context and the model response body. These are the primary metrics for usage dashboards and chargeback:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Labels</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>authorized_hits</code></td>
+<td>Counter</td>
+<td><code>user</code>, <code>subscription</code>, <code>model</code>, <code>limitador_namespace</code></td>
+<td>Total tokens consumed per request (from <code>usage.total_tokens</code> in the model response; input + output combined). The <code>model</code> label is extracted via <code>responseBodyJSON("/model")</code>.</td>
+</tr>
+<tr>
+<td><code>authorized_calls</code></td>
+<td>Counter</td>
+<td><code>user</code>, <code>subscription</code>, <code>limitador_namespace</code></td>
+<td>Requests allowed (not rate-limited).</td>
+</tr>
+<tr>
+<td><code>limited_calls</code></td>
+<td>Counter</td>
+<td><code>user</code>, <code>subscription</code>, <code>limitador_namespace</code></td>
+<td>Requests denied due to token rate limits.</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title"><code>model</code> label availability</p>
+<p>The <code>model</code> label is currently available <strong>only on <code>authorized_hits</code></strong>. The <code>authorized_calls</code> and <code>limited_calls</code> metrics carry <code>user</code> and <code>subscription</code> labels but not <code>model</code>, due to how the wasm-shim constructs the CEL evaluation context for these counters. This is a known upstream limitation tracked for improvement in Kuadrant.</p>
+</div>
+<p>Gateway latency is labeled by <strong>subscription only</strong> via Istio Telemetry (see <a href="#per-subscription-latency-tracking">Per-Subscription Latency Tracking</a>); per-user latency is not exposed on the gateway histogram to keep cardinality bounded.</p>
+<h3 id="authorino-metrics">Authorino Metrics</h3>
+<p>Authorino exposes metrics on two separate endpoints:</p>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Metrics</th>
+<th>Scraped?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/metrics</code></td>
+<td>Controller-runtime (reconcile counts, workqueue depth)</td>
+<td>Yes (<code>authorino-operator-monitor</code>, provided by Kuadrant)</td>
+</tr>
+<tr>
+<td><code>/server-metrics</code></td>
+<td>Auth evaluation metrics (see below)</td>
+<td>Yes (<code>authorino-server-metrics</code>, deployed by MaaS <code>install-observability.sh</code>)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Auth server metrics</strong> (exposed on <code>/server-metrics</code>, port 8080):</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Labels</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>auth_server_authconfig_total</code></td>
+<td>Counter</td>
+<td><code>namespace</code>, <code>authconfig</code></td>
+<td>Total AuthConfig evaluations</td>
+</tr>
+<tr>
+<td><code>auth_server_authconfig_duration_seconds</code></td>
+<td>Histogram</td>
+<td><code>namespace</code>, <code>authconfig</code></td>
+<td>Auth evaluation latency</td>
+</tr>
+<tr>
+<td><code>auth_server_authconfig_response_status</code></td>
+<td>Counter</td>
+<td><code>namespace</code>, <code>authconfig</code>, <code>status</code></td>
+<td>Auth response status per AuthConfig (OK, denied, etc.)</td>
+</tr>
+<tr>
+<td><code>auth_server_response_status</code></td>
+<td>Counter</td>
+<td><code>status</code></td>
+<td>Aggregate auth response status across all AuthConfigs</td>
+</tr>
+<tr>
+<td><code>grpc_server_handled_total</code></td>
+<td>Counter</td>
+<td><code>grpc_method</code>, <code>grpc_code</code></td>
+<td>gRPC requests handled</td>
+</tr>
+<tr>
+<td><code>grpc_server_handling_seconds</code></td>
+<td>Histogram</td>
+<td><code>grpc_method</code></td>
+<td>gRPC request latency</td>
+</tr>
+<tr>
+<td><code>grpc_server_msg_received_total</code></td>
+<td>Counter</td>
+<td><code>grpc_method</code></td>
+<td>gRPC messages received</td>
+</tr>
+<tr>
+<td><code>grpc_server_msg_sent_total</code></td>
+<td>Counter</td>
+<td><code>grpc_method</code></td>
+<td>gRPC messages sent</td>
+</tr>
+<tr>
+<td><code>grpc_server_started_total</code></td>
+<td>Counter</td>
+<td><code>grpc_method</code></td>
+<td>gRPC requests started</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">MaaS ServiceMonitor</p>
+<p>The Kuadrant-provided <code>authorino-operator-monitor</code> only scrapes <code>/metrics</code> (controller-runtime stats). MaaS deploys an additional <code>authorino-server-metrics</code> ServiceMonitor to scrape <code>/server-metrics</code> for auth evaluation metrics. This is deployed automatically by <code>install-observability.sh</code>.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Lazily registered metrics</p>
+<p>Authorino upstream <a href="https://github.com/Kuadrant/authorino/blob/main/docs/user-guides/observability.md">documents</a> additional per-evaluator metrics (<code>auth_server_evaluator_total</code>, <code>auth_server_evaluator_duration_seconds</code>, <code>auth_server_evaluator_cancelled</code>, <code>auth_server_evaluator_denied</code>). These are <strong>lazily registered</strong> and only appear when specific evaluator types (e.g. OPA, HTTP authorization) are triggered. The MaaS AuthPolicy uses <code>kubernetesTokenReview</code>, which does not emit these metrics. They are not listed in the table above because they are not present in a standard MaaS deployment.</p>
+</div>
+<h3 id="vllm-model-server-metrics">vLLM / Model Server Metrics</h3>
+<p>MaaS supports three model serving backends that expose Prometheus metrics on <code>/metrics</code> (port 8000), scraped by the <code>kserve-llm-models</code> ServiceMonitor:</p>
+<ul>
+<li><strong>vLLM</strong> (current stable) — full-featured LLM inference server</li>
+<li><strong>llm-d</strong> — llm-d inference platform (runs vLLM as backend + EPP routing layer)</li>
+<li><strong>llm-d-inference-sim</strong> (v0.8.2) — lightweight simulator for testing without GPUs</li>
+</ul>
+<p><strong>Supported versions:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Backend</th>
+<th>Minimum Version</th>
+<th>Sample Manifests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>vLLM</td>
+<td>v0.7.x stable</td>
+<td>—</td>
+</tr>
+<tr>
+<td>llm-d</td>
+<td>v0.1.x</td>
+<td>—</td>
+</tr>
+<tr>
+<td>llm-d-inference-sim</td>
+<td><strong>v0.8.2</strong></td>
+<td><code>docs/samples/models/simulator/</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="vllm-metrics-port-8000">vLLM Metrics (port 8000)</h4>
+<p>All three backends expose <code>vllm:</code>-prefixed metrics. The table below shows which metrics each backend provides.</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th style="text-align: center;">Simulator</th>
+<th style="text-align: center;">vLLM</th>
+<th style="text-align: center;">llm-d</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vllm:num_requests_running</code></td>
+<td>Gauge</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Requests currently being processed</td>
+</tr>
+<tr>
+<td><code>vllm:num_requests_waiting</code></td>
+<td>Gauge</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Requests queued waiting for processing</td>
+</tr>
+<tr>
+<td><code>vllm:e2e_request_latency_seconds</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>End-to-end inference latency</td>
+</tr>
+<tr>
+<td><code>vllm:time_to_first_token_seconds</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Time to First Token (TTFT)</td>
+</tr>
+<tr>
+<td><code>vllm:request_prompt_tokens</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Per-request prompt token counts (<code>_sum</code> gives cumulative total)</td>
+</tr>
+<tr>
+<td><code>vllm:request_generation_tokens</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Per-request generation token counts (<code>_sum</code> gives cumulative total)</td>
+</tr>
+<tr>
+<td><code>vllm:inter_token_latency_seconds</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Inter-Token Latency (ITL)</td>
+</tr>
+<tr>
+<td><code>vllm:kv_cache_usage_perc</code></td>
+<td>Gauge</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>KV-cache usage (0-1)</td>
+</tr>
+<tr>
+<td><code>vllm:prompt_tokens_total</code></td>
+<td>Counter</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Total prompt tokens processed</td>
+</tr>
+<tr>
+<td><code>vllm:generation_tokens_total</code></td>
+<td>Counter</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Total generation tokens processed</td>
+</tr>
+<tr>
+<td><code>vllm:request_queue_time_seconds</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">—</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Time requests wait in queue before processing (vLLM/llm-d only)</td>
+</tr>
+<tr>
+<td><code>vllm:request_success_total</code></td>
+<td>Counter</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Successful requests (<code>_total</code> suffix added by prometheus_client)</td>
+</tr>
+<tr>
+<td><code>vllm:request_prefill_time_seconds</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Time spent in prefill (prompt processing) phase</td>
+</tr>
+<tr>
+<td><code>vllm:request_decode_time_seconds</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">Y</td>
+<td>Time spent in decode (token generation) phase</td>
+</tr>
+<tr>
+<td><code>vllm:request_inference_time_seconds</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">—</td>
+<td style="text-align: center;">—</td>
+<td>Total inference time (simulator-specific)</td>
+</tr>
+<tr>
+<td><code>vllm:request_params_max_tokens</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">—</td>
+<td style="text-align: center;">—</td>
+<td>Distribution of <code>max_tokens</code> request parameter</td>
+</tr>
+<tr>
+<td><code>vllm:max_num_generation_tokens</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">—</td>
+<td style="text-align: center;">—</td>
+<td>Max generation tokens per request</td>
+</tr>
+<tr>
+<td><code>vllm:lora_requests_info</code></td>
+<td>Gauge</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">—</td>
+<td style="text-align: center;">—</td>
+<td>LoRA adapter request info</td>
+</tr>
+<tr>
+<td><code>vllm:cache_config_info</code></td>
+<td>Gauge</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">—</td>
+<td style="text-align: center;">—</td>
+<td>Cache configuration info (simulator-specific)</td>
+</tr>
+<tr>
+<td><code>vllm:time_per_output_token_seconds</code></td>
+<td>Histogram</td>
+<td style="text-align: center;">Y</td>
+<td style="text-align: center;">—</td>
+<td style="text-align: center;">—</td>
+<td>Legacy ITL name (kept by simulator for backward compat; not used by dashboards)</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Simulator metric alignment</p>
+<p>As of v0.7.1 (still true in v0.8.x), the simulator fully aligns with current vLLM metric names (<code>kv_cache_usage_perc</code>, <code>inter_token_latency_seconds</code>, <code>prompt_tokens_total</code>, <code>generation_tokens_total</code>). Older simulator versions (v0.6.x) used different names (<code>gpu_cache_usage_perc</code>, <code>time_per_output_token_seconds</code>) and are <strong>no longer supported</strong> by MaaS dashboards. The simulator also exposes additional metrics not used by MaaS dashboards (e.g. <code>request_inference_time_seconds</code>, <code>request_params_max_tokens</code>).</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Lazily registered metrics</p>
+<p>Some vLLM/simulator metrics are <strong>lazily registered</strong> — they only appear in <code>/metrics</code> output after the first event that triggers them. For example, <code>request_queue_time_seconds</code> (on real vLLM) only appears after a request actually queues (when <code>max-num-seqs</code> is exceeded). Similarly, histogram counters like <code>e2e_request_latency_seconds</code> only appear after the first inference request completes. Dashboard panels will show "No Data" until sufficient traffic has been generated. This is normal Prometheus client behavior, not a configuration issue.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Counter <code>_total</code> suffix</p>
+<p>vLLM code defines counters as <code>vllm:prompt_tokens</code> and <code>vllm:generation_tokens</code>, but the Python prometheus_client library appends <code>_total</code> when exposing metrics. The <strong>actual scraped metric names</strong> in Prometheus are <code>vllm:prompt_tokens_total</code> and <code>vllm:generation_tokens_total</code>. The <a href="https://github.com/llm-d/llm-d/blob/main/docs/monitoring/grafana/dashboards/llm-d-vllm-overview.json">llm-d official dashboard</a> confirms this by using the <code>_total</code> form.</p>
+</div>
+<h4 id="llm-d-epp-endpoint-picker-metrics">llm-d EPP (Endpoint Picker) Metrics</h4>
+<p>When using llm-d, the inference gateway's Endpoint Picker (EPP) exposes additional routing and scheduling metrics on a <strong>separate port (9090)</strong>. These are complementary to vLLM metrics and require a separate ServiceMonitor:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inference_model_request_total</code></td>
+<td>Counter</td>
+<td>Total inference requests per model</td>
+</tr>
+<tr>
+<td><code>inference_model_request_error_total</code></td>
+<td>Counter</td>
+<td>Total errored requests per model</td>
+</tr>
+<tr>
+<td><code>inference_model_request_duration_seconds</code></td>
+<td>Histogram</td>
+<td>Request duration through the EPP</td>
+</tr>
+<tr>
+<td><code>inference_model_input_tokens</code></td>
+<td>Counter</td>
+<td>Input tokens routed per model</td>
+</tr>
+<tr>
+<td><code>inference_model_output_tokens</code></td>
+<td>Counter</td>
+<td>Output tokens routed per model</td>
+</tr>
+<tr>
+<td><code>inference_model_running_requests</code></td>
+<td>Gauge</td>
+<td>Currently running requests per model</td>
+</tr>
+<tr>
+<td><code>inference_pool_average_kv_cache_utilization</code></td>
+<td>Gauge</td>
+<td>Average KV-cache utilization across the pool</td>
+</tr>
+<tr>
+<td><code>inference_pool_average_queue_size</code></td>
+<td>Gauge</td>
+<td>Average queue size across the pool</td>
+</tr>
+<tr>
+<td><code>inference_pool_ready_pods</code></td>
+<td>Gauge</td>
+<td>Number of ready pods in the inference pool</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition info">
+<p class="admonition-title">EPP metrics not yet in MaaS dashboards</p>
+<p>EPP metrics are not currently scraped or visualized by MaaS. When deploying llm-d with the EPP, refer to the <a href="https://llm-d.ai/docs/usage/monitoring">llm-d monitoring docs</a> and the <a href="https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/v1.0.1/tools/dashboards/inference_gateway.json">inference gateway dashboard</a> for EPP-specific visualization.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Input/Output Token Split</p>
+<p>vLLM metrics provide input vs output token breakdown <strong>per model</strong> (<code>vllm:prompt_tokens_total</code> / <code>vllm:generation_tokens_total</code> counters, or <code>vllm:request_prompt_tokens</code> / <code>vllm:request_generation_tokens</code> histograms). However, these do not carry <code>user</code> or <code>subscription</code> labels. For per-user billing with input/output split, upstream changes to the Kuadrant wasm-shim are required (see <a href="#known-limitations">Known Limitations</a>).</p>
+</div>
+<h4 id="dashboard-metric-queries">Dashboard Metric Queries</h4>
+<p>Dashboard panels use histogram <code>_sum</code> as primary data source. All queries work across vLLM, llm-d, and llm-d-inference-sim v0.8.2:</p>
+<table>
+<thead>
+<tr>
+<th>Panel</th>
+<th>PromQL metric</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tokens (1h)</td>
+<td><code>request_prompt_tokens_sum</code> + <code>request_generation_tokens_sum</code></td>
+</tr>
+<tr>
+<td>Token Throughput</td>
+<td><code>rate(request_prompt_tokens_sum)</code>, <code>rate(request_generation_tokens_sum)</code></td>
+</tr>
+<tr>
+<td>Prompt/Gen Ratio</td>
+<td><code>rate(request_prompt_tokens_sum)</code> / total</td>
+</tr>
+<tr>
+<td>ITL</td>
+<td><code>inter_token_latency_seconds_bucket</code></td>
+</tr>
+<tr>
+<td>KV Cache</td>
+<td><code>kv_cache_usage_perc</code></td>
+</tr>
+<tr>
+<td>Queue Wait Time</td>
+<td><code>request_queue_time_seconds_bucket</code> (vLLM/llm-d only)</td>
+</tr>
+</tbody>
+</table>
+<p>See the <a href="https://docs.vllm.ai/en/stable/usage/metrics/">vLLM metrics documentation</a> for the full vLLM metric list and deprecation policy, and the <a href="https://llm-d.ai/docs/usage/monitoring">llm-d monitoring documentation</a> for llm-d-specific setup.</p>
+<h3 id="servicemonitor-configuration">ServiceMonitor Configuration</h3>
+<p>ServiceMonitors are deployed by <code>install-observability.sh</code> to configure OpenShift's Prometheus to discover and scrape metrics from MaaS components.</p>
+<p><strong>Automatically Deployed:</strong></p>
+<ul>
+<li><strong>Istio Gateway</strong>: Scrapes Envoy metrics from the MaaS gateway in <code>openshift-ingress</code> (deployed if the gateway exists)</li>
+<li><strong>KServe LLM Models</strong>: Scrapes vLLM metrics from model pods in the <code>llm</code> namespace (deployed if the <code>llm</code> namespace exists)</li>
+</ul>
+<p><strong>Conditionally Deployed (auto-detected by <code>install-observability.sh</code>):</strong></p>
+<ul>
+<li><strong>Limitador</strong> (<code>limitador-servicemonitor.yaml</code>): Scrapes rate-limiting metrics from Limitador pods in <code>kuadrant-system</code>. <strong>Skipped when Kuadrant's own PodMonitor is already present.</strong> When Kuadrant CR has <code>spec.observability.enable: true</code>, the operator creates its own <code>kuadrant-limitador-monitor</code> PodMonitor that scrapes the same Limitador pod. Deploying both would cause duplicate metrics.</li>
+<li><strong>Authorino Server Metrics</strong> (<code>authorino-server-metrics-servicemonitor.yaml</code>): Scrapes auth evaluation metrics from Authorino's <code>/server-metrics</code> endpoint in <code>kuadrant-system</code>. <strong>Skipped if a Kuadrant-provided monitor already scrapes <code>/server-metrics</code>.</strong> This collects <code>auth_server_authconfig_duration_seconds</code>, <code>auth_server_authconfig_response_status</code>, and other auth server metrics that are <strong>not</strong> scraped by the Kuadrant-provided <code>authorino-operator-monitor</code> (which only covers <code>/metrics</code> for controller-runtime stats).</li>
+</ul>
+<p><strong>Already Provided by Kuadrant (when <code>observability.enable: true</code>):</strong></p>
+<ul>
+<li><strong>Limitador PodMonitor</strong> (<code>kuadrant-limitador-monitor</code>): Created by the Kuadrant operator</li>
+<li><strong>Authorino Operator Monitor</strong> (<code>authorino-operator-monitor</code>): Scrapes Authorino controller metrics from <code>/metrics</code> only</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Authorino Metrics Coverage</p>
+<p>The Kuadrant-provided <code>authorino-operator-monitor</code> only scrapes <code>/metrics</code> (controller-runtime stats). The MaaS <code>authorino-server-metrics</code> ServiceMonitor supplements this by scraping <code>/server-metrics</code> for auth evaluation metrics (<code>auth_server_authconfig_duration_seconds</code>, <code>auth_server_authconfig_response_status</code>, etc.). The <code>install-observability.sh</code> script auto-detects whether a Kuadrant-provided monitor already scrapes <code>/server-metrics</code> and skips deploying the MaaS ServiceMonitor to avoid duplicates. See <a href="https://docs.kuadrant.io/1.0.x/authorino/docs/user-guides/observability/">Authorino Observability</a> for details.</p>
+</div>
+<h2 id="high-availability-for-maas-metrics">High Availability for MaaS Metrics</h2>
+<p>For production deployments where metric persistence across pod restarts and scaling events is critical, you should configure Limitador to use Redis as a backend storage solution.</p>
+<h3 id="why-high-availability-matters">Why High Availability Matters</h3>
+<p>By default, Limitador stores rate-limiting counters in memory, which means:</p>
+<ul>
+<li>All hit counts are lost when pods restart</li>
+<li>Metrics reset when pods are rescheduled or scaled down</li>
+<li>No persistence across cluster maintenance or updates</li>
+</ul>
+<h3 id="setting-up-persistent-metrics">Setting Up Persistent Metrics</h3>
+<p>To enable persistent metric counts, refer to the detailed guide:</p>
+<p><strong><a href="https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp">Configuring Redis storage for rate limiting</a></strong></p>
+<p>This Red Hat documentation provides:</p>
+<ul>
+<li>Step-by-step Redis configuration for OpenShift</li>
+<li>Secret management for Redis credentials</li>
+<li>Limitador custom resource updates</li>
+<li>Production-ready setup instructions</li>
+</ul>
+<p>For local development and testing, you can also use our <a href="../limitador-persistence/">Limitador Persistence</a> guide which includes a basic Redis setup script that works with any Kubernetes cluster.</p>
+<h2 id="visualization">Visualization</h2>
+<p>For dashboard visualization options, see:</p>
+<ul>
+<li><strong>OpenShift Monitoring</strong>: <a href="https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/index">Monitoring overview</a></li>
+<li><strong>Grafana on OpenShift</strong>: <a href="https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/2.25/html/managing_and_monitoring_models/index">Red Hat OpenShift AI Monitoring</a></li>
+</ul>
+<h3 id="included-dashboards">Included Dashboards</h3>
+<p>MaaS includes two Grafana dashboards for different personas:</p>
+<h4 id="platform-admin-dashboard">Platform Admin Dashboard</h4>
+<p>Provides a comprehensive view of system health, usage across all users, and resource allocation:</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Metrics</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Component Health</strong></td>
+<td>Limitador up, Authorino pods, MaaS API pods, Gateway pods, Firing Alerts</td>
+</tr>
+<tr>
+<td><strong>Key Metrics</strong></td>
+<td>Total Tokens, Total Requests, Token Rate, Request Rate, Inference Success Rate, Active Users, P50 Response Latency, Rate Limit Ratio</td>
+</tr>
+<tr>
+<td><strong>Auth Evaluation</strong></td>
+<td>Auth Evaluation Latency (P50/P95/P99), Auth Success/Deny Rate</td>
+</tr>
+<tr>
+<td><strong>Traffic Analysis</strong></td>
+<td>Token/Request Rate by Model, Error Rates (4xx excl. 429, 5xx, 429 Rate Limited), Token/Request Rate by Subscription, P95 Latency</td>
+</tr>
+<tr>
+<td><strong>Error Breakdown</strong></td>
+<td>Rate Limited Requests, Unauthorized Requests</td>
+</tr>
+<tr>
+<td><strong>Model Metrics</strong></td>
+<td>vLLM queue depth, inference latency, KV cache usage, token throughput, prompt vs generation token ratio, queue wait time, TTFT, ITL</td>
+</tr>
+<tr>
+<td><strong>Top Users</strong></td>
+<td>By token usage, by declined requests</td>
+</tr>
+<tr>
+<td><strong>Detailed Breakdown</strong></td>
+<td>Token Rate by User, Request Volume by User &amp; Subscription</td>
+</tr>
+<tr>
+<td><strong>Resource Allocation</strong></td>
+<td>CPU/Memory/GPU per model pod</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Template Variables</p>
+<p>The Platform Admin dashboard uses Grafana template variables for namespace filtering instead of hardcoded values. This allows the dashboard to adapt to different deployment configurations:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>$datasource</code></td>
+<td><code>prometheus</code></td>
+<td>Prometheus datasource</td>
+</tr>
+<tr>
+<td><code>$maas_namespace</code></td>
+<td>auto-detected</td>
+<td>MaaS API namespace (auto-detected from <code>kube_pod_info{pod=~"maas-api.*"}</code>)</td>
+</tr>
+<tr>
+<td><code>$kuadrant_namespace</code></td>
+<td><code>kuadrant-system</code></td>
+<td>Kuadrant components namespace</td>
+</tr>
+<tr>
+<td><code>$gateway_namespace</code></td>
+<td><code>openshift-ingress</code></td>
+<td>Istio/Gateway namespace</td>
+</tr>
+<tr>
+<td><code>$llm_namespace</code></td>
+<td><code>llm</code></td>
+<td>LLM model pods namespace</td>
+</tr>
+<tr>
+<td><code>$model</code></td>
+<td><code>All</code></td>
+<td>Filter by model name</td>
+</tr>
+</tbody>
+</table>
+<p>To customize for your environment, change the variable values in Grafana's dashboard settings (gear icon → Variables).</p>
+</div>
+<h4 id="ai-engineer-dashboard">AI Engineer Dashboard</h4>
+<p>Personal usage view for individual developers:</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Metrics</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Usage Summary</strong></td>
+<td>My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Inference Success Rate</td>
+</tr>
+<tr>
+<td><strong>Usage Trends</strong></td>
+<td>Token Usage by Model, Usage Trends (tokens vs rate limited)</td>
+</tr>
+<tr>
+<td><strong>Detailed Analysis</strong></td>
+<td>Token Volume by Model, Rate Limited by Subscription</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Inference Success Rate</p>
+<p>Both dashboards use <code>rate()</code> on vLLM counters (<code>request_success_total</code>, <code>e2e_request_latency_seconds_count</code>) instead of raw counter values. This handles pod restarts correctly (counters reset independently and raw division produces incorrect results). When no traffic is present, <code>rate()/rate()</code> produces <code>NaN</code>; the dashboards use <code>((ratio) &gt;= 0) OR vector(1)</code> to filter <code>NaN</code> and default to 100% (healthy) when no traffic exists.</p>
+</div>
+<div class="admonition info">
+<p class="admonition-title">Tokens vs Requests</p>
+<p>Both dashboards show <strong>token consumption</strong> (<code>authorized_hits</code>) for billing/cost tracking and <strong>request counts</strong> (<code>authorized_calls</code>) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.</p>
+</div>
+<div class="admonition tip">
+<p class="admonition-title">Per-User Token Billing</p>
+<p>The <strong>Platform Admin dashboard</strong> shows token consumption aggregated by <strong>subscription</strong> and <strong>model</strong> for system-level visibility. Per-user token consumption for billing is available via:</p>
+<ul>
+<li><strong>AI Engineer dashboard</strong>: Individual users see their own token usage</li>
+<li><strong>Prometheus API</strong>: Query <code>sum by (user) (increase(authorized_hits[24h]))</code> for billing periods</li>
+<li><strong>RFE</strong>: A dedicated <code>/maas-api/v1/usage</code> chargeback API endpoint is recommended for production billing workflows</li>
+</ul>
+</div>
+<h3 id="prerequisites_1">Prerequisites</h3>
+<ul>
+<li><strong>Grafana</strong> must be installed (for example via your observability team's process, a centralized instance, or the <a href="https://grafana.github.io/grafana-operator/docs/installation/">Grafana Operator</a>). The dashboard helper does <strong>not</strong> install Grafana; it only deploys MaaS dashboard definitions and <strong>never fails</strong> (warnings only if none or multiple instances are found).</li>
+<li>Ensure the Grafana instance has label <code>app=grafana</code> so MaaS dashboard definitions attach.</li>
+<li>Configure a <strong>Prometheus or Thanos datasource</strong> in Grafana; the MaaS dashboards use the default Prometheus datasource.</li>
+</ul>
+<h3 id="deploying-dashboards">Deploying Dashboards</h3>
+<p>Monitoring is installed by <code>install-observability.sh</code>. Dashboards are installed by a <strong>separate helper</strong> that discovers Grafana cluster-wide:</p>
+<div class="highlight"><pre><span></span><code>./scripts/observability/install-grafana-dashboards.sh
+</code></pre></div>
+<p><strong>Behavior:</strong> Scans for Grafana CRs cluster-wide. If <strong>one</strong> instance is found, deploys dashboards to that namespace and prints a success message. If <strong>none</strong> or <strong>multiple</strong> are found, prints a warning (and, for multiple, lists them) and exits without error. Use flags to target a specific instance:</p>
+<div class="highlight"><pre><span></span><code>./scripts/observability/install-grafana-dashboards.sh --grafana-namespace maas-api
+./scripts/observability/install-grafana-dashboards.sh --grafana-label app=grafana
+</code></pre></div>
+<p>To deploy only the dashboard manifests manually (same namespace as your Grafana):</p>
+<div class="highlight"><pre><span></span><code>kustomize build deployment/components/observability/grafana | \
+  sed &quot;s/namespace: maas-api/namespace: &lt;your-namespace&gt;/g&quot; | \
+  kubectl apply -f -
+</code></pre></div>
+<h3 id="sample-dashboard-json">Sample Dashboard JSON</h3>
+<p>For manual import, a sample dashboard JSON file is available:</p>
+<ul>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json">MaaS Token Metrics Dashboard</a></li>
+</ul>
+<p>To import into Grafana:</p>
+<ol>
+<li>Go to Grafana → Dashboards → Import</li>
+<li>Upload the JSON file or paste content</li>
+<li>Select your Prometheus datasource</li>
+</ol>
+<h2 id="key-metrics-reference">Key Metrics Reference</h2>
+<h3 id="token-and-request-metrics">Token and Request Metrics</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+<th>Labels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>authorized_hits</code></td>
+<td>Total tokens consumed (input + output combined, from <code>usage.total_tokens</code> in model responses)</td>
+<td><code>user</code>, <code>subscription</code>, <code>model</code></td>
+</tr>
+<tr>
+<td><code>authorized_calls</code></td>
+<td>Total requests allowed</td>
+<td><code>user</code>, <code>subscription</code></td>
+</tr>
+<tr>
+<td><code>limited_calls</code></td>
+<td>Total requests rate-limited</td>
+<td><code>user</code>, <code>subscription</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">When to use which metric</p>
+<ul>
+<li><strong>Billing/Cost</strong>: Use <code>authorized_hits</code> - represents actual token consumption, with <code>model</code> label for per-model breakdown</li>
+<li><strong>API Usage</strong>: Use <code>authorized_calls</code> - represents number of API calls (per user, per subscription)</li>
+<li><strong>Rate Limiting</strong>: Use <code>limited_calls</code> - shows quota violations (per user, per subscription)</li>
+</ul>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Total tokens only (input/output split not yet available)</p>
+<p>Token consumption is reported as <strong>total tokens</strong> (prompt + completion) per request. The pipeline reads <code>usage.total_tokens</code> from the model response via Kuadrant's TokenRateLimitPolicy. Separate input-token (<code>prompt_tokens</code>) and output-token (<code>completion_tokens</code>) counters are <strong>not yet available</strong> at the gateway level; this would require upstream changes in the Kuadrant wasm-shim to send separate <code>hits_addend</code> values for each token type. Chargeback and usage tracking per user, per subscription, and per model are supported using <code>authorized_hits</code>.</p>
+</div>
+<h3 id="latency-metrics">Latency Metrics</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+<th>Labels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>istio_request_duration_milliseconds_bucket</code></td>
+<td>Gateway-level latency histogram</td>
+<td><code>destination_service_name</code>, <code>subscription</code></td>
+</tr>
+<tr>
+<td><code>vllm:e2e_request_latency_seconds</code></td>
+<td>Model inference latency</td>
+<td><code>model_name</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="per-subscription-latency-tracking">Per-Subscription Latency Tracking</h4>
+<p>The MaaS Platform uses an Istio Telemetry resource to add a <code>subscription</code> dimension to gateway latency metrics. This enables tracking request latency per subscription (e.g. free, premium, enterprise). Gateway latency is labeled by <strong>subscription only</strong> (not by user) to keep metric cardinality bounded and to align with latency-by-subscription requirements (e.g. P50/P95/P99 per subscription). Per-user metrics remain available from Limitador (<code>authorized_hits</code>, <code>authorized_calls</code>, <code>limited_calls</code>).</p>
+<p><strong>How it works:</strong></p>
+<ol>
+<li>The <code>gateway-auth-policy</code> injects the <code>X-MaaS-Subscription</code> header from the resolved subscription</li>
+<li>The Istio Telemetry resource extracts this header and adds it as a <code>subscription</code> label to the <code>REQUEST_DURATION</code> metric</li>
+<li>Prometheus scrapes these metrics from the Istio gateway</li>
+</ol>
+<p><strong>Configuration</strong> (<code>deployment/base/observability/istio-gateway-telemetry.yaml</code>):</p>
+<div class="highlight"><pre><span></span><code>apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: latency-per-subscription
+  namespace: openshift-ingress
+spec:
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: maas-default-gateway
+  metrics:
+  - providers:
+    - name: prometheus
+    overrides:
+    - match:
+        metric: REQUEST_DURATION
+        mode: CLIENT_AND_SERVER
+      tagOverrides:
+        subscription:
+          operation: UPSERT
+          value: request.headers[&quot;x-maas-subscription&quot;]
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Security</p>
+<p>The <code>X-MaaS-Subscription</code> header should be injected server-side by AuthPolicy. Ensure your AuthPolicy injects this header from the subscription selection (not client input) for accurate metrics attribution.</p>
+</div>
+<h3 id="common-queries">Common Queries</h3>
+<p><strong>Token-based queries (billing/cost):</strong></p>
+<div class="highlight"><pre><span></span><code># Total tokens consumed per user
+sum by (user) (authorized_hits)
+
+# Token consumption rate per model (tokens/sec)
+sum by (model) (rate(authorized_hits[5m]))
+
+# Top 10 users by tokens consumed
+topk(10, sum by (user) (authorized_hits))
+
+# Token consumption by subscription
+sum by (subscription) (authorized_hits)
+</code></pre></div>
+<p><strong>Request-based queries (capacity/usage):</strong></p>
+<div class="highlight"><pre><span></span><code># Total requests per user
+sum by (user) (authorized_calls)
+
+# Request rate per subscription (requests/sec)
+sum by (subscription) (rate(authorized_calls[5m]))
+
+# Top 10 users by request count
+topk(10, sum by (user) (authorized_calls))
+</code></pre></div>
+<p><strong>Inference success rate</strong> (system health — did requests that reached the model succeed?):</p>
+<div class="highlight"><pre><span></span><code># Inference success rate using rate() to handle counter resets correctly
+# The &gt;= 0 filter removes NaN (0/0 when no traffic), falling back to vector(1) = 100%
+((sum(rate(vllm:request_success_total[5m])) / sum(rate(vllm:e2e_request_latency_seconds_count[5m]))) &gt;= 0) OR vector(1)
+</code></pre></div>
+<p><strong>Rate limiting metrics</strong> (capacity planning — are users exceeding their quotas?):</p>
+<div class="highlight"><pre><span></span><code># Rate limit ratio (percentage of requests rejected by rate limiting)
+(sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)
+
+# Rate limit ratio by subscription
+(sum by (subscription) (limited_calls) / (sum by (subscription) (authorized_calls) + sum by (subscription) (limited_calls))) OR vector(0)
+
+# Rate limit violations per second by subscription
+sum by (subscription) (rate(limited_calls[5m]))
+
+# Users hitting rate limits most
+topk(10, sum by (user) (limited_calls))
+</code></pre></div>
+<p><strong>Latency metrics</strong> (per-subscription SLA tracking):</p>
+<div class="highlight"><pre><span></span><code># P99 latency per subscription
+histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=&quot;&quot;}[5m])))
+
+# P50 latency per subscription
+histogram_quantile(0.5, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=&quot;&quot;}[5m])))
+</code></pre></div>
+<p><strong>Latency queries:</strong></p>
+<div class="highlight"><pre><span></span><code># P99 latency by service
+histogram_quantile(0.99, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
+
+# P50 (median) latency
+histogram_quantile(0.5, sum by (le) (rate(istio_request_duration_milliseconds_bucket[5m])))
+
+# P99 latency per subscription
+histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=&quot;&quot;}[5m])))
+</code></pre></div>
+<div class="admonition tip">
+<p class="admonition-title">Filtering by subscription</p>
+<p>For per-subscription latency queries, use <code>subscription!=""</code> to exclude requests where the <code>X-MaaS-Subscription</code> header was not injected. Token consumption metrics (<code>authorized_hits</code>, <code>authorized_calls</code>) from Limitador already only include successful requests.</p>
+</div>
+<h2 id="maintenance">Maintenance</h2>
+<h3 id="grafana-datasource-token-rotation">Grafana Datasource Token Rotation</h3>
+<p>The Grafana datasource uses a ServiceAccount token to authenticate with Prometheus. This token is valid for <strong>30 days</strong> and must be rotated periodically.</p>
+<p><strong>To rotate the token:</strong></p>
+<div class="highlight"><pre><span></span><code># Delete the existing datasource and create a new one (or rotate the token per your Grafana setup).
+# To re-deploy only MaaS dashboard definitions: ./scripts/observability/install-grafana-dashboards.sh
+</code></pre></div>
+<div class="admonition tip">
+<p class="admonition-title">Production Recommendation</p>
+<p>For production deployments, consider automating token rotation using a CronJob or external secrets operator to avoid dashboard outages.</p>
+</div>
+<h2 id="known-limitations">Known Limitations</h2>
+<h3 id="currently-blocked-features">Currently Blocked Features</h3>
+<p>Some features require upstream changes and are currently blocked:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Blocker</th>
+<th>Workaround</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>model</code> label on <code>authorized_calls</code> / <code>limited_calls</code></strong></td>
+<td>Kuadrant wasm-shim does not pass <code>responseBodyJSON</code> context for these counters</td>
+<td>Use <code>authorized_hits</code> for per-model breakdown; <code>authorized_calls</code>/<code>limited_calls</code> support per-user and per-subscription</td>
+</tr>
+<tr>
+<td><strong>Input/output token split</strong></td>
+<td>Kuadrant TokenRateLimitPolicy sends a single <code>hits_addend</code> (total tokens); no mechanism for separate prompt/completion counters</td>
+<td>Total tokens available via <code>authorized_hits</code>; the response body contains <code>usage.prompt_tokens</code> and <code>usage.completion_tokens</code> but the wasm-shim does not split them</td>
+</tr>
+<tr>
+<td><strong>Input/output token breakdown per user</strong></td>
+<td>vLLM does not label its own metrics with <code>user</code></td>
+<td>Total tokens per user available via <code>authorized_hits{user="..."}</code>; vLLM prompt/generation token metrics are per-model only</td>
+</tr>
+<tr>
+<td><strong>Rate-limited requests not in Istio metrics</strong></td>
+<td>When the Kuadrant WASM plugin rejects a request (429), it calls <code>sendLocalReply()</code> which short-circuits the Envoy filter chain. These requests appear in Limitador metrics (<code>limited_calls</code>) but may not appear in Istio gateway metrics.</td>
+<td>Use <code>limited_calls</code> from Limitador for rate-limiting visibility (has correct <code>subscription</code> and <code>user</code> labels).</td>
+</tr>
+<tr>
+<td><strong>Kuadrant policy health metrics</strong></td>
+<td><code>kuadrant_policies_enforced</code>, <code>kuadrant_policies_total</code> etc. are defined in Kuadrant dev but not yet shipped in RHCL 1.x</td>
+<td>Enable <code>observability.enable: true</code> on the Kuadrant CR; the ServiceMonitors are created but policy-specific gauges will appear in a future operator release</td>
+</tr>
+<tr>
+<td><strong>Authorino auth server metrics (upstream)</strong></td>
+<td>The Kuadrant-provided <code>authorino-operator-monitor</code> only scrapes <code>/metrics</code> (controller-runtime); <code>/server-metrics</code> is not scraped by the upstream operator</td>
+<td><strong>Resolved by MaaS</strong>: The <code>authorino-server-metrics</code> ServiceMonitor (deployed by <code>install-observability.sh</code>) scrapes <code>/server-metrics</code>. Auth evaluation latency and success/deny rate are visualized in the Platform Admin dashboard.</td>
+</tr>
+<tr>
+<td><strong>maas-api application metrics</strong></td>
+<td>The maas-api Go service does not expose a <code>/metrics</code> endpoint</td>
+<td>No workaround available. Metrics such as API key creation rate, token issuance rate, model discovery latency, and handler durations require adding Prometheus instrumentation to the Go service (e.g. <code>promhttp</code> handler, custom counters/histograms).</td>
+</tr>
+<tr>
+<td><strong>PromQL "name does not end in _total" warnings</strong></td>
+<td>Limitador metrics (<code>authorized_hits</code>, <code>authorized_calls</code>, <code>limited_calls</code>) and Authorino's <code>auth_server_authconfig_response_status</code> are counters but do not follow the Prometheus naming convention of ending in <code>_total</code>. When <code>rate()</code> is applied, Prometheus generates a warning that Grafana displays on panels. This is <a href="https://github.com/grafana/grafana/issues/84636">Grafana issue #84636</a> (open).</td>
+<td>The warnings are cosmetic and do not affect data correctness. All dashboard queries correctly apply <code>rate()</code> or <code>increase()</code> to these counters. The metric names are defined by upstream Kuadrant (Limitador) and Authorino — renaming requires upstream changes.</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Total Tokens vs Token Breakdown</p>
+<p>Total token consumption per user <strong>is available</strong> via <code>authorized_hits{user="..."}</code>. The blocked feature is the input/output split (prompt vs generation tokens) at the gateway level, which requires the wasm-shim to send two separate counter updates to Limitador.</p>
+</div>
+<h3 id="available-per-user-and-per-subscription-metrics">Available Per-User and Per-Subscription Metrics</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Metric</th>
+<th>Label</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Latency per subscription</strong></td>
+<td><code>istio_request_duration_milliseconds_bucket</code></td>
+<td><code>subscription</code></td>
+</tr>
+<tr>
+<td><strong>Token consumption per user</strong></td>
+<td><code>authorized_hits</code></td>
+<td><code>user</code></td>
+</tr>
+<tr>
+<td><strong>Token consumption per subscription</strong></td>
+<td><code>authorized_hits</code></td>
+<td><code>subscription</code></td>
+</tr>
+<tr>
+<td><strong>Token consumption per model</strong></td>
+<td><code>authorized_hits</code></td>
+<td><code>model</code></td>
+</tr>
+<tr>
+<td><strong>Requests per user</strong></td>
+<td><code>authorized_calls</code></td>
+<td><code>user</code></td>
+</tr>
+<tr>
+<td><strong>Requests per subscription</strong></td>
+<td><code>authorized_calls</code></td>
+<td><code>subscription</code></td>
+</tr>
+<tr>
+<td><strong>Rate limited per user</strong></td>
+<td><code>limited_calls</code></td>
+<td><code>user</code></td>
+</tr>
+<tr>
+<td><strong>Rate limited per subscription</strong></td>
+<td><code>limited_calls</code></td>
+<td><code>subscription</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="requirements-alignment">Requirements Alignment</h3>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Usage dashboards</strong> (token consumption per user, per subscription, per model)</td>
+<td>Met</td>
+<td>Grafana dashboard + <code>authorized_hits</code> with <code>user</code>, <code>subscription</code>, <code>model</code>; Prometheus scrapes Limitador <code>/metrics</code>.</td>
+</tr>
+<tr>
+<td><strong>Latency by subscription</strong> (P50/P95/P99)</td>
+<td>Met</td>
+<td><code>istio_request_duration_milliseconds_bucket</code> with <code>subscription</code> label; subscription-only avoids unbounded cardinality.</td>
+</tr>
+<tr>
+<td><strong>Request tracking</strong> (per user, per subscription)</td>
+<td>Met</td>
+<td><code>authorized_calls</code> with <code>user</code> and <code>subscription</code> labels; <code>limited_calls</code> for rate-limit violations.</td>
+</tr>
+<tr>
+<td><strong>Export for chargeback</strong> (CSV/API)</td>
+<td>Not provided (RFE)</td>
+<td>Per-user token data exists in Prometheus (<code>authorized_hits{user="..."}</code>) but no dedicated billing API or export endpoint is implemented. <strong>RFE recommendation</strong>: Add <code>/maas-api/v1/usage</code> endpoint that queries Prometheus and returns per-user, per-subscription, per-model token consumption in CSV/JSON for finance and chargeback systems.</td>
+</tr>
+<tr>
+<td><strong>Input/output token split</strong></td>
+<td>Not available</td>
+<td>Only total tokens (<code>authorized_hits</code>); separate input and output counters require upstream Kuadrant wasm-shim changes to send split <code>hits_addend</code> values.</td>
+</tr>
+<tr>
+<td><strong><code>model</code> label on request/rate-limit counters</strong></td>
+<td>Partial</td>
+<td><code>model</code> available on <code>authorized_hits</code> only; requires upstream Kuadrant fix to propagate <code>responseBodyJSON</code> context to <code>authorized_calls</code>/<code>limited_calls</code> counters.</td>
+</tr>
+<tr>
+<td><strong>Policy enforcement health</strong></td>
+<td>Future</td>
+<td>Kuadrant operator metrics (<code>kuadrant_policies_enforced</code>, <code>kuadrant_ready</code>, etc.) defined upstream but not yet shipped in RHCL 1.x; <code>limitador_up</code> and <code>datastore_partitioned</code> are available now.</td>
+</tr>
+<tr>
+<td><strong>Auth evaluation metrics</strong></td>
+<td>Met</td>
+<td>Authorino <code>/server-metrics</code> is scraped by the <code>authorino-server-metrics</code> ServiceMonitor. Auth evaluation latency (P50/P95/P99) and success/deny rate are available in the Platform Admin dashboard.</td>
+</tr>
+<tr>
+<td><strong>maas-api application metrics</strong></td>
+<td>Not available (gap)</td>
+<td>The maas-api Go service does not expose <code>/metrics</code>. API key creation rate, token issuance rate, and handler latency are not observable. Requires adding Prometheus instrumentation to the Go service.</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 30, 2026 13:22:41 UTC">April 30, 2026</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Created">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 8, 2025 19:39:28 UTC">October 8, 2025</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.share", "content.code.copy", "content.code.annotate", "search.suggest", "search.boost", "navigation.instant"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
