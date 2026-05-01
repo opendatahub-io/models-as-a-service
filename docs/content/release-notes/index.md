@@ -10,10 +10,10 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 
 ### Breaking Changes
 
-**Required `tokenRateLimits` field**
-- All `MaaSSubscription` resources must now include inline `tokenRateLimits` specification
-- The `tokenRateLimitRef` field has been removed
-- **Migration:** Update subscriptions to define rate limits directly in the `spec.tokenRateLimits` field. See [Migration Guide: Tier-Based to Subscription Model](../migration/tier-to-subscription.md) for subscription examples
+**Required `spec` field for MaaS CRs**
+- All MaaS custom resources (`MaaSAuthPolicy`, `MaaSSubscription`, `MaaSModelRef`, `Tenant`) now require the `spec` field
+- CRs without `spec` are marked as `Invalid` and new CRs without `spec` are blocked
+- **Migration:** Ensure all MaaS CRs include a `spec` field. See [Migration Guide: Tier-Based to Subscription Model](../migration/tier-to-subscription.md) for examples
 
 ### New Features
 
@@ -33,7 +33,7 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 - Configurable cluster audience via `--cluster-audience` flag
 
 **External Models**
-- External models now included in `/v1/models` listings
+- External models (introduced in v0.1.0) now included in `/v1/models` listings
 - Namespace prefix added to HTTPRoute paths for LLMInferenceService parity
 
 ### Key Improvements
@@ -68,6 +68,11 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 - New required CRDs: `MaaSSubscription`, `MaaSAuthPolicy`, `ExternalModel`
 - Namespace scoping: MaaS API watches a configurable namespace for subscriptions
 
+**Required `tokenRateLimits` field**
+- All `MaaSSubscription` resources must include inline `tokenRateLimits` specification
+- The `tokenRateLimitRef` field has been removed
+- **Migration:** See [Migration Guide: Tier-Based to Subscription Model](../migration/tier-to-subscription.md) for subscription examples with inline rate limits
+
 ### New Features
 
 **Authentication & Authorization**
@@ -78,7 +83,7 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 - RBAC aggregation for namespace users
 
 **Model Management**
-- External model support via `ExternalModel` CRD with Istio-based egress routing
+- New `ExternalModel` CRD for external model support with Istio-based egress routing
 - `/v1/models` endpoint returns available models with subscription info
 - `/v1/subscriptions` endpoint for subscription management
 - Support for Vertex AI (Gemini) API translation
