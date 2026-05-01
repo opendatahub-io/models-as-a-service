@@ -54,7 +54,7 @@ func gvkListKind(gvk schema.GroupVersionKind) schema.GroupVersionKind {
 	return out
 }
 
-// PrerequisiteReport separates blocking errors from warnings (ODH modelsasservice validatePrerequisites parity).
+// PrerequisiteReport separates blocking errors from warnings.
 type PrerequisiteReport struct {
 	Blocking []string
 	Warnings []string
@@ -81,7 +81,7 @@ func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespac
 	return rep
 }
 
-// ValidatePrerequisites mirrors modelsasservice validatePrerequisites (blocking + warnings).
+// ValidatePrerequisites checks Tenant platform prerequisites (blocking + warnings).
 // Warnings do not return an error; callers may surface them on status separately.
 func ValidatePrerequisites(ctx context.Context, c client.Client, appNamespace string) error {
 	rep := CollectPrerequisiteReport(ctx, c, appNamespace)

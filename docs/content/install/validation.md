@@ -3,7 +3,7 @@
 This guide provides instructions for validating and testing your MaaS Platform deployment.
 
 !!! note "Prerequisite"
-    At least one model must be deployed to validate the installation. See [Model Setup (On Cluster)](model-setup.md) to deploy sample models.
+    At least one model must be deployed to validate the installation. See [Model Setup](model-setup.md) to deploy sample models.
 
 ## Manual Validation (Recommended)
 
@@ -126,25 +126,33 @@ The script automates the manual validation steps above and provides detailed fee
 
 ## TLS Verification
 
-TLS is enabled by default when deploying via the automated script or ODH overlay.
+TLS is enabled by default when deploying via the automated script or ODH overlay. Use `opendatahub` for ODH or `redhat-ods-applications` for RHOAI in the commands below.
 
 ### Check Certificate
 
 ```bash
-# View certificate details (RHOAI)
-kubectl get secret maas-api-serving-cert -n redhat-ods-applications \
+# View certificate details
+kubectl get secret maas-api-serving-cert -n <application-namespace> \
   -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -text -noout
 
 # Check expiry
-kubectl get secret maas-api-serving-cert -n redhat-ods-applications \
+kubectl get secret maas-api-serving-cert -n <application-namespace> \
   -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -enddate -noout
 ```
 
 ### Test HTTPS Endpoint
 
 ```bash
-kubectl run curl --rm -it --image=curlimages/curl -- \
-  curl -vk https://maas-api.redhat-ods-applications.svc:8443/health
+# Start port-forward (runs in foreground, use a separate terminal for the
+# commands below)
+kubectl port-forward -n <application-namespace> svc/maas-api 8443:8443
+
+# Test health endpoint
+curl -vk https://localhost:8443/health
+
+# Check certificate chain
+openssl s_client -connect localhost:8443 \
+  -servername maas-api.<application-namespace>.svc
 ```
 
 For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).

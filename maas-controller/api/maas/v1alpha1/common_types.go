@@ -17,7 +17,7 @@ limitations under the License.
 package v1alpha1
 
 // Phase represents the lifecycle phase of a MaaS resource.
-// +kubebuilder:validation:Enum=Pending;Active;Degraded;Failed
+// +kubebuilder:validation:Enum=Pending;Active;Degraded;Failed;Invalid
 type Phase string
 
 // Phase constants for MaaS resources (MaaSSubscription, MaaSAuthPolicy, MaaSModelRef)
@@ -26,10 +26,11 @@ const (
 	PhaseActive   Phase = "Active"
 	PhaseDegraded Phase = "Degraded"
 	PhaseFailed   Phase = "Failed"
+	PhaseInvalid  Phase = "Invalid"
 )
 
 // ConditionReason represents a machine-readable reason for a status condition.
-// +kubebuilder:validation:Enum=Reconciled;ReconcileFailed;PartialFailure;Valid;NotFound;GetFailed;Accepted;AcceptedEnforced;NotAccepted;Enforced;NotEnforced;BackendNotReady;ConditionsNotFound;Unknown
+// +kubebuilder:validation:Enum=Reconciled;ReconcileFailed;PartialFailure;Valid;NotFound;GetFailed;Accepted;AcceptedEnforced;NotAccepted;Enforced;NotEnforced;BackendNotReady;ConditionsNotFound;InvalidSpec;Unknown
 type ConditionReason string
 
 // Reason constants for status conditions and per-item statuses.
@@ -73,6 +74,9 @@ const (
 
 	// ReasonConditionsNotFound indicates status conditions are not available.
 	ReasonConditionsNotFound ConditionReason = "ConditionsNotFound"
+
+	// ReasonInvalidSpec indicates the resource spec is missing or structurally invalid.
+	ReasonInvalidSpec ConditionReason = "InvalidSpec"
 
 	// ReasonUnknown indicates an unknown or unhandled state.
 	ReasonUnknown ConditionReason = "Unknown"

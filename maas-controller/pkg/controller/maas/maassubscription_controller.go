@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -337,6 +338,14 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Handle deletion
 	if !subscription.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, log, subscription)
+	}
+
+	// Handle no spec (e.g. legacy resources created before spec was required).
+	// No finalizer needed — there are no TRLPs to clean up.
+	if reflect.DeepEqual(subscription.Spec, maasv1alpha1.MaaSSubscriptionSpec{}) {
+		statusSnapshot := subscription.Status.DeepCopy()
+		r.updateStatus(ctx, subscription, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
+		return ctrl.Result{}, nil
 	}
 
 	// Add finalizer if not present
@@ -814,6 +823,9 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 	case maasv1alpha1.PhaseFailed:
 		status = metav1.ConditionFalse
 		reason = maasv1alpha1.ReasonReconcileFailed
+	case maasv1alpha1.PhaseInvalid:
+		status = metav1.ConditionFalse
+		reason = maasv1alpha1.ReasonInvalidSpec
 	default:
 		status = metav1.ConditionUnknown
 		reason = maasv1alpha1.ReasonUnknown

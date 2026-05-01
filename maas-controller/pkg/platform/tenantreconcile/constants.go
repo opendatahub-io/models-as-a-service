@@ -1,5 +1,7 @@
-// Package tenantreconcile mirrors the Open Data Hub operator modelsasservice component pipeline
+// Package tenantreconcile implements the Tenant platform reconcile pipeline
 // (initialize → dependencies → prerequisites → gateway → params → kustomize → post-render → apply → deployment status).
+// The pipeline stages mirror the ODH operator's component deploy pattern; the Tenant CR is the
+// runtime object that drives this lifecycle (DSC.modelsAsService controls enablement only).
 package tenantreconcile
 
 import (
@@ -21,7 +23,8 @@ func isOptionalAPIGroup(group string) bool {
 }
 
 const (
-	// ComponentName matches the ODH modelsasservice component label key suffix (app.opendatahub.io/<name>).
+	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
+	// This is the DSC component identifier, not a standalone CR kind.
 	ComponentName = "modelsasservice"
 
 	LabelODHAppPrefix    = "app.opendatahub.io"
@@ -54,7 +57,7 @@ const (
 	ReadyConditionType                  = "Ready"
 )
 
-// ImageParamKeys maps params.env keys to RELATED_IMAGE_* env vars (same as ODH modelsasservice_support.go).
+// ImageParamKeys maps params.env keys to RELATED_IMAGE_* env vars (same layout as the ODH operator component support).
 var ImageParamKeys = map[string]string{
 	"maas-api-image":             "RELATED_IMAGE_ODH_MAAS_API_IMAGE",
 	"maas-controller-image":      "RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE",
@@ -62,7 +65,7 @@ var ImageParamKeys = map[string]string{
 	"maas-api-key-cleanup-image": "RELATED_IMAGE_UBI_MINIMAL_IMAGE",
 }
 
-// GVKs used for post-render and readiness (mirrors opendatahub-operator/pkg/cluster/gvk selections for modelsasservice).
+// GVKs used for post-render and readiness (mirrors opendatahub-operator/pkg/cluster/gvk selections).
 var (
 	GVKConfigMap            = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 	GVKDeployment           = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
@@ -74,4 +77,6 @@ var (
 	GVKIstioTelemetry       = schema.GroupVersionKind{Group: "telemetry.istio.io", Version: "v1", Kind: "Telemetry"}
 	GVKAuthConfig           = schema.GroupVersionKind{Group: "authorino.kuadrant.io", Version: "v1beta3", Kind: "AuthConfig"}
 	GVKAuthorino            = schema.GroupVersionKind{Group: "operator.authorino.kuadrant.io", Version: "v1beta1", Kind: "Authorino"}
+	GVKPersesDashboard      = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard"}
+	GVKPersesDatasource     = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDatasource"}
 )

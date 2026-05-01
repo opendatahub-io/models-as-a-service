@@ -7,7 +7,7 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 1. [Database Setup](#database-setup) — Create the PostgreSQL connection Secret
 2. [Create Gateway](#create-gateway) — Deploy maas-default-gateway (required before modelsAsService)
 3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable KServe and modelsAsService in your DataScienceCluster
-4. [Model Setup (On Cluster)](model-setup.md) — Deploy sample models
+4. [Model Setup](model-setup.md) — Deploy sample models
 5. [Validation](validation.md) — Verify the deployment
 
 ## Database Setup
@@ -78,12 +78,14 @@ The Gateway must exist before enabling modelsAsService in your DataScienceCluste
     ```
 
 !!! note "Required annotations"
-    The Gateway **must** include these annotations for MaaS to work correctly:
+    The Gateway **must** include these annotations to trust Authorino's certificates:
 
     | Annotation | Purpose |
     |------------|---------|
     | `opendatahub.io/managed: "false"` | Read by **maas-controller**: allows it to manage AuthPolicies and related resources; prevents the ODH Model Controller from overwriting them. |
-    | `security.opendatahub.io/authorino-tls-bootstrap: "true"` | Used by the ODH platform (not maas-controller) to create the EnvoyFilter for Gateway → Authorino TLS when Authorino uses a TLS listener. Required when Authorino TLS is enabled (see [TLS Configuration](../configuration-and-management/tls-configuration.md)). |
+    | `security.opendatahub.io/authorino-tls-bootstrap: "true"` | Used by the ODH platform (not maas-controller) to create the EnvoyFilter for Gateway → Authorino TLS when Authorino uses a TLS listener. Required when Authorino TLS is enabled. |
+
+    The `authorino-tls-bootstrap` annotation is an interim solution until [CONNLINK-528](https://issues.redhat.com/browse/CONNLINK-528) ships native support for configuring TLS between the Gateway and Authorino without mesh sidecars. It decouples TLS configuration from AuthPolicy management, allowing TLS even when `opendatahub.io/managed` is `"false"`.
 
 ```yaml
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
@@ -307,6 +309,6 @@ kubectl patch odhdashboardconfig odh-dashboard-config \
 
 ## Next steps
 
-* **Deploy models.** See [Model Setup (On Cluster)](model-setup.md) for sample model deployments.
+* **Deploy models.** See [Model Setup](model-setup.md) for sample model deployments.
 * **Perform validation.** Follow the [validation guide](validation.md) to verify that
   MaaS is working correctly.

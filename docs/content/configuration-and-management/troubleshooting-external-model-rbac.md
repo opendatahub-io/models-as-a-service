@@ -24,7 +24,7 @@ If the **`maas-controller` ServiceAccount** is not allowed that verb on that sub
 
 2. **ClusterRoleBinding** `maas-controller-rolebinding` must bind that `ClusterRole` to the **`maas-controller` ServiceAccount** in the namespace where the controller runs (commonly `opendatahub` when using the ODH overlay).
 
-On OpenShift, the `ModelsAsService` component may **own** these objects; if your live `ClusterRole` is missing the `externalmodels/finalizers` rule, upgrade or re-apply the manifest from this repo, or reconcile the component so the shipped RBAC matches.
+On OpenShift, the ODH operator (via the `modelsAsService` DSC component) may **own** these objects; if your live `ClusterRole` is missing the `externalmodels/finalizers` rule, upgrade or re-apply the manifest from this repo, or reconcile the component so the shipped RBAC matches.
 
 ## How to verify (important)
 

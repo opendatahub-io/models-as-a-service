@@ -35,7 +35,7 @@ type ExternalModel struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ExternalModelSpec   `json:"spec,omitempty"`
+	Spec   ExternalModelSpec   `json:"spec"`
 	Status ExternalModelStatus `json:"status,omitempty"`
 }
 
