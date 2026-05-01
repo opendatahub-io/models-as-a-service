@@ -1,12 +1,35 @@
 # Reconciliation Flow
 
-This document describes how the MaaS Controller **reconciles** resources, **ownership**, and **lifecycle** (not the runtime HTTP path through the gateway—see the [User Guide](../user-guide/inference.md) and [Model Discovery](../user-guide/model-discovery.md)). For architecture overview, see [Controller Architecture](./controller-architecture.md).
+This document describes how the MaaS Controller **reconciles** resources, **ownership**, and **lifecycle**. For architecture overview, see [Controller Architecture](./controller-architecture.md).
 
 ---
 
-## Tenant Resource Layout
+## Tenant reconciler
 
-The `Tenant` CR is namespace-scoped (lives in `models-as-a-service`). It owns resources across three scopes — same-namespace children use standard `ownerReference`, while cluster-scoped and cross-namespace children use **tracking labels** (Kubernetes rejects cross-namespace and namespaced-to-cluster ownerRefs).
+The **Tenant** reconciler watches the singleton **`Tenant`** CR named **`default-tenant`** (`maas.opendatahub.io/v1alpha1`). It:
+
+- Validates **gateway** reference (default `openshift-ingress` / `maas-default-gateway` when unset) and **cluster dependencies** (for example AuthConfig / Kuadrant CRDs).
+- Runs **prerequisite checks** in the application namespace before applying manifests.
+- **Renders and applies** embedded **kustomize** manifests with **Server-Side Apply**, then waits until the **maas-api** `Deployment` in the app namespace is available.
+- Manages **finalizers** and teardown for **Removed** / **Unmanaged** management-state annotations.
+
+Cross-namespace and cluster-scoped platform pieces (gateway AuthPolicy, telemetry, cluster RBAC) are tracked with **labels** and cleaned up when needed; in-namespace workloads use **`ownerReference`** where appropriate (see diagram below).
+
+### Tenant status
+
+`Tenant.status` exposes a high-level **`phase`**: **`Pending`**, **`Active`**, **`Degraded`**, or **`Failed`**, plus **conditions** aligned with platform aggregation (for example **`Ready`**, **`DependenciesAvailable`**, **`MaaSPrerequisitesAvailable`**, **`DeploymentsAvailable`**, **`Degraded`**). Typical outcomes:
+
+- **`Failed`** — blocking prerequisites missing, gateway invalid, or platform apply failed.
+- **`Pending`** — manifests applied but **maas-api** not ready yet.
+- **`Active`** — platform applied and **maas-api** deployment available; may still be **`Degraded`** if non-blocking warnings exist.
+
+For `spec` fields (gateway, API keys, telemetry, external OIDC), see [Tenant CR](../install/maas-setup.md#tenant-cr).
+
+---
+
+## Tenant resource layout
+
+The `Tenant` CR is namespace-scoped and lives in the **application namespace** for MaaS platform configuration (default **`models-as-a-service`**; configurable via install). It owns resources across three scopes — same-namespace children use standard **`ownerReference`**, while cluster-scoped and cross-namespace children use **tracking labels**.
 
 ```mermaid
 graph TB
@@ -156,7 +179,9 @@ Manually delete orphaned opted-out resources when no longer needed.
 
 ---
 
-## Related Documentation
+## Related documentation
 
-- [Controller Architecture](./controller-architecture.md) - Components and data model
-- [Authentication Internals](./authentication-internals.md) - How identity flows through the system
+- [Controller Architecture](./controller-architecture.md) — Components and data model
+- [Authentication Internals](./authentication-internals.md) — Subscription selection and gateway identity
+- [Inference](../user-guide/inference.md) — Runtime HTTP path for model calls
+- [Model Discovery](../user-guide/model-discovery.md) — Listing and discovering models

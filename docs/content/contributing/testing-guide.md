@@ -46,10 +46,6 @@ test/e2e/
 | `test_namespace_scoping.py` | Namespace isolation behavior |
 | `test_external_oidc.py` | External OIDC token flows (skipped unless `EXTERNAL_OIDC=true`) |
 
-## Architecture Documentation
-
-For controller internals before contributing, see the [Developer Guide](../architecture-internals/controller-architecture.md) section above.
-
 ## Running Tests
 
 ### Unit Tests (Go)
