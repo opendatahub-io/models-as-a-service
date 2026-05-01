@@ -1,6 +1,6 @@
 # MaaS Controller Architecture
 
-This document provides a technical deep-dive into the MaaS Controller architecture, internal components, and resource model. For operational guidance, see the [Controller Overview](../configuration-and-management/maas-controller-overview.md) in the Administration Guide.
+This document provides a technical deep-dive into the MaaS Controller architecture, internal components, and resource model. For install, validation, and links to operator topics, see [Controller Overview](../configuration-and-management/maas-controller-overview.md).
 
 ---
 
@@ -180,6 +180,6 @@ erDiagram
 
 ## Related Documentation
 
-- [Reconciliation Flow](./reconciliation-flow.md) - Request flow, watch triggers, status transitions
-- [Authentication Internals](./authentication-internals.md) - Token validation, identity headers
-- [Controller Overview](../configuration-and-management/maas-controller-overview.md) - Deployment and operational guidance
+- [Reconciliation Flow](./reconciliation-flow.md) - Ownership, watches, status, deletion lifecycle
+- [Authentication Internals](./authentication-internals.md) - Subscription selection, TRLP keys, identity context
+- [Controller Overview](../configuration-and-management/maas-controller-overview.md) - Operator hub (links to install and concepts)

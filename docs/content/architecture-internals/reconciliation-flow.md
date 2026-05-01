@@ -1,6 +1,6 @@
 # Reconciliation Flow
 
-This document describes how the MaaS Controller reconciles resources, handles ownership, and processes requests. For architecture overview, see [Controller Architecture](./controller-architecture.md).
+This document describes how the MaaS Controller **reconciles** resources, **ownership**, and **lifecycle** (not the runtime HTTP path through the gateway—see the [User Guide](../user-guide/inference.md) and [Model Discovery](../user-guide/model-discovery.md)). For architecture overview, see [Controller Architecture](./controller-architecture.md).
 
 ---
 
@@ -58,33 +58,6 @@ graph TB
 
 ---
 
-## Request Flow (End-to-End)
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Gateway
-    participant AuthPolicy as Kuadrant AuthPolicy
-    participant TRLP as TokenRateLimitPolicy
-    participant Backend as LLMInferenceService
-
-    User->>Gateway: POST /llm/<model>/v1/chat/completions (API key)
-    Gateway->>AuthPolicy: Validate API key
-    AuthPolicy->>AuthPolicy: Check groups/users, build identity
-    Note over AuthPolicy: Writes identity (userid, groups_str)
-    AuthPolicy-->>Gateway: Identity attached to request
-    Gateway->>TRLP: Evaluate rate limit (identity-based)
-    TRLP->>TRLP: groups_str.split(',').exists(g, g == "group")
-    TRLP-->>Gateway: Allow / deny by quota
-    Gateway->>Backend: Forward request
-    Backend-->>User: Inference response
-```
-
-- **AuthPolicy** authenticates (e.g. OpenShift token via Kubernetes TokenReview), authorizes (allowed groups/users), and **writes identity** (e.g. `userid`, `groups`, `groups_str`).
-- **TokenRateLimitPolicy** uses that identity (in particular the comma-separated `groups_str`) to decide which subscription and limits apply.
-
----
-
 ## Reconciler Behavior
 
 ### MaaSModelRef Reconciler
@@ -134,26 +107,18 @@ metadata:
 ### MaaSSubscription Reconciler
 
 **What it does:**
-- Creates one Kuadrant TokenRateLimitPolicy per referenced model
-- Aggregates multiple MaaSSubscriptions targeting the same model into a single TokenRateLimitPolicy
-- Sorts subscriptions by priority (token limit, highest first) and generates mutually exclusive CEL predicates
+- Creates one Kuadrant **TokenRateLimitPolicy** per model (aggregating every **MaaSSubscription** that references that model)
+- For each subscription that applies to the model, adds a **limit** entry with rates from the CR and a **`when`** predicate that matches  
+  `auth.identity.selected_subscription_key` to the model-scoped key  
+  `{subNamespace}/{subName}@{modelNamespace}/{modelName}`  
+  AuthPolicy is responsible for resolving subscription selection (via maas-api) before TRLP runs; see [Authentication Internals](./authentication-internals.md).
+- Exempts `/v1/models` from token consumption limits where configured so discovery still works when quotas are exhausted
 
 **Watch triggers:**
 - MaaSSubscription changes
 - MaaSModelRef changes (re-reconcile when model created/deleted)
 - HTTPRoute changes (re-reconcile when route appears)
 - Generated TokenRateLimitPolicy changes (overwrite manual edits unless opted out)
-
-**Priority and exclusivity:**
-When multiple subscriptions target the same model, the controller builds a cascade of predicates:
-
-```text
-premium-user (50000 tkn/min): matches "in premium-user"
-free-user    (100 tkn/min):   matches "in free-user AND NOT in premium-user"
-deny-unsubscribed (0):        matches "NOT in premium-user AND NOT in free-user"
-```
-
-A user matching multiple groups hits only the highest-limit rule.
 
 **Opt-out annotation:**
 ```yaml

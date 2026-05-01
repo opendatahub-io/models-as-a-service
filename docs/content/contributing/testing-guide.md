@@ -48,7 +48,7 @@ test/e2e/
 
 ## Architecture Documentation
 
-For controller internals before contributing, see the [Architecture & Internals](../architecture-internals/controller-architecture.md) section above.
+For controller internals before contributing, see the [Developer Guide](../architecture-internals/controller-architecture.md) section above.
 
 ## Running Tests
 
