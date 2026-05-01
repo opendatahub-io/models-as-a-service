@@ -25,7 +25,7 @@
     
     
       
-        <title>Model Setup (On Cluster) - ODH Models-as-a-Service Documentation</title>
+        <title>Model Setup - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#model-setup-on-cluster-guide" class="md-skip">
+        <a href="#model-setup-guide" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Model Setup (On Cluster)
+              Model Setup
             
           </span>
         </div>
@@ -1155,7 +1155,7 @@
   <span class="md-ellipsis">
     
   
-    Model Setup (On Cluster)
+    Model Setup
   
 
     
@@ -1582,7 +1582,7 @@
   <span class="md-ellipsis">
     
   
-    Model Setup (On Cluster)
+    Model Setup
   
 
     
@@ -1600,7 +1600,7 @@
   <span class="md-ellipsis">
     
   
-    Model Setup (On Cluster)
+    Model Setup
   
 
     
@@ -1626,22 +1626,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#supported-model-types" class="md-nav__link">
+  <a href="#on-cluster-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Supported model types
+        On-Cluster Models
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Supported model types">
+    <nav class="md-nav" aria-label="On-Cluster Models">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#supported-llms" class="md-nav__link">
+  <a href="#gateway-architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Supported LLMs
+        Gateway Architecture
       
     </span>
   </a>
@@ -1649,10 +1649,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#supported-inference-services" class="md-nav__link">
+  <a href="#configuration-requirements" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Supported inference services
+        Configuration Requirements
       
     </span>
   </a>
@@ -1665,44 +1665,33 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-the-model-list-is-built" class="md-nav__link">
+  <a href="#external-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How the model list is built
+        External Models
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#maas-capable-vs-standard-gateways" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MaaS-capable vs standard gateways
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#gateway-architecture-diagram" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Gateway architecture (diagram)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Gateway architecture (diagram)">
+    <nav class="md-nav" aria-label="External Models">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#benefits-of-the-segregated-approach" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Benefits of the segregated approach
+        How It Works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
       
     </span>
   </a>
@@ -1715,33 +1704,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#examples" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
+        Examples
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuring-llminferenceservice-for-maas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Configuring LLMInferenceService for MaaS
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuring LLMInferenceService for MaaS">
+    <nav class="md-nav" aria-label="Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#add-gateway-reference" class="md-nav__link">
+  <a href="#example-1-on-cluster-model" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Add gateway reference
+        Example 1: On-Cluster Model
       
     </span>
   </a>
@@ -1749,82 +1727,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#complete-example" class="md-nav__link">
+  <a href="#example-2-external-model" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Complete example
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-3-add-display-metadata-optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 3: Add Display Metadata (Optional)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#what-the-annotation-does" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What the Annotation Does
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#complete-example_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Complete Example
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#updating-existing-models" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Updating existing models
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Updating existing models">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#method-1-patch-the-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Method 1: Patch the Model
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#method-2-edit-the-resource" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Method 2: Edit the Resource
+        Example 2: External Model
       
     </span>
   </a>
@@ -1871,10 +1777,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#401-unauthorized-when-accessing-model" class="md-nav__link">
+  <a href="#401-unauthorized" class="md-nav__link">
     <span class="md-ellipsis">
       
-        401 Unauthorized When Accessing Model
+        401 Unauthorized
       
     </span>
   </a>
@@ -1882,10 +1788,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#403-forbidden-when-accessing-model" class="md-nav__link">
+  <a href="#403-forbidden" class="md-nav__link">
     <span class="md-ellipsis">
       
-        403 Forbidden When Accessing Model
+        403 Forbidden
       
     </span>
   </a>
@@ -1932,34 +1838,6 @@
     
   
     Model Listing Flow
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../maas-model-kinds/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    MaaS Model Kinds
   
 
     
@@ -2053,34 +1931,6 @@
     
   
     Controller Overview
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../crd-annotations/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    CRD Annotations
   
 
     
@@ -2810,22 +2660,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#supported-model-types" class="md-nav__link">
+  <a href="#on-cluster-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Supported model types
+        On-Cluster Models
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Supported model types">
+    <nav class="md-nav" aria-label="On-Cluster Models">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#supported-llms" class="md-nav__link">
+  <a href="#gateway-architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Supported LLMs
+        Gateway Architecture
       
     </span>
   </a>
@@ -2833,10 +2683,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#supported-inference-services" class="md-nav__link">
+  <a href="#configuration-requirements" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Supported inference services
+        Configuration Requirements
       
     </span>
   </a>
@@ -2849,44 +2699,33 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-the-model-list-is-built" class="md-nav__link">
+  <a href="#external-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How the model list is built
+        External Models
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#maas-capable-vs-standard-gateways" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MaaS-capable vs standard gateways
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#gateway-architecture-diagram" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Gateway architecture (diagram)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Gateway architecture (diagram)">
+    <nav class="md-nav" aria-label="External Models">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#benefits-of-the-segregated-approach" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Benefits of the segregated approach
+        How It Works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
       
     </span>
   </a>
@@ -2899,33 +2738,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#examples" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
+        Examples
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuring-llminferenceservice-for-maas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Configuring LLMInferenceService for MaaS
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuring LLMInferenceService for MaaS">
+    <nav class="md-nav" aria-label="Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#add-gateway-reference" class="md-nav__link">
+  <a href="#example-1-on-cluster-model" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Add gateway reference
+        Example 1: On-Cluster Model
       
     </span>
   </a>
@@ -2933,82 +2761,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#complete-example" class="md-nav__link">
+  <a href="#example-2-external-model" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Complete example
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-3-add-display-metadata-optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Step 3: Add Display Metadata (Optional)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#what-the-annotation-does" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What the Annotation Does
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#complete-example_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Complete Example
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#updating-existing-models" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Updating existing models
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Updating existing models">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#method-1-patch-the-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Method 1: Patch the Model
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#method-2-edit-the-resource" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Method 2: Edit the Resource
+        Example 2: External Model
       
     </span>
   </a>
@@ -3055,10 +2811,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#401-unauthorized-when-accessing-model" class="md-nav__link">
+  <a href="#401-unauthorized" class="md-nav__link">
     <span class="md-ellipsis">
       
-        401 Unauthorized When Accessing Model
+        401 Unauthorized
       
     </span>
   </a>
@@ -3066,10 +2822,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#403-forbidden-when-accessing-model" class="md-nav__link">
+  <a href="#403-forbidden" class="md-nav__link">
     <span class="md-ellipsis">
       
-        403 Forbidden When Accessing Model
+        403 Forbidden
       
     </span>
   </a>
@@ -3112,57 +2868,33 @@
   
 
 
-<h1 id="model-setup-on-cluster-guide">Model Setup (On Cluster) Guide</h1>
-<p>This guide explains how to configure models so they appear in the MaaS platform and are subject to authentication, rate limiting, and token-based consumption tracking.</p>
-<div class="admonition tip">
-<p class="admonition-title">Subscription model (recommended)</p>
-<p>When using the <strong>MaaS controller</strong>, model access and rate limits are controlled by <strong>MaaSModelRef</strong>, <strong>MaaSAuthPolicy</strong>, and <strong>MaaSSubscription</strong> CRDs. See <a href="../quota-and-access-configuration/">Quota and Access Configuration</a> and <a href="../model-listing-flow/">Model Listing Flow</a>.</p>
-</div>
-<h2 id="supported-model-types">Supported model types</h2>
-<p>MaaS distinguishes between <strong>supported LLMs</strong> (the model weights/architectures) and <strong>supported inference services</strong> (the runtime backends).</p>
-<h3 id="supported-llms">Supported LLMs</h3>
-<p>Most LLM model families should work (e.g., Llama, Mistral, Qwen, GPT-style models). We are working on an official validated list. If you encounter issues with a specific model, please report them.</p>
-<h3 id="supported-inference-services">Supported inference services</h3>
-<p>MaaS uses a <strong>provider paradigm</strong>: each MaaSModelRef references a model backend by <code>kind</code> (e.g., <code>LLMInferenceService</code>, <code>ExternalModel</code>). The controller uses provider-specific logic to reconcile and resolve each type. Supported inference runtimes include:</p>
-<table>
-<thead>
-<tr>
-<th>Inference service</th>
-<th>Status</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>vLLM</strong> (via LLMInferenceService / KServe)</td>
-<td>Initial supported release. This is the primary supported backend for on-cluster models.</td>
-</tr>
-<tr>
-<td><strong>KServe</strong> (LLMInferenceService)</td>
-<td>Runtime framework. vLLM workloads run through LLMInferenceService.</td>
-</tr>
-<tr>
-<td><strong>Additional backends</strong></td>
-<td>Planned for future releases.</td>
-</tr>
-</tbody>
-</table>
-<p>This guide describes the configuration differences between the default LLMInferenceService and the MaaS-enabled one to help users understand the differences.</p>
-<h2 id="how-the-model-list-is-built">How the model list is built</h2>
-<p>When the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS controller</a> is installed, you register models by creating <strong>MaaSModelRef</strong> CRs that reference a model backend (e.g., an LLMInferenceService). The controller reconciles each MaaSModelRef and sets <code>status.endpoint</code> and <code>status.phase</code>. The MaaS API lists these MaaSModelRef CRs and returns them as the model list. Access and quotas are controlled by <strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong>. See <a href="../model-listing-flow/">Model listing flow</a> for details.</p>
-<h2 id="maas-capable-vs-standard-gateways">MaaS-capable vs standard gateways</h2>
-<p>MaaS uses a <strong>segregated gateway approach</strong>. Models explicitly opt in to MaaS capabilities by routing through the <strong>MaaS gateway</strong> (<code>maas-default-gateway</code>). Models that use the <strong>standard gateway</strong> (ODH/KServe default) do not use MaaS policies.</p>
+<h1 id="model-setup-guide">Model Setup Guide</h1>
+<p>This guide explains how to configure models for the MaaS platform. MaaS supports two model kinds:</p>
+<ul>
+<li><strong>On-cluster models</strong> (<code>LLMInferenceService</code>) - vLLM/KServe models running in your cluster</li>
+<li><strong>External models</strong> (<code>ExternalModel</code>) - Hosted providers like OpenAI, Anthropic, Azure OpenAI <strong>(Tech Preview)</strong></li>
+</ul>
+<hr />
+<h2 id="on-cluster-models">On-Cluster Models</h2>
+<p>On-cluster models use <strong>LLMInferenceService</strong> (vLLM via KServe) and route through the <strong>MaaS gateway</strong> for authentication and rate limiting.</p>
+<h3 id="gateway-architecture">Gateway Architecture</h3>
+<p>MaaS uses a <strong>segregated gateway</strong> approach. Models route through either:</p>
+<ul>
+<li><strong>Standard gateway</strong> (ODH/KServe default) - No MaaS policies</li>
+<li><strong>MaaS gateway</strong> (<code>maas-default-gateway</code>) - Full MaaS policy enforcement</li>
+</ul>
 <table>
 <thead>
 <tr>
 <th></th>
-<th>Standard gateway (ODH/KServe)</th>
-<th>MaaS gateway (<code>maas-default-gateway</code>)</th>
+<th>Standard gateway</th>
+<th>MaaS gateway</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><strong>Authentication</strong></td>
-<td>Existing ODH/KServe auth model</td>
+<td>ODH/KServe auth</td>
 <td>Token-based (API keys, OpenShift tokens)</td>
 </tr>
 <tr>
@@ -3171,247 +2903,171 @@
 <td>Subscription-based (Limitador)</td>
 </tr>
 <tr>
-<td><strong>Token consumption</strong></td>
-<td>Not tracked</td>
-<td>Tracked per usage</td>
+<td><strong>Token tracking</strong></td>
+<td>No</td>
+<td>Yes</td>
 </tr>
 <tr>
 <td><strong>Access control</strong></td>
 <td>Platform-level</td>
 <td>Per-model (MaaSAuthPolicy, MaaSSubscription)</td>
 </tr>
-<tr>
-<td><strong>Use case</strong></td>
-<td>Standard inference without MaaS policies</td>
-<td>MaaS-managed access, quotas, and tracking</td>
-</tr>
 </tbody>
 </table>
-<p>Models that use the standard gateway do not appear in the MaaS model list and are not subject to MaaS policies. To use MaaS features, configure your model to route through the MaaS gateway.</p>
-<h2 id="gateway-architecture-diagram">Gateway architecture (diagram)</h2>
-<p>The diagram below shows how models can route through either gateway.</p>
-<pre class="mermaid"><code>%%{init: {'theme':'base', 'themeVariables': { 'fontSize':'16px', 'fontFamily':'system-ui, -apple-system, sans-serif', 'edgeLabelBackground':'transparent', 'labelBackground':'transparent', 'tertiaryColor':'transparent'}}}%%
-graph TB
-    subgraph cluster["OpenShift/K8s Cluster"]
-        subgraph gateways["Gateway Layer"]
-            defaultGW["Default Gateway&lt;br/&gt;(ODH/KServe)&lt;br/&gt;&lt;br/&gt;✓ Existing auth model&lt;br/&gt;✓ No rate limits&lt;br/&gt;"]
-            maasGW["MaaS Gateway&lt;br/&gt;(maas-default-gateway)&lt;br/&gt;&lt;br/&gt;✓ Token authentication&lt;br/&gt;✓ Subscription-based rate limits&lt;br/&gt;✓ Token consumption "]
-        end
+<p>Only models routing through <code>maas-default-gateway</code> appear in the MaaS catalog and have policies applied.</p>
+<pre class="mermaid"><code>graph TB
+    subgraph cluster["Cluster"]
+        defaultGW["Standard Gateway"]
+        maasGW["MaaS Gateway&lt;br/&gt;maas-default-gateway"]
+        standardModel["LLMInferenceService&lt;br/&gt;(Standard)"]
+        maasModel["LLMInferenceService&lt;br/&gt;(MaaS-enabled)"]
 
-        subgraph models["Model Deployments"]
-            standardModel["LLMInferenceService&lt;br/&gt;(Standard)&lt;br/&gt;&lt;br/&gt;spec:&lt;br/&gt;  model: ...&lt;br/&gt;  # Managed default Gateway instance"]
-            maasModel["LLMInferenceService&lt;br/&gt;(MaaS-enabled)&lt;br/&gt;&lt;br/&gt;spec:&lt;br/&gt;  model: ...&lt;br/&gt;  router:&lt;br/&gt;    gateway:&lt;br/&gt;      refs:&lt;br/&gt;        - name: maas-default-gateway"]
-        end
-
-        defaultGW -.-&gt;|Routes to| standardModel
-        maasGW ==&gt;|Routes to| maasModel
+        defaultGW -.-&gt; standardModel
+        maasGW ==&gt; maasModel
     end
 
-    users["Users/Clients"] --&gt;|Default ODH auth| defaultGW
-    apiUsers["API Clients"] --&gt;|Bearer token| maasGW
-
-    style defaultGW fill:#1976d2,stroke:#0d47a1,stroke-width:3px,color:#fff
-    style maasGW fill:#f57c00,stroke:#e65100,stroke-width:3px,color:#fff
-    style standardModel fill:#78909c,stroke:#546e7a,stroke-width:3px,color:#fff
-    style maasModel fill:#ffa726,stroke:#f57c00,stroke-width:3px,color:#fff
-    style cluster fill:none,stroke:#666,stroke-width:2px
-    style gateways fill:none,stroke:#5c6bc0,stroke-width:2px
-    style models fill:none,stroke:#5c6bc0,stroke-width:2px</code></pre>
+    users["Users"] --&gt; defaultGW
+    apiUsers["API Clients"] --&gt; maasGW</code></pre>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>The <code>maas-default-gateway</code> is created automatically during MaaS platform installation. You don't need to create it manually.</p>
+<p>The <code>maas-default-gateway</code> is created during MaaS installation.</p>
 </div>
-<h3 id="benefits-of-the-segregated-approach">Benefits of the segregated approach</h3>
-<ul>
-<li><strong>Flexibility</strong>: Different models can have different security and access requirements</li>
-<li><strong>Progressive adoption</strong>: Teams can adopt MaaS features incrementally</li>
-<li><strong>Production control</strong>: Production models get full policy enforcement when routed through the MaaS gateway</li>
-<li><strong>Multi-tenancy</strong>: Different teams can use different gateways in the same cluster</li>
-<li><strong>Blast radius containment</strong>: Issues with one gateway don't affect the other</li>
-</ul>
-<h2 id="prerequisites">Prerequisites</h2>
-<p>Before configuring an LLMInferenceService for MaaS, ensure you have:</p>
-<ul>
-<li><strong>MaaS platform installed</strong> with <code>maas-default-gateway</code> deployed</li>
-<li><strong>LLMInferenceService</strong> resource created or planned</li>
-<li><strong>Cluster admin</strong> or equivalent permissions to modify <code>LLMInferenceService</code> resources</li>
-</ul>
-<h2 id="configuring-llminferenceservice-for-maas">Configuring LLMInferenceService for MaaS</h2>
-<p>To make your LLMInferenceService available through the MaaS platform, <strong>reference the maas-default-gateway</strong> in the <code>LLMInferenceService</code> spec. This routes traffic through the MaaS gateway so authentication, rate limiting, and consumption tracking apply.</p>
-<h3 id="add-gateway-reference">Add gateway reference</h3>
-<p>Configure your <code>LLMInferenceService</code> to use the <code>maas-default-gateway</code> by adding the gateway reference in the <code>router</code> section:</p>
+<h3 id="configuration-requirements">Configuration Requirements</h3>
+<p>To enable MaaS policies for an LLMInferenceService:</p>
+<ol>
+<li><strong>Set gateway reference</strong> - Add <code>spec.router.gateway.refs</code> pointing to <code>maas-default-gateway</code></li>
+<li><strong>Create MaaSModelRef</strong> - Register the model in the MaaS catalog</li>
+<li><strong>Add display metadata</strong> (optional) - Annotations for <code>/maas-api/v1/models</code> API response</li>
+</ol>
+<p>Without the gateway reference, the model uses the standard gateway and MaaS policies do not apply.</p>
+<hr />
+<h2 id="external-models">External Models</h2>
+<p>External models route traffic to providers outside the cluster (OpenAI, Anthropic, Azure OpenAI, etc.). MaaS handles authentication, rate limiting, and request proxying.</p>
+<h3 id="how-it-works">How It Works</h3>
+<ol>
+<li><strong>Define ExternalModel CR</strong> - Specify provider, endpoint, credentials, and target model</li>
+<li><strong>Register with MaaSModelRef</strong> - Reference the ExternalModel by name</li>
+<li><strong>Controller creates routing</strong> - Service, ServiceEntry, DestinationRule, HTTPRoute (owned by ExternalModel CR)</li>
+<li><strong>Apply policies</strong> - MaaSAuthPolicy and MaaSSubscription work the same as on-cluster models</li>
+<li><strong>Traffic flows</strong> - Requests route through the gateway → Inference Payload Processor (IPP) injects provider API key → external provider</li>
+</ol>
+<p>The <strong>Inference Payload Processor</strong> (ext-proc) handles provider-specific authentication and request/response translation.</p>
+<h3 id="setup">Setup</h3>
+<p>For complete setup including IPP deployment, provider credentials, and examples, see <a href="../../install/external-model-setup/">External Model Setup (Tech Preview)</a>.</p>
+<hr />
+<h2 id="examples">Examples</h2>
+<h3 id="example-1-on-cluster-model">Example 1: On-Cluster Model</h3>
+<p><strong>LLMInferenceService with MaaS gateway:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">serving.kserve.io/v1alpha1</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-production-model</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">qwen3-model</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm</span>
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span>
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">uri</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hf://Qwen/Qwen3-0.6B</span>
 <a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-0.6B</span>
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="c1"># Connect to MaaS-enabled gateway</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="nt">router</span><span class="p">:</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">route</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">gateway</span><span class="p">:</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">      </span><span class="nt">refs</span><span class="p">:</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">          </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">  </span><span class="nt">template</span><span class="p">:</span>
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">    </span><span class="c1"># ... container configuration ...</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="nt">router</span><span class="p">:</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">route</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">gateway</span><span class="p">:</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">      </span><span class="nt">refs</span><span class="p">:</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">          </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="nt">containers</span><span class="p">:</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">main</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;vllm/vllm-openai:latest&quot;</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">        </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">          </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">            </span><span class="nt">nvidia.com/gpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1&quot;</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">            </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12Gi</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">          </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w">            </span><span class="nt">nvidia.com/gpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1&quot;</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w">            </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8Gi</span>
 </code></pre></div>
-<p><strong>Key points:</strong></p>
-<ul>
-<li>The <code>router.gateway.refs</code> field specifies which gateway to use</li>
-<li>Use <code>name: maas-default-gateway</code> and <code>namespace: openshift-ingress</code></li>
-<li><strong>Without this specification</strong>, the LLMInferenceService uses the default KServe gateway and <strong>is not subject to MaaS policies</strong></li>
-</ul>
-<h3 id="complete-example">Complete example</h3>
-<p>Add the <code>alpha.maas.opendatahub.io/tiers</code> annotation to enable automatic RBAC setup for tier-based access:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">serving.kserve.io/v1alpha1</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
+<p><strong>MaaSModelRef with display metadata:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModelRef</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-production-model</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">qwen3-model</span>
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm</span>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">alpha.maas.opendatahub.io/tiers</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;[]&#39;</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="c1"># ... rest of spec ...</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">openshift.io/display-name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Qwen</span><span class="nv"> </span><span class="s">3</span><span class="nv"> </span><span class="s">0.6B&quot;</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">openshift.io/description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Qwen</span><span class="nv"> </span><span class="s">3</span><span class="nv"> </span><span class="s">model</span><span class="nv"> </span><span class="s">for</span><span class="nv"> </span><span class="s">chat</span><span class="nv"> </span><span class="s">workloads&quot;</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">opendatahub.io/genai-use-case</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;chat&quot;</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">opendatahub.io/context-window</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;8192&quot;</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">qwen3-model</span>
 </code></pre></div>
-<p><strong>Annotation Values:</strong></p>
+<h3 id="example-2-external-model">Example 2: External Model</h3>
+<p>See <a href="../../install/external-model-setup/">External Model Setup (Tech Preview)</a> for complete examples including:</p>
 <ul>
-<li><strong>Empty list <code>[]</code></strong>: Grants access to <strong>all tiers</strong> (recommended for most models)</li>
-<li><strong>List of tier names</strong>: Grants access to specific tiers only</li>
-<li>Example: <code>'["premium","enterprise"]'</code> - only premium and enterprise tiers can access</li>
-<li><strong>Missing annotation</strong>: <strong>No tiers</strong> have access by default (model won't be accessible via MaaS)</li>
+<li>ExternalModel CR configuration</li>
+<li>Provider-specific settings (OpenAI, Anthropic, Azure, Vertex AI, Bedrock)</li>
+<li>Credential management</li>
+<li>MaaSModelRef registration</li>
 </ul>
-<p><strong>Examples:</strong></p>
-<p>Allow all tiers:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">alpha.maas.opendatahub.io/tiers</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;[]&#39;</span>
-</code></pre></div>
-<p>Allow specific tiers:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">alpha.maas.opendatahub.io/tiers</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;[&quot;premium&quot;,&quot;enterprise&quot;]&#39;</span>
-</code></pre></div>
-<h3 id="step-3-add-display-metadata-optional">Step 3: Add Display Metadata (Optional)</h3>
-<p>Add standard annotations to your <strong>MaaSModelRef</strong> to provide human-readable names and descriptions in the <code>GET /v1/models</code> API response:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModelRef</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-production-model</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span><span class="nt">openshift.io/display-name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;My</span><span class="nv"> </span><span class="s">Production</span><span class="nv"> </span><span class="s">Model&quot;</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="nt">openshift.io/description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;A</span><span class="nv"> </span><span class="s">fine-tuned</span><span class="nv"> </span><span class="s">model</span><span class="nv"> </span><span class="s">for</span><span class="nv"> </span><span class="s">production</span><span class="nv"> </span><span class="s">workloads&quot;</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="nt">opendatahub.io/genai-use-case</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;chat&quot;</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span><span class="nt">opendatahub.io/context-window</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;8192&quot;</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-production-model</span>
-</code></pre></div>
-<p>These annotations are returned in the <code>modelDetails</code> field of the API response. All are optional. See <a href="../crd-annotations/">CRD annotations</a> for the full list of supported annotations across all MaaS CRDs.</p>
-<h3 id="what-the-annotation-does">What the Annotation Does</h3>
-<p>This annotation automatically creates the necessary RBAC resources (Roles and RoleBindings) that allow tier-specific service accounts to POST to your <code>LLMInferenceService</code>. The ODH Controller handles this automatically when the annotation is present.</p>
-<p>Behind the scenes, it creates:</p>
-<ul>
-<li><strong>Role</strong>: Grants <code>POST</code> permission on <code>llminferenceservices</code> resource</li>
-<li><strong>RoleBinding</strong>: Binds tier service account groups (e.g., <code>system:serviceaccounts:maas-default-gateway-tier-premium</code>) to the role</li>
-</ul>
-<h3 id="complete-example_1">Complete Example</h3>
-<p>Here's a complete example of an LLMInferenceService configured for MaaS:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">serving.kserve.io/v1alpha1</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">qwen3-model</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">model</span><span class="p">:</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="nt">uri</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hf://Qwen/Qwen3-0.6B</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Qwen/Qwen3-0.6B</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="nt">router</span><span class="p">:</span>
-<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">    </span><span class="nt">route</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">    </span><span class="nt">gateway</span><span class="p">:</span>
-<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">      </span><span class="nt">refs</span><span class="p">:</span>
-<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
-<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">          </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
-<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">  </span><span class="nt">template</span><span class="p">:</span>
-<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">    </span><span class="nt">containers</span><span class="p">:</span>
-<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">main</span>
-<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">        </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;vllm/vllm-openai:latest&quot;</span>
-<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="w">        </span><span class="nt">resources</span><span class="p">:</span>
-<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="w">          </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="w">            </span><span class="nt">nvidia.com/gpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1&quot;</span>
-<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="w">            </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12Gi</span>
-<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="w">          </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="w">            </span><span class="nt">nvidia.com/gpu</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1&quot;</span>
-<a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a><span class="w">            </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8Gi</span>
-</code></pre></div>
-<h2 id="updating-existing-models">Updating existing models</h2>
-<p>To convert an existing LLMInferenceService to use MaaS:</p>
-<h3 id="method-1-patch-the-model">Method 1: Patch the Model</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>llminferenceservice<span class="w"> </span>my-production-model<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>--type<span class="o">=</span><span class="s1">&#39;json&#39;</span><span class="w"> </span>-p<span class="o">=</span><span class="s1">&#39;[</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="s1">  {</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="s1">    &quot;op&quot;: &quot;add&quot;,</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="s1">    &quot;path&quot;: &quot;/spec/router/gateway/refs/-&quot;,</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="s1">    &quot;value&quot;: {</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="s1">      &quot;name&quot;: &quot;maas-default-gateway&quot;,</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="s1">      &quot;namespace&quot;: &quot;openshift-ingress&quot;</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="s1">    }</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="s1">  }</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="s1">]&#39;</span>
-</code></pre></div>
-<h3 id="method-2-edit-the-resource">Method 2: Edit the Resource</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>edit<span class="w"> </span>llminferenceservice<span class="w"> </span>my-production-model<span class="w"> </span>-n<span class="w"> </span>llm
-</code></pre></div>
-<p>Then add the gateway reference in <code>spec.router.gateway.refs</code>.</p>
+<hr />
 <h2 id="verification">Verification</h2>
-<p>After configuring your LLMInferenceService, verify it's accessible through MaaS:</p>
-<p><strong>1. Check the model appears in the models list:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Get your MaaS token first, then:</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>curl<span class="w"> </span>-sSk<span class="w"> </span><span class="si">${</span><span class="nv">HOST</span><span class="si">}</span>/maas-api/v1/models<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+<p>After configuring your model, verify it's accessible.</p>
+<div class="admonition note">
+<p class="admonition-title">Access Control Required</p>
+<p>Both model kinds require <strong>MaaSModelRef</strong> for registration, <strong>MaaSAuthPolicy</strong> for access control, and <strong>MaaSSubscription</strong> for rate limits. See <a href="../quota-and-access-configuration/">Quota and Access Configuration</a> for complete policy setup.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">API Key Required</p>
+<p>These verification steps require an API key. See <a href="../../user-guide/api-key-management/#creating-api-keys">API Key Management</a> for how to create one.</p>
+</div>
+<p><strong>1. Check the model appears in the catalog:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Set HOST to your MaaS gateway URL (e.g., https://maas.your-cluster-domain.com)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>curl<span class="w"> </span>-sSk<span class="w"> </span><span class="si">${</span><span class="nv">HOST</span><span class="si">}</span>/maas-api/v1/models<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </code></pre></div>
 <p><strong>2. Verify the model status:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>llminferenceservice<span class="w"> </span>my-production-model<span class="w"> </span>-n<span class="w"> </span>llm
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Check the backend resource</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>llminferenceservice<span class="w"> </span>&lt;llmisvc-name&gt;<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w">  </span><span class="c1"># On-cluster</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>externalmodel<span class="w"> </span>&lt;external-name&gt;<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w">       </span><span class="c1"># External</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># Check MaaSModelRef (both kinds)</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>&lt;modelref-name&gt;<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;
 </code></pre></div>
 <p><strong>3. Test inference request:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Use the MODEL_URL from the models list</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$TOKEN</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;model&quot;: &quot;my-production-model&quot;, &quot;prompt&quot;: &quot;Hello&quot;, &quot;max_tokens&quot;: 50}&#39;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MODEL_URL</span><span class="si">}</span><span class="s2">&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Get MODEL_URL from step 1 above (data[].url field)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>curl<span class="w"> </span>-sSk<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;model&quot;: &quot;my-model&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Hello&quot;}]}&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MODEL_URL</span><span class="si">}</span><span class="s2">/v1/chat/completions&quot;</span>
 </code></pre></div>
+<hr />
 <h2 id="troubleshooting">Troubleshooting</h2>
 <h3 id="model-not-appearing-in-maas-apiv1models">Model Not Appearing in /maas-api/v1/models</h3>
 <ul>
-<li>Verify the gateway reference is correct: <code>name: maas-default-gateway</code>, <code>namespace: openshift-ingress</code></li>
-<li>Check that the model's status shows it's ready</li>
-<li>Ensure the model namespace is accessible (some configurations may restrict discovery)</li>
+<li>Verify gateway reference: <code>name: maas-default-gateway</code>, <code>namespace: openshift-ingress</code></li>
+<li>Check model status shows ready</li>
+<li>Ensure MaaSModelRef is created in the same namespace as the model</li>
 </ul>
-<h3 id="401-unauthorized-when-accessing-model">401 Unauthorized When Accessing Model</h3>
+<h3 id="401-unauthorized">401 Unauthorized</h3>
 <ul>
-<li>Verify your subscription (MaaSAuthPolicy, MaaSSubscription) grants access to the model</li>
-<li>Check that your API key or token is valid and has the correct permissions</li>
-<li>Ensure the model's MaaSModelRef and AuthPolicy are correctly configured</li>
+<li>Verify API key or token is valid</li>
+<li>Check MaaSAuthPolicy grants your group access to the model</li>
+<li>Ensure MaaSSubscription exists for your identity</li>
 </ul>
-<h3 id="403-forbidden-when-accessing-model">403 Forbidden When Accessing Model</h3>
+<h3 id="403-forbidden">403 Forbidden</h3>
 <ul>
-<li>Ensure your subscription includes access to the model</li>
-<li>Verify MaaSAuthPolicy grants your group access</li>
-<li>Check that the maas-controller has reconciled the AuthPolicy</li>
+<li>Verify MaaSAuthPolicy includes the model in <code>modelRefs</code></li>
+<li>Check MaaSSubscription ownership matches your identity</li>
+<li>Verify maas-controller has reconciled the policies</li>
 </ul>
+<hr />
 <h2 id="references">References</h2>
 <ul>
-<li><a href="../../concepts/subscription-overview/">Access and Quota Overview</a> - Configure policies and subscriptions</li>
-<li><a href="../quota-and-access-configuration/">Quota and Access Configuration</a> - Detailed configuration</li>
-<li><a href="../../concepts/architecture/">Architecture Overview</a> - Understand the overall MaaS architecture</li>
-<li><a href="https://kserve.github.io/website/">KServe LLMInferenceService Documentation</a> - Official KServe documentation</li>
+<li><a href="../quota-and-access-configuration/">Quota and Access Configuration</a> - Configure MaaSAuthPolicy and MaaSSubscription</li>
+<li><a href="../model-listing-flow/">Model Listing Flow</a> - How models appear in the catalog</li>
+<li><a href="../../install/external-model-setup/">External Model Setup</a> - Complete guide for external models</li>
+<li><a href="../../reference/crds/maas-model-ref/">MaaSModelRef CRD</a> - CRD reference and field details</li>
 </ul>
 
 
@@ -3435,7 +3091,7 @@ graph TB
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 17, 2026 02:14:44 UTC">April 17, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 1, 2026 20:21:15 UTC">May 1, 2026</span>
   </span>
 
     
