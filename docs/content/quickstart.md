@@ -28,7 +28,7 @@ For OpenShift clusters, use the unified automated deployment script. Choose your
     Deploy MaaS through the RHOAI or ODH operator. This is the recommended approach for production deployments.
 
     ```bash
-    export MAAS_REF="v0.1.0"  # Use the latest release tag, or "main" for development
+    export MAAS_REF="v0.1.1"  # Use the latest release tag, or "main" for development
 
     # Deploy using RHOAI operator (default)
     ./scripts/deploy.sh
@@ -39,7 +39,7 @@ For OpenShift clusters, use the unified automated deployment script. Choose your
 
     !!! note "Using Release Tags"
         The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
-        The release workflow automatically updates all `MAAS_REF="v0.1.0"` references in documentation and scripts
+        The release workflow automatically updates all `MAAS_REF="v0.1.1"` references in documentation and scripts
         to use the new release tag when a release is created. Use `"main"` only for development/testing.
 
 === "Kustomize (Development Only)"
@@ -54,14 +54,14 @@ For OpenShift clusters, use the unified automated deployment script. Choose your
         2. **ODH operator**: `./.github/hack/install-odh.sh`
 
     ```bash
-    export MAAS_REF="v0.1.0"  # Use the latest release tag, or "main" for development
+    export MAAS_REF="v0.1.1"  # Use the latest release tag, or "main" for development
 
     ./scripts/deploy.sh --deployment-mode kustomize
     ```
 
     !!! note "Using Release Tags"
         The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
-        The release workflow automatically updates all `MAAS_REF="v0.1.0"` references in documentation and scripts
+        The release workflow automatically updates all `MAAS_REF="v0.1.1"` references in documentation and scripts
         to use the new release tag when a release is created. Use `"main"` only for development/testing.
 
 
