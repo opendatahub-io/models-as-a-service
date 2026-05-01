@@ -178,7 +178,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     # Check DataScienceCluster status
     kubectl get datasciencecluster default-dsc
 
-    # Wait for KServe to be ready (optional)
+    # Wait for KServe and ModelsAsService to be ready (optional)
     kubectl wait --for=jsonpath='{.status.conditions[?(@.type=="KserveReady")].status}'=True \
       datasciencecluster/default-dsc --timeout=300s
     kubectl wait --for=jsonpath='{.status.conditions[?(@.type=="ModelControllerReady")].status}'=True \

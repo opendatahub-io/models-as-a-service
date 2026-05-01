@@ -139,7 +139,7 @@ spec:
               conditions:
                 description: |-
                   Conditions represent the latest available observations.
-                  Types align with ODH internal/controller/status for DSC aggregation: Ready,
+                  Types mirror ODH modelsasservice / maas-controller status for DSC aggregation: Ready,
                   DependenciesAvailable, MaaSPrerequisitesAvailable, DeploymentsAvailable, Degraded.
                 items:
                   description: Condition contains details for one aspect of the current
