@@ -318,7 +318,7 @@ curl -sSk -H "Authorization: Bearer $TOKEN" \
 
 ## References
 
-- [Access and Quota Overview](subscription-overview.md) - Configure policies and subscriptions
+- [Access and Quota Overview](../concepts/subscription-overview.md) - Configure policies and subscriptions
 - [Quota and Access Configuration](quota-and-access-configuration.md) - Detailed configuration
-- [Architecture Overview](../architecture.md) - Understand the overall MaaS architecture
+- [Architecture Overview](../concepts/architecture.md) - Understand the overall MaaS architecture
 - [KServe LLMInferenceService Documentation](https://kserve.github.io/website/) - Official KServe documentation

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
@@ -43,12 +44,13 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // Default gateway name and namespace when not set via flags.
 const (
-	defaultGatewayName      = "maas-default-gateway"
-	defaultGatewayNamespace = "openshift-ingress"
+	defaultGatewayName      = tenantreconcile.DefaultGatewayName
+	defaultGatewayNamespace = tenantreconcile.DefaultGatewayNamespace
 	defaultClusterAudience  = "https://kubernetes.default.svc"
 )
 
@@ -83,7 +85,6 @@ func (r *MaaSModelRefReconciler) gatewayNamespace() string {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
-//+kubebuilder:rbac:groups="",resources=secrets,verbs=get
 
 const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
 
@@ -115,6 +116,14 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Handle deletion
 	if !model.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, log, model)
+	}
+
+	// Handle no spec (e.g. legacy resources created before spec was required).
+	// No finalizer needed — there are no generated resources to clean up.
+	if reflect.DeepEqual(model.Spec, maasv1alpha1.MaaSModelSpec{}) {
+		statusSnapshot := model.Status.DeepCopy()
+		r.updateStatus(ctx, model, "Invalid", "spec is required", statusSnapshot)
+		return ctrl.Result{}, nil
 	}
 
 	// Add finalizer if not present
@@ -264,6 +273,8 @@ func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, mod
 			condReason = reason
 		} else if phase == "Failed" {
 			condReason = "ReconcileFailed"
+		} else if phase == "Invalid" {
+			condReason = "InvalidSpec"
 		} else {
 			condReason = "BackendNotReady"
 		}

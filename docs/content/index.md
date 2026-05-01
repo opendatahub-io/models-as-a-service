@@ -11,29 +11,32 @@ Use this platform to streamline the deployment of your models, monitor usage, an
 ### 🚀 Getting Started
 
 - **[QuickStart Guide](quickstart.md)** - Complete platform deployment instructions
-- **[Architecture](architecture.md)** - Overview of the MaaS Platform architecture
+- **[Architecture](concepts/architecture.md)** - Overview of the MaaS Platform architecture
 
-### ⚙️ Configuration & Management
+### 👤 User Guide
 
-- **[Access and Quota Overview](configuration-and-management/subscription-overview.md)** - Policies (access) and subscriptions (quota) for model access
-- **[Model Setup (On Cluster)](configuration-and-management/model-setup.md)** - Setting up models for MaaS
-- **[Self-Service Model Access](user-guide/self-service-model-access.md)** - Managing model access and policies
+- **[API Key Management](user-guide/api-key-management.md)** - Creating and managing API keys
+- **[Model Discovery](user-guide/model-discovery.md)** - Listing available models
+- **[Inference](user-guide/inference.md)** - Making inference requests
+
+### ⚙️ Administration
+
+- **[Access and Quota Overview](concepts/subscription-overview.md)** - Configuring policies and subscriptions
+- **[Model Setup](configuration-and-management/model-setup.md)** - Setting up models for MaaS
+- **[API Key Administration](configuration-and-management/api-key-administration.md)** - Bulk revocation and cleanup
+- **[Observability](advanced-administration/observability.md)** - Monitoring, metrics, and dashboards
+- **[Limitador Persistence](advanced-administration/limitador-persistence.md)** - Redis backend for rate-limit counters
+- **[TLS Configuration](configuration-and-management/tls-configuration.md)** - Configuring TLS
 
 ### 📋 Release Notes
 
-
-### 🔧 Advanced Administration
-
-- **[Observability](advanced-administration/observability.md)** - Monitoring, metrics, and dashboards
-- **[Limitador Persistence](advanced-administration/limitador-persistence.md)** - Redis backend for persistent rate-limit counters
-- **[TLS Configuration](configuration-and-management/tls-configuration.md)** - Configuring TLS for MaaS API, Authorino, and Gateway
-- **[Token Management](configuration-and-management/token-management.md)** - Token authentication system and lifecycle
+- **[Release notes](release-notes/index.md)** - Version highlights and known limitations by release
 
 ### 📖 Installation Guide
 
-- **[Prerequisites](install/prerequisites.md)** - Requirements and database setup
+- **[Prerequisites](install/prerequisites.md)** - Requirements, database setup, observability and GenAI Studio prerequisites
 - **[Platform Setup](install/platform-setup.md)** - Install ODH/RHOAI with MaaS
-- **[MaaS Setup](install/maas-setup.md)** - Gateway AuthPolicy and policies
+- **[MaaS Setup](install/maas-setup.md)** - Gateway, DataScienceCluster, OdhDashboardConfig feature flags
 - **[Validation](install/validation.md)** - Verify your deployment
 
 ### 🔄 Migration

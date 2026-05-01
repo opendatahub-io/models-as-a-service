@@ -11,7 +11,7 @@ metadata:
     pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
       == "main" && !files.all.all(x, x.matches('^docs/') || x.matches('\\.md$')
       || x.matches('^(.*/)?(\\.gitignore|OWNERS|PROJECT|LICENSE)$')
-      || x.matches('^\\.github/') || x.matches('^\\.tekton/'))
+      || x.matches('^\\.github/'))
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
@@ -28,20 +28,16 @@ spec:
   - name: output-image
     value: quay.io/opendatahub/maas-controller:odh-pr
   - name: dockerfile
-    value: Dockerfile
+    value: maas-controller/Dockerfile
   - name: path-context
-    value: maas-controller
+    value: .
   - name: additional-tags
     value:
     - 'odh-pr-{{revision}}'
   - name: pipeline-type
     value: pull-request
-  - name: build-platforms
-    value:
-    - linux/x86_64
-    - linux/arm64
-    - linux/ppc64le
-    - linux/s390x
+  - name: enable-group-testing
+    value: "true"
   pipelineRef:
     resolver: git
     params:

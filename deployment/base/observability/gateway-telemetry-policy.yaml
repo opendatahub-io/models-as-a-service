@@ -1,14 +1,15 @@
 apiVersion: extensions.kuadrant.io/v1alpha1
 kind: TelemetryPolicy
 metadata:
-  name: user-group
+  name: maas-telemetry
   namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: maas-observability
 spec:
   metrics:
     default:
       labels:
         model: responseBodyJSON("/model")
-        tier: auth.identity.tier
         user: auth.identity.userid
         # Subscription metadata for usage attribution and billing
         subscription: auth.identity.selected_subscription

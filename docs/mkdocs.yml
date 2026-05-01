@@ -57,9 +57,12 @@ nav:
     - Migration:
       - Tier to Subscription: migration/tier-to-subscription.md
   - Concepts:
-    - Architecture: architecture.md
-    - Access and Quota Overview: configuration-and-management/subscription-overview.md
-    - MaaS Models: configuration-and-management/maas-models.md
+    - Architecture: concepts/architecture.md
+    - Personas: concepts/personas.md
+    - Access and Quota Overview: concepts/subscription-overview.md
+    - Model Reference: concepts/model-reference.md
+    - API Key Authentication: concepts/api-key-authentication.md
+    - Model Access Control: concepts/model-access-control.md
   - Install:
     - Quick Start: quickstart.md
     - Prerequisites:
@@ -68,14 +71,15 @@ nav:
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
       - Model Setup (On Cluster): install/model-setup.md
+      - External Model Setup (Tech Preview): install/external-model-setup.md
       - Validation: install/validation.md
       - Troubleshooting: install/troubleshooting.md
   - Administration Guide:
     - Configuration & Management:
       - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
-      - Token Management: configuration-and-management/token-management.md
+      - API Key Administration: configuration-and-management/api-key-administration.md
+      - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
-      - Subscription Known Issues: configuration-and-management/subscription-known-issues.md
     - Models:
       - Model Setup (On Cluster): configuration-and-management/model-setup.md
       - Model Listing Flow: configuration-and-management/model-listing-flow.md
@@ -84,11 +88,15 @@ nav:
       - Controller Overview: configuration-and-management/maas-controller-overview.md
       - CRD Annotations: configuration-and-management/crd-annotations.md
     - Advanced Administration:
-      - Observability: advanced-administration/observability.md
+      - Observability Dashboard: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
-      - Subscription Cardinality: advanced-administration/subscription-cardinality.md
+      - Authorino Caching: configuration-and-management/authorino-caching.md
   - User Guide:
-    - Self Service Model Access: user-guide/self-service-model-access.md
+    - API Key Management: user-guide/api-key-management.md
+    - Model Discovery: user-guide/model-discovery.md
+    - Inference: user-guide/inference.md
+  - Contributing:
+    - MaaS Testing and Contribution Guide: contributing/testing-guide.md
   - API Reference:
     - MaaS API Overview: reference/maas-api-overview.md
     - MaaS API (Swagger): reference/api-reference.md

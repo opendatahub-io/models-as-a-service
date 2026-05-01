@@ -18,13 +18,13 @@ type serviceTestSubSelector struct{}
 
 func (serviceTestSubSelector) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if requested != "" {
-		return &subscription.SelectResponse{Name: requested}, nil
+		return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
 	}
-	return &subscription.SelectResponse{Name: "default-sub"}, nil
+	return &subscription.SelectResponse{Name: "default-sub", Phase: "Active"}, nil
 }
 
 func (serviceTestSubSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
-	return &subscription.SelectResponse{Name: "default-sub"}, nil
+	return &subscription.SelectResponse{Name: "default-sub", Phase: "Active"}, nil
 }
 
 func createTestService(t *testing.T) (*api_keys.Service, *api_keys.MockStore) {
@@ -272,6 +272,162 @@ func TestRevokeAPIKey(t *testing.T) {
 }
 
 // ============================================================
+// REVOKE API KEY - ERROR PATHS
+// ============================================================
+
+// TestRevokeAPIKey_NotFound verifies that revoking a non-existent key
+// propagates ErrKeyNotFound from the store through the service layer.
+func TestRevokeAPIKey_NotFound(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := createTestService(t)
+
+	err := svc.RevokeAPIKey(ctx, "nonexistent-key-id")
+	require.ErrorIs(t, err, api_keys.ErrKeyNotFound)
+}
+
+// TestRevokeAPIKey_AlreadyRevoked verifies that revoking a key twice
+// returns ErrKeyNotFound on the second attempt (matches PostgreSQL behavior:
+// UPDATE ... WHERE status='active' affects 0 rows).
+func TestRevokeAPIKey_AlreadyRevoked(t *testing.T) {
+	ctx := context.Background()
+	svc, store := createTestService(t)
+
+	keyID := "double-revoke-key"
+	_, hash := createTestAPIKey(t)
+	require.NoError(t, store.AddKey(ctx, "alice", keyID, hash, "Double Revoke", "", nil, "default-sub", nil, false))
+
+	// First revoke succeeds
+	require.NoError(t, svc.RevokeAPIKey(ctx, keyID))
+
+	// Second revoke returns not found (key is no longer active)
+	err := svc.RevokeAPIKey(ctx, keyID)
+	require.ErrorIs(t, err, api_keys.ErrKeyNotFound)
+}
+
+// TestRevokeAPIKey_ThenValidate verifies the full revoke-then-validate flow:
+// after revoking via the service layer, ValidateAPIKey should return invalid
+// with reason "key revoked or expired".
+func TestRevokeAPIKey_ThenValidate(t *testing.T) {
+	ctx := context.Background()
+	svc, store := createTestService(t)
+
+	keyID := "revoke-validate-key"
+	plainKey, hash := createTestAPIKey(t)
+	require.NoError(t, store.AddKey(ctx, "eve", keyID, hash, "Revoke Then Validate", "", []string{"users"}, "default-sub", nil, false))
+
+	// Revoke via service
+	require.NoError(t, svc.RevokeAPIKey(ctx, keyID))
+
+	// Validate should report the key as invalid
+	result, err := svc.ValidateAPIKey(ctx, plainKey)
+	require.NoError(t, err)
+	assert.False(t, result.Valid)
+	assert.Equal(t, "key revoked or expired", result.Reason)
+}
+
+// ============================================================
+// BULK REVOKE API KEYS (SERVICE LAYER)
+// ============================================================
+
+// TestBulkRevokeAPIKeys tests the service-level BulkRevokeAPIKeys function
+// which revokes all active keys for a given username.
+func TestBulkRevokeAPIKeys(t *testing.T) {
+	// Verify that bulk revoke revokes all active keys for the target user
+	// and returns the correct count.
+	t.Run("HappyPath", func(t *testing.T) {
+		ctx := context.Background()
+		svc, store := createTestService(t)
+
+		// Create 3 keys for alice
+		for i := range 3 {
+			_, hash := createTestAPIKey(t)
+			id := "bulk-key-" + string(rune('a'+i))
+			require.NoError(t, store.AddKey(ctx, "alice", id, hash, "Key "+id, "", nil, "default-sub", nil, false))
+		}
+
+		count, err := svc.BulkRevokeAPIKeys(ctx, "alice")
+		require.NoError(t, err)
+		assert.Equal(t, 3, count)
+
+		// Verify all keys are revoked
+		for i := range 3 {
+			id := "bulk-key-" + string(rune('a'+i))
+			meta, err := store.Get(ctx, id)
+			require.NoError(t, err)
+			assert.Equal(t, api_keys.StatusRevoked, meta.Status, "key %s should be revoked", id)
+		}
+	})
+
+	// Verify that bulk revoke for a user with no keys returns count=0 and no error.
+	t.Run("NoKeysToRevoke", func(t *testing.T) {
+		ctx := context.Background()
+		svc, _ := createTestService(t)
+
+		count, err := svc.BulkRevokeAPIKeys(ctx, "nobody")
+		require.NoError(t, err)
+		assert.Equal(t, 0, count)
+	})
+
+	// Verify that calling bulk revoke twice is idempotent:
+	// the second call returns count=0 because all keys are already revoked.
+	t.Run("Idempotent", func(t *testing.T) {
+		ctx := context.Background()
+		svc, store := createTestService(t)
+
+		_, hash := createTestAPIKey(t)
+		require.NoError(t, store.AddKey(ctx, "bob", "idem-key", hash, "Idempotent Key", "", nil, "default-sub", nil, false))
+
+		count, err := svc.BulkRevokeAPIKeys(ctx, "bob")
+		require.NoError(t, err)
+		assert.Equal(t, 1, count)
+
+		// Second call: no active keys left
+		count, err = svc.BulkRevokeAPIKeys(ctx, "bob")
+		require.NoError(t, err)
+		assert.Equal(t, 0, count)
+	})
+
+	// Verify that empty username is rejected with an error.
+	t.Run("EmptyUsername", func(t *testing.T) {
+		ctx := context.Background()
+		svc, _ := createTestService(t)
+
+		_, err := svc.BulkRevokeAPIKeys(ctx, "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "username is required")
+	})
+}
+
+// TestBulkRevokeAPIKeys_ThenValidateAll verifies that after bulk revoking,
+// all previously valid keys are rejected by ValidateAPIKey.
+func TestBulkRevokeAPIKeys_ThenValidateAll(t *testing.T) {
+	ctx := context.Background()
+	svc, store := createTestService(t)
+
+	// Create 3 keys, keep their plaintext for validation
+	plainKeys := make([]string, 3)
+	for i := range 3 {
+		plain, hash := createTestAPIKey(t)
+		plainKeys[i] = plain
+		id := "bulk-validate-" + string(rune('a'+i))
+		require.NoError(t, store.AddKey(ctx, "carol", id, hash, "Key "+id, "", []string{"users"}, "default-sub", nil, false))
+	}
+
+	// Bulk revoke all of carol's keys
+	count, err := svc.BulkRevokeAPIKeys(ctx, "carol")
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+
+	// Validate each key — all should be rejected
+	for i, plain := range plainKeys {
+		result, err := svc.ValidateAPIKey(ctx, plain)
+		require.NoError(t, err)
+		assert.False(t, result.Valid, "key %d should be invalid after bulk revoke", i)
+		assert.Equal(t, "key revoked or expired", result.Reason)
+	}
+}
+
+// ============================================================
 // MAX EXPIRATION VALIDATION TESTS
 // ============================================================
 
@@ -485,7 +641,7 @@ func (s subSelectorStub) Select(_ []string, _ string, requested string, _ string
 	if s.selectErr != nil {
 		return nil, s.selectErr
 	}
-	return &subscription.SelectResponse{Name: requested}, nil
+	return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
 }
 
 func (s subSelectorStub) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
@@ -496,7 +652,7 @@ func (s subSelectorStub) SelectHighestPriority(_ []string, _ string) (*subscript
 	if name == "" {
 		name = "from-priority"
 	}
-	return &subscription.SelectResponse{Name: name}, nil
+	return &subscription.SelectResponse{Name: name, Phase: "Active"}, nil
 }
 
 func TestCreateAPIKey_Subscription(t *testing.T) {
@@ -642,4 +798,117 @@ func createTestAPIKey(t *testing.T) (string, string) {
 	plainKey, hash, _, err := api_keys.GenerateAPIKey()
 	require.NoError(t, err)
 	return plainKey, hash
+}
+
+func TestCreateAPIKey_ValidatesSubscriptionPhase(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{}
+	user := "testuser"
+	groups := []string{"g1"}
+
+	tests := []struct {
+		name        string
+		phase       string
+		deleting    bool
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "rejects Failed subscription (prevents key spam)",
+			phase:       "Failed",
+			deleting:    false,
+			expectError: true,
+			errorMsg:    "Failed phase",
+		},
+		{
+			name:        "allows Pending subscription (enforcement at inference time)",
+			phase:       "Pending",
+			deleting:    false,
+			expectError: false,
+		},
+		{
+			name:        "allows Degraded subscription (enforcement at inference time)",
+			phase:       "Degraded",
+			deleting:    false,
+			expectError: false,
+		},
+		{
+			name:        "rejects unreconciled subscription (empty phase)",
+			phase:       "",
+			deleting:    false,
+			expectError: true,
+			errorMsg:    "unreconciled",
+		},
+		{
+			name:        "allows Active subscription",
+			phase:       "Active",
+			deleting:    false,
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Mock selector that returns subscription with specific health status
+			selector := &mockHealthSelector{
+				phase:    tt.phase,
+				deleting: tt.deleting,
+			}
+
+			store := api_keys.NewMockStore()
+			svc := api_keys.NewServiceWithLogger(store, cfg, selector, logger.Development())
+
+			_, err := svc.CreateAPIKey(ctx, user, groups, "test-key", "", nil, false, "test-sub")
+
+			if tt.expectError {
+				require.Error(t, err, "Expected error for %s", tt.name)
+				var modelErr *subscription.ModelUnhealthyError
+				require.ErrorAs(t, err, &modelErr, "Expected ModelUnhealthyError")
+				require.Contains(t, modelErr.Message, tt.errorMsg, "Error message should contain: %s", tt.errorMsg)
+			} else {
+				require.NoError(t, err, "Expected no error for %s", tt.name)
+			}
+		})
+	}
+}
+
+// mockHealthSelector implements SubscriptionSelector for health testing.
+type mockHealthSelector struct {
+	phase    string
+	deleting bool
+}
+
+func (m *mockHealthSelector) Select(_ []string, _ string, _ string, _ string) (*subscription.SelectResponse, error) {
+	// Simulate health validation that real selector does for API key creation
+	// API key creation path blocks Failed and unreconciled (empty phase)
+	if m.phase == "" {
+		return nil, &subscription.ModelUnhealthyError{
+			Subscription: "test-sub",
+			Phase:        "",
+			Reason:       "SubscriptionNotReady",
+			Message:      "subscription is unreconciled (no status.phase set)",
+		}
+	}
+	if m.phase == "Failed" {
+		return nil, &subscription.ModelUnhealthyError{
+			Subscription: "test-sub",
+			Phase:        "Failed",
+			Reason:       "SubscriptionNotReady",
+			Message:      "subscription is in Failed phase (cannot create API keys)",
+		}
+	}
+
+	resp := &subscription.SelectResponse{
+		Name:  "test-sub",
+		Phase: m.phase,
+	}
+	if m.deleting {
+		resp.DeletionTimestamp = "2026-04-08T12:00:00Z"
+	}
+	return resp, nil
+}
+
+func (m *mockHealthSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
+	//nolint:unqueryvet // False positive - not a SQL query
+	return m.Select(nil, "", "", "")
 }

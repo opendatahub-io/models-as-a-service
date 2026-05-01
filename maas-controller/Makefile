@@ -54,15 +54,18 @@ CONTROLLER_GEN = $(BUILD_DIR)/controller-gen
 ##@ Development
 
 .PHONY: build
-build: tidy $(BUILD_DIR) ##	build manager binary to bin/manager
-	$(GO_ENV) go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/manager
+build: tidy generate manifests lint test binary ##	run full build: tidy, generate, manifests, lint, test, binary
+
+.PHONY: binary
+binary: $(BUILD_DIR) ##	build manager binary to bin/manager (skip checks)
+	$(GO_ENV) go build -o "$(BUILD_DIR)/$(BINARY_NAME)" ./cmd/manager
 
 $(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
+	mkdir -p "$(BUILD_DIR)"
 
 .PHONY: run
-run: build ##	build and run manager locally
-	$(BUILD_DIR)/$(BINARY_NAME)
+run: binary ##	build and run manager locally
+	"$(BUILD_DIR)/$(BINARY_NAME)"
 
 TEST_FLAGS ?= -race -coverprofile=coverage.out
 .PHONY: test
@@ -95,17 +98,19 @@ generate: $(CONTROLLER_GEN) ##	generate deepcopy code for API types
 	$(CONTROLLER_GEN) object paths="./api/..."
 
 .PHONY: manifests
-manifests: $(CONTROLLER_GEN) ##	generate CRD manifests
+manifests: $(CONTROLLER_GEN) ##	generate CRD and RBAC manifests
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:dir=../deployment/base/maas-controller/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=maas-controller-role paths="./..." output:rbac:dir=../deployment/base/maas-controller/rbac
+	@mv ../deployment/base/maas-controller/rbac/role.yaml ../deployment/base/maas-controller/rbac/clusterrole.yaml
 
 .PHONY: verify-codegen
 verify-codegen: generate manifests ##	run generate + manifests and fail if files changed (CI check)
-	@if ! git diff --quiet HEAD -- api/ ../deployment/base/maas-controller/crd/bases/; then \
-		echo "ERROR: Generated files are out of date. Please run 'make generate manifests' and commit the results."; \
-		git diff --stat HEAD -- api/ ../deployment/base/maas-controller/crd/bases/; \
+	@if ! git diff --quiet HEAD -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/clusterrole.yaml; then \
+		echo "ERROR: Generated files are out of date. Please run 'make -C maas-controller generate manifests' from the repo root and commit the results."; \
+		git diff --stat HEAD -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/clusterrole.yaml; \
 		exit 1; \
 	fi
-	@UNTRACKED=$$(git ls-files --others --exclude-standard -- api/ ../deployment/base/maas-controller/crd/bases/); \
+	@UNTRACKED=$$(git ls-files --others --exclude-standard -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/); \
 	if [ -n "$$UNTRACKED" ]; then \
 		echo "ERROR: Untracked generated files detected. Please commit them:"; \
 		echo "$$UNTRACKED"; \

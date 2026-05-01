@@ -69,11 +69,15 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 
 	response, err := h.selector.Select(req.Groups, req.Username, req.RequestedSubscription, req.RequestedModel)
 	if err != nil {
+		// NOTE: All error responses return http.StatusOK with error fields populated in SelectResponse.
+		// This is intentional for Authorino integration, which expects 200 OK responses with metadata
+		// fields (not HTTP error codes). See SelectResponse type documentation in types.go.
 		var noSubErr *NoSubscriptionError
 		var notFoundErr *SubscriptionNotFoundError
 		var accessDeniedErr *AccessDeniedError
 		var multipleSubsErr *MultipleSubscriptionsError
 		var modelNotInSubErr *ModelNotInSubscriptionError
+		var modelUnhealthyErr *ModelUnhealthyError
 
 		if errors.As(err, &noSubErr) {
 			h.logger.Debug("No subscription found for user",
@@ -130,6 +134,21 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 			c.JSON(http.StatusOK, SelectResponse{
 				Error:   "model_not_in_subscription",
 				Message: err.Error(),
+			})
+			return
+		}
+
+		if errors.As(err, &modelUnhealthyErr) {
+			h.logger.Debug("Requested model is unhealthy",
+				"subscription", modelUnhealthyErr.Subscription,
+				"phase", modelUnhealthyErr.Phase,
+				"reason", modelUnhealthyErr.Reason,
+				"message", modelUnhealthyErr.Message,
+			)
+			c.JSON(http.StatusOK, SelectResponse{
+				Error:   "model_unhealthy",
+				Message: modelUnhealthyErr.Message,
+				Phase:   modelUnhealthyErr.Phase,
 			})
 			return
 		}

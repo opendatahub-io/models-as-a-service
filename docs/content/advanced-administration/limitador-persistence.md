@@ -1,154 +1,46 @@
-# Persisting Limitador Metric Counts
+# Limitador Persistence
 
-By default, Limitador stores its rate-limiting counters in memory. This provides high performance but has a significant drawback: if a Limitador pod restarts, scales down, or is rescheduled, all hit counts are lost.
+By default, Limitador stores rate-limit counters in memory. Counters reset when pods restart, scale, or are rescheduled. For production deployments, configure Limitador to use Redis for persistent storage.
 
-For persistent, production-ready rate limiting where counts are maintained across pod lifecycles, you must configure Limitador to use an external Redis backend.
-
-!!! warning
-    **Production Considerations**: The basic Redis setup script provided in this document is intended for local development and validation only. For production deployments, follow the official Red Hat documentation for proper Redis configuration and high availability.
+!!! info "Other Storage Options"
+    Limitador supports additional storage backends. See the [Limitador configuration documentation](https://github.com/Kuadrant/limitador/blob/main/doc/server/configuration.md) for details. This guide focuses on Redis.
 
 ---
 
-## Table of Contents
+## Configuration
 
-. [Requirements for Persistent Counts](#requirements-for-persistent-counts)
-. [Example Limitador CR Configuration](#example-limitador-cr-configuration)
-. [Local Validation Script](#local-validation-script-basic-dev-only-redis)
-. [How to Validate Persistence](#how-to-validate-persistence)
-. [Related Documentation](#related-documentation)
+To configure Limitador with Redis persistent storage:
 
----
+1. Deploy Redis according to your environment's requirements
+2. Create a Kubernetes Secret with the Redis connection URL
+3. Update the Limitador CR to reference the Secret
 
-## Requirements for Persistent Counts
-
-To enable persistence, two conditions must be met:
-
-. **A Running Redis Instance**: A Redis instance must be deployed and network-accessible from within the Kubernetes cluster.
-
-. **Limitador Custom Resource (CR) Configuration**: The Limitador CR that manages your deployment must be updated to point to the running Redis instance by specifying the storage configuration in its spec.
+**For complete configuration steps**, see [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.3/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp).
 
 ---
 
-## Example Limitador CR Configuration
+## Local Development Setup
 
-To configure Limitador to use Redis for persistent storage, you need to:
+For local development and testing, use the provided Redis setup script:
 
-. **Create a Kubernetes Secret** containing the Redis connection URL:
-
-   ```bash
-   kubectl create secret generic redis-config \
-     --from-literal=URL=redis://redis-service.redis-limitador.svc:6379 \
-     --namespace=<your-limitador-namespace>
-   ```
-
-. **Update your Limitador CR** to reference the secret:
-
-   ```yaml
-   apiVersion: limitador.kuadrant.io/v1alpha1
-   kind: Limitador
-   metadata:
-     name: limitador
-   spec:
-     storage:
-       redis:
-         configSecretRef:
-           name: redis-config
-   ```
-
-   Edit your existing Limitador CR:
-
-   ```bash
-   kubectl edit limitador <your-instance-name> -n <your-limitador-namespace>
-   ```
-
-For detailed, official instructions on production Redis setup, refer to the Red Hat documentation:
-
-- [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp)
-
----
-
-## Local Validation Script (Basic Dev-only Redis)
-
-A basic Redis setup script is provided for local development and validation. This script deploys a non-production Redis instance.
-
-**Script Location:** [`scripts/setup-redis.sh`](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/setup-redis.sh)
-
-### Namespace Selection
-
-The script uses a simple namespace selection logic:
-
-- **`NAMESPACE` environment variable** (if set)
-- **Default: `redis-limitador`** (created automatically if it doesn't exist)
-
-This opinionated default simplifies troubleshooting and ensures consistent deployments.
-
-### Usage
+**Script:** [`scripts/setup-redis.sh`](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/setup-redis.sh)
 
 ```bash
-# Make the script executable
-chmod +x scripts/setup-redis.sh
-
-# Run with default namespace (redis-limitador)
+# Default namespace: redis-limitador
 ./scripts/setup-redis.sh
 
-# Or override with environment variable
+# Or specify custom namespace
 NAMESPACE=my-namespace ./scripts/setup-redis.sh
 ```
 
-The script will:
+The script deploys a basic Redis instance and outputs instructions for configuring your Limitador CR.
 
-- Create the namespace if it doesn't exist (for default `redis-limitador` namespace)
-- Deploy a Redis Deployment and Service
-- Wait for Redis to be ready
-- Output instructions for creating a Secret and configuring your Limitador CR
-
-!!! note
-    **Single Source of Truth**: The script content is maintained only in `scripts/setup-redis.sh`. Any updates to the script are automatically reflected when users download and run it.
-
----
-
-## How to Validate Persistence
-
-. **Run the script**: `./scripts/setup-redis.sh`
-
-   This will deploy Redis to the `redis-limitador` namespace by default (or use your `NAMESPACE` env var).
-
-. **Follow the output instructions** to create the Secret and configure your Limitador CR with the Redis storage configuration.
-
-. **Send traffic** against a rate-limited route until you have a non-zero hit count.
-
-   You can verify metrics in Prometheus:
-
-   ```bash
-   # Port-forward to Prometheus (adjust namespace as needed)
-   kubectl port-forward -n monitoring svc/prometheus-k8s 9090:9091
-
-   # Query for authorized_hits metric
-   # Open http://localhost:9090 and search for: authorized_hits
-   ```
-
-. **Find your Limitador pod**:
-
-   ```bash
-   kubectl get pods -l app=limitador
-   ```
-
-. **Delete the pod** to force a restart:
-
-   ```bash
-   kubectl delete pod <limitador-pod-name>
-   ```
-
-. **Wait for the new pod** to become Running:
-
-   ```bash
-   kubectl get pods -l app=limitador -w
-   ```
-
-. **Send another request** to the same route. You will see that the metric count continues from its previous value instead of resetting to 1.
+!!! warning "Development Only"
+    This script deploys a non-HA Redis instance for local development. For production, follow the [Red Hat Connectivity Link documentation](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.3/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp).
 
 ---
 
 ## Related Documentation
 
-- [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.2/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp) - Official Red Hat documentation for production Redis setup
+- [Limitador Configuration](https://github.com/Kuadrant/limitador/blob/main/doc/server/configuration.md) - Storage backend options and configuration
+- [Red Hat Connectivity Link - Configure Redis](https://docs.redhat.com/en/documentation/red_hat_connectivity_link/1.3/html/installing_on_openshift_container_platform/rhcl-install-on-ocp#configure-redis_installing-rhcl-on-ocp) - Production Redis setup

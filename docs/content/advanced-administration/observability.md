@@ -1,11 +1,136 @@
-# Observability
+# Observability Dashboard
 
 This document covers the observability stack for the MaaS Platform, including metrics collection, monitoring, and visualization.
 
-!!! warning "Important"
-    [User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled in order to collect metrics.
+## Prerequisites
 
-    Add `enableUserWorkload: true` to the `cluster-monitoring-config` in the `openshift-monitoring` namespace
+Before deploying the observability stack, ensure the following platform prerequisites are configured. Without these, metrics pipelines for dashboards and showback will not function.
+
+### User Workload Monitoring
+
+[User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled for Prometheus to scrape metrics from MaaS components.
+
+!!! warning "Required for metrics collection"
+    Without User Workload Monitoring enabled, ServiceMonitors deployed by MaaS will not be processed and no metrics will be collected.
+
+**Step 1: Create or update the cluster-monitoring-config ConfigMap**
+
+The ConfigMap must exist in the `openshift-monitoring` namespace (not the MaaS application namespace). Cluster admin permissions are required.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+```
+
+Apply with:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+EOF
+```
+
+**Step 2: Verify User Workload Monitoring is active**
+
+```bash
+# Check that prometheus-user-workload pods are running
+kubectl get pods -n openshift-user-workload-monitoring
+
+# Expected output: prometheus-user-workload-0 and prometheus-user-workload-1 in Running state
+```
+
+If pods are not present, wait a few minutes for the monitoring operator to reconcile.
+
+### Kuadrant Observability
+
+The Kuadrant CR must have `observability.enabled` set to `true` for the operator to create the necessary PodMonitor that scrapes Limitador metrics.
+
+!!! warning "Required for rate-limiting and usage metrics"
+    Without Kuadrant observability enabled, metrics like `authorized_hits`, `authorized_calls`, and `limited_calls` will not be scraped into Prometheus. Dashboards showing token consumption and rate limiting will have no data.
+
+**Step 1: Enable observability on the Kuadrant CR**
+
+```bash
+kubectl patch kuadrant kuadrant -n kuadrant-system --type=merge \
+  -p '{"spec":{"observability":{"enable":true}}}'
+```
+
+Or edit the Kuadrant CR directly:
+
+```yaml
+apiVersion: kuadrant.io/v1beta1
+kind: Kuadrant
+metadata:
+  name: kuadrant
+  namespace: kuadrant-system
+spec:
+  observability:
+    enable: true  # Required for PodMonitor creation
+```
+
+**Step 2: Verify the PodMonitor exists**
+
+```bash
+# Check that the Kuadrant-created PodMonitor exists
+kubectl get podmonitor -n kuadrant-system
+
+# Expected: kuadrant-limitador-monitor should be listed
+```
+
+**Step 3: Verify Limitador metrics are being scraped**
+
+```bash
+# Query Prometheus for Limitador metrics
+curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+  "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/query?query=limitador_up"
+
+# Should return data with limitador_up = 1
+```
+
+### Prerequisites Summary
+
+| Prerequisite | Namespace | How to Enable | Verification |
+|--------------|-----------|---------------|--------------|
+| **User Workload Monitoring** | `openshift-monitoring` | Create `cluster-monitoring-config` ConfigMap with `enableUserWorkload: true` | `kubectl get pods -n openshift-user-workload-monitoring` shows running Prometheus pods |
+| **Kuadrant Observability** | `kuadrant-system` | Set `spec.observability.enable: true` on Kuadrant CR | `kubectl get podmonitor -n kuadrant-system` shows `kuadrant-limitador-monitor` |
+
+!!! note "Cluster Admin Permissions"
+    Configuring User Workload Monitoring requires cluster admin permissions to create ConfigMaps in the `openshift-monitoring` namespace. If you don't have these permissions, contact your cluster administrator.
+
+## RHOAI Dashboard Observability Tab
+
+The RHOAI Dashboard includes a built-in **Observability** tab that displays Perses-based dashboards
+for platform monitoring. This is separate from the MaaS-specific Grafana dashboards described later
+in this document.
+
+The following must be in place for the Observability tab to work:
+
+- **Cluster Observability Operator (COO)** and **OpenTelemetry Operator** — install both from OperatorHub
+- **DSCI `monitoring.metrics`** — see [Platform Setup](../install/platform-setup.md#install-platform-operator) for DSCI configuration
+- **`observabilityDashboard: true`** on OdhDashboardConfig — see [Feature Flags](../install/maas-setup.md#odhdashboardconfig-feature-flags)
+
+**Quick verification:**
+
+```bash
+kubectl get csv -A | grep -E 'cluster-observability|opentelemetry'
+kubectl get dsciinitialization default-dsci -o jsonpath='{.spec.monitoring}' | jq .
+kubectl get pods -n redhat-ods-monitoring | grep perses
+```
+
+For the full setup procedure, see [Managing observability (RHOAI 3.4)](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai).
 
 ## Overview
 
@@ -39,27 +164,205 @@ The observability stack consists of:
 
 ## Installation
 
-The observability stack is defined in `deployment/base/observability/`. It includes:
+There are two ways to enable deployment-based observability:
+
+1. **Operator-managed** (recommended): Enable via Tenant CR
+2. **Kustomize-based**: Deploy manifests directly
+
+### Option 1: Operator-Managed Telemetry
+
+When using the ODH/RHOAI operator, telemetry can be enabled via the Tenant CR (self-bootstrapped by `maas-controller` in the `models-as-a-service` namespace):
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Tenant
+metadata:
+  name: default-tenant
+  namespace: models-as-a-service
+spec:
+  telemetry:
+    enabled: true  # Enable TelemetryPolicy and Istio Telemetry
+    metrics:
+      captureOrganization: true
+      captureUser: false      # Disabled by default (GDPR)
+      captureGroup: false     # High cardinality
+      captureModelUsage: true
+```
+
+Or patch an existing CR:
+
+```bash
+kubectl patch tenant default-tenant -n models-as-a-service --type=merge \
+  -p '{"spec":{"telemetry":{"enabled":true}}}'
+```
+
+**What the Tenant reconciler creates when `telemetry.enabled: true`:**
+
+| Resource | Namespace | Purpose |
+|----------|-----------|---------|
+| TelemetryPolicy (`maas-telemetry`) | Gateway namespace | Adds `user`, `subscription`, `model` labels to Limitador usage metrics |
+| Istio Telemetry (`latency-per-subscription`) | Gateway namespace | Adds `subscription` label to gateway latency metrics |
+
+!!! note "Prerequisites for Operator-Managed Telemetry"
+    The Tenant reconciler telemetry feature requires:
+
+    - **OpenShift Service Mesh (Istio)** 2.4+ — for Istio Telemetry CRD
+    - **Kuadrant/RHCL** — for TelemetryPolicy CRD and AuthPolicy header injection
+    - **Gateway deployed** — Telemetry targets the gateway via selector
+
+    The Tenant reconciler checks for CRD availability before creating resources. If a CRD is not present, that resource is silently skipped.
+
+!!! warning "AuthPolicy Header Dependency"
+    The Istio Telemetry reads the `subscription` value from the `X-MaaS-Subscription` header, which must be injected by AuthPolicy:
+
+    ```yaml
+    response:
+      success:
+        headers:
+          X-MaaS-Subscription:
+            plain:
+              expression: 'auth.metadata.apiKeyValidation.subscription'
+    ```
+
+    Without this header injection, the `subscription` label on latency metrics will be empty.
+
+**Verify the feature is working:**
+
+```bash
+# Check Istio Telemetry was created
+kubectl get telemetry -n openshift-ingress latency-per-subscription
+
+# Query Prometheus for subscription label
+curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+  "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/label/subscription/values"
+```
+
+### Option 2: Kustomize-Based Installation
+
+!!! warning "Development/Testing Only"
+    **This is not the standard customer install.** The production path is operator-managed via ODH/RHOAI (Option 1 above).
+    
+    These Kustomize entrypoints exist so the team can install, iterate, and test observability without a full operator-driven deployment.
+
+#### Kustomize Entrypoint Map
+
+The observability stack is defined across multiple Kustomize directories. Each can be built and applied independently:
+
+| Entrypoint (kustomize build target) | What it deploys | Operator-owned equivalent |
+|--------------------------------------|----------------|---------------------------|
+| `deployment/base/observability/` | TelemetryPolicy + Istio Telemetry (conditional ServiceMonitors applied only via script) | Operator installs TelemetryPolicy as part of the MaaS stack; Kuadrant operator owns ServiceMonitors when `spec.observability.enable: true` |
+| `deployment/components/observability/grafana/` | GrafanaDashboard CRs (Platform Admin, AI Engineer) | Operator does not manage Grafana dashboards; same CRs are used in both paths |
+| `deployment/components/observability/prometheus/` | Standalone Prometheus + RBAC + ServiceMonitors in `llm-observability` namespace | OpenShift User Workload Monitoring (built-in Prometheus) — operator path relies on this instead |
+| `deployment/components/observability/observability/` | Aggregator that pulls in `prometheus/` above | Same as above — this is a convenience wrapper |
+| `deployment/components/observability/observability/dashboards/` | Perses PersesDashboard + Prometheus datasource | No operator equivalent — Perses is optional in both paths |
+
+**Base observability resources** (`deployment/base/observability/`):
 
 | Resource | Purpose |
 |----------|---------|
-| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `tier`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `tier`. |
-| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `tier` label to gateway latency (`istio_request_duration_milliseconds_bucket`) for per-tier P50/P95/P99. |
+| **TelemetryPolicy** (`gateway-telemetry-policy.yaml`) | Adds `user`, `subscription`, and `model` labels to Limitador metrics. The `model` label (from `responseBodyJSON`) is available on `authorized_hits`; `authorized_calls` and `limited_calls` carry `user` and `subscription`. |
+| **Istio Telemetry** (`istio-gateway-telemetry.yaml`) | Adds `subscription` label to gateway latency (`istio_request_duration_milliseconds_bucket`) via the `X-MaaS-Subscription` header injected by the controller-generated AuthPolicy. Enables per-subscription latency tracking (P50/P95/P99). |
 
-**Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Subscription` is injected):
+**Conditional resources** (not in kustomization.yaml, applied only by `install-observability.sh`):
 
-    ./scripts/observability/install-observability.sh [--namespace NAMESPACE]
+| Resource | Applied when… |
+|----------|--------------|
+| `limitador-servicemonitor.yaml` | No Kuadrant PodMonitor scraping Limitador `/metrics` |
+| `authorino-server-metrics-servicemonitor.yaml` | No existing monitor scraping Authorino `/server-metrics` |
+| `istio-gateway-service.yaml` | Gateway deployment exists in `openshift-ingress` |
+| `istio-gateway-servicemonitor.yaml` | Gateway deployment exists (paired with the Service above) |
+
+#### Dry-Run Verification
+
+Validate that every kustomization builds cleanly without applying to a cluster:
+
+```bash
+# Base telemetry (TelemetryPolicy + Istio Telemetry)
+kustomize build deployment/base/observability \
+  | kubectl apply --dry-run=client -f -
+
+# Grafana dashboards
+kustomize build deployment/components/observability/grafana \
+  | kubectl apply --dry-run=client -f -
+
+# Standalone Prometheus stack
+kustomize build deployment/components/observability/prometheus \
+  | kubectl apply --dry-run=client -f -
+
+# Prometheus aggregator (same content as prometheus/ above)
+kustomize build deployment/components/observability/observability \
+  | kubectl apply --dry-run=client -f -
+
+# Perses dashboards
+kustomize build deployment/components/observability/observability/dashboards \
+  | kubectl apply --dry-run=client -f -
+```
+
+!!! note "CI Validation"
+    CI runs `scripts/ci/validate-manifests.sh` on every PR that touches `deployment/**`, which runs `kustomize build` against all `kustomization.yaml` files. Files with `kind: Component` are skipped (they must be included via a parent's `components:` field), but directories whose kustomization.yaml declares `kind: Kustomization` can build standalone and are validated by CI dry-run.
+
+#### Deploy to a Cluster
+
+**Quick deployment** (recommended):
+
+```bash
+# Deploys base telemetry + conditional ServiceMonitors
+./scripts/observability/install-observability.sh [--namespace NAMESPACE]
+```
+
+**Manual deployment** (step-by-step):
+
+```bash
+# 1. Base telemetry (requires Gateway + AuthPolicy to exist first)
+kustomize build deployment/base/observability | kubectl apply -f -
+
+# 2. Conditional ServiceMonitors (Limitador, Authorino, Gateway, LLM models)
+#    Use the install script — it detects existing Kuadrant monitors to avoid duplicates:
+./scripts/observability/install-observability.sh
+
+# 3. Grafana dashboards (discovers Grafana instance cluster-wide)
+./scripts/observability/install-grafana-dashboards.sh
+
+# 4. (Optional) Standalone Prometheus — only if NOT using OpenShift User Workload Monitoring
+kustomize build deployment/components/observability/observability | kubectl apply -f -
+
+# 5. (Optional) Perses dashboards
+kustomize build deployment/components/observability/observability/dashboards | kubectl apply -f -
+```
 
 When using the full deployment script, this is applied automatically:
 
-    ./scripts/deploy.sh
+```bash
+./scripts/deploy.sh
+```
 
 !!! note "Prerequisites"
     - **Tools**: `kubectl`, `kustomize`, `jq`, `yq` must be installed
     - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and subscription selection must be deployed first. The AuthPolicy injects `X-MaaS-Subscription`, which Istio Telemetry reads to label latency by subscription. Without it, the `subscription` label on gateway latency will be empty.
     - **Namespace**: Use `--namespace` if your MaaS API is deployed to a namespace other than `maas-api` (e.g. `--namespace opendatahub`)
 
-**Optional:** The Istio gateway (Envoy) ServiceMonitor is included in `deployment/base/observability/` and deployed automatically by `install-observability.sh`.
+#### Operator vs Kustomize Drift Reference
+
+When updating manifests in `deployment/base/observability/` or `deployment/components/observability/`, check whether the operator path produces equivalent resources. Drift between the two is expected in some areas (e.g., the standalone Prometheus stack has no operator equivalent) but should be tracked for the telemetry CRs and ServiceMonitors.
+
+| Resource | Kustomize source | Operator creates? | Notes |
+|----------|-----------------|-------------------|-------|
+| TelemetryPolicy | `base/observability/gateway-telemetry-policy.yaml` | Yes | Keep in sync — labels must match |
+| Istio Telemetry | `base/observability/istio-gateway-telemetry.yaml` | Yes | Keep in sync — header extraction must match |
+| Limitador ServiceMonitor | `base/observability/limitador-servicemonitor.yaml` | Kuadrant PodMonitor when `observability.enable: true` | Script skips ours if Kuadrant's exists |
+| Authorino /server-metrics | `base/observability/authorino-server-metrics-servicemonitor.yaml` | Not yet (Kuadrant only scrapes `/metrics`) | MaaS supplements the operator gap |
+| Istio Gateway ServiceMonitor | `base/observability/istio-gateway-servicemonitor.yaml` | No | MaaS-only; applied conditionally |
+| Grafana Dashboards | `components/observability/grafana/` | No | Same CRs used in both paths |
+| Standalone Prometheus | `components/observability/prometheus/` | No (uses OpenShift UWM instead) | Dev/test only — not for production |
+| Perses Dashboards | `components/observability/observability/dashboards/` | No | Optional in both paths |
+
+#### Keeping Docs Accurate
+
+When you change any YAML under `deployment/base/observability/` or `deployment/components/observability/`:
+
+1. Verify the build still passes: `kustomize build <dir> | kubectl apply --dry-run=client -f -`
+2. Update the **entrypoint map table above** if you add, remove, or rename an entrypoint
+3. Update this document if the change affects user-facing instructions (metrics, ServiceMonitor behavior, dashboard content)
 
 ## Metrics Collection
 
@@ -125,7 +428,7 @@ MaaS supports three model serving backends that expose Prometheus metrics on `/m
 
 - **vLLM** (current stable) — full-featured LLM inference server
 - **llm-d** — llm-d inference platform (runs vLLM as backend + EPP routing layer)
-- **llm-d-inference-sim** (v0.7.1) — lightweight simulator for testing without GPUs
+- **llm-d-inference-sim** (v0.8.2) — lightweight simulator for testing without GPUs
 
 **Supported versions:**
 
@@ -133,7 +436,7 @@ MaaS supports three model serving backends that expose Prometheus metrics on `/m
 |---------|----------------|------------------|
 | vLLM | v0.7.x stable | — |
 | llm-d | v0.1.x | — |
-| llm-d-inference-sim | **v0.7.1** | `docs/samples/models/simulator/` |
+| llm-d-inference-sim | **v0.8.2** | `docs/samples/models/simulator/` |
 
 #### vLLM Metrics (port 8000)
 
@@ -163,7 +466,7 @@ All three backends expose `vllm:`-prefixed metrics. The table below shows which 
 | `vllm:time_per_output_token_seconds` | Histogram | Y | — | — | Legacy ITL name (kept by simulator for backward compat; not used by dashboards) |
 
 !!! note "Simulator metric alignment"
-    As of v0.7.1, the simulator fully aligns with current vLLM metric names (`kv_cache_usage_perc`, `inter_token_latency_seconds`, `prompt_tokens_total`, `generation_tokens_total`). Older simulator versions (v0.6.x) used different names (`gpu_cache_usage_perc`, `time_per_output_token_seconds`) and are **no longer supported** by MaaS dashboards. The simulator also exposes additional metrics not used by MaaS dashboards (e.g. `request_inference_time_seconds`, `request_params_max_tokens`).
+    As of v0.7.1 (still true in v0.8.x), the simulator fully aligns with current vLLM metric names (`kv_cache_usage_perc`, `inter_token_latency_seconds`, `prompt_tokens_total`, `generation_tokens_total`). Older simulator versions (v0.6.x) used different names (`gpu_cache_usage_perc`, `time_per_output_token_seconds`) and are **no longer supported** by MaaS dashboards. The simulator also exposes additional metrics not used by MaaS dashboards (e.g. `request_inference_time_seconds`, `request_params_max_tokens`).
 
 !!! note "Lazily registered metrics"
     Some vLLM/simulator metrics are **lazily registered** — they only appear in `/metrics` output after the first event that triggers them. For example, `request_queue_time_seconds` (on real vLLM) only appears after a request actually queues (when `max-num-seqs` is exceeded). Similarly, histogram counters like `e2e_request_latency_seconds` only appear after the first inference request completes. Dashboard panels will show "No Data" until sufficient traffic has been generated. This is normal Prometheus client behavior, not a configuration issue.
@@ -195,7 +498,7 @@ When using llm-d, the inference gateway's Endpoint Picker (EPP) exposes addition
 
 #### Dashboard Metric Queries
 
-Dashboard panels use histogram `_sum` as primary data source. All queries work across vLLM, llm-d, and llm-d-inference-sim v0.7.1:
+Dashboard panels use histogram `_sum` as primary data source. All queries work across vLLM, llm-d, and llm-d-inference-sim v0.8.2:
 
 | Panel | PromQL metric |
 |-------|---------------|
@@ -464,6 +767,14 @@ The MaaS Platform uses an Istio Telemetry resource to add a `subscription` dimen
     # Users hitting rate limits most
     topk(10, sum by (user) (limited_calls))
 
+**Latency metrics** (per-subscription SLA tracking):
+
+    # P99 latency per subscription
+    histogram_quantile(0.99, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=""}[5m])))
+
+    # P50 latency per subscription
+    histogram_quantile(0.5, sum by (subscription, le) (rate(istio_request_duration_milliseconds_bucket{subscription!=""}[5m])))
+
 **Latency queries:**
 
     # P99 latency by service
@@ -503,6 +814,7 @@ Some features require upstream changes and are currently blocked:
 | **`model` label on `authorized_calls` / `limited_calls`** | Kuadrant wasm-shim does not pass `responseBodyJSON` context for these counters | Use `authorized_hits` for per-model breakdown; `authorized_calls`/`limited_calls` support per-user and per-subscription |
 | **Input/output token split** | Kuadrant TokenRateLimitPolicy sends a single `hits_addend` (total tokens); no mechanism for separate prompt/completion counters | Total tokens available via `authorized_hits`; the response body contains `usage.prompt_tokens` and `usage.completion_tokens` but the wasm-shim does not split them |
 | **Input/output token breakdown per user** | vLLM does not label its own metrics with `user` | Total tokens per user available via `authorized_hits{user="..."}`; vLLM prompt/generation token metrics are per-model only |
+| **Rate-limited requests not in Istio metrics** | When the Kuadrant WASM plugin rejects a request (429), it calls `sendLocalReply()` which short-circuits the Envoy filter chain. These requests appear in Limitador metrics (`limited_calls`) but may not appear in Istio gateway metrics. | Use `limited_calls` from Limitador for rate-limiting visibility (has correct `subscription` and `user` labels). |
 | **Kuadrant policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` etc. are defined in Kuadrant dev but not yet shipped in RHCL 1.x | Enable `observability.enable: true` on the Kuadrant CR; the ServiceMonitors are created but policy-specific gauges will appear in a future operator release |
 | **Authorino auth server metrics (upstream)** | The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime); `/server-metrics` is not scraped by the upstream operator | **Resolved by MaaS**: The `authorino-server-metrics` ServiceMonitor (deployed by `install-observability.sh`) scrapes `/server-metrics`. Auth evaluation latency and success/deny rate are visualized in the Platform Admin dashboard. |
 | **maas-api application metrics** | The maas-api Go service does not expose a `/metrics` endpoint | No workaround available. Metrics such as API key creation rate, token issuance rate, model discovery latency, and handler durations require adding Prometheus instrumentation to the Go service (e.g. `promhttp` handler, custom counters/histograms). |

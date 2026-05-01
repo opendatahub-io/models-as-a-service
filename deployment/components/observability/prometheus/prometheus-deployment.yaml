@@ -19,6 +19,7 @@ spec:
   serviceAccountName: models-aas-observability
   version: v2.22.1
   serviceMonitorSelector: {}
+  podMonitorSelector: {}
 ---
 apiVersion: v1
 kind: Service

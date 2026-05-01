@@ -44,6 +44,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 5. **Rate limiting not working**: Verify AuthPolicy and TokenRateLimitPolicy are applied
       - [ ] Verify `gateway-rate-limits` RateLimitPolicy is applied
       - [ ] Verify TokenRateLimitPolicy is applied (e.g. gateway-default-deny or per-route policies)
+      - [ ] If **multiple** TokenRateLimitPolicies target the **same** HTTPRoute, see [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md)
       - [ ] Verify the model is deployed and the `LLMInferenceService` has the `maas-default-gateway` gateway specified
       - [ ] Verify that the model is rate limited by checking the inference endpoint (see [Validation Guide - Test Rate Limiting](validation.md#6-test-rate-limiting))
       - [ ] Verify that the model is token rate limited by checking the inference endpoint (see [Validation Guide - Test Rate Limiting](validation.md#6-test-rate-limiting))
@@ -51,7 +52,50 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Verify Gateway is in `Programmed` state: `kubectl get gateway -n openshift-ingress maas-default-gateway`
       - [ ] Check HTTPRoute configuration and status
 
+7. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
+      - [ ] Verify User Workload Monitoring is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#user-workload-monitoring)
+      - [ ] Verify Kuadrant observability is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#kuadrant-observability)
+      - [ ] Check prometheus-user-workload pods are running:
+
+      ```bash
+      kubectl get pods -n openshift-user-workload-monitoring
+      ```
+
+      - [ ] Verify ServiceMonitors/PodMonitors exist:
+
+      ```bash
+      kubectl get servicemonitor,podmonitor -A | grep -E "(maas|kuadrant|limitador)"
+      ```
+
+8. **Rate limiting metrics missing (authorized_calls, limited_calls)**: Kuadrant observability is not enabled.
+      - [ ] Enable observability on Kuadrant CR:
+
+      ```bash
+      kubectl patch kuadrant kuadrant -n kuadrant-system --type=merge \
+        -p '{"spec":{"observability":{"enable":true}}}'
+      ```
+
+      - [ ] Verify the PodMonitor was created:
+
+      ```bash
+      kubectl get podmonitor -n kuadrant-system
+      ```
+
+9. **RHOAI Dashboard Observability tab returns `503 Service Unavailable`**: The Dashboard cannot reach the Perses backend.
+
+      The error typically appears as `{"statusCode": 503, "code": "FST_REPLY_FROM_SERVICE_UNAVAILABLE", ...}`.
+      This is a Fastify/Dashboard-level error (not a gateway 503) indicating the monitoring stack
+      is not deployed or Perses is not running. The most common causes are missing operators (COO,
+      OpenTelemetry) or DSCI `monitoring.metrics` not being configured.
+
+      See [RHOAI Dashboard Observability Tab](../advanced-administration/observability.md#rhoai-dashboard-observability-tab) for the full prerequisites and verification checklist.
+
+10. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
+
+      See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
+
 ## Additional Resources
 
 - [Validation Guide](validation.md) — Manual validation steps
+- [Observability Guide](../advanced-administration/observability.md) — Metrics, monitoring, and dashboards
 - [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md) — Deployment scripts documentation

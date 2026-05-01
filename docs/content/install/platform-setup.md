@@ -216,6 +216,16 @@ Now install the Gateway API controller for your platform:
     EOF
     ```
 
+    !!! note "Rate limiting when Limitador is unavailable"
+        If the Limitador service is unavailable, rate limits may not be enforced unless the Kuadrant operator is configured to deny traffic on failure. Set `RATELIMIT_CHECK_SERVICE_FAILURE_MODE` and `RATELIMIT_REPORT_SERVICE_FAILURE_MODE` to `deny` on the operator Subscription (`spec.config.env`). Add them next to `ISTIO_GATEWAY_CONTROLLER_NAMES`, or apply the patch after install:
+
+        ```shell
+        kubectl patch subscription kuadrant-operator -n kuadrant-system --type='json' -p='[
+          {"op":"add","path":"/spec/config/env/-","value":{"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"}},
+          {"op":"add","path":"/spec/config/env/-","value":{"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}}
+        ]'
+        ```
+
     Wait for the subscription to install successfully:
 
     ```shell
@@ -271,6 +281,18 @@ Now install the Gateway API controller for your platform:
       sourceNamespace: openshift-marketplace
     EOF
     ```
+
+    !!! note "Rate limiting when Limitador is unavailable"
+        If the Limitador service is unavailable, rate limits may not be enforced unless the Kuadrant operator is configured to deny traffic on failure. Set `RATELIMIT_CHECK_SERVICE_FAILURE_MODE` and `RATELIMIT_REPORT_SERVICE_FAILURE_MODE` to `deny` on the operator Subscription (`spec.config.env`). Add a `config` section with those two variables before applying, or patch after install:
+
+        ```shell
+        kubectl patch subscription kuadrant-operator -n kuadrant-system --type='json' -p='[
+          {"op":"add","path":"/spec/config","value":{"env":[
+            {"name":"RATELIMIT_CHECK_SERVICE_FAILURE_MODE","value":"deny"},
+            {"name":"RATELIMIT_REPORT_SERVICE_FAILURE_MODE","value":"deny"}
+          ]}}
+        ]'
+        ```
 
     Wait for the subscription to install successfully:
 
@@ -366,6 +388,12 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
     kubectl wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/opendatahub-operator -n openshift-operators --timeout=300s
     ```
 
+    Wait for the operator webhook to be ready:
+
+    ```shell
+    kubectl wait --for=condition=Available --timeout=120s deployment/opendatahub-operator-controller-manager -n openshift-operators
+    ```
+
     Initialize the ODH platform with DSCInitialization:
 
     ```yaml
@@ -383,13 +411,6 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
       trustedCABundle:
         managementState: Managed
     EOF
-    ```
-
-    Wait for the operator webhook to be ready:
-
-    ```shell
-    
-    
     ```
 
 === "Red Hat OpenShift AI"
@@ -433,7 +454,7 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
     Wait for the operator webhook to be ready:
 
     ```shell
-    kubectl wait --for=condition=Available --timeout=120s deployment/rhods-operator-controller-manager -n redhat-ods-operator
+    kubectl wait --for=condition=Available --timeout=120s deployment/rhods-operator -n redhat-ods-operator
     ```
 
     Once ready, the RHOAI Operator automatically creates a `DSCInitialization` resource.

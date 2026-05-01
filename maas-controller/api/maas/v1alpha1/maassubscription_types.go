@@ -74,12 +74,19 @@ type ModelSubscriptionRef struct {
 
 // TokenRateLimit defines a token rate limit
 type TokenRateLimit struct {
-	// Limit is the maximum number of tokens allowed
+	// Limit is the maximum number of tokens allowed within the window.
+	// Must be between 1 and 1,000,000,000 (1 billion).
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000000000
 	Limit int64 `json:"limit"`
 
-	// Window is the time window (e.g., "1m", "1h", "24h")
-	// +kubebuilder:validation:Pattern=`^(\d+)(s|m|h|d)$`
+	// Window is the time window for rate limiting (e.g., "1m", "1h", "24h").
+	// Allowed units: s (seconds), m (minutes), h (hours). Days (d) are not
+	// supported; use hours instead (e.g., "24h" for one day).
+	// The numeric part must be between 1 and 9999.
+	// +kubebuilder:validation:MinLength=2
+	// +kubebuilder:validation:MaxLength=5
+	// +kubebuilder:validation:Pattern=`^[1-9]\d{0,3}(s|m|h)$`
 	Window string `json:"window"`
 }
 
@@ -104,15 +111,36 @@ type TokenMetadata struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
+// ModelRefStatus reports the status of a referenced MaaSModelRef.
+type ModelRefStatus struct {
+	ResourceRefStatus `json:",inline"`
+}
+
+// TokenRateLimitStatus reports the status of a generated TokenRateLimitPolicy.
+type TokenRateLimitStatus struct {
+	ResourceRefStatus `json:",inline"`
+	// Model is the MaaSModelRef name this TokenRateLimitPolicy targets
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Model string `json:"model"`
+}
+
 // MaaSSubscriptionStatus defines the observed state of MaaSSubscription
 type MaaSSubscriptionStatus struct {
 	// Phase represents the current phase of the subscription
-	// +kubebuilder:validation:Enum=Pending;Active;Failed
-	Phase string `json:"phase,omitempty"`
+	Phase Phase `json:"phase,omitempty"`
 
 	// Conditions represent the latest available observations of the subscription's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ModelRefStatuses reports the status of each referenced MaaSModelRef
+	// +optional
+	ModelRefStatuses []ModelRefStatus `json:"modelRefStatuses,omitempty"`
+
+	// TokenRateLimitStatuses reports the status of each generated TokenRateLimitPolicy
+	// +optional
+	TokenRateLimitStatuses []TokenRateLimitStatus `json:"tokenRateLimitStatuses,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -126,7 +154,7 @@ type MaaSSubscription struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   MaaSSubscriptionSpec   `json:"spec,omitempty"`
+	Spec   MaaSSubscriptionSpec   `json:"spec"`
 	Status MaaSSubscriptionStatus `json:"status,omitempty"`
 }
 

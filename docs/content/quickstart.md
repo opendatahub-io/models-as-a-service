@@ -9,12 +9,6 @@ This guide provides quickstart instructions for deploying the MaaS Platform infr
 
 - **OpenShift cluster** (4.19.9+) with kubectl/oc access
       - **Recommended** 16 vCPUs, 32GB RAM, 100GB storage
-- **ODH/RHOAI requirements**:
-      - RHOAI 3.0 +
-      - ODH 3.0 +
-- **RHCL requirements** (Note: This can be installed automatically by the script below):
-      - RHCL 1.2 +
-- **Authorino TLS**: Listener TLS must be enabled on Authorino (see [Configure Authorino TLS](#configure-authorino-tls))
 - **Cluster admin** or equivalent permissions
 - **Required tools**:
       - `oc` (OpenShift CLI)
@@ -22,17 +16,6 @@ This guide provides quickstart instructions for deploying the MaaS Platform infr
       - `jq`
       - `kustomize` (v5.7.0+)
       - `gsed` (GNU sed) - **macOS only**: `brew install gnu-sed`
-
-## Configure Authorino TLS
-
-Before deploying MaaS, Authorino's listener TLS must be enabled. This is a platform prerequisite for secure `LLMInferenceService` communication:
-
-- **Gateway → Authorino (Listener TLS)**: Enable TLS on Authorino's gRPC listener for incoming authentication requests
-
-For step-by-step commands, see [TLS Configuration: Authorino TLS Configuration](configuration-and-management/tls-configuration.md#authorino-tls-configuration).
-
-!!! tip "Automated configuration"
-    The `deploy.sh` script automatically configures all remaining TLS settings after deployment, including Gateway TLS bootstrap and Authorino → maas-api outbound TLS.
 
 ## Quick Start
 
@@ -87,12 +70,13 @@ For OpenShift clusters, use the unified automated deployment script. Choose your
 The deployment script creates the following core resources:
 
 - **Gateway**: `maas-default-gateway` in `openshift-ingress` namespace
-- **HTTPRoutes**: `maas-api-route` in the `redhat-ods-applications` namespace (deployed by operator)
+- **HTTPRoutes**: `maas-api-route` in the application namespace (deployed by Tenant reconciler)
 - **Policies**:
-  - `maas-api-auth-policy` (deployed by operator) - Protects MaaS API
-  - `gateway-auth-policy` (deployed by script) - Protects Gateway/model inference
-  - `TokenRateLimitPolicy`, `RateLimitPolicy` (deployed by script) - Usage limits
-- **MaaS API**: Deployment and service in `redhat-ods-applications` namespace (deployed by operator)
+  - `maas-api-auth-policy` (deployed by Tenant reconciler) - Protects MaaS API
+  - `gateway-default-auth` (deployed by Tenant reconciler) - Denies unauthenticated traffic
+  - `gateway-default-deny` (deployed by Tenant reconciler) - Denies unsubscribed traffic
+- **MaaS API**: Deployment and service in the application namespace (deployed by Tenant reconciler)
+- **Tenant CR**: `default-tenant` in `models-as-a-service` namespace (self-bootstrapped by maas-controller)
 - **Operators**: Cert-manager, LWS, Red Hat Connectivity Link and Red Hat OpenShift AI.
 
 Check deployment status:
@@ -109,20 +93,21 @@ kubectl get authpolicy -A
 kubectl get tokenratelimitpolicy -A
 kubectl get ratelimitpolicy -A
 
-# Check MaaS API (deployed by operator in redhat-ods-applications)
-kubectl get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
-kubectl get svc -n redhat-ods-applications maas-api
+# Check MaaS API (deployed by Tenant reconciler in the application namespace)
+# APP_NS is "opendatahub" for ODH or "redhat-ods-applications" for RHOAI
+kubectl get pods -n ${APP_NS} -l app.kubernetes.io/name=maas-api
+kubectl get svc -n ${APP_NS} maas-api
 
 # Check Kuadrant operators
 kubectl get pods -n kuadrant-system
 
+# Check Tenant CR
+kubectl get tenant default-tenant -n models-as-a-service
+
 # Check RHOAI/KServe
 kubectl get pods -n kserve
-kubectl get pods -n redhat-ods-applications
+kubectl get pods -n ${APP_NS}
 ```
-
-!!! tip "TLS Configuration"
-    TLS is enabled by default. See [TLS Configuration](configuration-and-management/tls-configuration.md) for details.
 
 For detailed validation and troubleshooting, see the [Validation Guide](install/validation.md).
 

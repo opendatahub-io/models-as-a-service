@@ -8,3 +8,5 @@ resources:
 - serviceaccount.yaml
 - clusterrole.yaml
 - clusterrolebinding.yaml
+- supplemental-clusterrole.yaml
+- supplemental-clusterrolebinding.yaml

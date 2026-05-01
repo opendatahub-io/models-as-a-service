@@ -1,0 +1,14 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: granite-3-1-8b-starter
+  namespace: llm
+  annotations:
+    openshift.io/display-name: "IBM Granite 3.1 8B Instruct (RHEL AI model car + vLLM CPU)"
+    openshift.io/description: "MaaS model ref for LLMIS from docs/samples/models/granite-3-1-8b-rhelai-modelcar (kustomize namePrefix + single-node-cpu)."
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    # kustomize build docs/samples/models/granite-3-1-8b-rhelai-modelcar → granite-3-1-8b-rhelai-modelcar-single-node-cpu
+    name: granite-3-1-8b-rhelai-modelcar-single-node-cpu
+    namespace: llm

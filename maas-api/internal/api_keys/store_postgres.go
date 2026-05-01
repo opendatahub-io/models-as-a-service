@@ -221,7 +221,9 @@ func (s *PostgresStore) Search(
 		argPos++
 	}
 
-	// Filter by status
+	// Filter by effective status (accounts for expired keys still stored as 'active')
+	// Use CASE expression to compute effective status at query time
+	effectiveStatusExpr := "CASE WHEN status = 'active' AND expires_at IS NOT NULL AND expires_at < NOW() THEN 'expired' ELSE status END"
 	if len(filters.Status) > 0 {
 		placeholders := make([]string, len(filters.Status))
 		for i, status := range filters.Status {
@@ -229,7 +231,7 @@ func (s *PostgresStore) Search(
 			args = append(args, strings.TrimSpace(status))
 			argPos++
 		}
-		whereClauses = append(whereClauses, fmt.Sprintf("status IN (%s)", strings.Join(placeholders, ",")))
+		whereClauses = append(whereClauses, fmt.Sprintf("(%s) IN (%s)", effectiveStatusExpr, strings.Join(placeholders, ",")))
 	}
 
 	// Build final WHERE clause
@@ -253,14 +255,17 @@ func (s *PostgresStore) Search(
 	// Fetch one extra to determine hasMore
 	fetchLimit := pagination.Limit + 1
 
+	// Use effective status in SELECT to match WHERE clause filtering
+	effectiveStatusSelect := "CASE WHEN status = 'active' AND expires_at IS NOT NULL AND expires_at < NOW() THEN 'expired' ELSE status END"
+
 	//nolint:gosec // Dynamic ORDER BY is safe - sort.By/Order validated against allowlist in handler
 	query := fmt.Sprintf(`
-		SELECT id, name, description, subscription, username, created_at, expires_at, status, last_used_at, ephemeral
+		SELECT id, name, description, subscription, username, created_at, expires_at, %s AS status, last_used_at, ephemeral
 		FROM api_keys
 		%s
 		%s
 		LIMIT $%d OFFSET $%d
-	`, whereClause, orderByClause, argPos, argPos+1)
+	`, effectiveStatusSelect, whereClause, orderByClause, argPos, argPos+1)
 
 	args = append(args, fetchLimit, pagination.Offset)
 
@@ -328,8 +333,11 @@ func (s *PostgresStore) Search(
 
 // Get retrieves a single API key by ID.
 func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
+	// Use effective status to return 'expired' for keys past expiration date
 	query := `
-		SELECT id, name, description, username, subscription, created_at, expires_at, status, last_used_at, ephemeral
+		SELECT id, name, description, username, subscription, created_at, expires_at,
+			CASE WHEN status = 'active' AND expires_at IS NOT NULL AND expires_at < NOW() THEN 'expired' ELSE status END AS status,
+			last_used_at, ephemeral
 		FROM api_keys
 		WHERE id = $1
 	`

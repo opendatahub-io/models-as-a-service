@@ -1,6 +1,6 @@
 # Quota and Access Configuration
 
-This guide provides step-by-step instructions for configuring MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription. For conceptual overview, see [Access and Quota Overview](subscription-overview.md) and [MaaS Models](maas-models.md).
+This guide provides step-by-step instructions for configuring MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription. For conceptual overview, see [Access and Quota Overview](../concepts/subscription-overview.md) and [Model Reference](../concepts/model-reference.md).
 
 ## Prerequisites
 
@@ -136,11 +136,50 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
 [[ -n "$TRLP" ]] && kubectl wait --for=condition=Enforced=true tokenratelimitpolicy/${TRLP} -n ${MODEL_NS} --timeout=120s
 ```
 
+!!! warning "Multiple model references on one HTTPRoute"
+    More than one **MaaSModelRef** on the same route can break independent per-subscription limits. Only one **TokenRateLimitPolicy** is fully effective at the gateway. For **MaaSSubscription** readiness, the controller checks each TRLP's **`Accepted`** condition; Kuadrant may still show **`Enforced`** and **`Overridden`** (or similar **`reason`**) when policies conflict on one route.
+    
+    **Detection:**
+    
+    List TRLPs that target an HTTPRoute, then inspect **`Accepted`** (controller readiness) and **`Enforced`** (gateway application):
+    
+    ```bash
+    # List TRLPs that target an HTTPRoute (namespace/name → route name)
+    kubectl get tokenratelimitpolicy -A -o json | jq -r '.items[] | select(.spec.targetRef.kind=="HTTPRoute") | "\(.metadata.namespace)/\(.metadata.name) → \(.spec.targetRef.name)"' | sort
+    
+    # Accepted + Enforced condition status per TRLP (needs jq; if this fails, use kubectl describe on each TRLP)
+    kubectl get tokenratelimitpolicy -A -o json | jq -r '
+      .items[] | select(.spec.targetRef.kind == "HTTPRoute")
+      | . as $i
+      | (($i.status.conditions // []) | map(select(.type == "Accepted")) | .[0]) as $a
+      | (($i.status.conditions // []) | map(select(.type == "Enforced")) | .[0]) as $e
+      | [
+          $i.metadata.namespace,
+          $i.metadata.name,
+          $i.spec.targetRef.name,
+          (($a // {}) | .status // "?"),
+          (($e // {}) | .status // "?"),
+          (($e // {}) | .reason // "")
+        ] | @tsv'
+    ```
+    
+    **How to recognize it:** Several TRLPs share the same `spec.targetRef.name`. Compare **`Accepted`** (what the MaaS controller uses for subscription readiness) and **`Enforced`** / **`reason`** (for example **`Overridden`**) on each policy—one route may show one TRLP fully effective and others superseded.
+    
+    **Workarounds:**
+    
+    - **Dedicated routes per model** — Deploy each model with its own HTTPRoute to ensure independent rate limiting
+    - **Shared subscription design** — If models share an **HTTPRoute**, use **one** **MaaSSubscription** that lists every **MaaSModelRef** on that route so you are not applying **different** subscription limits to the same route. The controller may still create **one TRLP per model ref**; **prefer dedicated routes** when each subscription must enforce limits independently until **Tracking** below ships.
+    - **Shared route limitations** — If **multiple** **MaaSModelRef** resources target the **same** **HTTPRoute**, you still get **multiple TRLPs**; grouping models on shared routes does **not** avoid this limitation. This pattern is **only** appropriate when **every** model on the route is meant to share **one** **MaaSSubscription** (and access policy)—**not** when different teams or subscriptions each register their own model refs on one route. If you need **separate** subscriptions with **separate** limits on the same route, use **dedicated routes per model**.
+    
+    **Status:** This limitation **remains in Models-as-a-Service v3.4**. The fix requiring merge strategy support for TokenRateLimitPolicy is not included. Plan your model deployment topology accordingly.
+    
+    **Tracking:** [opendatahub-io/models-as-a-service#585](https://github.com/opendatahub-io/models-as-a-service/pull/585) proposes the controller change for coexisting token rate limit policies on a shared route.
+    
 !!! note "Namespace requirements"
     Both **MaaSAuthPolicy** and **MaaSSubscription** must be installed in the `models-as-a-service` namespace. Each `modelRefs` entry must specify the `namespace` where the MaaSModelRef lives (e.g. `llm`).
 
 !!! warning "Using the `users` field"
-    The `subjects.users` (MaaSAuthPolicy) and `owner.users` (MaaSSubscription) fields should be used only for **Service Accounts** and similar programmatic identities, not for many individual human users. Having too many distinct users can cause [cardinality issues](../advanced-administration/subscription-cardinality.md) in rate limiting and policy enforcement. Prefer `groups` for human users.
+    The `subjects.users` (MaaSAuthPolicy) and `owner.users` (MaaSSubscription) fields should be used only for **Service Accounts** and similar programmatic identities, not for many individual human users. Having too many distinct users can cause cardinality issues in rate limiting and policy enforcement. Prefer `groups` for human users.
 
 **Premium example** with higher limits:
 
@@ -218,7 +257,7 @@ Users will get subscription access on their next request (after group membership
 
 ## Multiple Subscriptions per User
 
-When a user belongs to multiple groups that each have a subscription, the access depends on the API key used. A subscription is bound to each API key at minting (explicit or highest priority). See [Understanding Token Management](token-management.md).
+When a user belongs to multiple groups that each have a subscription, the access depends on the API key used. A subscription is bound to each API key at minting (explicit or highest priority). See [API Key Management](../user-guide/api-key-management.md).
 
 ## Troubleshooting
 
@@ -257,7 +296,7 @@ kubectl wait --for=condition=Enforced=true tokenratelimitpolicy/<policy-name> -n
 
 ## Related Documentation
 
-- [Access and Quota Overview](subscription-overview.md) — How policies and subscriptions work together
-- [MaaS Models](maas-models.md) — Conceptual overview
-- [Token Management](token-management.md)
+- [Access and Quota Overview](../concepts/subscription-overview.md) — How policies and subscriptions work together
+- [Model Reference](../concepts/model-reference.md) — Conceptual overview
+- [API Key Management](../user-guide/api-key-management.md)
 - [Validation](../install/validation.md)
