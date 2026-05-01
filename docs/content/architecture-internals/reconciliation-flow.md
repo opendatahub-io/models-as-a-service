@@ -97,7 +97,7 @@ graph TB
 
 **Opt-out annotation:**
 ```yaml
-apiVersion: kuadrant.io/v1beta2
+apiVersion: kuadrant.io/v1
 kind: AuthPolicy
 metadata:
   annotations:
@@ -122,7 +122,7 @@ metadata:
 
 **Opt-out annotation:**
 ```yaml
-apiVersion: kuadrant.io/v1beta2
+apiVersion: kuadrant.io/v1alpha1
 kind: TokenRateLimitPolicy
 metadata:
   annotations:
