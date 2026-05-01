@@ -80,4 +80,4 @@ Then verify with the **`--subresource=finalizers`** command above, not the slash
 ## Related
 
 - [Namespace user permissions (RBAC)](namespace-rbac.md)
-- [MaaS controller overview](maas-controller-overview.md)
+- [Controller Architecture](../architecture-internals/controller-architecture.md)

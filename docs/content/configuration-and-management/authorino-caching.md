@@ -103,4 +103,4 @@ For immediate enforcement after changes:
 ## References
 
 - [AuthPolicy Reference](https://docs.kuadrant.io/latest/kuadrant-operator/doc/reference/authpolicy/)
-- [MaaS Controller Overview](./maas-controller-overview.md)
+- [Controller Architecture](../architecture-internals/controller-architecture.md)

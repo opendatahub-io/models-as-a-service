@@ -104,5 +104,5 @@ echo '{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","spec":{"tok
 
 - [Controller Architecture](./controller-architecture.md)
 - [Reconciliation Flow](./reconciliation-flow.md)
-- [Controller Overview (hub)](../configuration-and-management/maas-controller-overview.md)
 - [Access and Quota Overview](../concepts/subscription-overview.md)
+- [MaaS Setup](../install/maas-setup.md)
