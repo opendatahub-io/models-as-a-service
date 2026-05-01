@@ -225,9 +225,9 @@ Replace `<application-namespace>` with your ODH/RHOAI application namespace
 (`opendatahub` or `redhat-ods-applications`).
 
 !!! note
-    In a managed MaaS deployment, the HTTPRoute for maas-api is created
-    automatically by maas-controller. You only need to create it manually for
-    kustomize-based or custom deployments.
+    The HTTPRoute for maas-api is created automatically by maas-controller
+    by default. You only need to create it manually if you are not using
+    maas-controller.
 
 ### Apply
 
