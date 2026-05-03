@@ -1243,17 +1243,18 @@ sum by (user_id, subscription, model) (sum_over_time({kubernetes_namespace_name=
    **Result**: `[$range]` + `calculation: last` is the only approach that gives **exact, correct values** from Loki. Each evaluation step computes the aggregate over the full `[$range]` window; `calculation: last` takes the last step's value (at time=now), which counts every log entry exactly once. The `$range` dropdown controls the lookback window for all panels.
    Fallbacks: `or vector(0)` on all stat panels; `or vector(1)` on Success Rate — show 0 / 100% instead of "No data" when the selected window has no activity.
    **Usage Dashboard — `subscription` and `model` filters (StaticListVariable; separate from `$range`):**
-   Perses does **not** expose a variable that discovers label values from Loki (no `LokiLabelValuesVariable`-style support for stream labels). The Usage dashboard therefore uses `**StaticListVariable`** for **Subscription** and **Model**, with `**values:`** hardcoded in `deployment/components/observability/perses/dashboards/dashboard-usage.yaml`.
+   Perses does **not** have a variable plugin that discovers label values from Loki. **`LokiLabelValuesVariable` does not exist** — not in the Red Hat COO 1.4.0 build, not in upstream Perses open source. The upstream Loki plugin ([perses/plugins/loki](https://github.com/perses/plugins/tree/main/loki)) registers only three plugin kinds: `LokiDatasource`, `LokiTimeSeriesQuery`, `LokiLogQuery` — there is no `variables/` schema directory at all. (Contrast with the Prometheus plugin which ships `PrometheusLabelValuesVariable` and `PrometheusLabelNamesVariable`.) **Validated 2026-05-03:** zero code search hits for "LokiLabelValuesVariable" across `perses/plugins` and `perses/perses` GitHub repos; the [Loki plugin model docs](https://perses.dev/plugins/docs/loki/model/) confirm only the three kinds above; the deployed Perses instance (COO 1.4.0, Loki plugin v0.5.0-rc.1, image `registry.redhat.io/cluster-observability-operator/perses-rhel9@sha256:19b297...`) `/api/v1/plugins` endpoint lists the same three. This is not a Red Hat downstream limitation — upstream has simply not implemented Loki label-discovery variables.
+   The Usage dashboard therefore uses **`StaticListVariable`** for **Subscription** and **Model**, with **`values:`** hardcoded in `deployment/components/observability/perses/dashboards/dashboard-usage.yaml`.
    **Implication for operators:** New subscription or model strings that appear in production traffic **do not** automatically appear as new entries in those dropdowns. To let users **filter by a specific new name**, edit the dashboard YAML to add that string to the appropriate `values:` list and re-apply the `PersesDashboard`.
    **Mitigation for viewers:** Both variables use `**allowAllValue: true`** with default `**$__all`**. With **All** selected, queries still match **every** `subscription` / `model` in Loki — **new models and subscriptions are included** in aggregate stats and the table. The limitation applies only to **picking a single new name from the dropdown** until the manifest is updated.
-   **There is no in-Perses-only switch to autodiscover `model` / `subscription` from Loki into those dropdowns** with current Perses variable types. The following are the practical ways to **reduce** the pain (not mutually exclusive):
+   **There is no in-Perses-only switch to autodiscover `model` / `subscription` from Loki into those dropdowns.** This is a fundamental gap in upstream Perses — no open issue or PR exists for a Loki label-values variable as of 2026-05-03. The following are the practical ways to **reduce** the pain (not mutually exclusive):
 
   | Approach                       | What it does                                                                                                                                                                                                                     |
   | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
   | **Default `$__all`** (current) | Aggregates and table include **all** models/subscriptions without maintaining lists; no per-name filter until YAML is updated.                                                                                                   |
   | **External automation**        | CronJob, GitOps reconcile, or small controller calls Loki’s label API (or LogQL) and **patches** the `PersesDashboard` CR to refresh `StaticListVariable` `values:` — dropdown stays curated **without** manual YAML edits.      |
   | **Text / regex variable**      | Replace or supplement the Model list with a **TextVariable** (like the User filter) so operators type a model name or pattern — **no** autodiscovery, but **no** manifest edit for every new model when users can type the name. |
-  | **Upstream Perses**            | A future **Loki label-values** variable type (or equivalent) would remove the need for static lists — track Perses / `perses/plugins` releases.                                                                                  |
+  | **Upstream Perses**            | A future Loki label-values variable type would remove the need for static lists — track [perses/plugins](https://github.com/perses/plugins) releases. As of 2026-05-03 this feature does not exist and no issue/PR has been filed upstream. |
 
 2. **Upstream WASM shim issue -- token counts**: File at `kuadrant/wasm-shim` requesting `set_attribute()` for `body_values` in `TokenUsageTask` (would eliminate need for json_to_metadata filter)
 3. **Upstream WASM shim issue -- 429 headers**: Request WASM shim to inject auth response headers before evaluating rate limits, so `user_id` and `subscription` appear in access logs for 429 responses (see Limitation #5)
@@ -1315,11 +1316,47 @@ sum by (user_id, subscription, model) (sum_over_time({kubernetes_namespace_name=
   - **(b) User has requests but zero 429s**: The `or` zero-fill in Query 3 correctly returns `0` for users present in Query 1 (tokens) but absent from the 429 count.
   - **(c) Traffic without rate limits (Phase 2 validation)**: 3 inference requests sent via API key (HTTP/1.1 to avoid dual-listener bug). Loki confirmed: `kube:admin` / `simulator-subscription` → tokens > 0, 0 rate-limited requests. Dashboard stat panels showed correct values; table showed user with Rate Limited = 0.
   - **(d) Traffic with rate limits (Phase 3 validation)**: 20 rapid requests sent. 5 succeeded (114 tokens), 15 rate-limited (429). Loki confirmed exact counts. Dashboard stat panels and table validated (with `$range` dropdown).
-9. **Tenant isolation — end-to-end testing with real users**: The verification in item 7 used ServiceAccounts with controlled RBAC. TODO: test with actual OpenShift users (non-admin) to confirm:
-  - User A cannot see User B's data in the Usage Dashboard (Loki tenant isolation via forwarded bearer token)
-  - Users without `cluster-logging-application-view` see "permission denied" errors in Perses, not empty dashboards
-  - Admin users see all data across all users
-  - Verify RBAC behavior when user's group membership changes (e.g., removed from a subscription)
+9. ~~**Tenant isolation — end-to-end testing with real users**~~ → **INVESTIGATED (2026-05-03)**: The verification in item 7 used ServiceAccounts with controlled RBAC. Per-user isolation findings documented below.
+
+### Per-User Tenant Isolation — Findings (2026-05-03)
+
+**Problem:**
+The MaaS Usage Dashboard shows per-user data (token consumption, request counts, rate-limited requests). Any user who can view the tenant dashboard can change the `$user` filter and see other users' data. The user filter is a UI convenience, not a security boundary.
+
+**Current Isolation (What Works):**
+Two layers of namespace-scoped isolation are verified and working:
+- **Layer 1 — Perses RBAC**: Kubernetes RBAC on PersesDashboard CRDs gates dashboard visibility by namespace
+- **Layer 2 — Data backend RBAC**: Thanos prom-label-proxy enforces `namespace=kuadrant-system` on PromQL; LokiStack gateway OPA enforces `kubernetes_namespace_name` on LogQL
+
+**The Gap (Per-User Isolation):**
+Neither Prometheus nor Loki enforces per-user data filtering. Both enforce namespace only. The `user`/`user_id` filter passes through untouched in both paths. The upstream MaaS 3.4 Prometheus-based usage dashboard has this same gap — it was never solved there either.
+
+Both would require a component that: (1) extracts user identity from bearer token, (2) maps it to the query user field, (3) rewrites the query to enforce it. That component does not exist in OpenShift for either backend.
+
+**Perses Limitation:**
+Perses knows the authenticated user (via TokenReview) but cannot inject the identity into query variables. No `$__user` built-in exists. Open issue `perses/perses#3891` (Feb 2026) confirms this — maintainers acknowledged "we need a solution but it will not be simple." In OpenShift, Perses is embedded via `monitoring-console-plugin` which renders dashboards generically — no hook to pass user identity as a variable override.
+
+**LokiStack Gateway Limitation:**
+All four LokiStack gateway modes (`openshift-logging`, `openshift-network`, `static`, `dynamic`) enforce tenant-level and namespace-level access only. The OPA rego policy checks resource/permission/tenant — it does not inspect LogQL query content. The `--logs.auth.extract-selectors` flag is hardcoded in the operator to namespace labels only. No mode supports binding arbitrary labels (like `user_id`) to RBAC.
+
+**Investigated Workarounds:**
+
+| # | Approach | Assessment |
+|---|----------|-----------|
+| 1 | **LogQL-rewriting proxy between Perses and LokiStack (recommended — cleanest solution)** | A lightweight proxy that sits between Perses and the LokiStack gateway. On each request it: (1) extracts user identity from the forwarded bearer token via TokenReview, (2) parses the outgoing LogQL query, (3) injects `\| user_id="<authenticated_user>"` as a mandatory filter before forwarding to LokiStack. Enforces per-user data isolation server-side regardless of what the dashboard `$user` variable is set to — no UI changes, no Perses upstream dependency, no namespace-per-user scaling problem. **Cleanest solution** because it adds a single enforcement point without modifying any upstream component (Perses, LokiStack, OTel Collector) and works with both the current `StaticListVariable` and any future variable type. **Status:** No production-ready implementation exists in the OpenShift ecosystem today. Building one requires a LogQL AST parser and TokenReview integration — moderate effort (~2-3 weeks for a minimal Go service). Third-party options (loki-label-proxy, Janus) are either immature or AGPL-licensed, unsuitable for a Red Hat product. |
+| 2 | **Perses HTTPProxy token forwarding (current architecture — validated 2026-03-31)** | We validated that Perses' built-in HTTPProxy datasource proxy forwards the authenticated user's bearer token to the LokiStack gateway. The `loki-secret` contains only TLS CA config (no static SA token), so each user's Loki queries are gated by their own RBAC via the gateway's OPA policy. This gives namespace-level isolation (Layer 2 above) but does **not** enforce per-user filtering within that namespace. The OPA rego checks resource/permission/tenant only — it does not inspect LogQL query content or bind `user_id` labels to the authenticated identity. |
+| 3 | **Synthetic namespace per user** | OTel Collector sets `kubernetes_namespace_name` to `user_id` instead of `openshift-ingress`. **Rejected:** LokiStack OPA does SubjectAccessReview against real namespaces — synthetic ones fail. Would require creating a real namespace + RoleBinding per user. Same scalability problem shifted to namespace management. |
+| 4 | **Real namespace per user** | Each user gets a namespace + PersesDashboard + datasource + RoleBinding. **Rejected:** does not scale. Operational overhead grows linearly with user count. |
+
+**Resolution Options:**
+1. **Upstream Perses** — add `$__user` built-in variable bound to authenticated identity (`perses/perses#3891`)
+2. **Upstream monitoring-console-plugin** — pass user identity as variable override when initializing Perses dashboard context
+3. **LogQL-rewriting proxy** — build a lightweight Go proxy with TokenReview + LogQL AST rewriting (~2-3 weeks effort). Best option if per-user isolation becomes a hard requirement before upstream delivers.
+4. **Accept current state** — namespace isolation + dashboard RBAC; document that `$user` is a convenience filter, not a security boundary (matches MaaS 3.4 upstream behavior)
+
+**References:**
+- `docs/content/advanced-administration/perses-user-access-and-restriction.md` — security boundaries summary
+- `perses/perses#3891` — upstream issue for id_token passthrough
 10. **Dashboards — further review and hardening**: The current dashboards are functional but need additional review:
   - **AI Engineer + Platform Admin dashboards**: These were migrated from PromQL to LogQL but have not been validated end-to-end on the cluster with live traffic (only Usage Dashboard was fully validated). Run through all panels with real data and verify correctness.
     - **Usage Dashboard — fresh-cluster validation**: Deploy to a clean cluster with fresh traffic (no debugging artifacts like 403/401/404 from HTTP/2 bug), validate all stat panels and table show exact expected values.
