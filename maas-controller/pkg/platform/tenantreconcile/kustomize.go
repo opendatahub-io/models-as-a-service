@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -21,9 +23,51 @@ import (
 // it to the actual appNamespace from the Tenant CR.
 const overlayDefaultNamespace = "opendatahub"
 
-// RenderKustomize runs kustomize build for the ODH maas-api overlay and
+func writeParamsFile(path string, params map[string]string) error {
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for _, k := range keys {
+		sb.WriteString(k)
+		sb.WriteString("=")
+		sb.WriteString(params[k])
+		sb.WriteString("\n")
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0644)
+}
+
+// RenderKustomizeWithParams writes the given params map to a temporary
+// params.env alongside the kustomization.yaml, runs kustomize build, and
+// removes the temp file afterward. The original on-disk params.env is never
+// modified — all runtime values flow through the Tenant CR and env vars.
+func RenderKustomizeWithParams(manifestDir, appNamespace string, params map[string]string) ([]unstructured.Unstructured, error) {
+	paramsFile := filepath.Join(manifestDir, "params.env")
+
+	original, readErr := os.ReadFile(paramsFile)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return nil, fmt.Errorf("read params.env: %w", readErr)
+	}
+
+	if err := writeParamsFile(paramsFile, params); err != nil {
+		return nil, fmt.Errorf("write params.env: %w", err)
+	}
+	defer func() {
+		if readErr == nil {
+			_ = os.WriteFile(paramsFile, original, 0644)
+		} else {
+			_ = os.Remove(paramsFile)
+		}
+	}()
+
+	return renderKustomize(manifestDir, appNamespace)
+}
+
+// renderKustomize runs kustomize build for the ODH maas-api overlay and
 // applies ODH-equivalent namespace remapping and component labels.
-func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructured, error) {
+func renderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructured, error) {
 	kustomizationPath := manifestDir
 	if !fileExists(filepath.Join(manifestDir, "kustomization.yaml")) {
 		kustomizationPath = filepath.Join(manifestDir, "default")

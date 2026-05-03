@@ -405,19 +405,20 @@ func hashConfigMapData(data map[string]string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// CustomizeParams writes gateway/app-namespace/cluster-audience and optional API key days into overlay params.env.
-// Images use RELATED_IMAGE_* env vars via ApplyParams.
-func CustomizeParams(manifestDir string, tenant *maasv1alpha1.Tenant, appNamespace string, clusterAudience string) error {
-	params := map[string]string{
+// BuildCustomizedParams reads the on-disk params.env as a read-only template and
+// returns a fully resolved parameter map by merging Tenant CR values, cluster
+// audience, and RELATED_IMAGE_* env-var overrides. Nothing is written to disk.
+func BuildCustomizedParams(manifestDir string, tenant *maasv1alpha1.Tenant, appNamespace string, clusterAudience string) (map[string]string, error) {
+	tenantParams := map[string]string{
 		"gateway-namespace": tenant.Spec.GatewayRef.Namespace,
 		"gateway-name":      tenant.Spec.GatewayRef.Name,
 		"app-namespace":     appNamespace,
 	}
 	if tenant.Spec.APIKeys != nil && tenant.Spec.APIKeys.MaxExpirationDays != nil {
-		params["api-key-max-expiration-days"] = strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
+		tenantParams["api-key-max-expiration-days"] = strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
 	}
 	if clusterAudience != "" {
-		params["cluster-audience"] = clusterAudience
+		tenantParams["cluster-audience"] = clusterAudience
 	}
-	return ApplyParams(manifestDir, "params.env", ImageParamKeys, params)
+	return BuildParamsMap(manifestDir, "params.env", ImageParamKeys, tenantParams)
 }

@@ -61,11 +61,12 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 	if err != nil {
 		return nil, fmt.Errorf("cluster audience: %w", err)
 	}
-	if err := CustomizeParams(manifestPath, tenant, appNs, audience); err != nil {
-		return nil, fmt.Errorf("customize params: %w", err)
+	params, err := BuildCustomizedParams(manifestPath, tenant, appNs, audience)
+	if err != nil {
+		return nil, fmt.Errorf("build params: %w", err)
 	}
 
-	rendered, err := RenderKustomize(manifestPath, appNs)
+	rendered, err := RenderKustomizeWithParams(manifestPath, appNs, params)
 	if err != nil {
 		return nil, fmt.Errorf("kustomize: %w", err)
 	}

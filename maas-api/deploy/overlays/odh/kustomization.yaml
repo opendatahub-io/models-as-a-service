@@ -5,9 +5,10 @@ metadata:
   name: maas-api-opendatahub
 
 # Overlay used by the Tenant reconciler (maas-controller) to render maas-api
-# platform workloads. CustomizeParams writes gateway, namespace, and audience
-# values into params.env before kustomize build; shared-patches then
-# substitutes them into Deployments, HTTPRoutes, and AuthPolicies.
+# platform workloads. The reconciler reads params.env as a read-only template,
+# resolves runtime overrides from the Tenant CR and RELATED_IMAGE_* env vars
+# in memory, then writes a temporary params.env for this kustomize build.
+# See: docs/content/configuration-and-management/params-env-ownership.md
 resources:
 - ../../../../deployment/base/maas-api/overlays/tls
 - ../../../../deployment/base/maas-controller/policies

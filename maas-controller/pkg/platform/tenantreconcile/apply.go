@@ -43,75 +43,36 @@ func parseParams(fileName string) (map[string]string, error) {
 	return paramsEnvMap, nil
 }
 
-func writeParamsToTmp(params map[string]string, tmpDir string) (string, error) {
-	tmp, err := os.CreateTemp(tmpDir, "params.env-")
-	if err != nil {
-		return "", err
-	}
-	defer tmp.Close()
-
-	writer := bufio.NewWriter(tmp)
-	for key, value := range params {
-		if _, err := fmt.Fprintf(writer, "%s=%s\n", key, value); err != nil {
-			return "", err
-		}
-	}
-	if err := writer.Flush(); err != nil {
-		return "", fmt.Errorf("failed to write to file: %w", err)
-	}
-
-	return tmp.Name(), nil
-}
-
-func updateMap(m *map[string]string, key, val string) int {
-	old := (*m)[key]
-	if old == val {
-		return 0
-	}
-	(*m)[key] = val
-	return 1
-}
-
-// ApplyParams mirrors opendatahub-operator/pkg/deploy.ApplyParams for params.env substitution.
-func ApplyParams(componentPath, file string, imageParamsMap map[string]string, extraParamsMaps ...map[string]string) error {
+// BuildParamsMap reads the on-disk params.env as a read-only template,
+// applies RELATED_IMAGE_* env-var overrides and any extra key-value maps,
+// and returns the fully resolved parameter set without writing anything to disk.
+// This eliminates the circular-write problem where both the platform operator
+// and maas-controller used to mutate the same params.env file.
+func BuildParamsMap(componentPath, file string, imageParamsMap map[string]string, extraParamsMaps ...map[string]string) (map[string]string, error) {
 	paramsFile := filepath.Join(componentPath, file)
 
 	paramsEnvMap, err := parseParams(paramsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return make(map[string]string), nil
 		}
-		return err
+		return nil, err
 	}
 
-	updated := 0
-	for i := range paramsEnvMap {
-		relatedImageValue := os.Getenv(imageParamsMap[i])
-		if relatedImageValue != "" {
-			updated |= updateMap(&paramsEnvMap, i, relatedImageValue)
-		}
-	}
-	for _, extraParamsMap := range extraParamsMaps {
-		for eKey, eValue := range extraParamsMap {
-			updated |= updateMap(&paramsEnvMap, eKey, eValue)
+	for key := range paramsEnvMap {
+		if envVar, ok := imageParamsMap[key]; ok {
+			if val := os.Getenv(envVar); val != "" {
+				paramsEnvMap[key] = val
+			}
 		}
 	}
-
-	if updated == 0 {
-		return nil
+	for _, extra := range extraParamsMaps {
+		for k, v := range extra {
+			paramsEnvMap[k] = v
+		}
 	}
 
-	tmp, err := writeParamsToTmp(paramsEnvMap, componentPath)
-	if err != nil {
-		return err
-	}
-
-	if err = os.Rename(tmp, paramsFile); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("failed rename %s to %s: %w", tmp, paramsFile, err)
-	}
-
-	return nil
+	return paramsEnvMap, nil
 }
 
 // ApplyRendered server-side-applies rendered objects with Tenant as controller owner (ODH deploy parity).
