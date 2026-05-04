@@ -79,6 +79,7 @@ nav:
       - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
       - API Key Administration: configuration-and-management/api-key-administration.md
       - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
+      - Payload Processing Namespace Configuration: configuration-and-management/payload-processing-namespace-configuration.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
     - Models:
       - Model Setup: configuration-and-management/model-setup.md

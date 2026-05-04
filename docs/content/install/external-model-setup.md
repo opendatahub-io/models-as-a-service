@@ -34,6 +34,9 @@ The Inference Payload Processor (IPP) component (ext-proc) handles API key injec
 
 IPP is required for external models — it injects the provider API key and translates between OpenAI-compatible format and the provider's native API.
 
+!!! tip
+    IPP must run in the same namespace as the Gateway (`openshift-ingress` by default). For a full reference of namespace fields, defaults, and constraints, see [Payload Processing Namespace Configuration](../configuration-and-management/payload-processing-namespace-configuration.md).
+
 !!! note
     If MaaS was deployed via the Tenant CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:
 

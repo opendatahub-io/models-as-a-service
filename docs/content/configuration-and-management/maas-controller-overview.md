@@ -289,7 +289,7 @@ flowchart LR
     Deploy --> Examples
 ```
 
-- **Namespaces**: MaaS API and controller default to **opendatahub** (configurable). The **Tenant** CR, MaaSAuthPolicy and MaaSSubscription default to **models-as-a-service** (configurable). MaaSModelRef must live in the **same namespace** as the model it references (e.g. **llm**).
+- **Namespaces**: MaaS API and controller default to **opendatahub** (configurable). The **Tenant** CR, MaaSAuthPolicy and MaaSSubscription default to **models-as-a-service** (configurable). MaaSModelRef must live in the **same namespace** as the model it references (e.g. **llm**). For a complete reference of namespace fields, defaults, and constraints (including payload-processing / IPP), see [Payload Processing Namespace Configuration](payload-processing-namespace-configuration.md).
 - **Self-bootstrap**: On startup, `maas-controller` creates a `default-tenant` CR in the `models-as-a-service` namespace if one does not exist. The Tenant reconciler then deploys `maas-api` and gateway policies via SSA.
 - **Install**: `./scripts/deploy.sh` installs the full stack including the controller. Optionally run `./scripts/install-examples.sh` for sample MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription.
 
