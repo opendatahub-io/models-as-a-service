@@ -15,13 +15,14 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -52,7 +53,9 @@ func serve() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize)
+	metricsRegistry := prometheus.NewRegistry()
+
+	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
@@ -73,6 +76,23 @@ func serve() error {
 	}
 
 	router := gin.Default()
+
+	metricsRecorder, err := metrics.NewPrometheusRecorder(metricsRegistry)
+	if err != nil {
+		return fmt.Errorf("failed to create metrics recorder: %w", err)
+	}
+	router.Use(metrics.NewMiddleware(metricsRecorder))
+
+	metricsSrv, err := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
+	if err != nil {
+		return fmt.Errorf("failed to create metrics server: %w", err)
+	}
+	metricsErr := make(chan error, 1)
+	go func() {
+		log.Info("Metrics server starting", "address", cfg.MetricsAddress())
+		metricsErr <- metricsSrv.ListenAndServe()
+	}()
+
 	if cfg.DebugMode {
 		log.Warn("Debug CORS policy active: allowing localhost origins only")
 		router.Use(cors.New(debugCORSConfig()))
@@ -115,6 +135,10 @@ func serve() error {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("server failed to start: %w", err)
 		}
+	case err := <-metricsErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("metrics server failed: %w", err)
+		}
 	case <-quit:
 		log.Info("Shutdown signal received, shutting down server...")
 	}
@@ -125,22 +149,23 @@ func serve() error {
 		return fmt.Errorf("server forced to shutdown: %w", err)
 	}
 
+	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+		log.Error("Metrics server forced to shutdown", "error", err)
+	}
+
 	log.Info("Server exited gracefully")
 	return nil
 }
 
 // initStore creates the PostgreSQL store for API key management.
 // DBConnectionURL is validated in cfg.Validate() before this is called.
-//
-//nolint:ireturn // Returns MetadataStore interface by design.
-func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
+func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
 	log.Info("Connecting to PostgreSQL database...")
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL)
 }
 
 func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
-	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
 		return errors.New("failed to sync informer caches")
