@@ -665,9 +665,9 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	}
 
 	// Verify TRLP only contains sub2's limits (sub1's limits should be removed)
-	limits, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	limits, found, err := unstructured.NestedMap(trlp.Object, "spec", "defaults", "limits")
 	if err != nil || !found {
-		t.Fatalf("failed to get spec.limits from TRLP: found=%v err=%v", found, err)
+		t.Fatalf("failed to get spec.defaults.limits from TRLP: found=%v err=%v", found, err)
 	}
 	// Check that sub2's limit exists (map keys use namespace-name format)
 	sub2Key := fmt.Sprintf("%s-%s-%s-tokens", subNS, sub2Name, modelName)
@@ -737,9 +737,9 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		t.Fatalf("Get TokenRateLimitPolicy %q: %v", trlpName, err)
 	}
 
-	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "defaults", "limits")
 	if err != nil || !found {
-		t.Fatalf("spec.limits not found: found=%v err=%v", found, err)
+		t.Fatalf("spec.defaults.limits not found: found=%v err=%v", found, err)
 	}
 
 	// Should have exactly 1 limit entry (no deny rules)
@@ -834,9 +834,9 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		t.Fatalf("Get TokenRateLimitPolicy: %v", err)
 	}
 
-	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "defaults", "limits")
 	if err != nil || !found {
-		t.Fatalf("spec.limits not found: found=%v err=%v", found, err)
+		t.Fatalf("spec.defaults.limits not found: found=%v err=%v", found, err)
 	}
 
 	// Should have exactly 2 limit entries (one per subscription, no deny rules)
