@@ -282,7 +282,7 @@ flowchart LR
 
     subgraph Install["Install steps"]
         Deploy["deploy.sh"]
-        Examples["Optional: install-examples.sh"]
+        Examples["Optional: kustomize build\ndocs/samples/maas-system/"]
     end
 
     Prereqs --> Deploy
@@ -291,7 +291,7 @@ flowchart LR
 
 - **Namespaces**: MaaS API and controller default to **opendatahub** (configurable). The **Tenant** CR, MaaSAuthPolicy and MaaSSubscription default to **models-as-a-service** (configurable). MaaSModelRef must live in the **same namespace** as the model it references (e.g. **llm**).
 - **Self-bootstrap**: On startup, `maas-controller` creates a `default-tenant` CR in the `models-as-a-service` namespace if one does not exist. The Tenant reconciler then deploys `maas-api` and gateway policies via SSA.
-- **Install**: `./scripts/deploy.sh` installs the full stack including the controller. Optionally run `./scripts/install-examples.sh` for sample MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription.
+- **Install**: `./scripts/deploy.sh` installs the full stack including the controller. Optionally run `kustomize build docs/samples/maas-system/ | kubectl apply -f -` for sample MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription (see `docs/samples/maas-system/` for details).
 
 ---
 
