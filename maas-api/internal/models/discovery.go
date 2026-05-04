@@ -45,16 +45,20 @@ const (
 
 // Manager runs access validation (probe model endpoints) for models listed from MaaSModelRef.
 type Manager struct {
-	logger             *logger.Logger
-	httpClient         *http.Client
-	accessCheckTimeout time.Duration
+	logger              *logger.Logger
+	httpClient          *http.Client
+	accessCheckTimeout  time.Duration
+	gatewayInternalHost string
 }
 
 // NewManager creates a Manager for filtering models by access. The client uses InsecureSkipVerify
 // for cluster-internal probes; auth is enforced by the gateway/model server.
 // accessCheckTimeoutSeconds controls the total duration bound for access validation;
 // if <= 0, the default of 15 seconds is used.
-func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int) (*Manager, error) {
+// gatewayInternalHost, when non-empty, reroutes probes through the cluster-internal
+// gateway service (e.g. <name>-istio.<ns>.svc.cluster.local) so they succeed on
+// disconnected clusters where the external LB is unreachable.
+func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayInternalHost string) (*Manager, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
@@ -63,8 +67,9 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int) (*Manager, er
 		timeout = time.Duration(accessCheckTimeoutSeconds) * time.Second
 	}
 	return &Manager{
-		logger:             log,
-		accessCheckTimeout: timeout,
+		logger:              log,
+		accessCheckTimeout:  timeout,
+		gatewayInternalHost: gatewayInternalHost,
 		httpClient: &http.Client{
 			// No per-client Timeout — each request inherits the accessCheckTimeout
 			// deadline via its context. This ensures that configuring a longer
@@ -272,6 +277,19 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscripti
 	if err != nil {
 		m.logger.Debug("Access validation: failed to create GET request", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
 		return nil, authRetry
+	}
+
+	// Route through the cluster-internal gateway service so probes work on
+	// disconnected clusters where the external LB address is unreachable.
+	// The original Host header is preserved for gateway routing and Authorino ext-authz.
+	// We switch to HTTP because the gateway's HTTPS listener filters by TLS SNI
+	// (per Gateway API spec), and the SNI won't match when connecting to the
+	// internal address. The HTTP listener matches on the Host header instead.
+	if m.gatewayInternalHost != "" {
+		originalHost := req.URL.Host
+		req.URL.Scheme = "http"
+		req.URL.Host = m.gatewayInternalHost
+		req.Host = originalHost
 	}
 
 	req.Header.Set("Authorization", authHeader)

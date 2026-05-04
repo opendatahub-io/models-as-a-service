@@ -56,6 +56,13 @@ type Config struct {
 	// Bounds memory usage under high-cardinality user traffic. Default: 8192.
 	SARCacheMaxSize int
 
+	// GatewayInternalHost is the cluster-internal address for model access probes.
+	// When set, probes are routed here instead of through the external load balancer,
+	// which may be unreachable from disconnected clusters or pods blocked by network
+	// policy. The original Host header is preserved for gateway routing.
+	// Example: maas-default-gateway-openshift-default.openshift-ingress.svc.cluster.local
+	GatewayInternalHost string
+
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
 }
@@ -68,6 +75,7 @@ func Load() *Config {
 	maxExpirationDays, _ := env.GetInt("API_KEY_MAX_EXPIRATION_DAYS", constant.DefaultAPIKeyMaxExpirationDays)
 	accessCheckTimeoutSeconds, _ := env.GetInt("ACCESS_CHECK_TIMEOUT_SECONDS", 15)
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
+	gatewayInternalHost := env.GetString("GATEWAY_INTERNAL_HOST", "")
 
 	c := &Config{
 		Name:                      env.GetString("INSTANCE_NAME", gatewayName),
@@ -83,6 +91,7 @@ func Load() *Config {
 		APIKeyMaxExpirationDays:   maxExpirationDays,
 		AccessCheckTimeoutSeconds: accessCheckTimeoutSeconds,
 		SARCacheMaxSize:           sarCacheMaxSize,
+		GatewayInternalHost:       gatewayInternalHost,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}
