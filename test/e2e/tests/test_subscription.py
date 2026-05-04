@@ -296,17 +296,32 @@ class TestAPIKeySubscriptionBinding:
     def _revoke_key(self, key_id: str) -> None:
         _revoke_api_key(_get_cluster_token(), key_id)
 
+    def _post_with_gateway_retry(self, json_body: dict, retries: int = 6, delay: int = 5):
+        """POST to api-keys with retry on empty 403 from gateway propagation delay."""
+        for attempt in range(1, retries + 1):
+            r = requests.post(
+                self._api_keys_url(),
+                headers=self._auth_headers(),
+                json=json_body,
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+            if r.status_code == 403 and not r.text.strip():
+                if attempt < retries:
+                    log.info("Gateway returned empty 403 (attempt %d/%d), retrying in %ds...",
+                             attempt, retries, delay)
+                    time.sleep(delay)
+                    continue
+            return r
+        return r
+
     def test_create_api_key_uses_highest_priority_subscription(
         self,
         high_priority_subscription_name_for_api_key_binding: str,
     ):
         """Omitting subscription binds the accessible subscription with highest spec.priority."""
-        r = requests.post(
-            self._api_keys_url(),
-            headers=self._auth_headers(),
-            json={"name": f"test-key-high-prio-{uuid.uuid4().hex[:6]}"},
-            timeout=TIMEOUT,
-            verify=TLS_VERIFY,
+        r = self._post_with_gateway_retry(
+            {"name": f"test-key-high-prio-{uuid.uuid4().hex[:6]}"},
         )
         assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
         data = r.json()
@@ -322,12 +337,8 @@ class TestAPIKeySubscriptionBinding:
     ):
         """Explicit subscription in body should bind that subscription, not the highest-priority one."""
         designated = SIMULATOR_SUBSCRIPTION
-        r = requests.post(
-            self._api_keys_url(),
-            headers=self._auth_headers(),
-            json={"name": f"test-key-explicit-sub-{uuid.uuid4().hex[:6]}", "subscription": designated},
-            timeout=TIMEOUT,
-            verify=TLS_VERIFY,
+        r = self._post_with_gateway_retry(
+            {"name": f"test-key-explicit-sub-{uuid.uuid4().hex[:6]}", "subscription": designated},
         )
         assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
         data = r.json()
@@ -339,12 +350,8 @@ class TestAPIKeySubscriptionBinding:
     def test_create_api_key_nonexistent_subscription_errors(self):
         """Unknown subscription name should fail with generic invalid_subscription."""
         bogus = f"e2e-no-such-subscription-{uuid.uuid4().hex}"
-        r = requests.post(
-            self._api_keys_url(),
-            headers=self._auth_headers(),
-            json={"name": f"test-key-bogus-sub-{uuid.uuid4().hex[:6]}", "subscription": bogus},
-            timeout=TIMEOUT,
-            verify=TLS_VERIFY,
+        r = self._post_with_gateway_retry(
+            {"name": f"test-key-bogus-sub-{uuid.uuid4().hex[:6]}", "subscription": bogus},
         )
         assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text}"
         body = r.json()
@@ -1549,16 +1556,28 @@ class TestE2ESubscriptionFlow:
 
             _wait_reconcile()
 
-            r = requests.post(
-                f"{_maas_api_url()}/v1/api-keys",
-                headers={
-                    "Authorization": f"Bearer {oc_token_user}",
-                    "Content-Type": "application/json",
-                },
-                json={"name": f"{sa_user}-bad-sub-key", "subscription": other_subscription},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
-            )
+            # Retry on empty 403 from gateway propagation delay (Envoy may not
+            # have loaded the AuthPolicy yet).
+            url = f"{_maas_api_url()}/v1/api-keys"
+            retries, delay = 6, 5
+            for attempt in range(1, retries + 1):
+                r = requests.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {oc_token_user}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"name": f"{sa_user}-bad-sub-key", "subscription": other_subscription},
+                    timeout=TIMEOUT,
+                    verify=TLS_VERIFY,
+                )
+                if r.status_code == 403 and not r.text.strip():
+                    if attempt < retries:
+                        log.info("Gateway returned empty 403 (attempt %d/%d), retrying in %ds...",
+                                 attempt, retries, delay)
+                        time.sleep(delay)
+                        continue
+                break
             assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text[:500]}"
             assert r.json().get("code") == "invalid_subscription", r.text
             log.info("✅ Mint with inaccessible subscription → %s", r.status_code)

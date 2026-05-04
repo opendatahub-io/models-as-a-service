@@ -32,6 +32,8 @@ const (
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
 
+	AnnotationManaged = "opendatahub.io/managed"
+
 	DefaultGatewayNamespace = "openshift-ingress"
 	DefaultGatewayName      = "maas-default-gateway"
 
