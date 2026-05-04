@@ -285,35 +285,34 @@ deploy_models() {
     fi
     echo "✅ Simulator models ready"
 
-    # Wait for MaaSModelRefs to transition to Ready phase.
-    # The controller now properly handles the race condition where MaaSModelRef is created
-    # before KServe creates the HTTPRoute (sets Pending, then Ready when HTTPRoute watch triggers).
-    echo "Waiting for MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s)..."
+    # Wait for governed MaaSModelRefs to transition to Ready phase.
+    # Only models with MaaSSubscription + MaaSAuthPolicy pairings will reach Ready;
+    # ungoverned test fixtures (unconfigured, distinct, etc.) stay Pending by design.
+    local governed_models=("facebook-opt-125m-simulated" "premium-simulated-simulated-premium")
+    echo "Waiting for governed MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s)..."
     local deadline=$((SECONDS + MAASMODELREF_TIMEOUT))
     local all_ready=false
-    local found_any=false
 
     while [[ $SECONDS -lt $deadline ]]; do
         all_ready=true
-        found_any=false
-        while IFS= read -r phase; do
-            found_any=true
+        for model in "${governed_models[@]}"; do
+            phase=$(oc get maasmodelref "$model" -n "$MODEL_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
             if [[ "$phase" != "Ready" ]]; then
                 all_ready=false
                 break
             fi
-        done < <(oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        done
 
-        if $found_any && $all_ready; then
-            echo "✅ MaaSModelRefs ready"
+        if $all_ready; then
+            echo "✅ Governed MaaSModelRefs ready"
             break
         fi
 
         sleep 5
     done
 
-    if ! $found_any || ! $all_ready; then
-        echo "❌ ERROR: MaaSModelRefs did not reach Ready state within ${MAASMODELREF_TIMEOUT}s"
+    if ! $all_ready; then
+        echo "❌ ERROR: Governed MaaSModelRefs did not reach Ready state within ${MAASMODELREF_TIMEOUT}s"
         echo "Dumping MaaSModelRef status:"
         oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o yaml || true
         echo "Dumping controller logs:"
