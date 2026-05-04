@@ -13,7 +13,7 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 **Required `spec` field for MaaS CRs**
 - All MaaS custom resources (`MaaSAuthPolicy`, `MaaSSubscription`, `MaaSModelRef`, `Tenant`) now require the `spec` field
 - CRs without `spec` are marked as `Invalid` and new CRs without `spec` are blocked
-- **Migration:** Ensure all MaaS CRs include a `spec` field. See [Migration Guide: Tier-Based to Subscription Model](../migration/tier-to-subscription.md) for examples
+- **Migration:** Add a `spec` field to any existing CRs that lack one (e.g., add `spec: {}` if needed)
 
 ### New Features
 
