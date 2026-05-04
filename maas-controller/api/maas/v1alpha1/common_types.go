@@ -29,8 +29,19 @@ const (
 	PhaseInvalid  Phase = "Invalid"
 )
 
+// Condition types for MaaSModelRef status.conditions.
+const (
+	// ConditionGovernanceAttached indicates whether the model is covered by
+	// at least one active MaaSSubscription + MaaSAuthPolicy pairing.
+	ConditionGovernanceAttached = "GovernanceAttached"
+
+	// ConditionRuntimeReady indicates whether the model's backend
+	// (routes, gateways, inference service) is healthy and serving.
+	ConditionRuntimeReady = "RuntimeReady"
+)
+
 // ConditionReason represents a machine-readable reason for a status condition.
-// +kubebuilder:validation:Enum=Reconciled;ReconcileFailed;PartialFailure;Valid;NotFound;GetFailed;Accepted;AcceptedEnforced;NotAccepted;Enforced;NotEnforced;BackendNotReady;ConditionsNotFound;InvalidSpec;Unknown
+// +kubebuilder:validation:Enum=Reconciled;ReconcileFailed;PartialFailure;Valid;NotFound;GetFailed;Accepted;AcceptedEnforced;NotAccepted;Enforced;NotEnforced;BackendNotReady;ConditionsNotFound;InvalidSpec;Unknown;NoPairingFound;GovernancePaired;GovernanceGap;RuntimeHealthy;RuntimeHealthFailure
 type ConditionReason string
 
 // Reason constants for status conditions and per-item statuses.
@@ -80,6 +91,25 @@ const (
 
 	// ReasonUnknown indicates an unknown or unhandled state.
 	ReasonUnknown ConditionReason = "Unknown"
+
+	// ReasonNoPairingFound indicates no active MaaSSubscription + MaaSAuthPolicy
+	// pairing was found for the model.
+	ReasonNoPairingFound ConditionReason = "NoPairingFound"
+
+	// ReasonGovernancePaired indicates the model is covered by at least one
+	// active subscription + auth policy pairing.
+	ReasonGovernancePaired ConditionReason = "GovernancePaired"
+
+	// ReasonGovernanceGap indicates the model was previously governed but lost
+	// its governance pairing.
+	ReasonGovernanceGap ConditionReason = "GovernanceGap"
+
+	// ReasonRuntimeHealthy indicates the model backend is healthy and serving.
+	ReasonRuntimeHealthy ConditionReason = "RuntimeHealthy"
+
+	// ReasonRuntimeHealthFailure indicates the model backend has a health or
+	// routing failure, distinct from a governance gap.
+	ReasonRuntimeHealthFailure ConditionReason = "RuntimeHealthFailure"
 )
 
 // ResourceRefStatus is the common status for any referenced Kubernetes resource.

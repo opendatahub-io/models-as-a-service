@@ -65,9 +65,33 @@ type ModelReference struct {
 	Name string `json:"name"`
 }
 
-// MaaSModelStatus defines the observed state of MaaSModelRef
+// MaaSModelStatus defines the observed state of MaaSModelRef.
+//
+// Phase semantics with governance:
+//   - Pending: the model is not yet ready — either the backend is initializing
+//     or no active MaaSSubscription + MaaSAuthPolicy pairing has been found.
+//   - Ready: the model backend is healthy AND at least one governance pairing
+//     (MaaSSubscription + MaaSAuthPolicy) is active. Authorized inference is possible.
+//   - Unhealthy: the model has active governance but the backend (routes, gateways,
+//     or inference service) has a runtime/health failure. GovernanceAttached remains
+//     True while RuntimeReady is False.
+//   - Failed: a non-recoverable reconciliation error occurred.
+//   - Invalid: the resource spec is missing or structurally invalid.
+//
+// Condition types:
+//   - Ready: overall readiness (True only when both governance and runtime are healthy).
+//   - GovernanceAttached: whether the model is covered by at least one active
+//     MaaSSubscription + MaaSAuthPolicy pairing. No admin CR names, namespaces,
+//     or UIDs appear in any status field.
+//   - RuntimeReady: whether the model backend is healthy and serving, independent
+//     of governance state.
 type MaaSModelStatus struct {
-	// Phase represents the current phase of the model
+	// Phase represents the current phase of the model.
+	// Pending = awaiting governance pairing or backend readiness.
+	// Ready = governed and runtime-healthy.
+	// Unhealthy = governed but runtime-failed.
+	// Failed = reconciliation error.
+	// Invalid = bad spec.
 	// +kubebuilder:validation:Enum=Pending;Ready;Unhealthy;Failed;Invalid
 	Phase string `json:"phase,omitempty"`
 
@@ -95,7 +119,11 @@ type MaaSModelStatus struct {
 	// +optional
 	HTTPRouteHostnames []string `json:"httpRouteHostnames,omitempty"`
 
-	// Conditions represent the latest available observations of the model's state
+	// Conditions represent the latest available observations of the model's state.
+	// Condition types include:
+	//   - Ready: overall readiness (governance + runtime).
+	//   - GovernanceAttached: active MaaSSubscription + MaaSAuthPolicy pairing exists.
+	//   - RuntimeReady: backend is healthy and serving.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

@@ -266,6 +266,11 @@ spec:
                       - ConditionsNotFound
                       - InvalidSpec
                       - Unknown
+                      - NoPairingFound
+                      - GovernancePaired
+                      - GovernanceGap
+                      - RuntimeHealthy
+                      - RuntimeHealthFailure
                       type: string
                   required:
                   - name
@@ -330,6 +335,11 @@ spec:
                       - ConditionsNotFound
                       - InvalidSpec
                       - Unknown
+                      - NoPairingFound
+                      - GovernancePaired
+                      - GovernanceGap
+                      - RuntimeHealthy
+                      - RuntimeHealthFailure
                       type: string
                   required:
                   - model
