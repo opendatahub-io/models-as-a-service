@@ -11,9 +11,9 @@
 #   - Default: opendatahub (ODH) or redhat-ods-applications (RHOAI)
 #
 # Environment variables:
-#   NAMESPACE       Target namespace (default: opendatahub)
-#   POSTGRES_USER   Database user (default: maas)
-#   POSTGRES_DB     Database name (default: maas)
+#   NAMESPACE          Target namespace (default: opendatahub)
+#   POSTGRES_USER      Database user (default: maas)
+#   POSTGRES_DB        Database name (default: maas)
 #   POSTGRES_PASSWORD  Database password (default: auto-generated)
 #
 # Usage:
@@ -32,6 +32,26 @@ source "${SCRIPT_DIR}/deployment-helpers.sh"
 
 # Default namespace for ODH; use redhat-ods-applications for RHOAI
 : "${NAMESPACE:=opendatahub}"
+
+# Fallback image when the RHOAI operator CSV is not available (e.g., vanilla
+# Kubernetes, ODH-only clusters, or dev environments without OLM).
+DEFAULT_POSTGRES_IMAGE="registry.redhat.io/rhel9/postgresql-16:latest"
+
+# Resolve the PostgreSQL image from the RHOAI operator CSV's relatedImages.
+# Expects the RHOAI operator (or its CSV) to be installed on the cluster.
+# Falls back to DEFAULT_POSTGRES_IMAGE if the CSV is not found or the entry
+# is missing.
+resolve_postgres_image() {
+  local csv_image
+  csv_image=$(kubectl get csv -l 'olm.copiedFrom=redhat-ods-operator' \
+    -o jsonpath='{.items[0].spec.relatedImages[?(@.name=="postgresql_16_image")].image}' 2>/dev/null) || true
+
+  if [[ -n "${csv_image}" ]]; then
+    echo "${csv_image}"
+  else
+    echo "${DEFAULT_POSTGRES_IMAGE}"
+  fi
+}
 
 # Ensure namespace exists
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
@@ -70,6 +90,14 @@ fi
 
 echo "  Creating PostgreSQL deployment..."
 echo "  ⚠️  Using POC configuration (ephemeral storage)"
+
+POSTGRES_IMAGE="$(resolve_postgres_image)"
+if [[ "${POSTGRES_IMAGE}" == "${DEFAULT_POSTGRES_IMAGE}" ]]; then
+  echo "  Using default PostgreSQL image (operator CSV not available)"
+else
+  echo "  Resolved PostgreSQL image from operator CSV"
+fi
+echo "  Image: ${POSTGRES_IMAGE}"
 echo ""
 
 # Deploy PostgreSQL resources
@@ -105,7 +133,7 @@ spec:
     spec:
       containers:
       - name: postgres
-        image: registry.redhat.io/rhel9/postgresql-16:latest@sha256:680b42d2c51b76d23cd5b68dd774af456b1e4c98c4aaeb49d0de0948dc933716
+        image: "${POSTGRES_IMAGE}"
         env:
         - name: POSTGRESQL_USER
           valueFrom:
