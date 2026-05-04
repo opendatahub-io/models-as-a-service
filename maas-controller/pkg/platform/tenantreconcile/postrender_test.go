@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	. "github.com/onsi/gomega"
-
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+
+	. "github.com/onsi/gomega"
 )
 
 func TestBuildCustomizedParams_MergesTenantValues(t *testing.T) {
@@ -21,7 +21,7 @@ func TestBuildCustomizedParams_MergesTenantValues(t *testing.T) {
 			"gateway-name=maas-default-gateway\n"+
 			"app-namespace=opendatahub\n"+
 			"cluster-audience=https://kubernetes.default.svc\n",
-	), 0644)).To(Succeed())
+	), 0600)).To(Succeed())
 
 	days := int32(30)
 	tenant := &maasv1alpha1.Tenant{
@@ -59,7 +59,7 @@ func TestBuildCustomizedParams_NoAPIKeys(t *testing.T) {
 	paramsFile := filepath.Join(dir, "params.env")
 	g.Expect(os.WriteFile(paramsFile, []byte(
 		"gateway-namespace=openshift-ingress\ngateway-name=gw\napp-namespace=odh\n",
-	), 0644)).To(Succeed())
+	), 0600)).To(Succeed())
 
 	tenant := &maasv1alpha1.Tenant{
 		Spec: maasv1alpha1.TenantSpec{

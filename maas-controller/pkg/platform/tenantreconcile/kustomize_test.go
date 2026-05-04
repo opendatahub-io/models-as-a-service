@@ -31,7 +31,7 @@ func TestRenderKustomizeWithParams_RestoresOriginal(t *testing.T) {
 	dir := t.TempDir()
 	paramsFile := filepath.Join(dir, "params.env")
 	original := "gateway-namespace=openshift-ingress\napp-namespace=opendatahub\n"
-	g.Expect(os.WriteFile(paramsFile, []byte(original), 0644)).To(Succeed())
+	g.Expect(os.WriteFile(paramsFile, []byte(original), 0600)).To(Succeed())
 
 	// RenderKustomizeWithParams will fail because there's no kustomization.yaml,
 	// but it should still restore the original params.env.

@@ -14,7 +14,7 @@ func TestBuildParamsMap_ReadsTemplateWithoutMutation(t *testing.T) {
 	dir := t.TempDir()
 	paramsFile := filepath.Join(dir, "params.env")
 	original := "maas-api-image=quay.io/opendatahub/maas-api:latest\ngateway-namespace=openshift-ingress\n"
-	g.Expect(os.WriteFile(paramsFile, []byte(original), 0644)).To(Succeed())
+	g.Expect(os.WriteFile(paramsFile, []byte(original), 0600)).To(Succeed())
 
 	result, err := BuildParamsMap(dir, "params.env", map[string]string{}, map[string]string{
 		"gateway-namespace": "custom-ns",
@@ -33,7 +33,7 @@ func TestBuildParamsMap_AppliesImageEnvVarOverrides(t *testing.T) {
 
 	dir := t.TempDir()
 	paramsFile := filepath.Join(dir, "params.env")
-	g.Expect(os.WriteFile(paramsFile, []byte("maas-api-image=default:latest\n"), 0644)).To(Succeed())
+	g.Expect(os.WriteFile(paramsFile, []byte("maas-api-image=default:latest\n"), 0600)).To(Succeed())
 
 	t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "custom-registry/maas-api:v2")
 
@@ -57,7 +57,7 @@ func TestBuildParamsMap_ExtraParamsOverrideDefaults(t *testing.T) {
 
 	dir := t.TempDir()
 	paramsFile := filepath.Join(dir, "params.env")
-	g.Expect(os.WriteFile(paramsFile, []byte("app-namespace=opendatahub\ngateway-name=default-gw\n"), 0644)).To(Succeed())
+	g.Expect(os.WriteFile(paramsFile, []byte("app-namespace=opendatahub\ngateway-name=default-gw\n"), 0600)).To(Succeed())
 
 	result, err := BuildParamsMap(dir, "params.env", nil,
 		map[string]string{"app-namespace": "custom-ns"},
@@ -74,7 +74,7 @@ func TestBuildParamsMap_SkipsCommentLines(t *testing.T) {
 	dir := t.TempDir()
 	paramsFile := filepath.Join(dir, "params.env")
 	content := "# This is a comment\nmaas-api-image=test:latest\n# Another comment\ngateway-name=gw\n"
-	g.Expect(os.WriteFile(paramsFile, []byte(content), 0644)).To(Succeed())
+	g.Expect(os.WriteFile(paramsFile, []byte(content), 0600)).To(Succeed())
 
 	result, err := BuildParamsMap(dir, "params.env", nil)
 	g.Expect(err).NotTo(HaveOccurred())

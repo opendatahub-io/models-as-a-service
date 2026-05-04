@@ -36,7 +36,7 @@ func writeParamsFile(path string, params map[string]string) error {
 		sb.WriteString(params[k])
 		sb.WriteString("\n")
 	}
-	return os.WriteFile(path, []byte(sb.String()), 0644)
+	return os.WriteFile(path, []byte(sb.String()), 0600)
 }
 
 // RenderKustomizeWithParams writes the given params map to a temporary
@@ -56,7 +56,7 @@ func RenderKustomizeWithParams(manifestDir, appNamespace string, params map[stri
 	}
 	defer func() {
 		if readErr == nil {
-			_ = os.WriteFile(paramsFile, original, 0644)
+			_ = os.WriteFile(paramsFile, original, 0600)
 		} else {
 			_ = os.Remove(paramsFile)
 		}
