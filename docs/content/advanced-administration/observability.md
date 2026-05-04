@@ -94,7 +94,7 @@ kubectl get podmonitor -n kuadrant-system
 
 ```bash
 # Query Prometheus for Limitador metrics
-curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+curl -s -H "Authorization: Bearer $(oc whoami -t)" \
   "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/query?query=limitador_up"
 
 # Should return data with limitador_up = 1
@@ -233,7 +233,7 @@ kubectl patch tenant default-tenant -n models-as-a-service --type=merge \
 kubectl get telemetry -n openshift-ingress latency-per-subscription
 
 # Query Prometheus for subscription label
-curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+curl -s -H "Authorization: Bearer $(oc whoami -t)" \
   "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/label/subscription/values"
 ```
 

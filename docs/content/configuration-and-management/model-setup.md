@@ -158,7 +158,7 @@ After configuring your model, verify it's accessible.
 
 ```bash
 # Set HOST to your MaaS gateway URL (e.g., https://maas.your-cluster-domain.com)
-curl -sSk ${HOST}/maas-api/v1/models \
+curl -sS ${HOST}/maas-api/v1/models \
     -H "Authorization: Bearer $API_KEY" | jq .
 ```
 
@@ -177,7 +177,7 @@ kubectl get maasmodelref <modelref-name> -n <namespace>
 
 ```bash
 # Get MODEL_URL from step 1 above (data[].url field)
-curl -sSk -H "Authorization: Bearer $API_KEY" \
+curl -sS -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model": "my-model", "messages": [{"role": "user", "content": "Hello"}]}' \
   "${MODEL_URL}/v1/chat/completions"

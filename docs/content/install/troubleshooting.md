@@ -94,6 +94,71 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
+## TLS Certificate Validation
+
+By default, `curl` validates TLS certificates against your system CA bundle. If you encounter certificate verification errors (e.g., `curl: (60) SSL certificate problem: self-signed certificate`), use one of the approaches below.
+
+### Recommended: Use Cluster CA Certificate
+
+For OpenShift clusters with self-signed or internal CA certificates, obtain the cluster CA and pass it to `curl`:
+
+```bash
+# Get the cluster CA certificate
+oc get secret -n openshift-ingress router-certs-default \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/cluster-ca.crt
+
+# Use --cacert in curl commands
+curl -sS --cacert /tmp/cluster-ca.crt \
+  -H "Authorization: Bearer $API_KEY" \
+  "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
+```
+
+Alternatively, if your cluster uses the OpenShift service CA:
+
+```bash
+# Extract the service CA bundle
+oc get configmap -n openshift-config-managed service-ca-bundle \
+  -o jsonpath='{.data.service-ca\.crt}' > /tmp/service-ca.crt
+
+# Use --cacert in curl commands
+curl -sS --cacert /tmp/service-ca.crt \
+  -H "Authorization: Bearer $API_KEY" \
+  "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
+```
+
+### Development/Testing Only: Disable Verification
+
+!!! danger "Security Warning"
+    The `-k` flag disables all TLS certificate validation. An attacker on the network path can present a forged certificate and intercept your API key, token, or other credentials. **Never use `-k` in production or when sending credentials over untrusted networks.**
+
+For **isolated development or test environments only**, you can add the `-k` flag:
+
+```bash
+# INSECURE: Only for isolated dev/test environments
+curl -sS -k -H "Authorization: Bearer $API_KEY" \
+  "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
+```
+
+### Adding the CA to Your System Trust Store
+
+For a permanent solution, add the cluster CA to your system trust store so that all tools (curl, Python, browsers) trust it automatically:
+
+```bash
+# Linux (Fedora/RHEL)
+sudo cp /tmp/cluster-ca.crt /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust
+
+# Linux (Debian/Ubuntu)
+sudo cp /tmp/cluster-ca.crt /usr/local/share/ca-certificates/cluster-ca.crt
+sudo update-ca-certificates
+
+# macOS
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain /tmp/cluster-ca.crt
+```
+
+For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).
+
 ## Additional Resources
 
 - [Validation Guide](validation.md) — Manual validation steps

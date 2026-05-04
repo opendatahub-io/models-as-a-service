@@ -216,11 +216,11 @@ Create API keys with `POST /v1/api-keys` on the maas-api (authenticate with your
 
 ```bash
 MAAS_API="https://<gateway-host>/maas-api"
-API_KEY=$(curl -sSk -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
+API_KEY=$(curl -sS -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
   -X POST -d '{"name":"demo","subscription":"<maas-subscription-name>"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-curl -sSk "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
+curl -sS "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}],"max_tokens":10}'
@@ -325,24 +325,24 @@ MAAS_API="https://${GATEWAY_HOST}/maas-api"
 TOKEN=$(oc whoami -t)
 
 # Regular tier: log in as a user in free-user, then mint a key for simulator-subscription
-FREE_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+FREE_API_KEY=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -X POST -d '{"name":"readme-free","subscription":"simulator-subscription"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Authorization: Bearer $FREE_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 
 # Premium tier: log in as a user in premium-user, mint a key for premium-simulator-subscription, then call the premium route
-PREMIUM_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+PREMIUM_API_KEY=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -X POST -d '{"name":"readme-premium","subscription":"premium-simulator-subscription"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Authorization: Bearer $PREMIUM_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 ```
