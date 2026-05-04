@@ -102,7 +102,7 @@ CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='
 KEYCLOAK_HOST="keycloak.${CLUSTER_DOMAIN}"
 
 # Test with tenant-a user
-curl -k -X POST \
+curl -X POST \
   "https://${KEYCLOAK_HOST}/realms/tenant-a/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password" \
@@ -112,7 +112,7 @@ curl -k -X POST \
   | jq .
 
 # Test with tenant-b user
-curl -k -X POST \
+curl -X POST \
   "https://${KEYCLOAK_HOST}/realms/tenant-b/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password" \

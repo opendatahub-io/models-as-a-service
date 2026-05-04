@@ -25,7 +25,7 @@ MODEL_URL=$(echo $MODELS | jq -r '.data[0].url')
 MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id')
 
 # Make an inference request
-curl -sSk \
+curl -sS \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
@@ -74,7 +74,7 @@ curl -sSk \
 Add `"stream": true` and use `--no-buffer` for real-time responses:
 
 ```bash
-curl -sSk --no-buffer \
+curl -sS --no-buffer \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
@@ -134,7 +134,7 @@ Common parameters for chat completions:
 Include previous messages for context:
 
 ```bash
-curl -sSk \
+curl -sS \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
@@ -204,7 +204,7 @@ max_retries=3
 backoff=2
 
 while [ $retry_count -lt $max_retries ]; do
-  response=$(curl -sSk -w "\n%{http_code}" \
+  response=$(curl -sS -w "\n%{http_code}" \
     -H "Authorization: Bearer ${API_KEY}" \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}" \

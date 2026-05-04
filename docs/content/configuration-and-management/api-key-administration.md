@@ -11,7 +11,7 @@ Platform administrators can revoke API keys for any user, which is useful for se
 Send a `POST` request to `/v1/api-keys/bulk-revoke` with the target username:
 
 ```bash
-curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -d '{"username": "alice"}'
