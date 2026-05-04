@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-listing-flow/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/gateway-patterns/">
       
       
-        <link rel="prev" href="../model-setup/">
+        <link rel="prev" href="../tls-configuration/">
       
       
-        <link rel="next" href="../maas-controller-overview/">
+        <link rel="next" href="../model-setup/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Model Listing Flow - ODH Models-as-a-Service Documentation</title>
+        <title>Gateway Patterns - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#model-listing-flow" class="md-skip">
+        <a href="#gateway-patterns" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Model Listing Flow
+              Gateway Patterns
             
           </span>
         </div>
@@ -1329,8 +1329,10 @@
                 
   
   
+    
   
   
+  
     
     
     
@@ -1344,13 +1346,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" checked>
         
           
           <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
@@ -1371,7 +1371,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4_1">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1498,10 +1498,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../gateway-patterns/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gateway Patterns
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1517,6 +1544,214 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#pattern-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pattern index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment matrix
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clusterip-gateway-with-openshift-route-re-encrypt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClusterIP Gateway with OpenShift Route (re-encrypt)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ClusterIP Gateway with OpenShift Route (re-encrypt)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#traffic-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Traffic flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-clusterip-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why ClusterIP + Route?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manifests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manifests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Manifests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-gatewayclass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. GatewayClass
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-gateway-options-configmap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Gateway options ConfigMap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-gateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Gateway
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-openshift-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. OpenShift Route
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-httproute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. HTTPRoute
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#apply" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Apply
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maas-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaaS integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1534,8 +1769,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1551,11 +1784,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
         
           
           <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
@@ -1576,7 +1811,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1619,37 +1854,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Model Listing Flow
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../model-listing-flow/" class="md-nav__link">
         
   
   
@@ -1665,176 +1873,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Overview
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#maasmodelref-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MaaSModelRef flow
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="MaaSModelRef flow">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#benefits" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Benefits
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#subscription-filtering-and-aggregation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Subscription Filtering and Aggregation
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Subscription Filtering and Aggregation">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#authentication-based-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Authentication-Based Behavior
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Authentication-Based Behavior">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#api-key-authentication-bearer-sk-oai-" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API Key Authentication (Bearer sk-oai-*)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#user-token-authentication-openshiftoidc-tokens" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        User Token Authentication (OpenShift/OIDC tokens)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#subscription-metadata" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Subscription Metadata
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#registering-models" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Registering models
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#maasmodelref-status-and-phases" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MaaSModelRef Status and Phases
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#annotations-for-ui-and-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Annotations for UI and API
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related documentation
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2649,10 +2687,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#pattern-index" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Pattern index
       
     </span>
   </a>
@@ -2660,22 +2698,160 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#maasmodelref-flow" class="md-nav__link">
+  <a href="#environment-matrix" class="md-nav__link">
     <span class="md-ellipsis">
       
-        MaaSModelRef flow
+        Environment matrix
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="MaaSModelRef flow">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clusterip-gateway-with-openshift-route-re-encrypt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClusterIP Gateway with OpenShift Route (re-encrypt)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ClusterIP Gateway with OpenShift Route (re-encrypt)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#benefits" class="md-nav__link">
+  <a href="#traffic-flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Benefits
+        Traffic flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-clusterip-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why ClusterIP + Route?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manifests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manifests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Manifests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-gatewayclass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. GatewayClass
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-gateway-options-configmap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Gateway options ConfigMap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-gateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Gateway
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-openshift-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. OpenShift Route
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-httproute" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. HTTPRoute
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#apply" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Apply
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
       
     </span>
   </a>
@@ -2688,110 +2864,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#subscription-filtering-and-aggregation" class="md-nav__link">
+  <a href="#maas-integration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Subscription Filtering and Aggregation
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Subscription Filtering and Aggregation">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#authentication-based-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Authentication-Based Behavior
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Authentication-Based Behavior">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#api-key-authentication-bearer-sk-oai-" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API Key Authentication (Bearer sk-oai-*)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#user-token-authentication-openshiftoidc-tokens" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        User Token Authentication (OpenShift/OIDC tokens)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#subscription-metadata" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Subscription Metadata
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#registering-models" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Registering models
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#maasmodelref-status-and-phases" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MaaSModelRef Status and Phases
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#annotations-for-ui-and-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Annotations for UI and API
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related documentation
+        MaaS integration
       
     </span>
   </a>
@@ -2818,203 +2894,380 @@
   
 
 
-<h1 id="model-listing-flow">Model listing flow</h1>
-<p>This document describes how the <strong>GET /v1/models</strong> endpoint discovers and returns the list of available models.</p>
-<p>The list is <strong>based on MaaSModelRef</strong> custom resources: the API considers MaaSModelRef objects cluster-wide (all namespaces), then filters by access.</p>
-<h2 id="overview">Overview</h2>
-<p>When a client calls <strong>GET /v1/models</strong> with an <strong>Authorization</strong> header, the MaaS API returns an OpenAI-compatible list of models.</p>
-<p>Each entry includes an <code>id</code>, <strong><code>url</code></strong> (the model’s endpoint), a <code>ready</code> flag, and related metadata. The list is built from <strong>MaaSModelRef</strong> CRs. The API then validates access by probing each model’s endpoint with the same Authorization header; only models the client can access are included in the response.</p>
-<div class="admonition note">
-<p class="admonition-title">Model endpoints and routing</p>
-<p>The returned value includes a <strong>URL</strong> per model; clients use that URL to call the model (e.g. for chat or completions).</p>
-<p>Currently each model is served on a <strong>different endpoint</strong>. <strong>Body Based Routing</strong> is being evaluated to provide a more unified OpenAI API feel (single endpoint with model selection in the request body).</p>
-</div>
-<h2 id="maasmodelref-flow">MaaSModelRef flow</h2>
-<p>When the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS controller</a> is installed and the API is configured with a MaaSModelRef lister, the flow is:</p>
-<ol>
-<li>
-<p>The MaaS API discovers <strong>MaaSModelRef</strong> custom resources <strong>cluster-wide</strong> (all namespaces) using a cached lister (informer-backed).</p>
-</li>
-<li>
-<p>For each MaaSModelRef, it reads <strong>id</strong> (<code>metadata.name</code>), <strong>url</strong> (<code>status.endpoint</code>), <strong>ready</strong> (<code>status.phase == "Ready"</code>), and <strong>namespace</strong> (<code>metadata.namespace</code>, returned as <code>ownedBy</code>). The controller populates <code>status.endpoint</code> and <code>status.phase</code> from the underlying backend.</p>
-</li>
-<li>
-<p><strong>Access validation</strong>: The API probes each model’s <code>/v1/models</code> endpoint with the client’s Authorization header. Models returning <strong>2xx</strong> or <strong>405</strong> are included; <strong>401/403/404</strong> are excluded.</p>
-<div class="admonition note">
-<p class="admonition-title">ExternalModel bypass</p>
-<p>ExternalModel kinds are included if <code>status.phase == "Ready"</code> without probe validation.</p>
-</div>
-</li>
-<li>
-<p>For each model, the API reads <strong>annotations</strong> from the MaaSModelRef to populate <code>modelDetails</code> in the response (display name, description, use case, context window). See <a href="../../reference/crds/maas-model-ref/#annotations">MaaSModelRef annotations</a> for the full list.</p>
-</li>
-<li>
-<p>The filtered list is returned to the client.</p>
-</li>
-</ol>
-<pre class="mermaid"><code>sequenceDiagram
-    participant Client
-    participant MaaS API
-    participant K8s as Kubernetes API
-    participant Model as Model endpoint
-
-    Client-&gt;&gt;MaaS API: GET /v1/models (Authorization header)
-    MaaS API-&gt;&gt;K8s: List MaaSModelRef CRs
-    K8s--&gt;&gt;MaaS API: MaaSModelRef list
-    loop For each model
-        MaaS API-&gt;&gt;Model: GET endpoint with same Authorization header
-        Model--&gt;&gt;MaaS API: include or exclude by response
-    end
-    MaaS API-&gt;&gt;MaaS API: Map to OpenAI-style entries
-    MaaS API--&gt;&gt;Client: JSON data array of models</code></pre>
-<h3 id="benefits">Benefits</h3>
+<h1 id="gateway-patterns">Gateway Patterns</h1>
+<p>This page provides curated Gateway API deployment patterns for MaaS on OpenShift.
+Each pattern includes copy-pasteable YAML manifests, prerequisites, verification steps,
+and troubleshooting guidance for common failure modes.</p>
+<p><strong>Related topics:</strong></p>
 <ul>
-<li>
-<p><strong>List is based on MaaSModelRefs</strong>: Only models registered as a MaaSModelRef appear. The controller reconciles each MaaSModelRef and sets its endpoint and phase; access and quotas are controlled by MaaSAuthPolicy and MaaSSubscription.</p>
-</li>
-<li>
-<p><strong>Access-filtered</strong>: The API probes each model with the client’s Authorization header (passed through as-is), so the returned list only includes models the client can actually use.</p>
-</li>
-<li>
-<p><strong>Consistent with gateway</strong>: The same model names and routes are used for inference; the list matches what the gateway will accept for that client.</p>
-</li>
+<li>Default MaaS Gateway setup: <a href="../../install/maas-setup/#create-gateway">Install MaaS Components — Create Gateway</a></li>
+<li>Attaching models to the Gateway: <a href="model-gateway-and-serving.md">Model Gateway and Serving</a></li>
+<li>End-to-end TLS: <a href="../tls-configuration/">TLS Configuration</a></li>
 </ul>
-<p>If the API is not configured with a MaaSModelRef lister, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.</p>
-<h2 id="subscription-filtering-and-aggregation">Subscription Filtering and Aggregation</h2>
-<p>The <code>/v1/models</code> endpoint automatically filters models based on your authentication method and optional headers.</p>
-<h3 id="authentication-based-behavior">Authentication-Based Behavior</h3>
-<h4 id="api-key-authentication-bearer-sk-oai-">API Key Authentication (Bearer sk-oai-*)</h4>
-<p>When using an API key, the subscription is automatically determined from the key:
-- Returns <strong>only</strong> models from the subscription bound to the API key at mint time</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># API key bound to &quot;premium-subscription&quot;</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer sk-oai-abc123...&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">     </span>https://maas.example.com/maas-api/v1/models
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># Returns models from &quot;premium-subscription&quot; only</span>
-</code></pre></div>
-<h4 id="user-token-authentication-openshiftoidc-tokens">User Token Authentication (OpenShift/OIDC tokens)</h4>
-<p>When using a user token, you have flexible options:</p>
-<p><strong>Default (no X-MaaS-Subscription header)</strong>:
-- Returns <strong>all</strong> models from all subscriptions you have access to
-- Models are deduplicated and subscription metadata is attached</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># User with access to &quot;basic&quot; and &quot;premium&quot; subscriptions</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">     </span>https://maas.example.com/maas-api/v1/models
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># Returns models from both subscriptions with subscription metadata</span>
-</code></pre></div>
-<p><strong>With X-MaaS-Subscription header</strong> (optional):
-- Returns only models from the specified subscription
-- Behaves like an API key request - allows you to scope your query to a specific subscription</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Filter to only &quot;premium&quot; subscription models</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">     </span>-H<span class="w"> </span><span class="s2">&quot;X-MaaS-Subscription: premium-subscription&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">     </span>https://maas.example.com/maas-api/v1/models
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c1"># Returns only &quot;premium-subscription&quot; models</span>
-</code></pre></div>
-<div class="admonition tip">
-<p class="admonition-title">User token filtering</p>
-<p>The <code>X-MaaS-Subscription</code> header allows user token requests to filter results to a specific subscription. This is useful when you have access to many subscriptions but only want to see models from one.</p>
-</div>
-<h3 id="subscription-metadata">Subscription Metadata</h3>
-<p>All models in the response include a <code>subscriptions</code> array with metadata for each subscription providing access to that model:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;object&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="p">{</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;llama-2-7b-chat&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">      </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1672531200</span><span class="p">,</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">      </span><span class="nt">&quot;object&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;model&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">      </span><span class="nt">&quot;owned_by&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;model-namespace&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://maas.example.com/llm/llama-2-7b-chat&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">      </span><span class="nt">&quot;ready&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">      </span><span class="nt">&quot;subscriptions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">        </span><span class="p">{</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">          </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;basic-subscription&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">          </span><span class="nt">&quot;displayName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Basic Tier&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">          </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Basic subscription with standard rate limits&quot;</span>
-<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">        </span><span class="p">},</span>
-<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">        </span><span class="p">{</span>
-<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">          </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;premium-subscription&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="w">          </span><span class="nt">&quot;displayName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Premium Tier&quot;</span><span class="p">,</span>
-<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="w">          </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Premium subscription with higher rate limits&quot;</span>
-<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="w">        </span><span class="p">}</span>
-<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="w">      </span><span class="p">]</span>
-<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="p">}</span>
-</code></pre></div>
-<h2 id="registering-models">Registering models</h2>
-<p>To have models appear via the <strong>MaaSModelRef</strong> flow:</p>
-<ol>
-<li>
-<p>Install the <strong>MaaS controller</strong> (CRDs, controller deployment, and optionally the default-deny policy). See <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">maas-controller README</a>.</p>
-</li>
-<li>
-<p>Ensure the underlying <strong>LLMInferenceService</strong> exists and (if applicable) has an HTTPRoute created by KServe.</p>
-</li>
-<li>
-<p>Create a <strong>MaaSModelRef</strong> for each model you want to expose, in the <strong>same namespace</strong> as the backend:</p>
-<div class="highlight"><pre><span></span><code>apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSModelRef
-metadata:
-  name: my-model-name   # Becomes the model &quot;id&quot; in GET /v1/models
-  namespace: llm        # MUST match LLMInferenceService namespace
-  annotations:
-    openshift.io/display-name: &quot;My Model&quot;
-    openshift.io/description: &quot;A general-purpose LLM&quot;
-spec:
-  modelRef:
-    kind: LLMInferenceService
-    name: my-llm-isvc-name   # References resource in same namespace
-</code></pre></div>
-</li>
-<li>
-<p>The controller reconciles the MaaSModelRef and sets <code>status.endpoint</code> and <code>status.phase</code>. The MaaS API will then include this model in GET /v1/models when it lists MaaSModelRef CRs.</p>
-</li>
-</ol>
-<p>You can use the <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/maas-system">maas-system samples</a> as a template; the install script deploys LLMInferenceService + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription together so dependencies resolve correctly.</p>
-<h2 id="maasmodelref-status-and-phases">MaaSModelRef Status and Phases</h2>
-<p>The controller populates <code>status.endpoint</code> and <code>status.phase</code> during reconciliation. The API uses these fields when listing models.</p>
-<p><strong>Phase values:</strong></p>
+<h2 id="pattern-index">Pattern index</h2>
 <table>
 <thead>
 <tr>
-<th>Phase</th>
-<th>Meaning</th>
+<th>Pattern</th>
+<th>Environment</th>
+<th>One-line purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>Pending</strong></td>
-<td>Model exists but HTTPRoute or backend is not ready</td>
-</tr>
-<tr>
-<td><strong>Ready</strong></td>
-<td>Model is ready for inference</td>
-</tr>
-<tr>
-<td><strong>Failed</strong></td>
-<td>Reconciliation failed (unknown <code>kind</code>, backend error, or unsupported)</td>
+<td><a href="#clusterip-gateway-with-openshift-route-re-encrypt">ClusterIP + Route re-encrypt</a></td>
+<td>Dev / Lab / Production</td>
+<td>ClusterIP Gateway Service fronted by an OpenShift Route with re-encrypt TLS; no external LoadBalancer required</td>
 </tr>
 </tbody>
 </table>
-<div class="admonition note">
-<p class="admonition-title">Unhealthy phase defined but unused</p>
-<p>The CRD enum includes <code>Unhealthy</code>, but the controller currently only sets <code>Pending</code>, <code>Ready</code>, or <code>Failed</code>.</p>
-</div>
-<p>See <a href="../../reference/crds/maas-model-ref/">MaaSModelRef CRD reference</a> for complete status field documentation.</p>
-<h2 id="annotations-for-ui-and-api">Annotations for UI and API</h2>
-<p>MaaSModelRef annotations (<code>openshift.io/display-name</code>, <code>openshift.io/description</code>, <code>opendatahub.io/genai-use-case</code>, <code>opendatahub.io/context-window</code>) are consumed by both the OpenShift console and the MaaS API <code>/v1/models</code> endpoint (<code>modelDetails</code> field).</p>
-<p>See <a href="../../reference/crds/maas-model-ref/#annotations">MaaSModelRef annotations</a> for the complete list and examples.</p>
-<hr />
-<h2 id="related-documentation">Related documentation</h2>
+<h2 id="environment-matrix">Environment matrix</h2>
+<p>Use this table to decide which pattern fits your deployment:</p>
+<table>
+<thead>
+<tr>
+<th>Environment</th>
+<th>Recommended pattern</th>
+<th>Who terminates client TLS?</th>
+<th>Internal TLS</th>
+<th>Namespace expectations</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Development / Lab</strong></td>
+<td>ClusterIP + Route re-encrypt</td>
+<td>OpenShift Router (wildcard or self-signed cert)</td>
+<td>service-ca auto-provisioned cert (re-encrypt to Gateway)</td>
+<td><code>openshift-ingress</code> for Gateway and Route; application namespace for HTTPRoute</td>
+</tr>
+<tr>
+<td><strong>Production</strong></td>
+<td>ClusterIP + Route re-encrypt</td>
+<td>OpenShift Router (CA-signed certificate)</td>
+<td>service-ca auto-provisioned cert (re-encrypt to Gateway)</td>
+<td><code>openshift-ingress</code> for Gateway and Route; application namespace for HTTPRoute</td>
+</tr>
+</tbody>
+</table>
+<p><strong>TLS responsibilities summary:</strong></p>
 <ul>
-<li><a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller">MaaS Controller README</a> — install and MaaSModelRef/MaaSAuthPolicy/MaaSSubscription</li>
-<li><a href="../model-setup/">Model setup</a> — configuring LLMInferenceServices (gateway reference) as backends for MaaSModelRef</li>
-<li><a href="../../concepts/architecture/">Architecture</a> — overall MaaS architecture</li>
+<li><strong>Client-facing TLS</strong>: Managed by the OpenShift Router. In production, replace the default wildcard certificate with a CA-signed certificate on the IngressController.</li>
+<li><strong>Gateway Service TLS</strong>: Auto-provisioned by the OpenShift <code>service-ca-operator</code> via the <code>service.beta.openshift.io/serving-cert-secret-name</code> annotation. The Secret name in the ConfigMap annotation <strong>must</strong> match the Gateway listener <code>certificateRefs</code>.</li>
+<li><strong>Authorino and maas-api TLS</strong>: Configured separately. See <a href="../tls-configuration/">TLS Configuration</a>.</li>
 </ul>
+<h2 id="clusterip-gateway-with-openshift-route-re-encrypt">ClusterIP Gateway with OpenShift Route (re-encrypt)</h2>
+<p>This pattern deploys a Gateway API Gateway as a <strong>ClusterIP</strong> service (no external
+LoadBalancer) and uses an <strong>OpenShift Route</strong> with <strong>re-encrypt</strong> TLS termination
+to expose the Gateway externally.</p>
+<h3 id="traffic-flow">Traffic flow</h3>
+<pre class="mermaid"><code>graph LR
+    Client --&gt;|HTTPS| Router["OpenShift Router"]
+    Router --&gt;|re-encrypt TLS| GWSvc["Gateway Service&lt;br/&gt;ClusterIP:443"]
+    GWSvc --&gt; Envoy["Istio / Envoy"]
+    Envoy --&gt;|HTTPRoute| MaaSAPI["maas-api:8443"]</code></pre>
+<ol>
+<li>The client connects over HTTPS to the OpenShift Router.</li>
+<li>The Router terminates the client TLS session and opens a new TLS connection
+   (re-encrypt) to the Gateway Service using the service-ca certificate.</li>
+<li>The Gateway (Istio/Envoy) terminates that connection and routes traffic via
+   HTTPRoute to backend services such as <code>maas-api</code>.</li>
+</ol>
+<h3 id="why-clusterip-route">Why ClusterIP + Route?</h3>
+<ul>
+<li><strong>No LoadBalancer required.</strong> Works on bare-metal, restricted cloud accounts,
+  and environments where LoadBalancer provisioning is slow or unavailable.</li>
+<li><strong>OpenShift-native ingress.</strong> Leverages the platform Router for TLS termination,
+  hostname routing, and integration with existing wildcard certificates.</li>
+<li><strong>Re-encrypt for defense in depth.</strong> Traffic is encrypted between the Router and
+  the Gateway Service, not just at the edge.</li>
+</ul>
+<h3 id="prerequisites">Prerequisites</h3>
+<ul>
+<li>OpenShift cluster with Gateway API support (see <a href="../../install/prerequisites/">Prerequisites</a>)</li>
+<li>GatewayClass <code>openshift-default</code> accepted (see <a href="../../install/platform-setup/#install-gateway-api-controller">Install Gateway API Controller</a>)</li>
+<li>Kuadrant or RHCL operator installed (see <a href="../../install/platform-setup/#install-gateway-api-controller">Install Gateway API Controller</a>)</li>
+<li>Access to the <code>openshift-ingress</code> namespace</li>
+</ul>
+<h3 id="manifests">Manifests</h3>
+<p>All manifests are in
+<a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/gateway-patterns/clusterip-route-reencrypt"><code>docs/samples/gateway-patterns/clusterip-route-reencrypt/</code></a>.</p>
+<h4 id="1-gatewayclass">1. GatewayClass</h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gateway.networking.k8s.io/v1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">GatewayClass</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-default</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">controllerName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openshift.io/gateway-controller/v1&quot;</span>
+</code></pre></div>
+<p>If <code>openshift-default</code> already exists on your cluster, skip this step.</p>
+<h4 id="2-gateway-options-configmap">2. Gateway options ConfigMap</h4>
+<p>The ConfigMap configures the Gateway Service as <strong>ClusterIP</strong> and requests a
+service-ca TLS certificate:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gw-options</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">data</span><span class="p">:</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">service</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="no">metadata:</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="no">annotations:</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="no">service.beta.openshift.io/serving-cert-secret-name: &quot;maas-gw-service-tls&quot;</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="no">spec:</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">      </span><span class="no">type: ClusterIP</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>serving-cert-secret-name</code></td>
+<td>The <code>service-ca-operator</code> provisions a TLS certificate into this Secret. Must match the Gateway <code>certificateRefs</code>.</td>
+</tr>
+<tr>
+<td><code>type: ClusterIP</code></td>
+<td>No external LoadBalancer; the OpenShift Route handles external ingress.</td>
+</tr>
+</tbody>
+</table>
+<h4 id="3-gateway">3. Gateway</h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gateway.networking.k8s.io/v1</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Gateway</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">kuadrant.io/gateway</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;true&quot;</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">app.kubernetes.io/name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-gateway</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="nt">opendatahub.io/managed</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;false&quot;</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="nt">security.opendatahub.io/authorino-tls-bootstrap</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;true&quot;</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">  </span><span class="nt">gatewayClassName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-default</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">  </span><span class="nt">infrastructure</span><span class="p">:</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nt">parametersRef</span><span class="p">:</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">      </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gw-options</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">  </span><span class="nt">listeners</span><span class="p">:</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="w">      </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">443</span>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">      </span><span class="nt">protocol</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HTTPS</span>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="w">      </span><span class="nt">allowedRoutes</span><span class="p">:</span>
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="w">        </span><span class="nt">namespaces</span><span class="p">:</span>
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="w">          </span><span class="nt">from</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">All</span>
+<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a><span class="w">      </span><span class="nt">tls</span><span class="p">:</span>
+<a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a><span class="w">        </span><span class="nt">certificateRefs</span><span class="p">:</span>
+<a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a><span class="w">          </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a><span class="w">            </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Secret</span>
+<a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a><span class="w">            </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-gw-service-tls</span>
+<a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a><span class="w">        </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Terminate</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Label / Annotation</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kuadrant.io/gateway: "true"</code></td>
+<td>Enables Kuadrant/RHCL policy attachment (AuthPolicy, RateLimitPolicy)</td>
+</tr>
+<tr>
+<td><code>opendatahub.io/managed: "false"</code></td>
+<td>Lets maas-controller manage AuthPolicies; prevents ODH Model Controller from overwriting them</td>
+</tr>
+<tr>
+<td><code>security.opendatahub.io/authorino-tls-bootstrap: "true"</code></td>
+<td>Creates the EnvoyFilter for Gateway → Authorino TLS communication</td>
+</tr>
+<tr>
+<td><code>infrastructure.parametersRef</code></td>
+<td>References the <code>gw-options</code> ConfigMap for ClusterIP and service-ca configuration</td>
+</tr>
+</tbody>
+</table>
+<h4 id="4-openshift-route">4. OpenShift Route</h4>
+<p>The Route exposes the Gateway Service externally with re-encrypt TLS:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">route.openshift.io/v1</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Route</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-gateway-route</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nt">router.openshift.io/service-ca-certificate</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;true&quot;</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.&lt;cluster-domain&gt;</span><span class="w">   </span><span class="c1"># Replace with your cluster domain</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="nt">to</span><span class="p">:</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway-openshift-default</span><span class="w">  </span><span class="c1"># Verify with kubectl get svc -n openshift-ingress</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">    </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">  </span><span class="nt">port</span><span class="p">:</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">    </span><span class="nt">targetPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">443</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">    </span><span class="nt">termination</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">reencrypt</span>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">    </span><span class="nt">insecureEdgeTerminationPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Redirect</span>
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Service name</p>
+<p>The Gateway controller generates a Service name from the Gateway name and
+GatewayClass name. Verify the actual name:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-l<span class="w"> </span>gateway.networking.k8s.io/gateway-name<span class="o">=</span>maas-default-gateway
+</code></pre></div>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Hostname placeholder</p>
+<p>Replace <code>maas.&lt;cluster-domain&gt;</code> with your actual hostname. Retrieve the
+cluster domain with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>ingresses.config.openshift.io<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.domain}&#39;</span>
+</code></pre></div>
+</div>
+<h4 id="5-httproute">5. HTTPRoute</h4>
+<p>Attach workloads to the Gateway. This example routes all traffic to <code>maas-api</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gateway.networking.k8s.io/v1</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HTTPRoute</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-api</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;application-namespace&gt;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">parentRefs</span><span class="p">:</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span><span class="nt">rules</span><span class="p">:</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matches</span><span class="p">:</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PathPrefix</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">            </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">      </span><span class="nt">backendRefs</span><span class="p">:</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-api</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">          </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8443</span>
+</code></pre></div>
+<p>Replace <code>&lt;application-namespace&gt;</code> with your ODH/RHOAI application namespace
+(<code>opendatahub</code> or <code>redhat-ods-applications</code>).</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The HTTPRoute for maas-api is created automatically by maas-controller
+by default. You only need to create it manually if you are not using
+maas-controller.</p>
+</div>
+<h3 id="apply">Apply</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Apply GatewayClass, ConfigMap, and Gateway</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span>docs/samples/gateway-patterns/clusterip-route-reencrypt<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Wait for the Gateway to be programmed</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>Programmed<span class="w"> </span>gateway/maas-default-gateway<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>--timeout<span class="o">=</span>60s
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="c1"># Determine your cluster domain and the Gateway Service name</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="nv">CLUSTER_DOMAIN</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>ingresses.config.openshift.io<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.domain}&#39;</span><span class="k">)</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="nv">GW_SVC</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span>-l<span class="w"> </span>gateway.networking.k8s.io/gateway-name<span class="o">=</span>maas-default-gateway<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="c1"># Create the Route (update host and service name in openshift-route.yaml, or apply inline)</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;EOF</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="s">apiVersion: route.openshift.io/v1</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="s">kind: Route</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="s">metadata:</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="s">  name: maas-gateway-route</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="s">  namespace: openshift-ingress</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="s">  annotations:</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="s">    router.openshift.io/service-ca-certificate: &quot;true&quot;</span>
+<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="s">spec:</span>
+<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="s">  host: maas.${CLUSTER_DOMAIN}</span>
+<a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a><span class="s">  to:</span>
+<a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a><span class="s">    kind: Service</span>
+<a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a><span class="s">    name: ${GW_SVC}</span>
+<a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a><span class="s">    weight: 100</span>
+<a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a><span class="s">  port:</span>
+<a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a><span class="s">    targetPort: 443</span>
+<a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a><span class="s">  tls:</span>
+<a id="__codelineno-7-32" name="__codelineno-7-32" href="#__codelineno-7-32"></a><span class="s">    termination: reencrypt</span>
+<a id="__codelineno-7-33" name="__codelineno-7-33" href="#__codelineno-7-33"></a><span class="s">    insecureEdgeTerminationPolicy: Redirect</span>
+<a id="__codelineno-7-34" name="__codelineno-7-34" href="#__codelineno-7-34"></a><span class="s">EOF</span>
+</code></pre></div>
+<h3 id="verify">Verify</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Gateway should show Programmed=True</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>gateway<span class="w"> </span>maas-default-gateway<span class="w"> </span>-n<span class="w"> </span>openshift-ingress
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Service should be ClusterIP</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span>-l<span class="w"> </span>gateway.networking.k8s.io/gateway-name<span class="o">=</span>maas-default-gateway
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="c1"># Route should be Admitted</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>route<span class="w"> </span>maas-gateway-route<span class="w"> </span>-n<span class="w"> </span>openshift-ingress
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="c1"># TLS certificate Secret should exist</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>kubectl<span class="w"> </span>get<span class="w"> </span>secret<span class="w"> </span>maas-gw-service-tls<span class="w"> </span>-n<span class="w"> </span>openshift-ingress
+</code></pre></div>
+<h3 id="troubleshooting">Troubleshooting</h3>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gateway stays <code>NotProgrammed</code></td>
+<td>GatewayClass not accepted, or <code>gw-options</code> ConfigMap missing</td>
+<td>Check <code>kubectl get gatewayclass</code>; verify ConfigMap in <code>openshift-ingress</code></td>
+</tr>
+<tr>
+<td>Route shows <code>HostAlreadyClaimed</code></td>
+<td>Another Route uses the same hostname</td>
+<td>Change <code>spec.host</code> to a unique FQDN</td>
+</tr>
+<tr>
+<td><code>503</code> from the Route</td>
+<td>Gateway Service not ready or certificate not yet provisioned</td>
+<td>Wait for <code>service-ca-operator</code> to provision <code>maas-gw-service-tls</code>; check <code>kubectl get secret -n openshift-ingress</code></td>
+</tr>
+<tr>
+<td>TLS handshake failure (re-encrypt)</td>
+<td>Service CA cert not trusted by the Router</td>
+<td>Ensure <code>router.openshift.io/service-ca-certificate: "true"</code> annotation on the Route</td>
+</tr>
+<tr>
+<td><code>certificateRefs</code> name mismatch</td>
+<td>Secret name in Gateway does not match ConfigMap annotation</td>
+<td>Verify both reference the same Secret name (<code>maas-gw-service-tls</code>)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="maas-integration">MaaS integration</h2>
+<p>After deploying a gateway pattern, complete the MaaS-specific steps:</p>
+<ol>
+<li>
+<p><strong>Attach models to the Gateway.</strong> Set <code>spec.router.gateway.refs</code> on your
+   LLMInferenceService to point at the deployed Gateway.
+   See <a href="model-gateway-and-serving.md">Model Gateway and Serving</a>.</p>
+</li>
+<li>
+<p><strong>Configure end-to-end TLS.</strong> Set up Authorino listener TLS and maas-api
+   backend TLS. See <a href="../tls-configuration/">TLS Configuration</a>.</p>
+</li>
+<li>
+<p><strong>Complete MaaS installation.</strong> If you have not already, follow the full
+   installation flow: database, DataScienceCluster, and validation.
+   See <a href="../../install/maas-setup/">Install MaaS Components</a>.</p>
+</li>
+<li>
+<p><strong>Deploy sample models.</strong> Use the bundled model samples to verify the
+   gateway is working end-to-end.
+   See <a href="../../install/model-setup/">Model Setup</a>.</p>
+</li>
+</ol>
 
 
 
@@ -3037,7 +3290,7 @@ spec:
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 1, 2026 20:21:15 UTC">May 1, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 4, 2026 14:06:51 UTC">May 4, 2026</span>
   </span>
 
     
@@ -3047,7 +3300,7 @@ spec:
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 27, 2026 17:58:09 UTC">February 27, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 4, 2026 14:06:51 UTC">May 4, 2026</span>
   </span>
 
     
