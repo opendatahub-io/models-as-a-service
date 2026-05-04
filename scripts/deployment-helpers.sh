@@ -125,6 +125,7 @@ readonly CATALOGSOURCE_TIMEOUT="${CATALOGSOURCE_TIMEOUT:-120}"      # CatalogSou
 readonly LLMIS_TIMEOUT="${LLMIS_TIMEOUT:-300}"                      # LLMInferenceService ready
 readonly MAASMODELREF_TIMEOUT="${MAASMODELREF_TIMEOUT:-300}"        # MaaSModelRef ready
 readonly AUTHPOLICY_TIMEOUT="${AUTHPOLICY_TIMEOUT:-180}"            # AuthPolicy enforced
+readonly KUBECTL_REQUEST_TIMEOUT="${KUBECTL_REQUEST_TIMEOUT:-60}"    # kubectl apply/create request timeout (seconds)
 
 # Validate timeout values - must be positive integers within a sane range
 readonly _MAX_TIMEOUT=86400  # 24 hours - upper bound to catch misconfigurations
@@ -543,7 +544,7 @@ install_olm_operator() {
     # If operatorgroup_target is "AllNamespaces", omit targetNamespaces field
     if [ "$operatorgroup_target" = "AllNamespaces" ]; then
       log_info "Creating OperatorGroup in $namespace for AllNamespaces mode"
-      cat <<EOF | kubectl apply -f -
+      cat <<EOF | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
@@ -554,7 +555,7 @@ EOF
     else
       local og_target_ns="${operatorgroup_target:-$namespace}"
       log_info "Creating OperatorGroup in $namespace targeting $og_target_ns"
-      cat <<EOF | kubectl apply -f -
+      cat <<EOF | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
@@ -596,7 +597,7 @@ spec:
 "
   fi
 
-  echo "$subscription_yaml" | kubectl apply -f -
+  echo "$subscription_yaml" | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
 
   if [[ "$install_plan_approval" == "Manual" ]]; then
     log_info "Manual Subscription: approving initial InstallPlan so first install can proceed..."
@@ -808,7 +809,7 @@ create_gateway_route() {
   if [[ -n "$dest_ca_cert" ]]; then
     # Use reencrypt: Router terminates TLS with trusted cert, re-encrypts to Gateway
     # This gives clients a trusted certificate instead of our self-signed one
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -830,7 +831,7 @@ EOF
   else
     # Fallback to passthrough if we can't get the certificate
     echo "  WARNING: Could not retrieve TLS certificate from $tls_secret, using passthrough"
-    cat <<EOF | kubectl apply -f -
+    cat <<EOF | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -1306,7 +1307,7 @@ create_custom_catalogsource() {
     sleep 5
   fi
 
-  cat <<EOF | kubectl apply -f -
+  cat <<EOF | kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
@@ -1602,7 +1603,7 @@ create_maas_db_config_secret() {
       --from-file=DB_CONNECTION_URL=/dev/stdin \
       --dry-run=client -o yaml | \
     kubectl label --local -f - app=maas-api --dry-run=client -o yaml | \
-    kubectl apply -n "$namespace" -f -
+    kubectl apply --request-timeout="${KUBECTL_REQUEST_TIMEOUT}s" -n "$namespace" -f -
 }
 
 # ==========================================
