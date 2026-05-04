@@ -11,9 +11,10 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 ### Breaking Changes
 
 **Required `spec` field for MaaS CRs**
-- All MaaS custom resources (`MaaSAuthPolicy`, `MaaSSubscription`, `MaaSModelRef`, `Tenant`) now require the `spec` field
+- `MaaSAuthPolicy`, `MaaSSubscription`, and `MaaSModelRef` now require the `spec` field
 - CRs without `spec` are marked as `Invalid` and new CRs without `spec` are blocked
-- **Migration:** Add a `spec` field to any existing CRs that lack one (e.g., add `spec: {}` if needed)
+- Tenant.Spec remains optional
+- **Migration:** Add a `spec` field to existing `MaaSAuthPolicy`, `MaaSSubscription`, and `MaaSModelRef` CRs that lack one (e.g., add `spec: {}` if needed)
 
 ### New Features
 
