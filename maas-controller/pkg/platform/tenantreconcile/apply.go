@@ -123,9 +123,8 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 	for i := range objs {
 		u := objs[i].DeepCopy()
 
-		// Skip resources whose live cluster copy has opendatahub.io/managed=false.
-		// This allows deploy scripts to opt-out specific resources (e.g. AuthPolicy
-		// patched with OIDC config) from being overwritten on each reconcile.
+		// Skip resources whose live cluster copy has opendatahub.io/managed=false,
+		// allowing operators to opt specific resources out of reconciliation.
 		if isLiveResourceUnmanaged(ctx, c, u) {
 			log.V(1).Info("Skipping SSA for resource with opendatahub.io/managed=false on cluster",
 				"kind", u.GetKind(), "name", u.GetName(), "namespace", u.GetNamespace())
@@ -173,7 +172,7 @@ func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *uns
 		return false
 	}
 	ann := live.GetAnnotations()
-	return ann != nil && ann["opendatahub.io/managed"] == "false"
+	return ann != nil && ann[AnnotationManaged] == "false"
 }
 
 func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant *maasv1alpha1.Tenant) {
