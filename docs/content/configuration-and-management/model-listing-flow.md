@@ -23,7 +23,7 @@ When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service
 
 2. For each MaaSModelRef, it reads **id** (`metadata.name`), **url** (`status.endpoint`), **ready** (`status.phase == "Ready"`), and **namespace** (`metadata.namespace`, returned as `ownedBy`). The controller populates `status.endpoint` and `status.phase` from the underlying backend.
 
-3. **Access validation**: The API probes each model’s `/v1/models` endpoint with the client’s Authorization header. Models returning **2xx** or **405** are included; **401/403/404** are excluded.
+3. **Access validation**: The API probes each model’s `/v1/models` endpoint with the client’s Authorization header. Models returning **2xx** or **405** are included; **401/403/404** are excluded. Each probe must respond within the access check timeout (default 15 seconds); models that do not respond in time are excluded (fail-closed). See [Access Check Timeout](#access-check-timeout) to tune this value.
 
     !!! note "ExternalModel bypass"
         ExternalModel kinds are included if `status.phase == "Ready"` without probe validation.
@@ -59,6 +59,17 @@ sequenceDiagram
 - **Consistent with gateway**: The same model names and routes are used for inference; the list matches what the gateway will accept for that client.
 
 If the API is not configured with a MaaSModelRef lister, or if listing fails (e.g. CRD not installed, no RBAC, or server error), the API returns an empty list or an error.
+
+### Access Check Timeout
+
+The maas-api deployment supports the following environment variable to control access validation probe timing:
+
+| Variable | Description | Default | Constraints |
+|----------|-------------|---------|-------------|
+| `ACCESS_CHECK_TIMEOUT_SECONDS` | Timeout in seconds for each model access validation probe during `GET /v1/models`. Models that do not respond within this window are excluded from the response (fail-closed). | `15` | Must be ≥ 1 |
+
+!!! tip "When to increase"
+    If models are missing from `GET /v1/models` responses and maas-api logs show probe timeouts, increase `ACCESS_CHECK_TIMEOUT_SECONDS` to give slower backends more time to respond. This is common when model endpoints have cold-start latency or are under heavy load.
 
 ## Subscription Filtering and Aggregation
 
