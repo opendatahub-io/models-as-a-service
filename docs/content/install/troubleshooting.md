@@ -53,8 +53,8 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Check HTTPRoute configuration and status
 
 7. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
-      - [ ] Verify User Workload Monitoring is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#user-workload-monitoring)
-      - [ ] Verify Kuadrant observability is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#kuadrant-observability)
+      - [ ] Verify User Workload Monitoring is enabled — see [Observability Setup](../observability/setup.md#user-workload-monitoring)
+      - [ ] Verify Kuadrant observability is enabled — see [Observability Setup](../observability/setup.md#kuadrant-observability)
       - [ ] Check prometheus-user-workload pods are running:
 
       ```bash
@@ -88,7 +88,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       is not deployed or Perses is not running. The most common causes are missing operators (COO,
       OpenTelemetry) or DSCI `monitoring.metrics` not being configured.
 
-      See [RHOAI Dashboard Observability Tab](../advanced-administration/observability.md#rhoai-dashboard-observability-tab) for the full prerequisites and verification checklist.
+      See [RHOAI Dashboard Observability Tab](../observability/setup.md#rhoai-dashboard-observability-tab-optional) for the full prerequisites and verification checklist.
 
 10. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
 
@@ -97,5 +97,5 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 ## Additional Resources
 
 - [Validation Guide](validation.md) — Manual validation steps
-- [Observability Guide](../advanced-administration/observability.md) — Metrics, monitoring, and dashboards
+- [Observability Guide](../observability/index.md) — Metrics, monitoring, and dashboards
 - [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md) — Deployment scripts documentation
