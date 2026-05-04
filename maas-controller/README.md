@@ -506,7 +506,7 @@ cluster-audience=https://your-cluster-oidc-issuer
 Then redeploy:
 
 ```bash
-kustomize build deployment/overlays/odh | kubectl apply -f -
+./scripts/deploy.sh
 ```
 
 **Configure via kubectl patch (running deployment):**

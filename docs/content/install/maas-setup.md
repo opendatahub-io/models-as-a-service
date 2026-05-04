@@ -269,10 +269,10 @@ After creating the database Secret and Gateways, create or update your DataScien
     EOF
     ```
 
-    Apply the ODH overlay to deploy the MaaS API and controller (run from the project root; ensure the `maas-db-config` Secret exists per [Database Setup](#database-setup)):
+    Deploy MaaS (run from the project root; ensure the `maas-db-config` Secret exists per [Database Setup](#database-setup)):
 
     ```bash
-    kustomize build deployment/overlays/odh | kubectl apply -f -
+    ./scripts/deploy.sh
     ```
 
 !!! tip "Troubleshooting"
