@@ -72,7 +72,7 @@ Use the unified deployment script for all deployment scenarios. The script insta
 ./scripts/deploy.sh --deployment-mode kustomize
 ```
 
-For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md) or the [Deployment Options](#-deployment-options) section below.
+For detailed instructions, see the [Installation Guide](docs/content/quickstart.md) or the [Deployment Options](#-deployment-options) section below.
 
 ## 🛠️ Deployment Options
 
@@ -156,7 +156,7 @@ MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \
 
 ## 📚 Documentation
 
-- [Deployment Guide](docs/content/quickstart.md) - Complete deployment instructions
+- [Installation Guide](docs/content/quickstart.md) - Complete deployment instructions
 - [MaaS API Documentation](maas-api/README.md) - Go API for key management
 - [MaaS Controller Documentation](maas-controller/README.md) - Controller, Tenant reconciler, and subscription model
 - [Authorino Caching Configuration](docs/content/configuration-and-management/authorino-caching.md) - Cache tuning for metadata and authorization
@@ -179,5 +179,5 @@ This project is licensed under the Apache 2.0 License.
 
 For questions or issues:
 - Open an issue on GitHub
-- Check the [deployment guide](docs/content/quickstart.md) for troubleshooting
+- Check the [Installation Guide](docs/content/quickstart.md) for troubleshooting
 - Review the [samples](docs/samples/models) for examples
