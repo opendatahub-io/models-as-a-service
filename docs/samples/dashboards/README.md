@@ -78,7 +78,7 @@ Monitor these important metrics:
 ### 🔗 Related Documentation
 
 - [Deployment Guide](../../README.md)
-- [Observability Setup](../../content/advanced-administration/observability.md)
+- [Observability Setup](../../content/observability/setup.md)
 
 ### 🛠️ Customization
 
