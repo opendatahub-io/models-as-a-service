@@ -102,6 +102,19 @@ func (l *Logger) WithError(err error) *Logger {
 	}
 }
 
+// WithRequestID returns a logger with a request_id field attached.
+// This is the preferred method for request-scoped logging to enable
+// correlation across logs without exposing sensitive tokens.
+func (l *Logger) WithRequestID(requestID string) *Logger {
+	if requestID == "" {
+		return l
+	}
+	return &Logger{
+		SugaredLogger: l.With("request_id", requestID),
+		level:         l.level,
+	}
+}
+
 // Debug logs a debug-level message with optional fields.
 // Only logged when debug mode is enabled.
 func (l *Logger) Debug(msg string, fields ...any) {
