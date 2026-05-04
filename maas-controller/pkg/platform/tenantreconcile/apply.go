@@ -12,7 +12,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -50,7 +49,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
 				var already *controllerutil.AlreadyOwnedError
 				if errors.As(err, &already) {
-					log.FromContext(ctx).Info("skipping Config controller reference: object already owned by another controller",
+					ctrl.LoggerFrom(ctx).Info("skipping Config controller reference: object already owned by another controller",
 						"kind", u.GetKind(), "namespace", u.GetNamespace(), "name", u.GetName(),
 						"existingOwner", already)
 				} else {
@@ -70,7 +69,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 				// installed by COO which may not be present yet). Skip so the rest of the
 				// platform manifests are applied and Tenant reconcile does not fail.
 				// The CRD watch will re-trigger reconcile once the CRDs appear.
-				log.FromContext(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
+				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", u.GroupVersionKind().Group, "kind", u.GetKind(),
 					"name", u.GetName(), "namespace", u.GetNamespace())
 				continue
