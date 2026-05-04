@@ -80,6 +80,7 @@ nav:
       - API Key Administration: configuration-and-management/api-key-administration.md
       - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
+      - Gateway Patterns: configuration-and-management/gateway-patterns.md
     - Models:
       - Model Setup: configuration-and-management/model-setup.md
       - Model Listing Flow: configuration-and-management/model-listing-flow.md
