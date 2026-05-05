@@ -147,8 +147,12 @@ kubectl get secret maas-api-serving-cert -n <application-namespace> \
 # commands below)
 kubectl port-forward -n <application-namespace> svc/maas-api 8443:8443
 
+# Extract the service CA for TLS verification
+oc get configmap -n openshift-config-managed service-ca-bundle \
+  -o jsonpath='{.data.service-ca\.crt}' > /tmp/service-ca.crt
+
 # Test health endpoint
-curl -v https://localhost:8443/health
+curl -v --cacert /tmp/service-ca.crt https://localhost:8443/health
 
 # Check certificate chain
 openssl s_client -connect localhost:8443 \

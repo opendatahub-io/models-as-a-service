@@ -94,6 +94,8 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
+11. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+
 ## TLS Certificate Validation
 
 By default, `curl` validates TLS certificates against your system CA bundle. If you encounter certificate verification errors (e.g., `curl: (60) SSL certificate problem: self-signed certificate`), use one of the approaches below.
