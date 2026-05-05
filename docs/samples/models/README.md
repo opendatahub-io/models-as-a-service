@@ -1,6 +1,6 @@
 # Sample LLMInferenceService Models
 
-This directory contains `LLMInferenceService`s for deploying sample models. Please refer to the [deployment guide](../../content/quickstart.md) for more details on how to test the MaaS Platform with these models.
+This directory contains `LLMInferenceService`s for deploying sample models. Please refer to the [Installation Guide](../../content/quickstart.md) for more details on how to test the MaaS Platform with these models.
 
 ## Available Models
 

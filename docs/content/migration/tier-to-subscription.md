@@ -1106,7 +1106,7 @@ This is equivalent to the old tier system's `free` tier with `system:authenticat
 
 - [Old vs New Flow Documentation](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/docs/old-vs-new-flow.md)
 - [MaaS Controller README](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/README.md)
-- [Deployment Guide](../quickstart.md)
+- [Installation Guide](../quickstart.md)
 
 ## Support
 
