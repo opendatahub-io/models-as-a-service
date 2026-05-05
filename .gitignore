@@ -7,7 +7,6 @@ build/
 .idea/
 .claude
 .cursor/
-AGENTS.md
 
 *.pid
 
@@ -54,7 +53,9 @@ reports/
 apps/frontend/.env.local
 apps/backend/.env
 CLAUDE.md
-.cursor/
+
+# Git worktrees
+.worktrees/
 
 # Docs build and site directories
 docs/build/

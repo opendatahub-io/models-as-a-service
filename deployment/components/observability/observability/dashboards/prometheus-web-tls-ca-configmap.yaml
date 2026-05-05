@@ -1,0 +1,12 @@
+# OpenShift service CA bundle for TLS clients (e.g. Perses → Thanos Querier).
+# The service-ca operator injects data.service-ca.crt when the annotation is present.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-web-tls-ca
+  namespace: opendatahub
+  labels:
+    app.kubernetes.io/managed-by: maas-observability
+    app.kubernetes.io/component: perses
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"

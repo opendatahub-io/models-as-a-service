@@ -82,4 +82,4 @@ kubectl create rolebinding my-models-admin --clusterrole=admin --user=user@examp
 
 - [Model Setup Guide](model-setup.md) - How to configure models for MaaS
 - [Quota and Access Configuration](quota-and-access-configuration.md) - Platform admin guide for subscriptions
-- [Self-Service Model Access](../user-guide/self-service-model-access.md) - End user guide for using models via API
+- [API Key Management](../user-guide/api-key-management.md) - End user guide for creating API keys and using models

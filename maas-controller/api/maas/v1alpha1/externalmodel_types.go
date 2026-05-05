@@ -35,18 +35,16 @@ type ExternalModel struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ExternalModelSpec   `json:"spec,omitempty"`
+	Spec   ExternalModelSpec   `json:"spec"`
 	Status ExternalModelStatus `json:"status,omitempty"`
 }
 
 // ExternalModelSpec defines the desired state of ExternalModel
 type ExternalModelSpec struct {
 	// Provider identifies the API format and auth type for the external model.
-	// The allowed values are: "openai", "anthropic", "azure-openai", "vertex" and "bedrock-openai".
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Enum=openai;anthropic;azure-openai;vertex;bedrock-openai
 	Provider string `json:"provider"`
 
 	// TargetModel is the upstream model name at the external provider.

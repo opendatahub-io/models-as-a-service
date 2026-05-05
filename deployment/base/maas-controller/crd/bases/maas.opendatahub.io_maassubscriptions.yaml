@@ -83,8 +83,11 @@ spec:
                         description: TokenRateLimit defines a token rate limit
                         properties:
                           limit:
-                            description: Limit is the maximum number of tokens allowed
+                            description: |-
+                              Limit is the maximum number of tokens allowed within the window.
+                              Must be between 1 and 1,000,000,000 (1 billion).
                             format: int64
+                            maximum: 1000000000
                             minimum: 1
                             type: integer
                           window:
@@ -261,6 +264,7 @@ spec:
                       - NotEnforced
                       - BackendNotReady
                       - ConditionsNotFound
+                      - InvalidSpec
                       - Unknown
                       type: string
                   required:
@@ -276,6 +280,7 @@ spec:
                 - Active
                 - Degraded
                 - Failed
+                - Invalid
                 type: string
               tokenRateLimitStatuses:
                 description: TokenRateLimitStatuses reports the status of each generated
@@ -323,6 +328,7 @@ spec:
                       - NotEnforced
                       - BackendNotReady
                       - ConditionsNotFound
+                      - InvalidSpec
                       - Unknown
                       type: string
                   required:
@@ -333,6 +339,8 @@ spec:
                   type: object
                 type: array
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true

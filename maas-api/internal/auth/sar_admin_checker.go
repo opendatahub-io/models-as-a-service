@@ -2,7 +2,7 @@ package auth
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 
 	authv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,10 +37,9 @@ func NewSARAdminChecker(client kubernetes.Interface, namespace string) *SARAdmin
 
 // IsAdmin checks if the user can create maasauthpolicies in the configured namespace.
 // This is a proxy for "is this user an admin" based on RBAC permissions.
-// Returns false (fail-closed) if the check cannot be performed.
-func (s *SARAdminChecker) IsAdmin(ctx context.Context, user *token.UserContext) bool {
+func (s *SARAdminChecker) IsAdmin(ctx context.Context, user *token.UserContext) (bool, error) {
 	if s == nil || s.client == nil || user == nil || user.Username == "" {
-		return false
+		return false, nil
 	}
 
 	sar := &authv1.SubjectAccessReview{
@@ -58,9 +57,8 @@ func (s *SARAdminChecker) IsAdmin(ctx context.Context, user *token.UserContext) 
 
 	result, err := s.client.AuthorizationV1().SubjectAccessReviews().Create(ctx, sar, metav1.CreateOptions{})
 	if err != nil {
-		slog.Warn("SAR admin check failed", "error", err.Error())
-		return false
+		return false, fmt.Errorf("SAR admin check: %w", err)
 	}
 
-	return result.Status.Allowed
+	return result.Status.Allowed, nil
 }

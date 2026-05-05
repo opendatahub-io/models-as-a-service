@@ -41,12 +41,11 @@ Client → Gateway (TLS termination) → [DestinationRule] → maas-api:8443 (TL
 kustomize build deployment/overlays/tls | kubectl apply -f -
 ```
 
-### As part of full TLS backend
+### As part of Tenant reconciler
 
-This overlay is referenced by `overlays/tls-backend` which adds:
-- Authorino TLS configuration
-- HTTPRoute port patches for HTTPS backend
-- Service CA bundle for inter-service trust
+This overlay is referenced by `maas-api/deploy/overlays/odh` (the Tenant reconciler overlay)
+and `deployment/overlays/odh` (the ODH operator overlay). The Tenant reconciler also applies
+gateway policies and configures DestinationRule namespace via PostRender.
 
 ## Certificate Management
 

@@ -7,8 +7,9 @@ metadata:
     config.kubernetes.io/local-config: "true"
 
 resources:
-  - usage-dashboard.yaml
+  - prometheus-web-tls-ca-configmap.yaml
   - kuadrant-prometheus-datasource.yaml
+  - usage-dashboard.yaml
 
 labels:
   - pairs:

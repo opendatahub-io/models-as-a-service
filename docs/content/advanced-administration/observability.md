@@ -1,4 +1,4 @@
-# Observability
+# Observability Dashboard
 
 This document covers the observability stack for the MaaS Platform, including metrics collection, monitoring, and visualization.
 
@@ -110,6 +110,28 @@ curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
 !!! note "Cluster Admin Permissions"
     Configuring User Workload Monitoring requires cluster admin permissions to create ConfigMaps in the `openshift-monitoring` namespace. If you don't have these permissions, contact your cluster administrator.
 
+## RHOAI Dashboard Observability Tab
+
+The RHOAI Dashboard includes a built-in **Observability** tab that displays Perses-based dashboards
+for platform monitoring. This is separate from the MaaS-specific Grafana dashboards described later
+in this document.
+
+The following must be in place for the Observability tab to work:
+
+- **Cluster Observability Operator (COO)** and **OpenTelemetry Operator** — install both from OperatorHub
+- **DSCI `monitoring.metrics`** — see [Platform Setup](../install/platform-setup.md#install-platform-operator) for DSCI configuration
+- **`observabilityDashboard: true`** on OdhDashboardConfig — see [Feature Flags](../install/maas-setup.md#odhdashboardconfig-feature-flags)
+
+**Quick verification:**
+
+```bash
+kubectl get csv -A | grep -E 'cluster-observability|opentelemetry'
+kubectl get dsciinitialization default-dsci -o jsonpath='{.spec.monitoring}' | jq .
+kubectl get pods -n redhat-ods-monitoring | grep perses
+```
+
+For the full setup procedure, see [Managing observability (RHOAI 3.4)](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai).
+
 ## Overview
 
 As part of Dev Preview, MaaS Platform includes a basic observability stack that provides insights into system performance, usage patterns, and operational health.
@@ -144,18 +166,19 @@ The observability stack consists of:
 
 There are two ways to enable deployment-based observability:
 
-1. **Operator-managed** (recommended): Enable via ModelsAsService CR
+1. **Operator-managed** (recommended): Enable via Tenant CR
 2. **Kustomize-based**: Deploy manifests directly
 
 ### Option 1: Operator-Managed Telemetry
 
-When using the ODH/RHOAI operator, telemetry can be enabled via the ModelsAsService CR:
+When using the ODH/RHOAI operator, telemetry can be enabled via the Tenant CR (self-bootstrapped by `maas-controller` in the `models-as-a-service` namespace):
 
 ```yaml
-apiVersion: components.platform.opendatahub.io/v1alpha1
-kind: ModelsAsService
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Tenant
 metadata:
-  name: default-modelsasservice
+  name: default-tenant
+  namespace: models-as-a-service
 spec:
   telemetry:
     enabled: true  # Enable TelemetryPolicy and Istio Telemetry
@@ -169,11 +192,11 @@ spec:
 Or patch an existing CR:
 
 ```bash
-kubectl patch modelsasservice default-modelsasservice --type=merge \
+kubectl patch tenant default-tenant -n models-as-a-service --type=merge \
   -p '{"spec":{"telemetry":{"enabled":true}}}'
 ```
 
-**What the operator creates when `telemetry.enabled: true`:**
+**What the Tenant reconciler creates when `telemetry.enabled: true`:**
 
 | Resource | Namespace | Purpose |
 |----------|-----------|---------|
@@ -181,13 +204,13 @@ kubectl patch modelsasservice default-modelsasservice --type=merge \
 | Istio Telemetry (`latency-per-subscription`) | Gateway namespace | Adds `subscription` label to gateway latency metrics |
 
 !!! note "Prerequisites for Operator-Managed Telemetry"
-    The operator-managed telemetry feature requires:
+    The Tenant reconciler telemetry feature requires:
 
     - **OpenShift Service Mesh (Istio)** 2.4+ — for Istio Telemetry CRD
     - **Kuadrant/RHCL** — for TelemetryPolicy CRD and AuthPolicy header injection
     - **Gateway deployed** — Telemetry targets the gateway via selector
 
-    The operator checks for CRD availability before creating resources. If a CRD is not present, that resource is silently skipped.
+    The Tenant reconciler checks for CRD availability before creating resources. If a CRD is not present, that resource is silently skipped.
 
 !!! warning "AuthPolicy Header Dependency"
     The Istio Telemetry reads the `subscription` value from the `X-MaaS-Subscription` header, which must be injected by AuthPolicy:
@@ -405,7 +428,7 @@ MaaS supports three model serving backends that expose Prometheus metrics on `/m
 
 - **vLLM** (current stable) — full-featured LLM inference server
 - **llm-d** — llm-d inference platform (runs vLLM as backend + EPP routing layer)
-- **llm-d-inference-sim** (v0.7.1) — lightweight simulator for testing without GPUs
+- **llm-d-inference-sim** (v0.8.2) — lightweight simulator for testing without GPUs
 
 **Supported versions:**
 
@@ -413,7 +436,7 @@ MaaS supports three model serving backends that expose Prometheus metrics on `/m
 |---------|----------------|------------------|
 | vLLM | v0.7.x stable | — |
 | llm-d | v0.1.x | — |
-| llm-d-inference-sim | **v0.7.1** | `docs/samples/models/simulator/` |
+| llm-d-inference-sim | **v0.8.2** | `docs/samples/models/simulator/` |
 
 #### vLLM Metrics (port 8000)
 
@@ -443,7 +466,7 @@ All three backends expose `vllm:`-prefixed metrics. The table below shows which 
 | `vllm:time_per_output_token_seconds` | Histogram | Y | — | — | Legacy ITL name (kept by simulator for backward compat; not used by dashboards) |
 
 !!! note "Simulator metric alignment"
-    As of v0.7.1, the simulator fully aligns with current vLLM metric names (`kv_cache_usage_perc`, `inter_token_latency_seconds`, `prompt_tokens_total`, `generation_tokens_total`). Older simulator versions (v0.6.x) used different names (`gpu_cache_usage_perc`, `time_per_output_token_seconds`) and are **no longer supported** by MaaS dashboards. The simulator also exposes additional metrics not used by MaaS dashboards (e.g. `request_inference_time_seconds`, `request_params_max_tokens`).
+    As of v0.7.1 (still true in v0.8.x), the simulator fully aligns with current vLLM metric names (`kv_cache_usage_perc`, `inter_token_latency_seconds`, `prompt_tokens_total`, `generation_tokens_total`). Older simulator versions (v0.6.x) used different names (`gpu_cache_usage_perc`, `time_per_output_token_seconds`) and are **no longer supported** by MaaS dashboards. The simulator also exposes additional metrics not used by MaaS dashboards (e.g. `request_inference_time_seconds`, `request_params_max_tokens`).
 
 !!! note "Lazily registered metrics"
     Some vLLM/simulator metrics are **lazily registered** — they only appear in `/metrics` output after the first event that triggers them. For example, `request_queue_time_seconds` (on real vLLM) only appears after a request actually queues (when `max-num-seqs` is exceeded). Similarly, histogram counters like `e2e_request_latency_seconds` only appear after the first inference request completes. Dashboard panels will show "No Data" until sufficient traffic has been generated. This is normal Prometheus client behavior, not a configuration issue.
@@ -475,7 +498,7 @@ When using llm-d, the inference gateway's Endpoint Picker (EPP) exposes addition
 
 #### Dashboard Metric Queries
 
-Dashboard panels use histogram `_sum` as primary data source. All queries work across vLLM, llm-d, and llm-d-inference-sim v0.7.1:
+Dashboard panels use histogram `_sum` as primary data source. All queries work across vLLM, llm-d, and llm-d-inference-sim v0.8.2:
 
 | Panel | PromQL metric |
 |-------|---------------|

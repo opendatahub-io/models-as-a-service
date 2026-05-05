@@ -60,3 +60,27 @@ Reports the status of each underlying Kuadrant AuthPolicy created by this MaaSAu
 | modelNamespace | string | Namespace of the MaaSModelRef |
 | accepted | string | Whether the AuthPolicy has been accepted (from `status.conditions` type=Accepted) |
 | enforced | string | Whether the AuthPolicy is enforced (from `status.conditions` type=Enforced) |
+
+## Annotations
+
+MaaSAuthPolicy supports standard Kubernetes and OpenShift annotations for use by `kubectl`, the OpenShift console, and other tooling.
+
+| Annotation | Description | Example |
+| ---------- | ----------- | ------- |
+| `openshift.io/display-name` | Human-readable display name | `"Premium Access Policy"` |
+| `openshift.io/description` | Free-text description | `"Grants premium-users group access to premium models"` |
+
+**Example:**
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: premium-access
+  namespace: models-as-a-service
+  annotations:
+    openshift.io/display-name: "Premium Access Policy"
+    openshift.io/description: "Grants premium-users group access to premium models"
+spec:
+  # ...
+```

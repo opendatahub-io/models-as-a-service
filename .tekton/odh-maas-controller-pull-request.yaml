@@ -28,9 +28,9 @@ spec:
   - name: output-image
     value: quay.io/opendatahub/maas-controller:odh-pr
   - name: dockerfile
-    value: Dockerfile
+    value: maas-controller/Dockerfile
   - name: path-context
-    value: maas-controller
+    value: .
   - name: additional-tags
     value:
     - 'odh-pr-{{revision}}'

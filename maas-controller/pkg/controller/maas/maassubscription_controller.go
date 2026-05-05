@@ -20,8 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -66,7 +69,58 @@ const (
 	// modelRefIndexKey is the field index key for looking up MaaSSubscriptions by model reference.
 	// The index value format is "namespace/name" of the model.
 	modelRefIndexKey = "spec.modelRef"
+
+	// maxTokenRateLimit caps the token limit to prevent Kuadrant validation failures.
+	// Values above this are unreasonable for any practical rate-limiting scenario.
+	maxTokenRateLimit int64 = 1_000_000_000 // 1 billion tokens
+
+	// maxWindowSeconds caps the window duration to 366 days (one leap year) to prevent
+	// unreasonably large windows from reaching Kuadrant. 8784h fits the CRD pattern
+	// ^[1-9]\d{0,3}(s|m|h)$.
+	maxWindowSeconds int64 = 366 * 24 * 3600 // 366 days (leap year) in seconds
 )
+
+var windowPattern = regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
+
+// validateTokenRateLimit checks if a token rate limit has reasonable values that
+// Kuadrant will accept. Returns an error describing the issue if invalid.
+func validateTokenRateLimit(limit int64, window string) error {
+	if limit <= 0 {
+		return fmt.Errorf("token limit %d must be positive", limit)
+	}
+	if limit > maxTokenRateLimit {
+		return fmt.Errorf("token limit %d exceeds maximum allowed value %d", limit, maxTokenRateLimit)
+	}
+
+	matches := windowPattern.FindStringSubmatch(window)
+	if len(matches) != 2 {
+		return fmt.Errorf("invalid window format %q: expected a positive number followed by s, m, or h (e.g. \"1h\", \"30m\")", window)
+	}
+
+	// Extract numeric part (everything except the last character).
+	unit := matches[1]
+	numStr := window[:len(window)-len(unit)]
+	value, err := strconv.ParseInt(numStr, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid window numeric value %q: %w", numStr, err)
+	}
+
+	var seconds int64
+	switch unit {
+	case "s":
+		seconds = value
+	case "m":
+		seconds = value * 60
+	case "h":
+		seconds = value * 3600
+	}
+
+	if seconds > maxWindowSeconds {
+		return fmt.Errorf("window %q (%d seconds) exceeds maximum allowed duration (%d seconds)", window, seconds, maxWindowSeconds)
+	}
+
+	return nil
+}
 
 // ConditionSpecPriorityDuplicate is set True when another MaaSSubscription shares the same spec.priority
 // (API key mint and selector use deterministic tie-break; admins should set distinct priorities).
@@ -286,6 +340,14 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return r.handleDeletion(ctx, log, subscription)
 	}
 
+	// Handle no spec (e.g. legacy resources created before spec was required).
+	// No finalizer needed — there are no TRLPs to clean up.
+	if reflect.DeepEqual(subscription.Spec, maasv1alpha1.MaaSSubscriptionSpec{}) {
+		statusSnapshot := subscription.Status.DeepCopy()
+		r.updateStatus(ctx, subscription, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
+		return ctrl.Result{}, nil
+	}
+
 	// Add finalizer if not present
 	if !controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
 		controllerutil.AddFinalizer(subscription, maasSubscriptionFinalizer)
@@ -459,16 +521,39 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 				continue
 			}
 			var rates []any
+			var hasInvalidLimits bool
 			if len(mRef.TokenRateLimits) > 0 {
 				for _, trl := range mRef.TokenRateLimits {
+					if err := validateTokenRateLimit(trl.Limit, trl.Window); err != nil {
+						log.Error(err, "Skipping subscription with invalid token rate limit — fix the spec to include it in TRLP",
+							"subscription", sub.Name, "model", modelNamespace+"/"+modelName,
+							"limit", trl.Limit, "window", trl.Window)
+						hasInvalidLimits = true
+						break
+					}
 					rates = append(rates, map[string]any{"limit": trl.Limit, "window": trl.Window})
 				}
 			} else {
 				rates = append(rates, map[string]any{"limit": int64(100), "window": "1m"})
 			}
+			if hasInvalidLimits {
+				// Skip this subscription to prevent poisoning the aggregated TRLP.
+				// The subscription is already marked Degraded/Failed by validateModelRefs(),
+				// and maas-api's subscription selector rejects non-Active subscriptions,
+				// so the invalid subscription cannot be used for API key minting.
+				continue
+			}
 			subs = append(subs, subInfo{sub: sub, mRef: mRef, rates: rates})
 			break
 		}
+	}
+
+	// If all subscriptions were skipped due to invalid limits, treat as no effective
+	// subscriptions — delete the TRLP instead of writing one with empty limits.
+	if len(subs) == 0 && len(allSubs) > 0 {
+		log.Info("All subscriptions for model have invalid rate limits — deleting TRLP",
+			"model", modelNamespace+"/"+modelName, "invalidCount", len(allSubs))
+		return r.deleteModelTRLP(ctx, log, modelNamespace, modelName)
 	}
 
 	// Trust auth.identity.selected_subscription_key from AuthPolicy.
@@ -738,6 +823,9 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 	case maasv1alpha1.PhaseFailed:
 		status = metav1.ConditionFalse
 		reason = maasv1alpha1.ReasonReconcileFailed
+	case maasv1alpha1.PhaseInvalid:
+		status = metav1.ConditionFalse
+		reason = maasv1alpha1.ReasonInvalidSpec
 	default:
 		status = metav1.ConditionUnknown
 		reason = maasv1alpha1.ReasonUnknown

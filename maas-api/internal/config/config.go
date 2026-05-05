@@ -52,6 +52,12 @@ type Config struct {
 	// window are excluded (fail-closed). Default: 15 seconds. Minimum: 1 second.
 	AccessCheckTimeoutSeconds int
 
+	// SARCacheMaxSize is the maximum number of entries in the SAR admin-check cache.
+	// Bounds memory usage under high-cardinality user traffic. Default: 8192.
+	SARCacheMaxSize int
+
+	MetricsPort int
+
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
 }
@@ -63,6 +69,8 @@ func Load() *Config {
 	secure, _ := env.GetBool("SECURE", false)
 	maxExpirationDays, _ := env.GetInt("API_KEY_MAX_EXPIRATION_DAYS", constant.DefaultAPIKeyMaxExpirationDays)
 	accessCheckTimeoutSeconds, _ := env.GetInt("ACCESS_CHECK_TIMEOUT_SECONDS", 15)
+	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
+	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
 
 	c := &Config{
 		Name:                      env.GetString("INSTANCE_NAME", gatewayName),
@@ -77,6 +85,8 @@ func Load() *Config {
 		DBConnectionURL:           "", // Loaded from K8s secret via LoadDatabaseURL()
 		APIKeyMaxExpirationDays:   maxExpirationDays,
 		AccessCheckTimeoutSeconds: accessCheckTimeoutSeconds,
+		SARCacheMaxSize:           sarCacheMaxSize,
+		MetricsPort:               metricsPort,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}
@@ -153,6 +163,10 @@ func (c *Config) Validate() error {
 		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
 	}
 
+	if c.MetricsPort < 1 || c.MetricsPort > 65535 {
+		return errors.New("METRICS_PORT must be between 1 and 65535")
+	}
+
 	return nil
 }
 
@@ -174,6 +188,11 @@ func (c *Config) PrintDeprecationWarnings(log *logger.Logger) {
 			log.Warn("WARNING: --port is deprecated, use --address with --secure=false to serve insecure HTTP traffic")
 		}
 	})
+}
+
+// MetricsAddress returns the listen address for the metrics server.
+func (c *Config) MetricsAddress() string {
+	return fmt.Sprintf(":%d", c.MetricsPort)
 }
 
 // LoadDatabaseURL reads the database connection URL from the Kubernetes secret.

@@ -29,13 +29,15 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - Installs primary operator (RHOAI or ODH) or deploys via kustomize
 - Applies custom resources (DSC, DSCI)
 - Configures TLS backend (enabled by default, use `--disable-tls-backend` to skip)
+- Deploys `maas-controller`, which then deploys `maas-api` via the **Tenant reconciler** (SSA)
+- Passes `MAAS_API_IMAGE` to the controller as `RELATED_IMAGE_ODH_MAAS_API_IMAGE` so the Tenant reconciler uses the correct image
 - Supports custom operator catalogs and MaaS API images for PR testing
 
 **Options:**
 - `--operator-type <odh|rhoai>` - Which operator to install (default: odh)
 - `--deployment-mode <operator|kustomize>` - Deployment method (default: operator)
 - `--namespace <namespace>` - Target namespace for deployment
-- `--external-oidc` - Enable external OIDC on the `maas-api` AuthPolicy (kustomize mode only; in operator mode, configure `spec.externalOIDC` on the `ModelsAsService` CR)
+- `--external-oidc` - Enable external OIDC on the `maas-api` AuthPolicy (kustomize mode only; in operator mode, configure `spec.externalOIDC` on the `Tenant` CR)
 - `--enable-keycloak` - Deploy a Keycloak instance for external OIDC testing
 - `--enable-tls-backend` - Enable TLS backend (default)
 - `--disable-tls-backend` - Disable TLS backend
@@ -53,7 +55,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `kustomize` installed
 
 **Environment Variables:**
-- `MAAS_API_IMAGE` - Custom MaaS API container image (works in both operator and kustomize modes)
+- `MAAS_API_IMAGE` - Custom MaaS API container image (passed to the Tenant reconciler via `RELATED_IMAGE_ODH_MAAS_API_IMAGE` on the controller Deployment)
 - `MAAS_CONTROLLER_IMAGE` - Custom MaaS controller container image
 - `OPERATOR_CATALOG` - Custom operator catalog for PR testing
 - `OPERATOR_IMAGE` - Custom operator image for PR testing
@@ -153,8 +155,8 @@ Results:
 
 External OIDC can be enabled in two ways:
 
-**Operator mode:** Edit the `ModelsAsService` CR to add `spec.externalOIDC` with
-`issuerUrl` and `clientId`. The operator patches the AuthPolicy automatically.
+**Operator mode:** Edit the `Tenant` CR to add `spec.externalOIDC` with
+`issuerUrl` and `clientId`. The Tenant reconciler patches the AuthPolicy automatically.
 
 **Kustomize mode:** Use `--external-oidc` with env vars:
 ```bash
@@ -221,7 +223,7 @@ Installs individual dependencies (Kuadrant, ODH, etc.).
 
 ### Initial Deployment (Operator Mode - Recommended)
 ```bash
-# 1. Deploy the platform using ODH operator (default)
+# 1. Deploy the platform (installs prerequisites + maas-controller; Tenant reconciler deploys maas-api)
 ./scripts/deploy.sh
 
 # 2. Validate the deployment
@@ -236,7 +238,7 @@ kustomize build docs/samples/models/simulator | kubectl apply -f -
 
 ### Initial Deployment (Kustomize Mode)
 ```bash
-# 1. Deploy the platform using kustomize
+# 1. Deploy the platform via kustomize (maas-controller Tenant reconciler deploys maas-api)
 ./scripts/deploy.sh --deployment-mode kustomize
 
 # 2. Validate the deployment
