@@ -43,7 +43,7 @@ This prevents credential exfiltration where a malicious or compromised model ser
 **Migration Notes:**
 
 - The deployment script (`scripts/deploy.sh`) automatically installs Kuadrant 1.4.2 for new deployments
-- For existing deployments, upgrade Kuadrant/RHCL before upgrading to MaaS v0.2.0+
+- For existing deployments, upgrade Kuadrant/RHCL before upgrading to MaaS v0.1.0+
 
 For detailed version compatibility, see [Version Compatibility](docs/content/install/prerequisites.md#version-compatibility).
 
