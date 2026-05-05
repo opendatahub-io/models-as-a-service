@@ -23,7 +23,6 @@ import (
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -41,22 +40,12 @@ type externalModelHandler struct {
 }
 
 // ReconcileRoute validates the HTTPRoute for an external model and populates status.
-// The ExternalModel reconciler creates the "maas-model-<model.Name>" HTTPRoute in the
-// model's namespace. This method validates that it exists and is accepted by the gateway.
+// The ExternalModel reconciler creates the HTTPRoute in the model's namespace.
+// This method validates that it exists and is accepted by the gateway.
+// Note: we don't read the ExternalModel CR itself — only the HTTPRoute matters.
+// This keeps MaaSModelRef agnostic to the ExternalModel API group
+// (maas.opendatahub.io or inference.opendatahub.io).
 func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
-	// Fetch the referenced ExternalModel CR to get provider configuration
-	externalModel := &maasv1alpha1.ExternalModel{}
-	externalModelKey := types.NamespacedName{
-		Name:      model.Spec.ModelRef.Name,
-		Namespace: model.Namespace,
-	}
-	if err := h.r.Get(ctx, externalModelKey, externalModel); err != nil {
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("ExternalModel %s not found in namespace %s", model.Spec.ModelRef.Name, model.Namespace)
-		}
-		return fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
-	}
-
 	routeName := model.Spec.ModelRef.Name
 	routeNS := model.Namespace
 
@@ -155,7 +144,6 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 
 	log.Info("HTTPRoute validated for ExternalModel",
 		"routeName", routeName, "namespace", routeNS, "model", model.Name,
-		"externalModel", externalModel.Name, "provider", externalModel.Spec.Provider,
 		"gateway", fmt.Sprintf("%s/%s", gatewayNamespace, gatewayName), "hostnames", hostnames)
 
 	return nil

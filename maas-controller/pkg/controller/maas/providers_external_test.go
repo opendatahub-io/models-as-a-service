@@ -146,18 +146,19 @@ func TestExternalModel_ReconcileRoute_MissingHTTPRoute(t *testing.T) {
 
 func TestExternalModel_ReconcileRoute_MissingExternalModel(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
-	// Don't create ExternalModel CR - it should fail
+	// No ExternalModel CR — ReconcileRoute only checks HTTPRoute, not the ExternalModel CR.
+	// Without an HTTPRoute, it should return nil and clear status (waiting state).
 
 	r, _ := newTestReconciler(model)
 	handler := &externalModelHandler{r: r}
 	log := zap.New(zap.UseDevMode(true))
 
 	err := handler.ReconcileRoute(context.Background(), log, model)
-	if err == nil {
-		t.Fatal("ReconcileRoute: expected error for missing ExternalModel CR")
+	if err != nil {
+		t.Fatalf("ReconcileRoute: unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "ExternalModel") || !strings.Contains(err.Error(), "not found") {
-		t.Errorf("ReconcileRoute: error = %q, want to contain 'ExternalModel' and 'not found'", err.Error())
+	if model.Status.HTTPRouteName != "" {
+		t.Errorf("HTTPRouteName should be empty when HTTPRoute not found, got %q", model.Status.HTTPRouteName)
 	}
 }
 
