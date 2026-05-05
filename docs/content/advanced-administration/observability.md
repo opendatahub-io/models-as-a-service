@@ -835,17 +835,3 @@ Some features require upstream changes and are currently blocked:
 | **Requests per subscription** | `authorized_calls` | `subscription` |
 | **Rate limited per user** | `limited_calls` | `user` |
 | **Rate limited per subscription** | `limited_calls` | `subscription` |
-
-### Requirements Alignment
-
-| Requirement | Status | Notes |
-|-------------|--------|-------|
-| **Usage dashboards** (token consumption per user, per subscription, per model) | Met | Grafana dashboard + `authorized_hits` with `user`, `subscription`, `model`; Prometheus scrapes Limitador `/metrics`. |
-| **Latency by subscription** (P50/P95/P99) | Met | `istio_request_duration_milliseconds_bucket` with `subscription` label; subscription-only avoids unbounded cardinality. |
-| **Request tracking** (per user, per subscription) | Met | `authorized_calls` with `user` and `subscription` labels; `limited_calls` for rate-limit violations. |
-| **Export for chargeback** (CSV/API) | Not provided (RFE) | Per-user token data exists in Prometheus (`authorized_hits{user="..."}`) but no dedicated billing API or export endpoint is implemented. **RFE recommendation**: Add `/maas-api/v1/usage` endpoint that queries Prometheus and returns per-user, per-subscription, per-model token consumption in CSV/JSON for finance and chargeback systems. |
-| **Input/output token split** | Not available | Only total tokens (`authorized_hits`); separate input and output counters require upstream Kuadrant wasm-shim changes to send split `hits_addend` values. |
-| **`model` label on request/rate-limit counters** | Partial | `model` available on `authorized_hits` only; requires upstream Kuadrant fix to propagate `responseBodyJSON` context to `authorized_calls`/`limited_calls` counters. |
-| **Policy enforcement health** | Future | Kuadrant operator metrics (`kuadrant_policies_enforced`, `kuadrant_ready`, etc.) defined upstream but not yet shipped in RHCL 1.x; `limitador_up` and `datastore_partitioned` are available now. |
-| **Auth evaluation metrics** | Met | Authorino `/server-metrics` is scraped by the `authorino-server-metrics` ServiceMonitor. Auth evaluation latency (P50/P95/P99) and success/deny rate are available in the Platform Admin dashboard. |
-| **maas-api application metrics** | Not available (gap) | The maas-api Go service does not expose `/metrics`. API key creation rate, token issuance rate, and handler latency are not observable. Requires adding Prometheus instrumentation to the Go service. |
