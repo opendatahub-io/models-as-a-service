@@ -152,7 +152,12 @@ oc get configmap -n openshift-config-managed service-ca-bundle \
   -o jsonpath='{.data.service-ca\.crt}' > /tmp/service-ca.crt
 
 # Test health endpoint
-curl -v --cacert /tmp/service-ca.crt https://localhost:8443/health
+# --resolve maps the service hostname to 127.0.0.1 so TLS hostname
+# verification succeeds over port-forward
+SVC_HOST="maas-api.<application-namespace>.svc"
+curl -v --cacert /tmp/service-ca.crt \
+  --resolve "${SVC_HOST}:8443:127.0.0.1" \
+  "https://${SVC_HOST}:8443/health"
 
 # Check certificate chain
 openssl s_client -connect localhost:8443 \
