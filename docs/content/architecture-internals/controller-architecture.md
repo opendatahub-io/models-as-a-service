@@ -86,7 +86,6 @@ For **GET /v1/models**, the MaaS API uses **MaaSModelRef** CRs as its primary so
 
 !!! warning "Trust boundary: model discovery"
     The GET /v1/models flow forwards raw **Authorization** headers to model workloads during access validation. That creates a trust boundary:
-    
     - **Model workloads must not log or forward raw Authorization headers** during discovery probes
     - **Operators should only register models trusted to handle credentials safely** via MaaSModelRef
     - For additional protections on model inference routes, see [Authentication Internals](./authentication-internals.md)
