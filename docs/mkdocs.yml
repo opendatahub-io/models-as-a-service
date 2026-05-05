@@ -56,6 +56,7 @@ nav:
     - Release Notes: release-notes/index.md
     - Migration:
       - Tier to Subscription: migration/tier-to-subscription.md
+      - Upgrade 3.2 to 3.4: migration/upgrade-3.2-to-3.4.md
   - Concepts:
     - Architecture: concepts/architecture.md
     - Personas: concepts/personas.md
