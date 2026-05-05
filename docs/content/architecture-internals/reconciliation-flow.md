@@ -1,6 +1,6 @@
 # Reconciliation Flow
 
-This document describes how the MaaS Controller **reconciles** resources, **ownership**, and **lifecycle**. For architecture overview, see [Controller Architecture](./controller-architecture.md).
+This document describes how the MaaS Controller **reconciles** resources, **ownership**, and **lifecycle**.
 
 ---
 

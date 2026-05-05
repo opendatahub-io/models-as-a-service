@@ -1,6 +1,6 @@
 # MaaS Controller Architecture
 
-This document provides a technical deep-dive into the MaaS Controller architecture, internal components, and resource model. For deployment and operations, see [MaaS Setup](../install/maas-setup.md), [Validation](../install/validation.md), [Troubleshooting](../install/troubleshooting.md), [Access and Quota Overview](../concepts/subscription-overview.md), and [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md).
+This document provides a technical deep-dive into the MaaS Controller architecture, internal components, and resource model.
 
 ---
 

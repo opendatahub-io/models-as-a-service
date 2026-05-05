@@ -1,8 +1,6 @@
 # Authentication & gateway identity (internals)
 
-This page describes how **identity and subscription context** are established at the gateway and how **rate limiting** uses them. For day-to-day auth behavior from a user perspective, see [Access and Quota Overview](../concepts/subscription-overview.md) and the [User Guide](../user-guide/inference.md).
-
-Implementation references: `maas-controller/pkg/controller/maas/maasauthpolicy_controller.go`, `maas-controller/pkg/controller/maas/maassubscription_controller.go`.
+This page describes how **identity and subscription context** are established at the gateway and how **rate limiting** uses them.
 
 ---
 
