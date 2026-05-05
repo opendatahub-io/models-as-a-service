@@ -58,8 +58,9 @@ Reports the status of each underlying Kuadrant AuthPolicy created by this MaaSAu
 | namespace | string | Namespace of the AuthPolicy resource |
 | model | string | MaaSModelRef name this AuthPolicy targets |
 | modelNamespace | string | Namespace of the MaaSModelRef |
-| accepted | string | Whether the AuthPolicy has been accepted (from `status.conditions` type=Accepted) |
-| enforced | string | Whether the AuthPolicy is enforced (from `status.conditions` type=Enforced) |
+| ready | bool | Whether the AuthPolicy resource is valid and healthy |
+| reason | ConditionReason | Machine-readable reason code (e.g. `Ready`, `NotReady`, `Unknown`) |
+| message | string | Human-readable description of the status |
 
 ## Annotations
 

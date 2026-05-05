@@ -52,7 +52,6 @@ reports/
 .vscode/
 apps/frontend/.env.local
 apps/backend/.env
-CLAUDE.md
 
 # Git worktrees
 .worktrees/
