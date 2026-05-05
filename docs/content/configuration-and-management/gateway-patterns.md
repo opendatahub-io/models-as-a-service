@@ -7,7 +7,7 @@ and troubleshooting guidance for common failure modes.
 **Related topics:**
 
 - Default MaaS Gateway setup: [Install MaaS Components — Create Gateway](../install/maas-setup.md#create-gateway)
-- Attaching models to the Gateway: [Model Gateway and Serving](model-gateway-and-serving.md)
+- Attaching models to the Gateway: [Model Setup Guide](model-setup.md)
 - End-to-end TLS: [TLS Configuration](tls-configuration.md)
 
 ## Pattern index
@@ -301,7 +301,7 @@ After deploying a gateway pattern, complete the MaaS-specific steps:
 
 1. **Attach models to the Gateway.** Set `spec.router.gateway.refs` on your
    LLMInferenceService to point at the deployed Gateway.
-   See [Model Gateway and Serving](model-gateway-and-serving.md).
+   See [Model Setup Guide](model-setup.md).
 
 2. **Configure end-to-end TLS.** Set up Authorino listener TLS and maas-api
    backend TLS. See [TLS Configuration](tls-configuration.md).
