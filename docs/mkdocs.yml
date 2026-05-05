@@ -87,9 +87,13 @@ nav:
     - MaaS Controller:
       - Controller Overview: configuration-and-management/maas-controller-overview.md
     - Advanced Administration:
-      - Observability Dashboard: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
       - Authorino Caching: configuration-and-management/authorino-caching.md
+  - Observability:
+    - Overview: observability/index.md
+    - Setup: observability/setup.md
+    - Metrics & Dashboards: observability/metrics-and-dashboards.md
+    - Operations: observability/operations.md
   - User Guide:
     - API Key Management: user-guide/api-key-management.md
     - Model Discovery: user-guide/model-discovery.md
