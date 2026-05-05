@@ -76,15 +76,23 @@ flowchart TB
 
 **Summary:** The controller has two sides: the **Tenant reconciler** deploys and manages the MaaS platform workloads (maas-api, gateway policies, telemetry) from the `Tenant` CR; the **subscription reconcilers** turn MaaS CRs into Gateway/Kuadrant resources that attach to per-model HTTPRoutes and backends (e.g. KServe LLMInferenceService).
 
-The **MaaS API** GET /v1/models endpoint uses MaaSModelRef CRs as its primary source: it reads them cluster-wide (all namespaces), then **validates access** by probing each model's `/v1/models` endpoint with the client's **Authorization header** (passed through as-is). Only models that return 2xx or 405 are included. So the catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can actually access. No token exchange is performed; the header is forwarded as-is.
+---
 
-!!! warning "Trust Boundary: Model Discovery"
-    The GET /v1/models endpoint forwards raw Authorization headers to model workloads during access validation. This creates a trust boundary:
+## Interaction with MaaS API (discovery)
+
+The **MaaS API** is deployed as part of the **Tenant** platform bundle; it is not the same process as **maas-controller**, but the two work together: the controller **reconciles** **MaaSModelRef** and related CRs, and the API **lists** models from that cluster state for **GET /v1/models**.
+
+For **GET /v1/models**, the MaaS API uses **MaaSModelRef** CRs as its primary source: it reads them cluster-wide (all namespaces), then **validates access** by probing each model's `/v1/models` endpoint with the client's **Authorization** header (passed through as-is). Only models that return 2xx or 405 are included. The catalogue returned to the client is the set of MaaSModelRef objects the controller reconciles, filtered to those the client can access. **No** token exchange is performed; the header is forwarded as-is.
+
+!!! warning "Trust boundary: model discovery"
+    The GET /v1/models flow forwards raw **Authorization** headers to model workloads during access validation. That creates a trust boundary:
     
     - **Model workloads must not log or forward raw Authorization headers** during discovery probes
     - **Operators should only register models trusted to handle credentials safely** via MaaSModelRef
     - For additional protections on model inference routes, see [Authentication Internals](./authentication-internals.md)
     - Future enhancements may include token exchange or credential mediation to reduce exposure during discovery
+
+For end-user behavior and examples, see [Model Discovery](../user-guide/model-discovery.md) and [Model listing flow](../configuration-and-management/model-listing-flow.md).
 
 ---
 
@@ -178,7 +186,28 @@ erDiagram
 
 ---
 
-## Related Documentation
+## References
 
-- [Reconciliation Flow](./reconciliation-flow.md) - Ownership, watches, status, deletion lifecycle
-- [Authentication Internals](./authentication-internals.md) - Subscription selection, TRLP keys, identity context
+### Other internals (this guide)
+
+- [Reconciliation Flow](./reconciliation-flow.md) — Ownership, watches, status, deletion lifecycle
+- [Authentication Internals](./authentication-internals.md) — Subscription selection, TRLP keys, identity context
+
+### Install and operations
+
+- [MaaS Setup](../install/maas-setup.md) — Platform install, **Tenant** CR, gateway
+- [Validation](../install/validation.md) — Post-install checks
+- [Troubleshooting](../install/troubleshooting.md) — Common failures
+- [Access and Quota Overview](../concepts/subscription-overview.md) — Subscriptions and access model
+- [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md) — Quotas, auth policies, subscriptions
+
+### Discovery and API
+
+- [Model Discovery](../user-guide/model-discovery.md) — Using **GET /v1/models** from a client perspective
+- [Inference](../user-guide/inference.md) — Calling inference endpoints
+- [Model Listing Flow](../configuration-and-management/model-listing-flow.md) — How listing fits the platform
+- [MaaS API Overview](../reference/maas-api-overview.md) — REST surface (discovery, keys, admin)
+
+### Architecture context
+
+- [Architecture](../concepts/architecture.md) — Product-level architecture (Concepts)
