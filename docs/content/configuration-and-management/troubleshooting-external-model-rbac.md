@@ -1,59 +1,36 @@
-# Troubleshooting: ExternalModel Service `ownerReference` / finalizers (RBAC)
+# ExternalModel RBAC: Service Creation Failures
 
 ## Symptoms
 
-- `external-model-reconciler` logs show Service create failing with:
+ExternalModel-backed MaaSModelRef objects remain `Pending` with backend-not-ready status. The `external-model-reconciler` logs show:
 
-  ```text
-  cannot set blockOwnerDeletion if an ownerReference refers to a resource you can't set finalizers on
-  ```
-
-- `MaaSModelRef` objects that reference `ExternalModel` backends stay `Pending` with a backend-not-ready reason.
+```text
+cannot set blockOwnerDeletion if an ownerReference refers to a resource you can't set finalizers on
+```
 
 ## Cause
 
-The reconciler sets a **controller `ownerReference`** on the `Service` it creates for an `ExternalModel`. With that pattern, the API server checks that the controller identity can **`update` the `externalmodels/finalizers` subresource** (OwnerReferencesPermissionEnforcement).
+The controller sets a controller `ownerReference` on the Service it creates for each ExternalModel. The API server enforces that the controller ServiceAccount (`maas-controller`) must have `update` permission on the `externalmodels/finalizers` subresource (OwnerReferencesPermissionEnforcement admission controller).
 
-If the **`maas-controller` ServiceAccount** is not allowed that verb on that subresource, Service creation fails before routes are healthy.
+If this permission is missing, Service creation fails and routes never become healthy.
 
-## What to fix
+## Resolution
 
-1. **ClusterRole** `maas-controller-role` must include a rule that allows `update` on `externalmodels/finalizers` for API group `maas.opendatahub.io`.
+The ClusterRole `maas-controller-role` must include a rule allowing `update` on `externalmodels/finalizers`:
 
-   Source manifest in this repository: `deployment/base/maas-controller/rbac/clusterrole.yaml`.
-
-2. **ClusterRoleBinding** `maas-controller-rolebinding` must bind that `ClusterRole` to the **`maas-controller` ServiceAccount** in the namespace where the controller runs (commonly `opendatahub` when using the ODH overlay).
-
-On OpenShift, the ODH operator (via the `modelsAsService` DSC component) may **own** these objects; if your live `ClusterRole` is missing the `externalmodels/finalizers` rule, upgrade or re-apply the manifest from this repo, or reconcile the component so the shipped RBAC matches.
-
-## How to verify (important)
-
-`oc auth can-i` **does not** treat `externalmodels/finalizers` as a single resource name the same way RBAC does. Using the slash form often returns **`no` even when the rule is present**.
-
-Use the **`--subresource=finalizers`** form instead:
-
-```bash
-# Replace NAMESPACE with the namespace where ExternalModel CRs live (e.g. llm)
-# Replace SA_NAMESPACE with the controller ServiceAccount namespace (e.g. opendatahub)
-
-oc auth can-i update externalmodels --subresource=finalizers \
-  -n NAMESPACE \
-  --as=system:serviceaccount:SA_NAMESPACE:maas-controller
+```yaml
+apiGroups: ["maas.opendatahub.io"]
+resources: ["externalmodels/finalizers"]
+verbs: ["update"]
 ```
 
-You should see **`yes`**.
+Source manifest: `deployment/base/maas-controller/rbac/clusterrole.yaml`
 
-**Incorrect (misleading false negative):**
+The ClusterRoleBinding `maas-controller-rolebinding` must bind this role to the `maas-controller` ServiceAccount in the controller namespace (typically `opendatahub`).
 
-```bash
-# Often prints "no" even when RBAC is correct — do not use for verification
-oc auth can-i update externalmodels/finalizers -n NAMESPACE \
-  --as=system:serviceaccount:SA_NAMESPACE:maas-controller
-```
+### Fix: Add the Missing Rule
 
-## Optional: add the rule with `oc patch`
-
-If you must patch the live `ClusterRole` (for example before an operator update ships the rule):
+If the ODH operator manages these resources (via the `modelsAsService` DSC component), upgrade or reconcile the component. Otherwise, patch the ClusterRole directly:
 
 ```bash
 oc patch clusterrole maas-controller-role --type=json -p='[
@@ -69,13 +46,23 @@ oc patch clusterrole maas-controller-role --type=json -p='[
 ]'
 ```
 
-Then verify with the **`--subresource=finalizers`** command above, not the slash form.
+## Verification
 
-## What we changed in docs (2026-04-14)
+Verify the ServiceAccount has the required permission:
 
-- Documented that **`oc auth can-i update externalmodels/finalizers`** can incorrectly report **`no`** when permission exists.
-- Documented the supported check: **`oc auth can-i update externalmodels --subresource=finalizers`**.
-- Pointed to **`deployment/base/maas-controller/rbac/clusterrole.yaml`** as the in-repo source for the `maas-controller-role` rules.
+```bash
+# Replace NAMESPACE with the ExternalModel namespace (e.g., llm)
+# Replace SA_NAMESPACE with the controller namespace (e.g., opendatahub)
+
+oc auth can-i update externalmodels --subresource=finalizers \
+  -n NAMESPACE \
+  --as=system:serviceaccount:SA_NAMESPACE:maas-controller
+```
+
+Expected output: `yes`
+
+!!! warning "Common Pitfall"
+    Do not use `oc auth can-i update externalmodels/finalizers` (slash notation). This form often returns `no` even when the permission exists. Always use `--subresource=finalizers` for accurate results.
 
 ## Related
 
