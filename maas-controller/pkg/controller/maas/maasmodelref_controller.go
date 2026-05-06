@@ -418,20 +418,16 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
 			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
 		).
-		// Watch MaaSSubscriptions so we re-reconcile when governance state changes.
+		// Watch MaaSSubscriptions so we re-reconcile when governance state changes
+		// (spec, status/phase, or deletion). No predicate filter — the reconciler's
+		// equality.Semantic.DeepEqual check gates unnecessary status writes.
 		Watches(&maasv1alpha1.MaaSSubscription{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSSubscriptionToMaaSModelRefs,
-		), builder.WithPredicates(predicate.Or(
-			predicate.GenerationChangedPredicate{},
-			predicate.Funcs{UpdateFunc: deletionTimestampSet},
-		))).
+		)).
 		// Watch MaaSAuthPolicies so we re-reconcile when governance state changes.
 		Watches(&maasv1alpha1.MaaSAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSAuthPolicyToMaaSModelRefs,
-		), builder.WithPredicates(predicate.Or(
-			predicate.GenerationChangedPredicate{},
-			predicate.Funcs{UpdateFunc: deletionTimestampSet},
-		))).
+		)).
 		Complete(r)
 }
 
