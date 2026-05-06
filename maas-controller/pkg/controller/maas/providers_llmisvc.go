@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -122,7 +123,7 @@ func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maa
 	if !ready {
 		return "", false, nil
 	}
-	endpoint = h.getEndpointFromLLMISvc(llmisvc)
+	endpoint = h.getEndpointFromLLMISvc(llmisvc, model.Status.HTTPRouteHostnames)
 	if endpoint == "" {
 		endpoint, err = h.GetModelEndpoint(ctx, log, model)
 		if err != nil {
@@ -166,12 +167,27 @@ func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, 
 }
 
 // getEndpointFromLLMISvc returns the endpoint URL from LLMInferenceService status as-reported.
-// Prefers gateway-external with https, then any gateway-external, then first address, then status.URL.
-func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInferenceService) string {
+// When expectedHostnames is non-empty, only gateway-external addresses whose hostname matches
+// are considered; this prevents selecting the wrong gateway when multiple gateways exist.
+// When expectedHostnames is empty, preserves legacy behavior for single-gateway deployments.
+func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInferenceService, expectedHostnames []string) string {
+	hostSet := make(map[string]struct{}, len(expectedHostnames))
+	for _, h := range expectedHostnames {
+		hostSet[h] = struct{}{}
+	}
+	filtering := len(hostSet) > 0
+
 	var gatewayExternalURLs []string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.Name != nil && *addr.Name == "gateway-external" && addr.URL != nil {
-			gatewayExternalURLs = append(gatewayExternalURLs, addr.URL.String())
+			u := addr.URL.String()
+			if filtering {
+				host := url.URL(*addr.URL).Hostname()
+				if _, ok := hostSet[host]; !ok {
+					continue
+				}
+			}
+			gatewayExternalURLs = append(gatewayExternalURLs, u)
 		}
 	}
 	for _, u := range gatewayExternalURLs {
@@ -181,6 +197,12 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 	}
 	if len(gatewayExternalURLs) > 0 {
 		return gatewayExternalURLs[0]
+	}
+	// When filtering is active, don't fall back to unfiltered addresses — they may
+	// belong to the wrong gateway. Return empty so GetModelEndpoint can derive the
+	// correct endpoint from Gateway/HTTPRoute metadata.
+	if filtering {
+		return ""
 	}
 	if len(llmisvc.Status.Addresses) > 0 && llmisvc.Status.Addresses[0].URL != nil {
 		return llmisvc.Status.Addresses[0].URL.String()
