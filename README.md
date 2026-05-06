@@ -17,18 +17,18 @@ Our goal is to create a comprehensive platform for **Models as a Service** with 
 ## 📋 Prerequisites
 
 - **OpenShift cluster** (4.19.9+) with kubectl/oc access
-- **Kuadrant v1.4.2+** (ODH) or **RHCL v1.3+** (RHOAI) - **Required for MaaS v0.2.0+**
+- **Kuadrant v1.4.2+** (ODH) or **RHCL v1.3+** (RHOAI) - **Required for MaaS v0.1.0+**
 - **PostgreSQL database** (for production ODH/RHOAI deployments)
 
 ### ⚠️ Important Version Requirements
 
-#### Kuadrant 1.4.2+ Required (MaaS v0.2.0+)
+#### Kuadrant 1.4.2+ Required (MaaS v0.1.0+)
 
-**MaaS v0.2.0 and later requires Kuadrant 1.4.2+ (ODH) or RHCL 1.3+ (RHOAI).**
+**MaaS v0.1.0 and later requires Kuadrant 1.4.2+ (ODH) or RHCL 1.3+ (RHOAI).**
 
 **Why Kuadrant 1.4.2+ is required:**
 
-MaaS v0.2.0 requires the authorization header stripping capability added in Authorino v0.23.1 (shipped with Kuadrant 1.4.2) to protect user credentials from potential exfiltration to model backends.
+MaaS v0.1.0 requires the authorization header stripping capability added in Authorino v0.23.1 (shipped with Kuadrant 1.4.2) to protect user credentials from potential exfiltration to model backends.
 
 **Security Context:**
 
@@ -43,7 +43,7 @@ This prevents credential exfiltration where a malicious or compromised model ser
 **Migration Notes:**
 
 - The deployment script (`scripts/deploy.sh`) automatically installs Kuadrant 1.4.2 for new deployments
-- For existing deployments, upgrade Kuadrant/RHCL before upgrading to MaaS v0.2.0+
+- For existing deployments, upgrade Kuadrant/RHCL before upgrading to MaaS v0.1.0+
 
 For detailed version compatibility, see [Version Compatibility](docs/content/install/prerequisites.md#version-compatibility).
 

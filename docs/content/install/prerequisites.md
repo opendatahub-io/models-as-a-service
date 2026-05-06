@@ -40,7 +40,7 @@ MaaS requires Red Hat OpenShift AI (RHOAI) version 3.0 or later, with the Model 
 component enabled (KServe) and properly configured for deploying models with
 `LLMInferenceService` resources.
 
-A specific requirement for MaaS v0.2.0+ is to set up RHOAI Model Serving with Red Hat Connectivity Link (RHCL) v1.3 or later.
+A specific requirement for MaaS v0.1.0+ is to set up RHOAI Model Serving with Red Hat Connectivity Link (RHCL) v1.3 or later.
 
 ## Optional: Observability Prerequisites
 

@@ -68,6 +68,10 @@ Semantic format required: `type: subject` (lowercase subject).
 
 Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
 
+## PR review process
+
+After creating a PR, immediately add a comment with `@coderabbitai review` to trigger automated code review.
+
 ## Testing conventions
 
 - Go tests use `testing` + `gomega` or `testify` — match the style of the package you're editing.

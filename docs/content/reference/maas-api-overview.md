@@ -25,15 +25,6 @@ All endpoints except `/health` require authentication via the `Authorization: Be
 |--------|------|-------------|
 | GET | `/v1/models` | List available LLMs in OpenAI-compatible format. Returns models the authenticated user can access. |
 
-### Tiers (Legacy)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v1/tiers/lookup` | Look up the highest subscription tier for a set of groups. Used by tier-based access control. |
-
-!!! note "Subscription model"
-    The subscription-based architecture (MaaSAuthPolicy, MaaSSubscription) is the current approach. The tiers endpoint is retained for backward compatibility with tier-based deployments.
-
 ### API Keys
 
 | Method | Path | Description |
