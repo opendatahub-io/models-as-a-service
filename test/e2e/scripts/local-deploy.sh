@@ -1477,6 +1477,42 @@ EOF
   ok "Subscriptions and auth policies deployed"
 fi
 
+# ── Gateway default-deny AuthPolicy ──
+# Blocks all model inference routes that don't have a per-route AuthPolicy.
+# Routes with MaaSAuthPolicy (via MaaS controller) override this default.
+# Without this, models deployed via new inference.opendatahub.io CRDs
+# are completely unprotected. See: ai-gateway-payload-processing#235
+if kubectl get authpolicy gateway-default-auth -n "$GATEWAY_NAMESPACE" &>/dev/null; then
+  ok "Gateway default-deny AuthPolicy already deployed"
+else
+  echo "  Deploying gateway default-deny AuthPolicy..."
+  kubectl apply -f - <<EOF
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: gateway-default-auth
+  namespace: ${GATEWAY_NAMESPACE}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+  defaults:
+    rules:
+      authentication: {}
+      authorization:
+        deny-unconfigured-models:
+          metrics: false
+          priority: 0
+          patternMatching:
+            patterns:
+            - operator: eq
+              selector: "context.request.http.method"
+              value: "__deny_unconfigured_models__"
+EOF
+  ok "Gateway default-deny AuthPolicy deployed"
+fi
+
 # Wait for reconciliation
 echo "  Waiting for controller to reconcile fixtures..."
 sleep 20
