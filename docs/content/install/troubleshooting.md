@@ -46,8 +46,8 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Verify TokenRateLimitPolicy is applied (e.g. gateway-default-deny or per-route policies)
       - [ ] If **multiple** TokenRateLimitPolicies target the **same** HTTPRoute, see [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md)
       - [ ] Verify the model is deployed and the `LLMInferenceService` has the `maas-default-gateway` gateway specified
-      - [ ] Verify that the model is rate limited by checking the inference endpoint (see [Validation Guide - Test Rate Limiting](validation.md#7-test-rate-limiting))
-      - [ ] Verify that the model is token rate limited by checking the inference endpoint (see [Validation Guide - Test Rate Limiting](validation.md#7-test-rate-limiting))
+      - [ ] Verify that the model is rate limited for request bursts (request-rate limiting) — see [Validation Guide - Test Rate Limiting](validation.md#7-test-rate-limiting)
+      - [ ] Verify that the model returns 429 for token-heavy prompts (token-rate limiting) — see [Validation Guide - Test Rate Limiting](validation.md#7-test-rate-limiting)
 6. **Routes not accessible (503 errors)**: Check MaaS Default Gateway status and HTTPRoute configuration
       - [ ] Verify Gateway is in `Programmed` state: `kubectl get gateway -n openshift-ingress maas-default-gateway`
       - [ ] Check HTTPRoute configuration and status
