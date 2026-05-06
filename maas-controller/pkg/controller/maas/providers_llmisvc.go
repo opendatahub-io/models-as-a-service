@@ -182,7 +182,8 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 		if addr.Name != nil && *addr.Name == "gateway-external" && addr.URL != nil {
 			u := addr.URL.String()
 			if filtering {
-				host := url.URL(*addr.URL).Hostname()
+				parsed := url.URL(*addr.URL)
+				host := parsed.Hostname()
 				if _, ok := hostSet[host]; !ok {
 					continue
 				}
