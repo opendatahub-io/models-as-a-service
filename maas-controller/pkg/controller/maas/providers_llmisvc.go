@@ -168,27 +168,32 @@ func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, 
 
 // getEndpointFromLLMISvc returns the endpoint URL from LLMInferenceService status as-reported.
 // When expectedHostnames is non-empty, only gateway-external addresses whose hostname matches
-// are considered; this prevents selecting the wrong gateway when multiple gateways exist.
+// (case-insensitive per RFC 4343) are considered; this prevents selecting the wrong gateway
+// when multiple gateways exist.
 // When expectedHostnames is empty, preserves legacy behavior for single-gateway deployments.
+// Returns "" when no suitable address is found; the caller (Status) falls through to
+// GetModelEndpoint which derives the endpoint from Gateway/HTTPRoute metadata.
 func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInferenceService, expectedHostnames []string) string {
 	hostSet := make(map[string]struct{}, len(expectedHostnames))
-	for _, h := range expectedHostnames {
-		hostSet[h] = struct{}{}
+	for _, hn := range expectedHostnames {
+		hostSet[strings.ToLower(hn)] = struct{}{}
 	}
 	filtering := len(hostSet) > 0
 
 	var gatewayExternalURLs []string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.Name != nil && *addr.Name == "gateway-external" && addr.URL != nil {
-			u := addr.URL.String()
 			if filtering {
 				parsed := url.URL(*addr.URL)
-				host := parsed.Hostname()
+				host := strings.ToLower(parsed.Hostname())
+				if host == "" {
+					continue
+				}
 				if _, ok := hostSet[host]; !ok {
 					continue
 				}
 			}
-			gatewayExternalURLs = append(gatewayExternalURLs, u)
+			gatewayExternalURLs = append(gatewayExternalURLs, addr.URL.String())
 		}
 	}
 	for _, u := range gatewayExternalURLs {
@@ -200,8 +205,7 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 		return gatewayExternalURLs[0]
 	}
 	// When filtering is active, don't fall back to unfiltered addresses — they may
-	// belong to the wrong gateway. Return empty so GetModelEndpoint can derive the
-	// correct endpoint from Gateway/HTTPRoute metadata.
+	// belong to the wrong gateway.
 	if filtering {
 		return ""
 	}

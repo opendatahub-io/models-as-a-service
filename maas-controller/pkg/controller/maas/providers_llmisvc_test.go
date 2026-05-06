@@ -138,3 +138,31 @@ func TestGetEndpointFromLLMISvc_PrefersHTTPS(t *testing.T) {
 		t.Errorf("getEndpointFromLLMISvc() = %q, want %q (should prefer HTTPS)", got, want)
 	}
 }
+
+func TestGetEndpointFromLLMISvc_CaseInsensitiveHostname(t *testing.T) {
+	llmisvc := newReadyLLMISvc("test-model", "default", []duckv1.Addressable{
+		{Name: strPtr("gateway-external"), URL: mustParseURL("https://MaaS.Example.COM/test-model")},
+	})
+	h := &llmisvcHandler{}
+
+	got := h.getEndpointFromLLMISvc(llmisvc, []string{"maas.example.com"})
+	want := "https://MaaS.Example.COM/test-model"
+	if got != want {
+		t.Errorf("getEndpointFromLLMISvc() = %q, want %q (case-insensitive match)", got, want)
+	}
+}
+
+func TestGetEndpointFromLLMISvc_EmptyHostnameSkipped(t *testing.T) {
+	emptyHostURL := &apis.URL{Path: "/test-model"}
+	llmisvc := newReadyLLMISvc("test-model", "default", []duckv1.Addressable{
+		{Name: strPtr("gateway-external"), URL: emptyHostURL},
+		{Name: strPtr("gateway-external"), URL: mustParseURL("https://maas.example.com/test-model")},
+	})
+	h := &llmisvcHandler{}
+
+	got := h.getEndpointFromLLMISvc(llmisvc, []string{"maas.example.com"})
+	want := "https://maas.example.com/test-model"
+	if got != want {
+		t.Errorf("getEndpointFromLLMISvc() = %q, want %q (should skip address with empty hostname)", got, want)
+	}
+}
