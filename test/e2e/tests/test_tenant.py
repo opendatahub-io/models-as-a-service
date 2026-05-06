@@ -1,8 +1,4 @@
-"""
-Tenant CR checks for maas-controller (singleton default-tenant).
-
-DSC enable/disable and Tenant deletion stay in operator CI.
-"""
+"""Tenant singleton (`default-tenant`) checks; DSC disable/remove Tenant → operator CI."""
 
 import json
 import os
@@ -16,7 +12,6 @@ TENANT_NAME = "default-tenant"
 TENANT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 TENANT_CRD = "tenants.maas.opendatahub.io"
 
-# Matches test_helper._list_crs pluralization for oc get
 _KIND_PLURAL = {
     "maasmodelref": "maasmodelrefs",
     "maasauthpolicy": "maasauthpolicies",
@@ -58,8 +53,7 @@ def require_tenant_crd():
     )
     if r.returncode != 0:
         pytest.fail(
-            f"CRD {TENANT_CRD} not found on this cluster. "
-            "Deploy maas-controller / MaaS (e.g. repo ./scripts/deploy.sh) before test_tenant.py."
+            f"Missing CRD {TENANT_CRD}; install MaaS / maas-controller before running this module."
         )
 
 
@@ -132,16 +126,8 @@ class TestTenantContract:
                 assert key in cond, f"condition {cond.get('type')!r} missing {key!r}"
 
 
-class TestTenantOperatorIntegration:
-    @pytest.mark.skip(reason="DSC lifecycle — Operator CI")
-    def test_tenant_removed_when_maas_disabled_in_dsc(self):
-        """Operator-owned: disable modelsAsService in DSC → Tenant absent."""
-        raise AssertionError("unreachable")
-
-
 class TestTenantNoFalseOwnership:
     def test_maas_user_crs_not_owned_by_tenant(self):
-        """MaaSModelRef / policies / subscriptions must not chain-delete via Tenant."""
         checks = [
             (
                 "maasmodelref",
