@@ -205,6 +205,10 @@ curl -sS -H "Authorization: Bearer $API_KEY" \
 - Check MaaSSubscription ownership matches your identity
 - Verify maas-controller has reconciled the policies
 
+### TLS Certificate Errors
+
+If `curl` returns `curl: (60) SSL certificate problem`, your cluster uses certificates not in your system trust store. See [Troubleshooting - TLS Certificate Validation](../install/troubleshooting.md#tls-certificate-validation) for solutions.
+
 ---
 
 ## References

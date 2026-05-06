@@ -188,6 +188,9 @@ Common HTTP error codes:
 | 404 | Model not found | Verify the model ID exists in your subscription via `/maas-api/v1/models` |
 | 500 | Internal server error | Check model backend status, contact your administrator if persistent |
 
+!!! tip "TLS certificate errors"
+    If `curl` returns `curl: (60) SSL certificate problem`, see [Troubleshooting - TLS Certificate Validation](../install/troubleshooting.md#tls-certificate-validation).
+
 ### Handling Rate Limits
 
 When you receive a `429 Too Many Requests` response:
