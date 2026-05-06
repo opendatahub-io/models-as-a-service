@@ -497,9 +497,9 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		t.Fatalf("Get TokenRateLimitPolicy: %v", err)
 	}
 
-	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "defaults", "limits")
 	if err != nil || !found {
-		t.Fatalf("spec.limits not found: found=%v err=%v", found, err)
+		t.Fatalf("spec.defaults.limits not found: found=%v err=%v", found, err)
 	}
 
 	// CRITICAL: Verify both subscriptions have UNIQUE limit entries

@@ -210,6 +210,9 @@ flowchart LR
 
 All generated resources are labeled `app.kubernetes.io/managed-by: maas-controller`.
 
+!!! note "Multiple Models Sharing the Same HTTPRoute"
+    When multiple MaaSModelRefs point to the same backend (e.g., the same LLMInferenceService), they resolve to the same HTTPRoute. The controller creates separate TokenRateLimitPolicies for each model, and all policies use `defaults.strategy: merge` to coexist without conflicts. This allows different user groups or subscriptions to access the same model with independent rate limits.
+
 ---
 
 ## 6. Component Diagram (Controller Internals)

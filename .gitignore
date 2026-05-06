@@ -60,3 +60,4 @@ apps/backend/.env
 docs/build/
 docs/site/
 
+.worktrees/
