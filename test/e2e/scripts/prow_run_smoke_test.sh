@@ -13,7 +13,7 @@
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
 #   4. Deploy MaaS system (free + premium + e2e test fixtures: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
 #   5. Setup test tokens (admin + regular user) for comprehensive testing
-#   6. Run E2E tests (API keys + subscription + models endpoint tests)
+#   6. Run E2E tests (API keys + subscription + models + tenant + ...)
 #   7. Run deployment validation + token metadata verification
 # 
 # USAGE:
@@ -546,7 +546,7 @@ run_e2e_tests() {
         echo "⚠️  WARNING: Gateway not reachable after ${gw_timeout}s, proceeding anyway (tests may fail)"
     fi
 
-    # Run all e2e tests: API keys, namespace scoping, negative security, subscription, models endpoint
+    # Run all e2e tests: API keys, namespace scoping, negative security, subscription, models, tenant
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
@@ -557,7 +557,8 @@ run_e2e_tests() {
         "$test_dir/tests/test_negative_security.py" \
         "$test_dir/tests/test_subscription.py" \
         "$test_dir/tests/test_models_endpoint.py" \
-        "$test_dir/tests/test_external_models.py" ; then
+        "$test_dir/tests/test_external_models.py" \
+        "$test_dir/tests/test_tenant.py" ; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi
