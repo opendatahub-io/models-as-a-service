@@ -99,6 +99,7 @@ nav:
     - Authentication Internals: architecture-internals/authentication-internals.md
     - Contributing:
       - MaaS Testing and Contribution Guide: contributing/testing-guide.md
+      - Release Strategy: contributing/release-strategy.md
   - API Reference:
     - MaaS API Overview: reference/maas-api-overview.md
     - MaaS API (Swagger): reference/api-reference.md
