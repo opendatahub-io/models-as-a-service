@@ -17,6 +17,18 @@
          <lastmod>2026-05-06</lastmod>
     </url>
     <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/architecture-internals/authentication-internals/</loc>
+         <lastmod>2026-05-06</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/architecture-internals/controller-architecture/</loc>
+         <lastmod>2026-05-06</lastmod>
+    </url>
+    <url>
+         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/architecture-internals/reconciliation-flow/</loc>
+         <lastmod>2026-05-06</lastmod>
+    </url>
+    <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/concepts/api-key-authentication/</loc>
          <lastmod>2026-05-06</lastmod>
     </url>
@@ -50,10 +62,6 @@
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/gateway-patterns/</loc>
-         <lastmod>2026-05-06</lastmod>
-    </url>
-    <url>
-         <loc>https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/maas-controller-overview/</loc>
          <lastmod>2026-05-06</lastmod>
     </url>
     <url>
