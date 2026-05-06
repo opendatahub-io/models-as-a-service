@@ -170,7 +170,7 @@ After creating the database Secret and Gateways, create or update your DataScien
         see [OdhDashboardConfig Feature Flags](#odhdashboardconfig-feature-flags) below.
 
     !!! note "Connectivity Link warning (ODH with Kuadrant)"
-        When using ODH with Kuadrant (upstream), you may see `Warning: Red Hat Connectivity Link is not installed, LLMInferenceService cannot be used` in the Kserve status initially. This typically resolves after a few minutes as the operator reconciles. If it persists, apply the `scripts/workaround-odh-rhcl-check.yaml` workaround.
+        When using ODH with Kuadrant (upstream), you may see `Warning: Red Hat Connectivity Link is not installed, LLMInferenceService cannot be used` in the Kserve status initially. This typically resolves after a few minutes as the operator reconciles. If it persists, run `kubectl describe datasciencecluster default-dsc` and check that the Kuadrant/Connectivity Link operator is installed and healthy.
 
     **Validate DataScienceCluster:**
 

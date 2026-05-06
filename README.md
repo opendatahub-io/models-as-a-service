@@ -17,18 +17,18 @@ Our goal is to create a comprehensive platform for **Models as a Service** with 
 ## 📋 Prerequisites
 
 - **OpenShift cluster** (4.19.9+) with kubectl/oc access
-- **Kuadrant v1.4.2+** (ODH) or **RHCL v1.3+** (RHOAI) - **Required for MaaS v0.2.0+**
+- **Kuadrant v1.4.2+** (ODH) or **RHCL v1.3+** (RHOAI) - **Required for MaaS v0.1.0+**
 - **PostgreSQL database** (for production ODH/RHOAI deployments)
 
 ### ⚠️ Important Version Requirements
 
-#### Kuadrant 1.4.2+ Required (MaaS v0.2.0+)
+#### Kuadrant 1.4.2+ Required (MaaS v0.1.0+)
 
-**MaaS v0.2.0 and later requires Kuadrant 1.4.2+ (ODH) or RHCL 1.3+ (RHOAI).**
+**MaaS v0.1.0 and later requires Kuadrant 1.4.2+ (ODH) or RHCL 1.3+ (RHOAI).**
 
 **Why Kuadrant 1.4.2+ is required:**
 
-MaaS v0.2.0 requires the authorization header stripping capability added in Authorino v0.23.1 (shipped with Kuadrant 1.4.2) to protect user credentials from potential exfiltration to model backends.
+MaaS v0.1.0 requires the authorization header stripping capability added in Authorino v0.23.1 (shipped with Kuadrant 1.4.2) to protect user credentials from potential exfiltration to model backends.
 
 **Security Context:**
 
@@ -43,7 +43,7 @@ This prevents credential exfiltration where a malicious or compromised model ser
 **Migration Notes:**
 
 - The deployment script (`scripts/deploy.sh`) automatically installs Kuadrant 1.4.2 for new deployments
-- For existing deployments, upgrade Kuadrant/RHCL before upgrading to MaaS v0.2.0+
+- For existing deployments, upgrade Kuadrant/RHCL before upgrading to MaaS v0.1.0+
 
 For detailed version compatibility, see [Version Compatibility](docs/content/install/prerequisites.md#version-compatibility).
 
@@ -72,7 +72,7 @@ Use the unified deployment script for all deployment scenarios. The script insta
 ./scripts/deploy.sh --deployment-mode kustomize
 ```
 
-For detailed instructions, see the [Deployment Guide](docs/content/quickstart.md) or the [Deployment Options](#-deployment-options) section below.
+For detailed instructions, see the [Installation Guide](docs/content/quickstart.md) or the [Deployment Options](#-deployment-options) section below.
 
 ## 🛠️ Deployment Options
 
@@ -156,7 +156,7 @@ MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \
 
 ## 📚 Documentation
 
-- [Deployment Guide](docs/content/quickstart.md) - Complete deployment instructions
+- [Installation Guide](docs/content/quickstart.md) - Complete deployment instructions
 - [MaaS API Documentation](maas-api/README.md) - Go API for key management
 - [MaaS Controller Documentation](maas-controller/README.md) - Controller, Tenant reconciler, and subscription model
 - [Authorino Caching Configuration](docs/content/configuration-and-management/authorino-caching.md) - Cache tuning for metadata and authorization
@@ -179,5 +179,5 @@ This project is licensed under the Apache 2.0 License.
 
 For questions or issues:
 - Open an issue on GitHub
-- Check the [deployment guide](docs/content/quickstart.md) for troubleshooting
+- Check the [Installation Guide](docs/content/quickstart.md) for troubleshooting
 - Review the [samples](docs/samples/models) for examples

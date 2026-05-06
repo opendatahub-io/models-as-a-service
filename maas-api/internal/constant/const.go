@@ -10,6 +10,8 @@ const (
 
 	DefaultResyncPeriod = 8 * time.Hour
 
+	DefaultMetricsPort = 9090
+
 	// Header configuration constants.
 	HeaderUsername = "X-MaaS-Username"
 	HeaderGroup    = "X-MaaS-Group"

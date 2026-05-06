@@ -44,7 +44,7 @@ At least one of `groups` or `users` must be specified.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| phase | string | One of: `Pending`, `Active`, `Failed` |
+| phase | string | One of: `Pending`, `Active`, `Degraded`, `Failed`, `Invalid`. `Degraded` means some model references or AuthPolicies are unhealthy. `Invalid` means the spec is missing or structurally invalid. |
 | conditions | []Condition | Latest observations of the policy's state |
 | authPolicies | []AuthPolicyRefStatus | Underlying Kuadrant AuthPolicies and their state |
 
@@ -58,8 +58,9 @@ Reports the status of each underlying Kuadrant AuthPolicy created by this MaaSAu
 | namespace | string | Namespace of the AuthPolicy resource |
 | model | string | MaaSModelRef name this AuthPolicy targets |
 | modelNamespace | string | Namespace of the MaaSModelRef |
-| accepted | string | Whether the AuthPolicy has been accepted (from `status.conditions` type=Accepted) |
-| enforced | string | Whether the AuthPolicy is enforced (from `status.conditions` type=Enforced) |
+| ready | bool | Whether the AuthPolicy resource is valid and healthy |
+| reason | ConditionReason | Machine-readable reason code (e.g. `Ready`, `NotReady`, `Unknown`) |
+| message | string | Human-readable description of the status |
 
 ## Annotations
 

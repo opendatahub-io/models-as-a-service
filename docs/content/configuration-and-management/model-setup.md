@@ -5,6 +5,9 @@ This guide explains how to configure models for the MaaS platform. MaaS supports
 - **On-cluster models** (`LLMInferenceService`) - vLLM/KServe models running in your cluster
 - **External models** (`ExternalModel`) - Hosted providers like OpenAI, Anthropic, Azure OpenAI **(Tech Preview)**
 
+!!! warning "Legacy tier annotations removed"
+    The `alpha.maas.opendatahub.io/tiers` annotation for tier-based access control is **deprecated** and no longer documented here. Model access and rate limits are now managed exclusively through **MaaSAuthPolicy** and **MaaSSubscription** CRDs. If you are still using tier annotations, see the [Migration Guide: Tier-Based to Subscription Model](../migration/tier-to-subscription.md) for instructions on migrating to the subscription model.
+
 ---
 
 ## On-Cluster Models
