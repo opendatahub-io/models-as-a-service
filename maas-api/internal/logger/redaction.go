@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/textproto"
+	"strings"
 	"sync"
 )
 
@@ -105,4 +107,23 @@ func IsSensitiveHeader(name string) bool {
 		}
 	}
 	return false
+}
+
+// SensitiveHeadersSummaryForAccessLog returns presence-only key=value pairs for each
+// entry in SensitiveHeaders (uses RedactHeaders / RedactHeader).
+func SensitiveHeadersSummaryForAccessLog(h http.Header) string {
+	redacted := RedactHeaders(h, false)
+	parts := make([]string, 0, len(SensitiveHeaders))
+	for _, name := range SensitiveHeaders {
+		canonical := textproto.CanonicalMIMEHeaderKey(name)
+		val := RedactHeader(h.Get(name), false)
+		for k, v := range redacted {
+			if textproto.CanonicalMIMEHeaderKey(k) == canonical {
+				val = v
+				break
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", name, val))
+	}
+	return strings.Join(parts, " ")
 }

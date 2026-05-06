@@ -162,6 +162,17 @@ func TestRedactHeaders_CaseInsensitive(t *testing.T) {
 		"Non-sensitive header should pass through")
 }
 
+func TestSensitiveHeadersSummaryForAccessLog(t *testing.T) {
+	h := http.Header{}
+	h.Set("Authorization", "Bearer secret")
+	h.Set("Cookie", "session=abc")
+
+	summary := logger.SensitiveHeadersSummaryForAccessLog(h)
+	assert.Contains(t, summary, "Authorization=present")
+	assert.NotContains(t, summary, "secret")
+	assert.NotContains(t, summary, "session=abc")
+}
+
 func TestIsSensitiveHeader_CaseInsensitive(t *testing.T) {
 	tests := []struct {
 		name      string

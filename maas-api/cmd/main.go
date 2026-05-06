@@ -79,11 +79,8 @@ func serve() error {
 	// Use gin.New() instead of gin.Default() to control middleware order
 	router := gin.New()
 
-	// Add request ID middleware first so it's available to logger
 	router.Use(middleware.RequestID())
-
-	// Add Logger and Recovery middleware after RequestID
-	router.Use(gin.Logger())
+	router.Use(middleware.AccessLogger())
 	router.Use(gin.Recovery())
 
 	// Add metrics middleware
