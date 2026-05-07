@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/gateway-patterns/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/subscription-cardinality/">
       
       
-        <link rel="prev" href="../tls-configuration/">
+        <link rel="prev" href="../observability/">
       
       
-        <link rel="next" href="../model-setup/">
+        <link rel="next" href="../limitador-persistence/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Gateway Patterns - ODH Models-as-a-Service Documentation</title>
+        <title>Subscription Cardinality - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#gateway-patterns" class="md-skip">
+        <a href="#subscription-cardinality" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Gateway Patterns
+              Subscription Cardinality
             
           </span>
         </div>
@@ -304,7 +304,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../quota-and-access-configuration/" class="md-tabs__link">
+        <a href="../../configuration-and-management/quota-and-access-configuration/" class="md-tabs__link">
           
   
   
@@ -1329,8 +1329,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1346,11 +1344,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
         
           
           <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
@@ -1371,7 +1371,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_1">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1389,7 +1389,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../quota-and-access-configuration/" class="md-nav__link">
+      <a href="../../configuration-and-management/quota-and-access-configuration/" class="md-nav__link">
         
   
   
@@ -1417,7 +1417,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-key-administration/" class="md-nav__link">
+      <a href="../../configuration-and-management/api-key-administration/" class="md-nav__link">
         
   
   
@@ -1445,7 +1445,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../namespace-rbac/" class="md-nav__link">
+      <a href="../../configuration-and-management/namespace-rbac/" class="md-nav__link">
         
   
   
@@ -1473,7 +1473,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting-external-model-rbac/" class="md-nav__link">
+      <a href="../../configuration-and-management/troubleshooting-external-model-rbac/" class="md-nav__link">
         
   
   
@@ -1501,7 +1501,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tls-configuration/" class="md-nav__link">
+      <a href="../../configuration-and-management/tls-configuration/" class="md-nav__link">
         
   
   
@@ -1526,37 +1526,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Gateway Patterns
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/gateway-patterns/" class="md-nav__link">
         
   
   
@@ -1572,214 +1545,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#pattern-index" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pattern index
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#environment-matrix" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Environment matrix
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#clusterip-gateway-with-openshift-route-re-encrypt" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ClusterIP Gateway with OpenShift Route (re-encrypt)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="ClusterIP Gateway with OpenShift Route (re-encrypt)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#traffic-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Traffic flow
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#why-clusterip-route" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why ClusterIP + Route?
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prerequisites
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#manifests" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Manifests
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Manifests">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-gatewayclass" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. GatewayClass
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-gateway-options-configmap" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Gateway options ConfigMap
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-gateway" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. Gateway
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#4-openshift-route" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. OpenShift Route
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-httproute" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. HTTPRoute
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#apply" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Apply
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#verify" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Verify
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Troubleshooting
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#maas-integration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MaaS integration
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1857,7 +1622,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../model-setup/" class="md-nav__link">
+      <a href="../../configuration-and-management/model-setup/" class="md-nav__link">
         
   
   
@@ -1885,7 +1650,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../model-listing-flow/" class="md-nav__link">
+      <a href="../../configuration-and-management/model-listing-flow/" class="md-nav__link">
         
   
   
@@ -1918,8 +1683,10 @@
                 
   
   
+    
   
   
+  
     
     
     
@@ -1933,13 +1700,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" checked>
         
           
           <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
@@ -1960,7 +1725,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1978,7 +1743,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../advanced-administration/observability/" class="md-nav__link">
+      <a href="../observability/" class="md-nav__link">
         
   
   
@@ -2003,10 +1768,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../advanced-administration/subscription-cardinality/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Subscription Cardinality
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -2022,6 +1814,259 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-cardinality-arises" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How Cardinality Arises
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#users-vs-groups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Users vs Groups
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Users vs Groups">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prefer-groups-for-human-users" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prefer groups for human users
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reserve-users-for-service-accounts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reserve users for service accounts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#impact-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Impact summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#telemetry-label-cardinality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telemetry Label Cardinality
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cardinality-limits-and-observed-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cardinality Limits and Observed Impact
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cardinality Limits and Observed Impact">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#limitador" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitador
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prometheus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitoring-cardinality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Monitoring Cardinality
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitoring Cardinality">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#check-current-counter-counts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Check current counter counts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#check-prometheus-cardinality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Check Prometheus cardinality
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#check-from-the-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Check from the CLI
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#symptom-limitador-memory-usage-is-growing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symptom: Limitador memory usage is growing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#symptom-prometheus-queries-for-usage-metrics-are-slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symptom: Prometheus queries for usage metrics are slow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#symptom-rate-limiting-is-not-applied-consistently" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symptom: Rate limiting is not applied consistently
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2034,7 +2079,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../advanced-administration/limitador-persistence/" class="md-nav__link">
+      <a href="../limitador-persistence/" class="md-nav__link">
         
   
   
@@ -2062,7 +2107,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../authorino-caching/" class="md-nav__link">
+      <a href="../../configuration-and-management/authorino-caching/" class="md-nav__link">
         
   
   
@@ -2824,10 +2869,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#pattern-index" class="md-nav__link">
+  <a href="#how-cardinality-arises" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Pattern index
+        How Cardinality Arises
       
     </span>
   </a>
@@ -2835,33 +2880,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-matrix" class="md-nav__link">
+  <a href="#users-vs-groups" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Environment matrix
+        Users vs Groups
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#clusterip-gateway-with-openshift-route-re-encrypt" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ClusterIP Gateway with OpenShift Route (re-encrypt)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="ClusterIP Gateway with OpenShift Route (re-encrypt)">
+    <nav class="md-nav" aria-label="Users vs Groups">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#traffic-flow" class="md-nav__link">
+  <a href="#prefer-groups-for-human-users" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Traffic flow
+        Prefer groups for human users
       
     </span>
   </a>
@@ -2869,10 +2903,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#why-clusterip-route" class="md-nav__link">
+  <a href="#reserve-users-for-service-accounts" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why ClusterIP + Route?
+        Reserve users for service accounts
       
     </span>
   </a>
@@ -2880,77 +2914,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#impact-summary" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#manifests" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Manifests
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Manifests">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-gatewayclass" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. GatewayClass
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-gateway-options-configmap" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Gateway options ConfigMap
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-gateway" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. Gateway
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#4-openshift-route" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. OpenShift Route
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-httproute" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. HTTPRoute
+        Impact summary
       
     </span>
   </a>
@@ -2961,12 +2928,35 @@
     </nav>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#apply" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#telemetry-label-cardinality" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Apply
+        Telemetry Label Cardinality
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cardinality-limits-and-observed-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cardinality Limits and Observed Impact
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cardinality Limits and Observed Impact">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#limitador" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Limitador
       
     </span>
   </a>
@@ -2974,10 +2964,38 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#verify" class="md-nav__link">
+  <a href="#prometheus" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verify
+        Prometheus
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitoring-cardinality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Monitoring Cardinality
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitoring Cardinality">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#check-current-counter-counts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Check current counter counts
       
     </span>
   </a>
@@ -2985,6 +3003,33 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#check-prometheus-cardinality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Check Prometheus cardinality
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#check-from-the-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Check from the CLI
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#troubleshooting" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2993,6 +3038,40 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#symptom-limitador-memory-usage-is-growing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symptom: Limitador memory usage is growing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#symptom-prometheus-queries-for-usage-metrics-are-slow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symptom: Prometheus queries for usage metrics are slow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#symptom-rate-limiting-is-not-applied-consistently" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symptom: Rate limiting is not applied consistently
+      
+    </span>
+  </a>
+  
 </li>
         
       </ul>
@@ -3001,10 +3080,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#maas-integration" class="md-nav__link">
+  <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        MaaS integration
+        Best Practices
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
       
     </span>
   </a>
@@ -3031,380 +3121,198 @@
   
 
 
-<h1 id="gateway-patterns">Gateway Patterns</h1>
-<p>This page provides curated Gateway API deployment patterns for MaaS on OpenShift.
-Each pattern includes copy-pasteable YAML manifests, prerequisites, verification steps,
-and troubleshooting guidance for common failure modes.</p>
-<p><strong>Related topics:</strong></p>
+<h1 id="subscription-cardinality">Subscription Cardinality</h1>
+<p>Cardinality refers to the number of unique label combinations that Limitador and Prometheus must track across rate-limiting counters and metrics. High cardinality increases memory consumption, slows queries, and can destabilize both rate limiting and observability.</p>
+<p>This guide explains the cardinality dimensions in MaaS, when they become a problem, and how to keep them under control.</p>
+<h2 id="how-cardinality-arises">How Cardinality Arises</h2>
+<p>Every MaaSSubscription generates a Kuadrant <strong>TokenRateLimitPolicy</strong> (TRLP) per model reference. Limitador maintains a separate counter for each unique combination of labels on that policy. The TelemetryPolicy adds further labels (<code>user</code>, <code>subscription</code>, <code>model</code>, <code>organization_id</code>, and optionally <code>group</code>) to usage metrics.</p>
+<p>The total number of counters Limitador tracks is roughly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>counters ≈ subscriptions × models × unique_users × rate_limit_windows
+</code></pre></div>
+<p>For Prometheus, the cardinality of <code>authorized_hits</code>, <code>authorized_calls</code>, and <code>limited_calls</code> grows with the number of distinct <code>user</code> and <code>subscription</code> label values.</p>
+<h2 id="users-vs-groups">Users vs Groups</h2>
+<p>MaaSAuthPolicy and MaaSSubscription both accept <code>users</code> and <code>groups</code> in their subject/owner fields. The choice directly affects cardinality.</p>
+<h3 id="prefer-groups-for-human-users">Prefer groups for human users</h3>
+<p>Groups create <strong>one</strong> identity entry per group, regardless of how many users belong to that group. Adding a user to a group does not add a new counter or label value — the user inherits the group's subscription.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">owner</span><span class="p">:</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">groups</span><span class="p">:</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">data-science-team</span><span class="w">    </span><span class="c1"># One counter, many users</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nt">users</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+</code></pre></div>
+<h3 id="reserve-users-for-service-accounts">Reserve users for service accounts</h3>
+<p>The <code>users</code> field creates a <strong>separate counter per entry</strong>. Listing 500 individual human users in <code>owner.users</code> creates 500 distinct rate-limit counters per model per window — and 500 distinct <code>user</code> label values in Prometheus metrics.</p>
+<p>Use <code>users</code> only for:</p>
 <ul>
-<li>Default MaaS Gateway setup: <a href="../../install/maas-setup/#create-gateway">Install MaaS Components — Create Gateway</a></li>
-<li>Attaching models to the Gateway: <a href="../model-setup/">Model Setup Guide</a></li>
-<li>End-to-end TLS: <a href="../tls-configuration/">TLS Configuration</a></li>
+<li>Kubernetes <strong>ServiceAccounts</strong> used by CI/CD pipelines or automation</li>
+<li>Programmatic identities that need individual rate limits distinct from any group</li>
 </ul>
-<h2 id="pattern-index">Pattern index</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">owner</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">groups</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ml-engineers</span><span class="w">          </span><span class="c1"># Human users go here</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">users</span><span class="p">:</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">system:serviceaccount:ci:pipeline-bot</span><span class="w">   </span><span class="c1"># Individual tracking justified</span>
+</code></pre></div>
+<h3 id="impact-summary">Impact summary</h3>
 <table>
 <thead>
 <tr>
-<th>Pattern</th>
-<th>Environment</th>
-<th>One-line purpose</th>
+<th>Approach</th>
+<th>Counters per model per window</th>
+<th>Prometheus label values</th>
+<th>Recommended for</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><a href="#clusterip-gateway-with-openshift-route-re-encrypt">ClusterIP + Route re-encrypt</a></td>
-<td>Dev / Lab / Production</td>
-<td>ClusterIP Gateway Service fronted by an OpenShift Route with re-encrypt TLS; no external LoadBalancer required</td>
+<td>1 group with 500 users</td>
+<td>1</td>
+<td>1 subscription value</td>
+<td>Human users</td>
+</tr>
+<tr>
+<td>500 individual users</td>
+<td>500</td>
+<td>500 user values</td>
+<td>Not recommended</td>
+</tr>
+<tr>
+<td>5 service accounts</td>
+<td>5</td>
+<td>5 user values</td>
+<td>CI/CD, automation</td>
 </tr>
 </tbody>
 </table>
-<h2 id="environment-matrix">Environment matrix</h2>
-<p>Use this table to decide which pattern fits your deployment:</p>
-<table>
-<thead>
-<tr>
-<th>Environment</th>
-<th>Recommended pattern</th>
-<th>Who terminates client TLS?</th>
-<th>Internal TLS</th>
-<th>Namespace expectations</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Development / Lab</strong></td>
-<td>ClusterIP + Route re-encrypt</td>
-<td>OpenShift Router (wildcard or self-signed cert)</td>
-<td>service-ca auto-provisioned cert (re-encrypt to Gateway)</td>
-<td><code>openshift-ingress</code> for Gateway and Route; application namespace for HTTPRoute</td>
-</tr>
-<tr>
-<td><strong>Production</strong></td>
-<td>ClusterIP + Route re-encrypt</td>
-<td>OpenShift Router (CA-signed certificate)</td>
-<td>service-ca auto-provisioned cert (re-encrypt to Gateway)</td>
-<td><code>openshift-ingress</code> for Gateway and Route; application namespace for HTTPRoute</td>
-</tr>
-</tbody>
-</table>
-<p><strong>TLS responsibilities summary:</strong></p>
-<ul>
-<li><strong>Client-facing TLS</strong>: Managed by the OpenShift Router. In production, replace the default wildcard certificate with a CA-signed certificate on the IngressController.</li>
-<li><strong>Gateway Service TLS</strong>: Auto-provisioned by the OpenShift <code>service-ca-operator</code> via the <code>service.beta.openshift.io/serving-cert-secret-name</code> annotation. The Secret name in the ConfigMap annotation <strong>must</strong> match the Gateway listener <code>certificateRefs</code>.</li>
-<li><strong>Authorino and maas-api TLS</strong>: Configured separately. See <a href="../tls-configuration/">TLS Configuration</a>.</li>
-</ul>
-<h2 id="clusterip-gateway-with-openshift-route-re-encrypt">ClusterIP Gateway with OpenShift Route (re-encrypt)</h2>
-<p>This pattern deploys a Gateway API Gateway as a <strong>ClusterIP</strong> service (no external
-LoadBalancer) and uses an <strong>OpenShift Route</strong> with <strong>re-encrypt</strong> TLS termination
-to expose the Gateway externally.</p>
-<h3 id="traffic-flow">Traffic flow</h3>
-<pre class="mermaid"><code>graph LR
-    Client --&gt;|HTTPS| Router["OpenShift Router"]
-    Router --&gt;|re-encrypt TLS| GWSvc["Gateway Service&lt;br/&gt;ClusterIP:443"]
-    GWSvc --&gt; Envoy["Istio / Envoy"]
-    Envoy --&gt;|HTTPRoute| MaaSAPI["maas-api:8443"]</code></pre>
-<ol>
-<li>The client connects over HTTPS to the OpenShift Router.</li>
-<li>The Router terminates the client TLS session and opens a new TLS connection
-   (re-encrypt) to the Gateway Service using the service-ca certificate.</li>
-<li>The Gateway (Istio/Envoy) terminates that connection and routes traffic via
-   HTTPRoute to backend services such as <code>maas-api</code>.</li>
-</ol>
-<h3 id="why-clusterip-route">Why ClusterIP + Route?</h3>
-<ul>
-<li><strong>No LoadBalancer required.</strong> Works on bare-metal, restricted cloud accounts,
-  and environments where LoadBalancer provisioning is slow or unavailable.</li>
-<li><strong>OpenShift-native ingress.</strong> Leverages the platform Router for TLS termination,
-  hostname routing, and integration with existing wildcard certificates.</li>
-<li><strong>Re-encrypt for defense in depth.</strong> Traffic is encrypted between the Router and
-  the Gateway Service, not just at the edge.</li>
-</ul>
-<h3 id="prerequisites">Prerequisites</h3>
-<ul>
-<li>OpenShift cluster with Gateway API support (see <a href="../../install/prerequisites/">Prerequisites</a>)</li>
-<li>GatewayClass <code>openshift-default</code> accepted (see <a href="../../install/platform-setup/#install-gateway-api-controller">Install Gateway API Controller</a>)</li>
-<li>Kuadrant or RHCL operator installed (see <a href="../../install/platform-setup/#install-gateway-api-controller">Install Gateway API Controller</a>)</li>
-<li>Access to the <code>openshift-ingress</code> namespace</li>
-</ul>
-<h3 id="manifests">Manifests</h3>
-<p>All manifests are in
-<a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/gateway-patterns/clusterip-route-reencrypt"><code>docs/samples/gateway-patterns/clusterip-route-reencrypt/</code></a>.</p>
-<h4 id="1-gatewayclass">1. GatewayClass</h4>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gateway.networking.k8s.io/v1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">GatewayClass</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-default</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">controllerName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;openshift.io/gateway-controller/v1&quot;</span>
-</code></pre></div>
-<p>If <code>openshift-default</code> already exists on your cluster, skip this step.</p>
-<h4 id="2-gateway-options-configmap">2. Gateway options ConfigMap</h4>
-<p>The ConfigMap configures the Gateway Service as <strong>ClusterIP</strong> and requests a
-service-ca TLS certificate:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gw-options</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">data</span><span class="p">:</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">service</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="no">metadata:</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="no">annotations:</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="no">service.beta.openshift.io/serving-cert-secret-name: &quot;maas-gw-service-tls&quot;</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="no">spec:</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">      </span><span class="no">type: ClusterIP</span>
-</code></pre></div>
+<h2 id="telemetry-label-cardinality">Telemetry Label Cardinality</h2>
+<p>The Tenant CR controls which labels the TelemetryPolicy adds to Limitador usage metrics. Each enabled label multiplies cardinality.</p>
 <table>
 <thead>
 <tr>
 <th>Field</th>
-<th>Purpose</th>
+<th>Default</th>
+<th>Cardinality impact</th>
+<th>Recommendation</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>serving-cert-secret-name</code></td>
-<td>The <code>service-ca-operator</code> provisions a TLS certificate into this Secret. Must match the Gateway <code>certificateRefs</code>.</td>
+<td><code>captureOrganization</code></td>
+<td><code>true</code></td>
+<td>Low — typically a handful of orgs</td>
+<td>Safe to enable</td>
 </tr>
 <tr>
-<td><code>type: ClusterIP</code></td>
-<td>No external LoadBalancer; the OpenShift Route handles external ingress.</td>
+<td><code>captureUser</code></td>
+<td><code>false</code></td>
+<td><strong>High</strong> — one value per authenticated user</td>
+<td>Enable only if you need per-user billing and accept the cost; has GDPR implications</td>
+</tr>
+<tr>
+<td><code>captureGroup</code></td>
+<td><code>false</code></td>
+<td><strong>High</strong> — one value per group membership; users in multiple groups multiply counters</td>
+<td>Leave disabled unless you specifically need group-level metrics</td>
+</tr>
+<tr>
+<td><code>captureModelUsage</code></td>
+<td><code>true</code></td>
+<td>Moderate — one value per model</td>
+<td>Safe for typical deployments (tens of models)</td>
 </tr>
 </tbody>
 </table>
-<h4 id="3-gateway">3. Gateway</h4>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gateway.networking.k8s.io/v1</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Gateway</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">kuadrant.io/gateway</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;true&quot;</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">app.kubernetes.io/name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-gateway</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="nt">opendatahub.io/managed</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;false&quot;</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="nt">security.opendatahub.io/authorino-tls-bootstrap</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;true&quot;</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">  </span><span class="nt">gatewayClassName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-default</span>
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">  </span><span class="nt">infrastructure</span><span class="p">:</span>
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nt">parametersRef</span><span class="p">:</span>
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">      </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
-<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
-<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gw-options</span>
-<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">  </span><span class="nt">listeners</span><span class="p">:</span>
-<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https</span>
-<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="w">      </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">443</span>
-<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">      </span><span class="nt">protocol</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HTTPS</span>
-<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="w">      </span><span class="nt">allowedRoutes</span><span class="p">:</span>
-<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="w">        </span><span class="nt">namespaces</span><span class="p">:</span>
-<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="w">          </span><span class="nt">from</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">All</span>
-<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a><span class="w">      </span><span class="nt">tls</span><span class="p">:</span>
-<a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a><span class="w">        </span><span class="nt">certificateRefs</span><span class="p">:</span>
-<a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a><span class="w">          </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
-<a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a><span class="w">            </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Secret</span>
-<a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a><span class="w">            </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-gw-service-tls</span>
-<a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a><span class="w">        </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Terminate</span>
+<p>To check or change these settings:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tenant<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.telemetry.metrics}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </code></pre></div>
-<table>
-<thead>
-<tr>
-<th>Label / Annotation</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>kuadrant.io/gateway: "true"</code></td>
-<td>Enables Kuadrant/RHCL policy attachment (AuthPolicy, RateLimitPolicy)</td>
-</tr>
-<tr>
-<td><code>opendatahub.io/managed: "false"</code></td>
-<td>Lets maas-controller manage AuthPolicies; prevents ODH Model Controller from overwriting them</td>
-</tr>
-<tr>
-<td><code>security.opendatahub.io/authorino-tls-bootstrap: "true"</code></td>
-<td>Creates the EnvoyFilter for Gateway → Authorino TLS communication</td>
-</tr>
-<tr>
-<td><code>infrastructure.parametersRef</code></td>
-<td>References the <code>gw-options</code> ConfigMap for ClusterIP and service-ca configuration</td>
-</tr>
-</tbody>
-</table>
-<h4 id="4-openshift-route">4. OpenShift Route</h4>
-<p>The Route exposes the Gateway Service externally with re-encrypt TLS:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">route.openshift.io/v1</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Route</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-gateway-route</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nt">router.openshift.io/service-ca-certificate</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;true&quot;</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.&lt;cluster-domain&gt;</span><span class="w">   </span><span class="c1"># Replace with your cluster domain</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="nt">to</span><span class="p">:</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Service</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway-openshift-default</span><span class="w">  </span><span class="c1"># Verify with kubectl get svc -n openshift-ingress</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">    </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">  </span><span class="nt">port</span><span class="p">:</span>
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">    </span><span class="nt">targetPort</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">443</span>
-<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
-<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">    </span><span class="nt">termination</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">reencrypt</span>
-<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">    </span><span class="nt">insecureEdgeTerminationPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Redirect</span>
+<p>To disable a high-cardinality label:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>tenant<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;telemetry&quot;:{&quot;metrics&quot;:{&quot;captureGroup&quot;: false}}}}&#39;</span>
 </code></pre></div>
-<div class="admonition warning">
-<p class="admonition-title">Service name</p>
-<p>The Gateway controller generates a Service name from the Gateway name and
-GatewayClass name. Verify the actual name:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-l<span class="w"> </span>gateway.networking.k8s.io/gateway-name<span class="o">=</span>maas-default-gateway
+<h2 id="cardinality-limits-and-observed-impact">Cardinality Limits and Observed Impact</h2>
+<h3 id="limitador">Limitador</h3>
+<p>Limitador stores one counter per unique combination of (namespace, label values, window). When counters grow large:</p>
+<ul>
+<li><strong>Memory usage increases</strong> — each counter consumes memory in Limitador pods. With Redis persistence, this also increases Redis memory.</li>
+<li><strong>Lookup latency rises</strong> — counter lookups become slower as the keyspace grows.</li>
+<li><strong>Pod restarts lose state</strong> — without Redis persistence, all counters reset on pod restart (see <a href="../limitador-persistence/">Limitador Persistence</a>).</li>
+</ul>
+<p>There is no hard-coded limit on counter count in Limitador, but practical limits depend on your pod memory allocation and whether you use in-memory or Redis storage.</p>
+<h3 id="prometheus">Prometheus</h3>
+<p>High cardinality in <code>authorized_hits</code>, <code>authorized_calls</code>, and <code>limited_calls</code> metrics affects:</p>
+<ul>
+<li><strong>Prometheus memory and storage</strong> — each unique label combination creates a new time series.</li>
+<li><strong>Query performance</strong> — queries like <code>sum by (user) (rate(authorized_hits[5m]))</code> become slow when thousands of user values exist.</li>
+<li><strong>Dashboard responsiveness</strong> — Grafana panels using high-cardinality metrics may time out.</li>
+</ul>
+<p>Gateway latency metrics (<code>istio_request_duration_milliseconds_bucket</code>) are labeled by <strong>subscription only</strong> (not by user) specifically to keep cardinality bounded. See <a href="../observability/#per-subscription-latency-tracking">Observability Dashboard</a>.</p>
+<h2 id="monitoring-cardinality">Monitoring Cardinality</h2>
+<h3 id="check-current-counter-counts">Check current counter counts</h3>
+<p>Query Limitador's counter count through Prometheus:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Number of active rate-limit counters</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nv">limitador_up</span>
 </code></pre></div>
-</div>
-<div class="admonition warning">
-<p class="admonition-title">Hostname placeholder</p>
-<p>Replace <code>maas.&lt;cluster-domain&gt;</code> with your actual hostname. Retrieve the
-cluster domain with:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>ingresses.config.openshift.io<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.domain}&#39;</span>
+<h3 id="check-prometheus-cardinality">Check Prometheus cardinality</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Count unique user label values on usage metrics</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">count</span><span class="o">(</span><span class="k">count</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">user</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="nv">authorized_calls</span><span class="o">))</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Count unique subscription label values</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="k">count</span><span class="o">(</span><span class="k">count</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">subscription</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="nv">authorized_calls</span><span class="o">))</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># Total time series for MaaS usage metrics</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="k">count</span><span class="o">(</span><span class="p">{</span><span class="nl">__name__</span><span class="o">=~</span><span class="p">&quot;</span><span class="s">authorized_hits|authorized_calls|limited_calls</span><span class="p">&quot;}</span><span class="o">)</span>
 </code></pre></div>
-</div>
-<h4 id="5-httproute">5. HTTPRoute</h4>
-<p>Attach workloads to the Gateway. This example routes all traffic to <code>maas-api</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gateway.networking.k8s.io/v1</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HTTPRoute</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-api</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;application-namespace&gt;</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">parentRefs</span><span class="p">:</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span><span class="nt">rules</span><span class="p">:</span>
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">matches</span><span class="p">:</span>
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">path</span><span class="p">:</span>
-<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">            </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">PathPrefix</span>
-<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">            </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/</span>
-<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">      </span><span class="nt">backendRefs</span><span class="p">:</span>
-<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-api</span>
-<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">          </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8443</span>
+<h3 id="check-from-the-cli">Check from the CLI</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># List all subscriptions and their owner counts</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maassubscription<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.items[] | &quot;\(.metadata.name): groups=\(.spec.owner.groups // [] | length), users=\(.spec.owner.users // [] | length), models=\(.spec.modelRefs | length)&quot;&#39;</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1"># Count total TokenRateLimitPolicies (one per subscription × model)</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tokenratelimitpolicy<span class="w"> </span>-A<span class="w"> </span>--no-headers<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l
 </code></pre></div>
-<p>Replace <code>&lt;application-namespace&gt;</code> with your ODH/RHOAI application namespace
-(<code>opendatahub</code> or <code>redhat-ods-applications</code>).</p>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>The HTTPRoute for maas-api is created automatically by maas-controller
-by default. You only need to create it manually if you are not using
-maas-controller.</p>
-</div>
-<h3 id="apply">Apply</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Apply GatewayClass, ConfigMap, and Gateway</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kustomize<span class="w"> </span>build<span class="w"> </span>docs/samples/gateway-patterns/clusterip-route-reencrypt<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Wait for the Gateway to be programmed</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>Programmed<span class="w"> </span>gateway/maas-default-gateway<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>--timeout<span class="o">=</span>60s
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="c1"># Determine your cluster domain and the Gateway Service name</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="nv">CLUSTER_DOMAIN</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>ingresses.config.openshift.io<span class="w"> </span>cluster<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.domain}&#39;</span><span class="k">)</span>
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="nv">GW_SVC</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span>-l<span class="w"> </span>gateway.networking.k8s.io/gateway-name<span class="o">=</span>maas-default-gateway<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
-<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>
-<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="c1"># Create the Route (update host and service name in openshift-route.yaml, or apply inline)</span>
-<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;EOF</span>
-<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="s">apiVersion: route.openshift.io/v1</span>
-<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="s">kind: Route</span>
-<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="s">metadata:</span>
-<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="s">  name: maas-gateway-route</span>
-<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="s">  namespace: openshift-ingress</span>
-<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="s">  annotations:</span>
-<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="s">    router.openshift.io/service-ca-certificate: &quot;true&quot;</span>
-<a id="__codelineno-7-23" name="__codelineno-7-23" href="#__codelineno-7-23"></a><span class="s">spec:</span>
-<a id="__codelineno-7-24" name="__codelineno-7-24" href="#__codelineno-7-24"></a><span class="s">  host: maas.${CLUSTER_DOMAIN}</span>
-<a id="__codelineno-7-25" name="__codelineno-7-25" href="#__codelineno-7-25"></a><span class="s">  to:</span>
-<a id="__codelineno-7-26" name="__codelineno-7-26" href="#__codelineno-7-26"></a><span class="s">    kind: Service</span>
-<a id="__codelineno-7-27" name="__codelineno-7-27" href="#__codelineno-7-27"></a><span class="s">    name: ${GW_SVC}</span>
-<a id="__codelineno-7-28" name="__codelineno-7-28" href="#__codelineno-7-28"></a><span class="s">    weight: 100</span>
-<a id="__codelineno-7-29" name="__codelineno-7-29" href="#__codelineno-7-29"></a><span class="s">  port:</span>
-<a id="__codelineno-7-30" name="__codelineno-7-30" href="#__codelineno-7-30"></a><span class="s">    targetPort: 443</span>
-<a id="__codelineno-7-31" name="__codelineno-7-31" href="#__codelineno-7-31"></a><span class="s">  tls:</span>
-<a id="__codelineno-7-32" name="__codelineno-7-32" href="#__codelineno-7-32"></a><span class="s">    termination: reencrypt</span>
-<a id="__codelineno-7-33" name="__codelineno-7-33" href="#__codelineno-7-33"></a><span class="s">    insecureEdgeTerminationPolicy: Redirect</span>
-<a id="__codelineno-7-34" name="__codelineno-7-34" href="#__codelineno-7-34"></a><span class="s">EOF</span>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="symptom-limitador-memory-usage-is-growing">Symptom: Limitador memory usage is growing</h3>
+<p><strong>Likely cause:</strong> Large number of individual users in <code>owner.users</code> across multiple subscriptions.</p>
+<p><strong>Diagnosis:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Find subscriptions with many individual users</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maassubscription<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.items[] | select((.spec.owner.users // []) | length &gt; 10) | &quot;\(.metadata.name): \(.spec.owner.users | length) users&quot;&#39;</span>
 </code></pre></div>
-<h3 id="verify">Verify</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Gateway should show Programmed=True</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>gateway<span class="w"> </span>maas-default-gateway<span class="w"> </span>-n<span class="w"> </span>openshift-ingress
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Service should be ClusterIP</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span>-l<span class="w"> </span>gateway.networking.k8s.io/gateway-name<span class="o">=</span>maas-default-gateway
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="c1"># Route should be Admitted</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>route<span class="w"> </span>maas-gateway-route<span class="w"> </span>-n<span class="w"> </span>openshift-ingress
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="c1"># TLS certificate Secret should exist</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>kubectl<span class="w"> </span>get<span class="w"> </span>secret<span class="w"> </span>maas-gw-service-tls<span class="w"> </span>-n<span class="w"> </span>openshift-ingress
+<p><strong>Fix:</strong> Migrate individual users to groups. Create a Kubernetes group, add users to it, and reference the group in the subscription's <code>owner.groups</code> instead of listing users individually.</p>
+<h3 id="symptom-prometheus-queries-for-usage-metrics-are-slow">Symptom: Prometheus queries for usage metrics are slow</h3>
+<p><strong>Likely cause:</strong> <code>captureUser: true</code> or <code>captureGroup: true</code> in the Tenant telemetry config with many users/groups.</p>
+<p><strong>Diagnosis:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Check cardinality of the user label</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">count</span><span class="o">(</span><span class="k">count</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">user</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="nv">authorized_hits</span><span class="o">))</span>
 </code></pre></div>
-<h3 id="troubleshooting">Troubleshooting</h3>
-<table>
-<thead>
-<tr>
-<th>Symptom</th>
-<th>Likely cause</th>
-<th>Fix</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Gateway stays <code>NotProgrammed</code></td>
-<td>GatewayClass not accepted, or <code>gw-options</code> ConfigMap missing</td>
-<td>Check <code>kubectl get gatewayclass</code>; verify ConfigMap in <code>openshift-ingress</code></td>
-</tr>
-<tr>
-<td>Route shows <code>HostAlreadyClaimed</code></td>
-<td>Another Route uses the same hostname</td>
-<td>Change <code>spec.host</code> to a unique FQDN</td>
-</tr>
-<tr>
-<td><code>503</code> from the Route</td>
-<td>Gateway Service not ready or certificate not yet provisioned</td>
-<td>Wait for <code>service-ca-operator</code> to provision <code>maas-gw-service-tls</code>; check <code>kubectl get secret -n openshift-ingress</code></td>
-</tr>
-<tr>
-<td>TLS handshake failure (re-encrypt)</td>
-<td>Service CA cert not trusted by the Router</td>
-<td>Ensure <code>router.openshift.io/service-ca-certificate: "true"</code> annotation on the Route</td>
-</tr>
-<tr>
-<td><code>certificateRefs</code> name mismatch</td>
-<td>Secret name in Gateway does not match ConfigMap annotation</td>
-<td>Verify both reference the same Secret name (<code>maas-gw-service-tls</code>)</td>
-</tr>
-</tbody>
-</table>
-<h2 id="maas-integration">MaaS integration</h2>
-<p>After deploying a gateway pattern, complete the MaaS-specific steps:</p>
+<p>If this returns hundreds or more, the <code>user</code> label is driving high cardinality.</p>
+<p><strong>Fix:</strong> Disable <code>captureUser</code> or <code>captureGroup</code> if per-user or per-group metrics are not required for billing. Per-user token data remains available through the MaaS API even with metrics labels disabled.</p>
+<h3 id="symptom-rate-limiting-is-not-applied-consistently">Symptom: Rate limiting is not applied consistently</h3>
+<p><strong>Likely cause:</strong> Multiple TokenRateLimitPolicies targeting the same HTTPRoute (see the <a href="../../configuration-and-management/quota-and-access-configuration/#3-define-subscriptions-maassubscription">shared route warning</a> in the quota configuration guide).</p>
+<p><strong>Diagnosis:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Find TRLPs sharing the same HTTPRoute</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tokenratelimitpolicy<span class="w"> </span>-A<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.items[] | select(.spec.targetRef.kind==&quot;HTTPRoute&quot;) | &quot;\(.metadata.namespace)/\(.metadata.name) → \(.spec.targetRef.name)&quot;&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>sort<span class="w"> </span><span class="p">|</span><span class="w"> </span>uniq<span class="w"> </span>-d<span class="w"> </span>-f2
+</code></pre></div>
+<p><strong>Fix:</strong> Use dedicated HTTPRoutes per model to ensure independent rate limiting.</p>
+<h2 id="best-practices">Best Practices</h2>
 <ol>
-<li>
-<p><strong>Attach models to the Gateway.</strong> Set <code>spec.router.gateway.refs</code> on your
-   LLMInferenceService to point at the deployed Gateway.
-   See <a href="../model-setup/">Model Setup Guide</a>.</p>
-</li>
-<li>
-<p><strong>Configure end-to-end TLS.</strong> Set up Authorino listener TLS and maas-api
-   backend TLS. See <a href="../tls-configuration/">TLS Configuration</a>.</p>
-</li>
-<li>
-<p><strong>Complete MaaS installation.</strong> If you have not already, follow the full
-   installation flow: database, DataScienceCluster, and validation.
-   See <a href="../../install/maas-setup/">Install MaaS Components</a>.</p>
-</li>
-<li>
-<p><strong>Deploy sample models.</strong> Use the bundled model samples to verify the
-   gateway is working end-to-end.
-   See <a href="../../install/model-setup/">Model Setup</a>.</p>
-</li>
+<li><strong>Use groups, not individual users</strong> — assign human users to Kubernetes groups and reference groups in <code>owner.groups</code>. Reserve <code>owner.users</code> for service accounts.</li>
+<li><strong>Keep telemetry labels minimal</strong> — leave <code>captureUser</code> and <code>captureGroup</code> disabled unless you have a specific billing or compliance requirement.</li>
+<li><strong>Monitor counter growth</strong> — periodically check the number of TokenRateLimitPolicies and Prometheus time series for MaaS metrics.</li>
+<li><strong>Use Redis for Limitador</strong> in production — persistent storage prevents counter resets on pod restarts and provides better visibility into counter counts. See <a href="../limitador-persistence/">Limitador Persistence</a>.</li>
+<li><strong>Use dedicated routes per model</strong> — avoids TRLP conflicts and simplifies cardinality accounting.</li>
 </ol>
+<h2 id="related-documentation">Related Documentation</h2>
+<ul>
+<li><a href="../../configuration-and-management/quota-and-access-configuration/">Quota and Access Configuration</a> — step-by-step subscription setup including the <code>users</code> field warning</li>
+<li><a href="../observability/">Observability Dashboard</a> — metrics collection, TelemetryPolicy labels, and dashboard configuration</li>
+<li><a href="../limitador-persistence/">Limitador Persistence</a> — configuring Redis for persistent rate-limit counters</li>
+<li><a href="../../reference/crds/maas-subscription/">MaaSSubscription CRD Reference</a> — full CRD field reference</li>
+</ul>
 
 
 
@@ -3427,7 +3335,7 @@ maas-controller.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 5, 2026 12:29:10 UTC">May 5, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 7, 2026 14:39:58 UTC">May 7, 2026</span>
   </span>
 
     
@@ -3437,7 +3345,7 @@ maas-controller.</p>
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 4, 2026 14:06:51 UTC">May 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
   </span>
 
     
