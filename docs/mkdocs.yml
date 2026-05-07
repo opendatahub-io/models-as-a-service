@@ -85,8 +85,6 @@ nav:
     - Models:
       - Model Setup: configuration-and-management/model-setup.md
       - Model Listing Flow: configuration-and-management/model-listing-flow.md
-    - MaaS Controller:
-      - Controller Overview: configuration-and-management/maas-controller-overview.md
     - Advanced Administration:
       - Observability Dashboard: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
@@ -95,8 +93,12 @@ nav:
     - API Key Management: user-guide/api-key-management.md
     - Model Discovery: user-guide/model-discovery.md
     - Inference: user-guide/inference.md
-  - Contributing:
-    - MaaS Testing and Contribution Guide: contributing/testing-guide.md
+  - Developer Guide:
+    - Controller Architecture: architecture-internals/controller-architecture.md
+    - Reconciliation Flow: architecture-internals/reconciliation-flow.md
+    - Authentication Internals: architecture-internals/authentication-internals.md
+    - Contributing:
+      - MaaS Testing and Contribution Guide: contributing/testing-guide.md
   - API Reference:
     - MaaS API Overview: reference/maas-api-overview.md
     - MaaS API (Swagger): reference/api-reference.md

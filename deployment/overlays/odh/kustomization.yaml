@@ -170,12 +170,15 @@ replacements:
       name: payload-processing
     fieldPaths:
     - spec.targetRefs.0.name
-# Replace gateway namespace in payload-processing DestinationRule host and EnvoyFilter cluster_name
+# Replace namespace in payload-processing DestinationRule host and EnvoyFilter cluster_name.
+# Kustomize default: openshift-ingress (gateway ns, where payload-processing is deployed).
+# RHOAI operator overrides to app namespace (its NamespaceApplierPlugin moves all
+# resources to the app ns, so the FQDN must match). See RHOAIENG-59726.
 - source:
     kind: ConfigMap
     version: v1
     name: maas-parameters
-    fieldPath: data.gateway-namespace
+    fieldPath: data.payload-processing-namespace
   targets:
   - select:
       kind: DestinationRule

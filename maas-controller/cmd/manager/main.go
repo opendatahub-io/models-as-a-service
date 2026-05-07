@@ -535,6 +535,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// LifecycleReconciler manages the cleanup finalizer on the maas-controller
+	// Deployment. When ODH deletes the Deployment (MaaS disable), the finalizer ensures
+	// Tenant CRs are cleaned up before the controller process exits.
+	// maasAPINamespace is the namespace ODH deployed maas-controller into (same namespace).
+	if err := (&maas.LifecycleReconciler{
+		Client:          mgr.GetClient(),
+		DeploymentName:  "maas-controller",
+		DeploymentNS:    maasAPINamespace,
+		TenantNamespace: maasSubscriptionNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
+		os.Exit(1)
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)

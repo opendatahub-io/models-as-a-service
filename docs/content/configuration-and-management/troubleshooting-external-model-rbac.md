@@ -67,4 +67,4 @@ Expected output: `yes`
 ## Related
 
 - [Namespace user permissions (RBAC)](namespace-rbac.md)
-- [MaaS controller overview](maas-controller-overview.md)
+- [Controller Architecture](../architecture-internals/controller-architecture.md)
