@@ -48,6 +48,9 @@ echo "API Key: ${API_KEY}"
 !!! warning "API key shown only once"
     The plaintext API key is returned **only at creation time**. Store it securely when displayed. If you lose it, you must create a new key.
 
+!!! tip "TLS certificate errors"
+    If `curl` returns `curl: (60) SSL certificate problem`, see [Troubleshooting - TLS Certificate Validation](../install/troubleshooting.md#tls-certificate-validation).
+
 **Request body fields:**
 
 | Field | Required | Description |

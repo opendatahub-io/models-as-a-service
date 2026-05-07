@@ -228,6 +228,9 @@ curl -sS "https://${GW_HOST}/v1/models" \
 
 The model `gpt-4o` should appear in the list.
 
+!!! tip "TLS certificate errors"
+    If `curl` returns `curl: (60) SSL certificate problem`, see [Troubleshooting - TLS Certificate Validation](troubleshooting.md#tls-certificate-validation).
+
 ## Supported Providers
 
 The `spec.provider` field determines how IPP translates requests and injects credentials. Each provider has different authentication headers and API formats — IPP handles the translation automatically.
