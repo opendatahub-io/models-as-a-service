@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -147,7 +148,7 @@ func (c *ClusterConfig) StartAndWaitForSync(stopCh <-chan struct{}) bool {
 // gateway.networking.k8s.io/gateway-name=<gatewayName> in gatewayNamespace.
 // Only Services owned by a Gateway resource (via ownerReferences) and exposing
 // port 443 are considered. Returns "<service-name>.<namespace>.svc.cluster.local".
-func ResolveGatewayInternalHost(ctx context.Context, clientset *kubernetes.Clientset, gatewayName, gatewayNamespace string) (string, error) {
+func ResolveGatewayInternalHost(ctx context.Context, clientset kubernetes.Interface, gatewayName, gatewayNamespace string) (string, error) {
 	labelSelector := fmt.Sprintf("gateway.networking.k8s.io/gateway-name=%s", gatewayName)
 	svcs, err := clientset.CoreV1().Services(gatewayNamespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
@@ -160,7 +161,8 @@ func ResolveGatewayInternalHost(ctx context.Context, clientset *kubernetes.Clien
 	for _, svc := range svcs.Items {
 		ownedByGateway := false
 		for _, ref := range svc.OwnerReferences {
-			if ref.Kind == "Gateway" && ref.Name == gatewayName {
+			if ref.Kind == "Gateway" && ref.Name == gatewayName &&
+				strings.HasPrefix(ref.APIVersion, "gateway.networking.k8s.io/") {
 				ownedByGateway = true
 				break
 			}

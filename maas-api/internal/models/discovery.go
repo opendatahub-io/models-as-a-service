@@ -69,7 +69,7 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayIntern
 	}
 
 	transport := &http.Transport{
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // cluster-internal only
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, //nolint:gosec // cluster-internal only
 		MaxIdleConns:        httpMaxIdleConns,
 		MaxIdleConnsPerHost: maxDiscoveryConcurrency,
 		IdleConnTimeout:     httpIdleConnTimeout,
