@@ -31,7 +31,7 @@ MaaS uses a two-layer deployment model that separates concerns between the opera
 
 The full ownership chain from cluster configuration to running workloads:
 
-```
+```text
 DataScienceCluster → ODH Operator → maas-controller Deployment →
 Tenant CR → Tenant reconciler → platform workloads
   (maas-api, AuthPolicy, TokenRateLimitPolicy, TelemetryPolicy, …)
