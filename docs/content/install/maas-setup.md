@@ -248,8 +248,8 @@ After creating the database Secret and Gateways, create or update your DataScien
 
 === "Kustomize"
 
-    !!! note "Development and early testing"
-        Kustomize deployment can be used for **development and early testing purposes**. For production, use the Managed tab above.
+    !!! note "Development and early testing only"
+        Kustomize deployment is for **development and early testing** only. It does not provide the operator-managed lifecycle (automatic upgrades, drift healing, integrated status reporting). For production, use the **Managed** tab above.
 
     Set `modelsAsService` to **Removed** so the operator does not deploy the MaaS API, then deploy MaaS via the ODH overlay:
 
@@ -271,11 +271,34 @@ After creating the database Secret and Gateways, create or update your DataScien
     EOF
     ```
 
+    #### Kustomize Build Roots
+
+    Use the table below to choose the correct `kustomize build` root for your scenario:
+
+    | Build root | What it builds | When to use |
+    |---|---|---|
+    | `deployment/base/maas-controller/default` | Standalone `maas-controller` (CRDs, RBAC, Deployment, monitoring) | Adding the controller to an existing cluster where infrastructure is already deployed |
+    | `deployment/overlays/odh` | Full ODH stack: `maas-controller` + `maas-api` (TLS) + payload processing + shared config | Development / early testing of the complete MaaS platform on ODH |
+
     Apply the ODH overlay to deploy the MaaS API and controller (run from the project root; ensure the `maas-db-config` Secret exists per [Database Setup](#database-setup)):
 
     ```bash
     kustomize build deployment/overlays/odh | kubectl apply -f -
     ```
+
+!!! info "DSC vs Tenant: what goes where"
+    Configuration is split between two resources. Use the table below to determine which resource owns each setting:
+
+    | Setting | Resource | Field / mechanism |
+    |---|---|---|
+    | Enable / disable MaaS | `DataScienceCluster` | `spec.components.kserve.modelsAsService.managementState` (Managed / Removed) |
+    | KServe raw deployment mode | `DataScienceCluster` | `spec.components.kserve.rawDeploymentServiceConfig` |
+    | Gateway reference (namespace, name) | `Tenant` CR | `spec.gatewayRef` |
+    | API key max expiration | `Tenant` CR | `spec.apiKeys.maxExpirationDays` |
+    | Telemetry toggles (metrics labels) | `Tenant` CR | `spec.telemetry.enabled`, `spec.telemetry.metrics.*` |
+    | External OIDC provider | `Tenant` CR | `spec.externalOIDC.issuerUrl`, `spec.externalOIDC.clientId` |
+
+    **Rule of thumb:** `DataScienceCluster` controls *whether* MaaS is deployed; `Tenant` controls *how* MaaS behaves at runtime. See [Controller Architecture — Bootstrap and Platform Layers](../architecture-internals/controller-architecture.md#bootstrap-and-platform-layers) for the full ownership model.
 
 !!! tip "Troubleshooting"
     If components do not become ready, run `kubectl describe datasciencecluster default-dsc` to inspect conditions and events.

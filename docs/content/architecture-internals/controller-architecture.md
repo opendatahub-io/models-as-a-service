@@ -19,6 +19,58 @@ The controller does not run inference. It **reconciles** your high-level MaaS CR
 
 ---
 
+## Bootstrap and Platform Layers
+
+MaaS uses a two-layer deployment model that separates concerns between the operator (bootstrap) and the controller (platform):
+
+- **ODH operator = bootstrap layer** — deploys only `maas-controller` + CRDs + `maas-parameters` ConfigMap; nothing else.
+- **maas-controller self-bootstraps `default-tenant` CR** on startup and watches it continuously (every 30 s).
+- **Tenant reconciler = platform layer** — renders embedded kustomize manifests and SSA-applies all workloads (`maas-api`, gateway policies, telemetry, networking); any drift is self-healed.
+
+### End-to-End Ownership Chain
+
+The full ownership chain from cluster configuration to running workloads:
+
+```
+DataScienceCluster → ODH Operator → maas-controller Deployment →
+Tenant CR → Tenant reconciler → platform workloads
+  (maas-api, AuthPolicy, TokenRateLimitPolicy, TelemetryPolicy, …)
+```
+
+### Deployment Flow
+
+```mermaid
+sequenceDiagram
+    participant DSC as DataScienceCluster
+    participant Op as ODH Operator
+    participant Ctrl as maas-controller
+    participant T as Tenant CR
+    participant Plat as Platform Workloads
+
+    DSC->>Op: modelsAsService: Managed
+    Op->>Ctrl: Deploy maas-controller + CRDs + maas-parameters
+    Ctrl->>T: Self-bootstrap default-tenant (if absent)
+    loop Every 30 s
+        Ctrl->>T: Watch Tenant CR
+        T->>Plat: Tenant reconciler renders kustomize & SSA-applies
+    end
+    Note over Plat: maas-api, AuthPolicy,<br/>TokenRateLimitPolicy,<br/>TelemetryPolicy, DestinationRule,<br/>NetworkPolicy
+```
+
+### `maas-parameters` ConfigMap Ownership
+
+The `maas-parameters` ConfigMap carries runtime configuration (images, gateway coordinates, cache TTLs). Who creates it depends on the deployment method:
+
+| Deployment method | Who creates `maas-parameters` | Mechanism | Notes |
+|---|---|---|---|
+| **Managed (ODH/RHOAI operator)** | ODH operator | `AppendOperatorInstallManifests` reads `params.env` from the overlay and generates the ConfigMap at deploy time | The operator is authoritative; the Tenant reconciler **must not** overwrite it |
+| **Kustomize standalone** | `kustomize build` | `configMapGenerator` in the overlay `kustomization.yaml` generates it from `params.env` | Developer/testing workflow |
+
+!!! warning "Operator-managed deployments"
+    In ODH/RHOAI managed deployments the operator is authoritative for `maas-parameters`. The Tenant reconciler reads values from the ConfigMap but must not overwrite it — the operator controls image tags, gateway coordinates, and other build-time defaults via `params.env`.
+
+---
+
 ## High-Level Architecture
 
 ```mermaid

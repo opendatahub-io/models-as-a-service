@@ -29,6 +29,12 @@ Use this platform to streamline the deployment of your models, monitor usage, an
 - **[TLS Configuration](configuration-and-management/tls-configuration.md)** - Configuring TLS
 - **[Gateway Patterns](configuration-and-management/gateway-patterns.md)** - Curated Gateway API deployment patterns
 
+### Architecture Internals
+
+- **[Controller Architecture](architecture-internals/controller-architecture.md)** - Bootstrap/platform deployment boundary, Tenant reconciler, resource ownership, and configuration reference
+- **[Reconciliation Flow](architecture-internals/reconciliation-flow.md)** - Ownership, watches, status, deletion lifecycle
+- **[Authentication Internals](architecture-internals/authentication-internals.md)** - Subscription selection, TRLP keys, identity context
+
 ### 📋 Release Notes
 
 - **[Release notes](release-notes/index.md)** - Version highlights and known limitations by release
