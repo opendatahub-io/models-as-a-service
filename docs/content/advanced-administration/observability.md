@@ -1,4 +1,4 @@
-# Observability
+# Observability Dashboard
 
 This document covers the observability stack for the MaaS Platform, including metrics collection, monitoring, and visualization.
 
@@ -94,7 +94,7 @@ kubectl get podmonitor -n kuadrant-system
 
 ```bash
 # Query Prometheus for Limitador metrics
-curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+curl -s -H "Authorization: Bearer $(oc whoami -t)" \
   "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/query?query=limitador_up"
 
 # Should return data with limitador_up = 1
@@ -109,6 +109,28 @@ curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
 
 !!! note "Cluster Admin Permissions"
     Configuring User Workload Monitoring requires cluster admin permissions to create ConfigMaps in the `openshift-monitoring` namespace. If you don't have these permissions, contact your cluster administrator.
+
+## RHOAI Dashboard Observability Tab
+
+The RHOAI Dashboard includes a built-in **Observability** tab that displays Perses-based dashboards
+for platform monitoring. This is separate from the MaaS-specific Grafana dashboards described later
+in this document.
+
+The following must be in place for the Observability tab to work:
+
+- **Cluster Observability Operator (COO)** and **OpenTelemetry Operator** — install both from OperatorHub
+- **DSCI `monitoring.metrics`** — see [Platform Setup](../install/platform-setup.md#install-platform-operator) for DSCI configuration
+- **`observabilityDashboard: true`** on OdhDashboardConfig — see [Feature Flags](../install/maas-setup.md#odhdashboardconfig-feature-flags)
+
+**Quick verification:**
+
+```bash
+kubectl get csv -A | grep -E 'cluster-observability|opentelemetry'
+kubectl get dsciinitialization default-dsci -o jsonpath='{.spec.monitoring}' | jq .
+kubectl get pods -n redhat-ods-monitoring | grep perses
+```
+
+For the full setup procedure, see [Managing observability (RHOAI 3.4)](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai).
 
 ## Overview
 
@@ -211,7 +233,7 @@ kubectl patch tenant default-tenant -n models-as-a-service --type=merge \
 kubectl get telemetry -n openshift-ingress latency-per-subscription
 
 # Query Prometheus for subscription label
-curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+curl -s -H "Authorization: Bearer $(oc whoami -t)" \
   "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/label/subscription/values"
 ```
 

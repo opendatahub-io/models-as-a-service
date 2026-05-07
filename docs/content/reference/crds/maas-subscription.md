@@ -33,3 +33,27 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 |-------|------|----------|-------------|
 | limit | int64 | Yes | Maximum number of tokens allowed |
 | window | string | Yes | Time window (e.g., `1m`, `1h`, `24h`). Allowed units: `s`, `m`, `h` (1–9999). Pattern: `^[1-9]\d{0,3}(s\|m\|h)$`. **Breaking change:** `d` (days) is no longer accepted; use hours instead (e.g., `24h` not `1d`). |
+
+## Annotations
+
+MaaSSubscription supports standard Kubernetes and OpenShift annotations for use by `kubectl`, the OpenShift console, and other tooling.
+
+| Annotation | Description | Example |
+| ---------- | ----------- | ------- |
+| `openshift.io/display-name` | Human-readable display name | `"Premium Subscription"` |
+| `openshift.io/description` | Free-text description | `"Premium-tier subscription with 1000 tokens/min rate limit"` |
+
+**Example:**
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: premium-subscription
+  namespace: models-as-a-service
+  annotations:
+    openshift.io/display-name: "Premium Subscription"
+    openshift.io/description: "Premium-tier subscription with 1000 tokens/min rate limit"
+spec:
+  # ...
+```

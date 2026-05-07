@@ -66,11 +66,21 @@ func (t *TLSConfig) HasCerts() bool {
 // loadTLSConfig loads TLS configuration from environment variables.
 func loadTLSConfig() TLSConfig {
 	selfSigned, _ := env.GetBool("TLS_SELF_SIGNED", false)
+	minVersion := TLSVersion(tls.VersionTLS12)
+
+	// Read TLS_MIN_VERSION env var as fallback (CLI flag will override later)
+	if envVal := env.GetString("TLS_MIN_VERSION", ""); envVal != "" {
+		if err := minVersion.Set(envVal); err != nil {
+			// Invalid value - keep default 1.2
+			minVersion = TLSVersion(tls.VersionTLS12)
+		}
+	}
+
 	return TLSConfig{
 		Cert:       env.GetString("TLS_CERT", ""),
 		Key:        env.GetString("TLS_KEY", ""),
 		SelfSigned: selfSigned,
-		MinVersion: TLSVersion(tls.VersionTLS12),
+		MinVersion: minVersion,
 	}
 }
 
@@ -91,12 +101,6 @@ func (t *TLSConfig) validate() error {
 
 	if t.HasCerts() {
 		t.SelfSigned = false
-	}
-
-	if envVal := env.GetString("TLS_MIN_VERSION", ""); envVal != "" {
-		if err := t.MinVersion.Set(envVal); err != nil {
-			return err
-		}
 	}
 
 	return nil

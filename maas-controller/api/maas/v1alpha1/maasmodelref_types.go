@@ -33,7 +33,7 @@ type MaaSModelRef struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   MaaSModelSpec   `json:"spec,omitempty"`
+	Spec   MaaSModelSpec   `json:"spec"`
 	Status MaaSModelStatus `json:"status,omitempty"`
 }
 
@@ -68,7 +68,7 @@ type ModelReference struct {
 // MaaSModelStatus defines the observed state of MaaSModelRef
 type MaaSModelStatus struct {
 	// Phase represents the current phase of the model
-	// +kubebuilder:validation:Enum=Pending;Ready;Unhealthy;Failed
+	// +kubebuilder:validation:Enum=Pending;Ready;Unhealthy;Failed;Invalid
 	Phase string `json:"phase,omitempty"`
 
 	// Endpoint is the endpoint URL for the model

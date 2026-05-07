@@ -10,6 +10,8 @@ const (
 
 	DefaultResyncPeriod = 8 * time.Hour
 
+	DefaultMetricsPort = 9090
+
 	// Header configuration constants.
 	HeaderUsername = "X-MaaS-Username"
 	HeaderGroup    = "X-MaaS-Group"
@@ -17,6 +19,9 @@ const (
 	// API Key configuration defaults.
 	// DefaultAPIKeyMaxExpirationDays is the default maximum allowed expiration for API keys.
 	DefaultAPIKeyMaxExpirationDays = 90
+
+	// DefaultSARCacheMaxSize is the maximum number of entries in the SAR admin-check cache.
+	DefaultSARCacheMaxSize = 8192
 
 	// LLMInferenceService annotation keys for model metadata.
 	AnnotationGenAIUseCase  = "opendatahub.io/genai-use-case"

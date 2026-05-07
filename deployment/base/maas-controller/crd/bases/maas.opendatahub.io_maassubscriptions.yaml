@@ -264,6 +264,7 @@ spec:
                       - NotEnforced
                       - BackendNotReady
                       - ConditionsNotFound
+                      - InvalidSpec
                       - Unknown
                       type: string
                   required:
@@ -279,6 +280,7 @@ spec:
                 - Active
                 - Degraded
                 - Failed
+                - Invalid
                 type: string
               tokenRateLimitStatuses:
                 description: TokenRateLimitStatuses reports the status of each generated
@@ -326,6 +328,7 @@ spec:
                       - NotEnforced
                       - BackendNotReady
                       - ConditionsNotFound
+                      - InvalidSpec
                       - Unknown
                       type: string
                   required:
@@ -336,6 +339,8 @@ spec:
                   type: object
                 type: array
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true

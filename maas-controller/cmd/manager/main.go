@@ -388,7 +388,6 @@ func main() {
 	var gatewayNamespace string
 	var maasAPINamespace string
 	var maasSubscriptionNamespace string
-	var clusterAudience string
 	var metadataCacheTTL int64
 	var authzCacheTTL int64
 	var subscriptionNamespaceMaintainInterval time.Duration
@@ -401,7 +400,6 @@ func main() {
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "The namespace of the Gateway resource.")
 	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "opendatahub", "The namespace where maas-api service is deployed.")
 	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
-	flag.StringVar(&clusterAudience, "cluster-audience", "https://kubernetes.default.svc", "The OIDC audience of the cluster for TokenReview. HyperShift/ROSA clusters use a custom OIDC provider URL.")
 	flag.Int64Var(&metadataCacheTTL, "metadata-cache-ttl", 60, "TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info).")
 	flag.Int64Var(&authzCacheTTL, "authz-cache-ttl", 60, "TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership).")
 	flag.DurationVar(&subscriptionNamespaceMaintainInterval, "subscription-namespace-maintain-interval", 30*time.Second,
@@ -448,15 +446,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Auto-detect cluster audience from OpenShift/ROSA if using default value
-	// Use GetAPIReader() instead of GetClient() because the cache hasn't started yet
-	if clusterAudience == "https://kubernetes.default.svc" {
-		if detectedAudience, err := getClusterServiceAccountIssuer(mgr.GetAPIReader()); err == nil && detectedAudience != "" {
-			setupLog.Info("auto-detected cluster service account issuer", "audience", detectedAudience)
-			clusterAudience = detectedAudience
-		} else if err != nil {
-			setupLog.Info("unable to auto-detect cluster service account issuer, using default", "error", err, "default", clusterAudience)
-		}
+	// Auto-detect cluster audience from OpenShift/ROSA; fall back to the standard Kubernetes audience.
+	// Use GetAPIReader() instead of GetClient() because the cache hasn't started yet.
+	clusterAudience := "https://kubernetes.default.svc"
+	if detectedAudience, err := getClusterServiceAccountIssuer(mgr.GetAPIReader()); err == nil && detectedAudience != "" {
+		setupLog.Info("auto-detected cluster service account issuer", "audience", detectedAudience)
+		clusterAudience = detectedAudience
+	} else if err != nil {
+		setupLog.Error(err, "unable to auto-detect cluster service account issuer, using default", "default", clusterAudience)
 	}
 
 	if err := (&maas.MaaSModelRefReconciler{
@@ -535,6 +532,20 @@ func main() {
 		TenantNamespace: maasSubscriptionNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
+		os.Exit(1)
+	}
+
+	// LifecycleReconciler manages the cleanup finalizer on the maas-controller
+	// Deployment. When ODH deletes the Deployment (MaaS disable), the finalizer ensures
+	// Tenant CRs are cleaned up before the controller process exits.
+	// maasAPINamespace is the namespace ODH deployed maas-controller into (same namespace).
+	if err := (&maas.LifecycleReconciler{
+		Client:          mgr.GetClient(),
+		DeploymentName:  "maas-controller",
+		DeploymentNS:    maasAPINamespace,
+		TenantNamespace: maasSubscriptionNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
 		os.Exit(1)
 	}
 

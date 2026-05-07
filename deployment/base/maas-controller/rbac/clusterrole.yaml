@@ -58,6 +58,7 @@ rules:
   resources:
   - customresourcedefinitions
   verbs:
+  - delete
   - get
   - list
   - watch
@@ -71,7 +72,14 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments/finalizers
+  verbs:
+  - update
 - apiGroups:
   - authentication.k8s.io
   resources:
@@ -208,6 +216,17 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - podmonitors
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
 - apiGroups:
   - networking.istio.io
   resources:

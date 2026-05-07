@@ -7,12 +7,14 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 1. [Database Setup](#database-setup) — Create the PostgreSQL connection Secret
 2. [Create Gateway](#create-gateway) — Deploy maas-default-gateway (required before modelsAsService)
 3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable KServe and modelsAsService in your DataScienceCluster
-4. [Model Setup (On Cluster)](model-setup.md) — Deploy sample models
+4. [Model Setup](model-setup.md) — Deploy sample models
 5. [Validation](validation.md) — Verify the deployment
 
 ## Database Setup
 
-A PostgreSQL database is required. Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI):
+`maas-api` uses PostgreSQL as its persistence layer for API key metadata: hashed tokens, subscription bindings, expiration dates, and revocation state. The database must be reachable before `maas-api` starts; the pod will crash-loop until the connection succeeds and the schema migration completes.
+
+Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI):
 
 ```bash
 kubectl create secret generic maas-db-config \
@@ -78,12 +80,14 @@ The Gateway must exist before enabling modelsAsService in your DataScienceCluste
     ```
 
 !!! note "Required annotations"
-    The Gateway **must** include these annotations for MaaS to work correctly:
+    The Gateway **must** include these annotations to trust Authorino's certificates:
 
     | Annotation | Purpose |
     |------------|---------|
     | `opendatahub.io/managed: "false"` | Read by **maas-controller**: allows it to manage AuthPolicies and related resources; prevents the ODH Model Controller from overwriting them. |
-    | `security.opendatahub.io/authorino-tls-bootstrap: "true"` | Used by the ODH platform (not maas-controller) to create the EnvoyFilter for Gateway → Authorino TLS when Authorino uses a TLS listener. Required when Authorino TLS is enabled (see [TLS Configuration](../configuration-and-management/tls-configuration.md)). |
+    | `security.opendatahub.io/authorino-tls-bootstrap: "true"` | Used by the ODH platform (not maas-controller) to create the EnvoyFilter for Gateway → Authorino TLS when Authorino uses a TLS listener. Required when Authorino TLS is enabled. |
+
+    The `authorino-tls-bootstrap` annotation is an interim solution until [CONNLINK-528](https://issues.redhat.com/browse/CONNLINK-528) ships native support for configuring TLS between the Gateway and Authorino without mesh sidecars. It decouples TLS configuration from AuthPolicy management, allowing TLS even when `opendatahub.io/managed` is `"false"`.
 
 ```yaml
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
@@ -156,11 +160,19 @@ After creating the database Secret and Gateways, create or update your DataScien
             managementState: Managed
         dashboard:
           managementState: Managed
+        llamastackoperator:
+          managementState: Managed
     EOF
     ```
 
+    !!! tip "LlamaStack Operator (GenAI Studio)"
+        The `llamastackoperator` component is required for **GenAI Studio** functionality.
+        If you do not need GenAI Studio, you can omit it or set it to `Removed`.
+        You also need to enable the `genAiStudio` feature flag on `OdhDashboardConfig` —
+        see [OdhDashboardConfig Feature Flags](#odhdashboardconfig-feature-flags) below.
+
     !!! note "Connectivity Link warning (ODH with Kuadrant)"
-        When using ODH with Kuadrant (upstream), you may see `Warning: Red Hat Connectivity Link is not installed, LLMInferenceService cannot be used` in the Kserve status initially. This typically resolves after a few minutes as the operator reconciles. If it persists, apply the `scripts/workaround-odh-rhcl-check.yaml` workaround.
+        When using ODH with Kuadrant (upstream), you may see `Warning: Red Hat Connectivity Link is not installed, LLMInferenceService cannot be used` in the Kserve status initially. This typically resolves after a few minutes as the operator reconciles. If it persists, run `kubectl describe datasciencecluster default-dsc` and check that the Kuadrant/Connectivity Link operator is installed and healthy.
 
     **Validate DataScienceCluster:**
 
@@ -268,8 +280,37 @@ After creating the database Secret and Gateways, create or update your DataScien
 !!! tip "Troubleshooting"
     If components do not become ready, run `kubectl describe datasciencecluster default-dsc` to inspect conditions and events.
 
+## OdhDashboardConfig Feature Flags
+
+The RHOAI Dashboard uses feature flags in the `OdhDashboardConfig` resource to control which tabs
+and features are visible in the UI. The operator creates this resource automatically when the
+Dashboard component is deployed, but the following flags may need to be enabled manually.
+
+Patch the `OdhDashboardConfig` in your applications namespace (typically `redhat-ods-applications`
+for RHOAI or `opendatahub` for ODH):
+
+```bash
+kubectl patch odhdashboardconfig odh-dashboard-config \
+  -n redhat-ods-applications --type=merge \
+  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"observabilityDashboard":true}}}'
+```
+
+| Flag | Effect | Prerequisites |
+|------|--------|---------------|
+| `genAiStudio: true` | Shows the **GenAI Studio** tab in the Dashboard | `llamastackoperator` set to `Managed` in DSC |
+| `observabilityDashboard: true` | Shows the **Observability** tab in the Dashboard | COO, OpenTelemetry Operator installed; DSCI `monitoring.metrics` configured |
+
+!!! note "Namespace"
+    For ODH installations, replace `redhat-ods-applications` with `opendatahub` (or your configured
+    applications namespace from DSCI `spec.applicationsNamespace`).
+
+!!! note "Flag names"
+    These flags are defined in the odh-dashboard source. The `OdhDashboardConfig` CRD is of
+    API version `opendatahub.io/v1alpha`. The operator re-creates this resource with factory
+    defaults if it is deleted, but does not overwrite user changes to existing fields.
+
 ## Next steps
 
-* **Deploy models.** See [Model Setup (On Cluster)](model-setup.md) for sample model deployments.
+* **Deploy models.** See [Model Setup](model-setup.md) for sample model deployments.
 * **Perform validation.** Follow the [validation guide](validation.md) to verify that
   MaaS is working correctly.

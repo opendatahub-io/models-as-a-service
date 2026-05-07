@@ -89,7 +89,7 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 	return &RunResult{}, nil
 }
 
-// Run executes the ODH-equivalent modelsasservice pipeline against Tenant.
+// Run executes the Tenant platform pipeline (dependencies → prerequisites → render → apply → status).
 // The application namespace is derived from tenant.Namespace (Tenant CR is co-located with workloads).
 func Run(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, manifestPath string) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
