@@ -90,7 +90,7 @@ The Gateway resource must already exist in the target namespace.
 
 ## Related documentation
 
-- [Controller Overview](maas-controller-overview.md)
+- [Controller Architecture](../architecture-internals/controller-architecture.md)
 - [External Model Setup (Tech Preview)](../install/external-model-setup.md)
 - [Namespace User Permissions (RBAC)](namespace-rbac.md)
 - [Architecture](../concepts/architecture.md)
