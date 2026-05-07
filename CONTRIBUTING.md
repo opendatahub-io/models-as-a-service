@@ -49,7 +49,7 @@ Thanks for your interest in contributing. This guide explains how to work with t
 
 ## Release strategy
 
-This project follows a **Stream-Lake-Ocean** release model. Code flows from active development (`main`) through quality-gated branches (`stable`, `rhoai`) to the downstream RHOAI repository. See the full details in [docs/release-strategy.md](docs/release-strategy.md).
+This project follows a **Stream-Lake-Ocean** release model. Code flows from active development (`main`) through quality-gated branches (`stable`, `rhoai`) to the downstream RHOAI repository. See the full details in [docs/content/contributing/release-strategy.md](docs/content/contributing/release-strategy.md).
 
 ## Repository layout
 

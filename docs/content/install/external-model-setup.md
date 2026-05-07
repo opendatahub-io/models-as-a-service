@@ -187,7 +187,7 @@ GW_HOST=$(kubectl get gateway maas-default-gateway -n openshift-ingress \
   -o jsonpath='{.spec.listeners[0].hostname}')
 TOKEN=$(oc whoami -t)
 
-KEY=$(curl -sSk -X POST "https://${GW_HOST}/maas-api/v1/api-keys" \
+KEY=$(curl -sS -X POST "https://${GW_HOST}/maas-api/v1/api-keys" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"external-model-key","subscription":"gpt-4o-subscription"}' | jq -r '.key')
@@ -198,7 +198,7 @@ echo "MaaS API key: ${KEY:0:20}..."
 ### Run Inference
 
 ```bash
-curl -sSk "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
+curl -sS "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $KEY" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"say hello"}]}'
@@ -208,13 +208,13 @@ curl -sSk "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
 
 ```bash
 # Bogus key — expect 403
-curl -sSk -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
+curl -sS -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-oai-FAKE-KEY" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 
 # No auth — expect 401
-curl -sSk -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
+curl -sS -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 ```
@@ -222,11 +222,14 @@ curl -sSk -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/compl
 ### Verify Model Listing
 
 ```bash
-curl -sSk "https://${GW_HOST}/v1/models" \
+curl -sS "https://${GW_HOST}/v1/models" \
   -H "Authorization: Bearer $KEY" | jq '.data[].id'
 ```
 
 The model `gpt-4o` should appear in the list.
+
+!!! tip "TLS certificate errors"
+    If `curl` returns `curl: (60) SSL certificate problem`, see [Troubleshooting - TLS Certificate Validation](troubleshooting.md#tls-certificate-validation).
 
 ## Supported Providers
 
@@ -284,7 +287,7 @@ Routes to AWS Bedrock's OpenAI-compatible Mantle endpoint. Pass-through — no b
     Use `bedrock-mantle.<region>.api.aws`, **not** `bedrock-runtime.<region>.amazonaws.com`. The IPP translator uses `/v1/chat/completions` which is only available on the Bedrock Mantle endpoint. Using `bedrock-runtime` will result in `404` errors.
 
 - Set `endpoint: bedrock-mantle.<region>.api.aws` (e.g., `bedrock-mantle.us-east-2.api.aws`)
-- Models vary by region. List available models: `curl -sk "https://bedrock-mantle.<region>.api.aws/v1/models" -H "Authorization: Bearer <KEY>"`
+- Models vary by region. List available models: `curl -s "https://bedrock-mantle.<region>.api.aws/v1/models" -H "Authorization: Bearer <KEY>"`
 
 See the [Bedrock provider guide](https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/bedrock-openai.md).
 

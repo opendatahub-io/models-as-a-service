@@ -5,6 +5,9 @@ This guide explains how to configure models for the MaaS platform. MaaS supports
 - **On-cluster models** (`LLMInferenceService`) - vLLM/KServe models running in your cluster
 - **External models** (`ExternalModel`) - Hosted providers like OpenAI, Anthropic, Azure OpenAI **(Tech Preview)**
 
+!!! warning "Legacy tier annotations removed"
+    The `alpha.maas.opendatahub.io/tiers` annotation for tier-based access control is **deprecated** and no longer documented here. Model access and rate limits are now managed exclusively through **MaaSAuthPolicy** and **MaaSSubscription** CRDs. If you are still using tier annotations, see the [Migration Guide: Tier-Based to Subscription Model](../migration/tier-to-subscription.md) for instructions on migrating to the subscription model.
+
 ---
 
 ## On-Cluster Models
@@ -158,7 +161,7 @@ After configuring your model, verify it's accessible.
 
 ```bash
 # Set HOST to your MaaS gateway URL (e.g., https://maas.your-cluster-domain.com)
-curl -sSk ${HOST}/maas-api/v1/models \
+curl -sS ${HOST}/maas-api/v1/models \
     -H "Authorization: Bearer $API_KEY" | jq .
 ```
 
@@ -177,7 +180,7 @@ kubectl get maasmodelref <modelref-name> -n <namespace>
 
 ```bash
 # Get MODEL_URL from step 1 above (data[].url field)
-curl -sSk -H "Authorization: Bearer $API_KEY" \
+curl -sS -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model": "my-model", "messages": [{"role": "user", "content": "Hello"}]}' \
   "${MODEL_URL}/v1/chat/completions"
@@ -204,6 +207,10 @@ curl -sSk -H "Authorization: Bearer $API_KEY" \
 - Verify MaaSAuthPolicy includes the model in `modelRefs`
 - Check MaaSSubscription ownership matches your identity
 - Verify maas-controller has reconciled the policies
+
+### TLS Certificate Errors
+
+If `curl` returns `curl: (60) SSL certificate problem`, your cluster uses certificates not in your system trust store. See [Troubleshooting - TLS Certificate Validation](../install/troubleshooting.md#tls-certificate-validation) for solutions.
 
 ---
 
