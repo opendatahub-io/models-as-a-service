@@ -28,14 +28,14 @@ The gateway namespace defaults to `openshift-ingress` on both ODH and RHOAI. Thi
 
 ## Payload-processing resources
 
-All seven payload-processing resources must be in the gateway namespace. The kustomize overlay and Tenant reconciler handle this automatically via the `gateway-namespace` parameter.
+Six payload-processing resources must be created in the gateway namespace. The ClusterRoleBinding is cluster-scoped, but its `subjects[0].namespace` must reference the gateway namespace. The kustomize overlay and Tenant reconciler handle this automatically via the `gateway-namespace` parameter.
 
 | Resource Kind | Resource Name | Namespace field |
 |--------------|---------------|-----------------|
 | Deployment | `payload-processing` | `metadata.namespace` |
 | Service | `payload-processing` | `metadata.namespace` |
 | ServiceAccount | `payload-processing` | `metadata.namespace` |
-| ClusterRoleBinding | `payload-processing-reader` | `subjects[0].namespace` |
+| ClusterRoleBinding | `payload-processing-reader` | `subjects[0].namespace` (cluster-scoped) |
 | EnvoyFilter | `payload-processing` | `metadata.namespace` |
 | DestinationRule | `payload-processing` | `metadata.namespace` |
 | ConfigMap | `payload-processing-plugins` | `metadata.namespace` |
