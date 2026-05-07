@@ -30,15 +30,6 @@ echo "Gateway endpoint: $HOST"
     HOST="https://maas.apps.your-cluster.example.com"
     ```
 
-??? success "Expected output"
-    ```text
-    Gateway endpoint: https://maas.apps.your-cluster.example.com
-    ```
-
-**If this fails:**
-
-- Empty `CLUSTER_DOMAIN`: you don't have permission to read the ingress config. Set `HOST` manually as shown above.
-
 !!! note "Optional"
     List MaaSSubscriptions you can access (authenticate with your OpenShift token; requires `HOST` from above):
     ```bash
@@ -66,10 +57,11 @@ else
 fi
 ```
 
-??? success "Expected output"
-    ```text
-    API key obtained successfully.
-    ```
+Expected output:
+
+```text
+API key obtained successfully.
+```
 
 !!! tip "If jq fails"
     If you see a jq parse error, the curl request likely returned a non-JSON error. Run `echo "$API_KEY_RESPONSE"` to inspect the raw response.
@@ -112,22 +104,24 @@ MODEL_URL=$(echo "$MODELS" | jq -r '.data[0].url')
 echo "Model URL: $MODEL_URL"
 ```
 
-??? success "Expected output"
-    ```json
+Expected output:
+
+```json
+{
+  "data": [
     {
-      "data": [
-        {
-          "id": "facebook/opt-125m",
-          "url": "https://maas.apps.your-cluster.example.com/llm/facebook-opt-125m-simulated",
-          "object": "model"
-        }
-      ],
-      "object": "list"
+      "id": "facebook/opt-125m",
+      "url": "https://maas.apps.your-cluster.example.com/llm/facebook-opt-125m-simulated",
+      "object": "model"
     }
-    ```
-    ```text
-    Model URL: https://maas.apps.your-cluster.example.com/llm/facebook-opt-125m-simulated
-    ```
+  ],
+  "object": "list"
+}
+```
+
+```text
+Model URL: https://maas.apps.your-cluster.example.com/llm/facebook-opt-125m-simulated
+```
 
 **If this fails:**
 
@@ -148,30 +142,31 @@ RESPONSE=$(curl -sS \
 echo "$RESPONSE" | jq .
 ```
 
-??? success "Expected output"
-    ```json
+Expected output:
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "created": 1776000000,
+  "model": "facebook/opt-125m",
+  "usage": {
+    "prompt_tokens": 1,
+    "completion_tokens": 25,
+    "total_tokens": 26
+  },
+  "object": "chat.completion",
+  "choices": [
     {
-      "id": "chatcmpl-abc123",
-      "created": 1776000000,
-      "model": "facebook/opt-125m",
-      "usage": {
-        "prompt_tokens": 1,
-        "completion_tokens": 25,
-        "total_tokens": 26
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Hello! How can I help you today?"
       },
-      "object": "chat.completion",
-      "choices": [
-        {
-          "index": 0,
-          "message": {
-            "role": "assistant",
-            "content": "Hello! How can I help you today?"
-          },
-          "finish_reason": "stop"
-        }
-      ]
+      "finish_reason": "stop"
     }
-    ```
+  ]
+}
+```
 
 !!! note
     Some models only support `/v1/completions` (prompt-based) instead of `/v1/chat/completions`. If you get a 404 or 400, try the completions endpoint:
@@ -202,10 +197,11 @@ curl -sS -o /dev/null -w "HTTP status: %{http_code}\n" \
   "${MODEL_URL}/v1/chat/completions"
 ```
 
-??? success "Expected output"
-    ```text
-    HTTP status: 401
-    ```
+Expected output:
+
+```text
+HTTP status: 401
+```
 
 **If this fails:**
 
@@ -226,11 +222,13 @@ done
 echo ""
 ```
 
-??? success "Expected output"
-    ```text
-    200 200 200 429 429 429 429 429 429 429 429 429 429 429 429 429
-    ```
-    The exact number of 200s before rate limiting depends on your TokenRateLimitPolicy configuration. With the default simulator subscription (100 tokens/min), you should see 429s after 3-5 requests.
+Expected output:
+
+```text
+200 200 200 429 429 429 429 429 429 429 429 429 429 429 429 429
+```
+
+The exact number of 200s before rate limiting depends on your TokenRateLimitPolicy configuration. With the default simulator subscription (100 tokens/min), you should see 429s after 3-5 requests.
 
 **If this fails:**
 
