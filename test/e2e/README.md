@@ -1,19 +1,54 @@
 # MaaS E2E Testing
 
+**Ownership:** Deep MaaS behavior is tested here (controller, CRDs, gateway policies, maas-api). DSC toggling MaaS, `ModelsAsServiceReady`, Tenant presence/absence vs DSC, and thin operator smoke belong in the operator repo.
+
+## Quick start
+
+Full deploy and pytest (same path CI uses):
+
 ```bash
 ./test/e2e/scripts/prow_run_smoke_test.sh
 ```
 
-```bash
-SKIP_DEPLOYMENT=true ./test/e2e/scripts/prow_run_smoke_test.sh   # cluster already has MaaS
-```
+Existing cluster (skip deploy):
 
 ```bash
-./test/e2e/smoke.sh   # pytest all of tests/
+SKIP_DEPLOYMENT=true ./test/e2e/scripts/prow_run_smoke_test.sh
 ```
 
-Local: `cd test/e2e`, Python venv, `pip install -r requirements.txt`. HTTP tests need `GATEWAY_HOST` / routes as in `tests/test_helper.py`.
+Smoke helper only:
 
-`prow_run_smoke_test.sh` runs pytest on `test_api_keys.py`, `test_namespace_scoping.py`, `test_negative_security.py`, `test_subscription.py`, `test_models_endpoint.py`, `test_external_models.py`, `test_tenant.py`, then `./scripts/validate-deployment.sh`. HTML/XML under `ARTIFACT_DIR` when set.
+```bash
+./test/e2e/smoke.sh
+```
 
-Tenant checks only: `pytest tests/test_tenant.py -v` (requires MaaS + `tenants.maas.opendatahub.io`; namespace `DEPLOYMENT_NAMESPACE`, default `opendatahub`). DSC-driven Tenant lifecycle belongs in the operator repo.
+## Local prerequisites
+
+- OpenShift access (`oc` logged in)
+- From repo root: `cd test/e2e`, create venv, `pip install -r requirements.txt`
+- Most HTTP tests need `GATEWAY_HOST` (and often routes/API reachable). Full env list: `tests/test_helper.py` docstring.
+
+## Pytest modules
+
+```bash
+cd test/e2e && source .venv/bin/activate   # after setup above
+pytest tests/<file>.py -v
+```
+
+| File | Focus |
+|------|--------|
+| `test_subscription.py` | Subscription / inference flows |
+| `test_api_keys.py` | `/v1/api-keys` |
+| `test_models_endpoint.py` | `/v1/models` |
+| `test_negative_security.py` | Security / negative paths |
+| `test_namespace_scoping.py` | Namespace wiring |
+| `test_external_models.py` | External model refs |
+| `test_tenant.py` | Tenant singleton checks: Ready/phase, workload presence, CRs not owned by Tenant; DSC deletion → operator CI |
+
+Other modules (for example `test_external_oidc.py`, `test_subscription_list_endpoints.py`) are not in the default Prow pytest list—run them explicitly or use `smoke.sh`, which executes all tests under `tests/`.
+
+## CI
+
+CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`: pytest on `test_api_keys.py`, `test_namespace_scoping.py`, `test_negative_security.py`, `test_subscription.py`, `test_models_endpoint.py`, `test_external_models.py`, `test_tenant.py`, then deployment validation; reports under `ARTIFACT_DIR` when set.
+
+External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, `OIDC_PASSWORD` per your deploy/test setup.
