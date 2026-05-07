@@ -172,6 +172,8 @@ func TestRequestID_AcceptsValidFormats(t *testing.T) {
 
 			assert.Equal(t, tt.clientID, capturedID,
 				"Should accept valid ID format")
+			assert.Equal(t, tt.clientID, w.Header().Get("X-Request-ID"),
+				"Response header should reflect accepted client ID")
 		})
 	}
 }
