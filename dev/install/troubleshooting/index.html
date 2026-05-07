@@ -1310,6 +1310,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#tls-certificate-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS Certificate Validation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TLS Certificate Validation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-use-the-ingress-cacertificate-chain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended: Use the Ingress CA/Certificate Chain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#developmenttesting-only-disable-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Development/Testing Only: Disable Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adding-the-ca-to-your-system-trust-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding the CA to Your System Trust Store
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#additional-resources" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2636,6 +2686,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#tls-certificate-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS Certificate Validation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TLS Certificate Validation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-use-the-ingress-cacertificate-chain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended: Use the Ingress CA/Certificate Chain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#developmenttesting-only-disable-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Development/Testing Only: Disable Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adding-the-ca-to-your-system-trust-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding the CA to Your System Trust Store
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#additional-resources" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2720,8 +2820,8 @@
 <li class="task-list-item"><input type="checkbox"/> Verify TokenRateLimitPolicy is applied (e.g. gateway-default-deny or per-route policies)</li>
 <li class="task-list-item"><input type="checkbox"/> If <strong>multiple</strong> TokenRateLimitPolicies target the <strong>same</strong> HTTPRoute, see <a href="../../configuration-and-management/quota-and-access-configuration/">Quota and Access Configuration</a></li>
 <li class="task-list-item"><input type="checkbox"/> Verify the model is deployed and the <code>LLMInferenceService</code> has the <code>maas-default-gateway</code> gateway specified</li>
-<li class="task-list-item"><input type="checkbox"/> Verify that the model is rate limited by checking the inference endpoint (see <a href="../validation/#6-test-rate-limiting">Validation Guide - Test Rate Limiting</a>)</li>
-<li class="task-list-item"><input type="checkbox"/> Verify that the model is token rate limited by checking the inference endpoint (see <a href="../validation/#6-test-rate-limiting">Validation Guide - Test Rate Limiting</a>)</li>
+<li class="task-list-item"><input type="checkbox"/> Verify that the model is rate limited for request bursts (request-rate limiting) — see <a href="../validation/#7-test-rate-limiting">Validation Guide - Test Rate Limiting</a></li>
+<li class="task-list-item"><input type="checkbox"/> Verify that the model returns 429 for token-heavy prompts (token-rate limiting) — see <a href="../validation/#7-test-rate-limiting">Validation Guide - Test Rate Limiting</a></li>
 </ul>
 </li>
 <li>
@@ -2772,7 +2872,58 @@
 <p><strong>GenAI Studio tab not visible in Dashboard</strong>: Requires <code>llamastackoperator</code> set to <code>Managed</code> in the DSC and the <code>genAiStudio</code> feature flag enabled on <code>OdhDashboardConfig</code>.</p>
 <p>See <a href="../maas-setup/#odhdashboardconfig-feature-flags">OdhDashboardConfig Feature Flags</a> for setup.</p>
 </li>
+<li>
+<p><strong>TLS certificate errors (<code>curl: (60) SSL certificate problem</code>)</strong>: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See <a href="#tls-certificate-validation">TLS Certificate Validation</a> below.</p>
+</li>
 </ol>
+<h2 id="tls-certificate-validation">TLS Certificate Validation</h2>
+<p>By default, <code>curl</code> validates TLS certificates against your system CA bundle. If you encounter certificate verification errors (e.g., <code>curl: (60) SSL certificate problem: self-signed certificate</code>), use one of the approaches below.</p>
+<h3 id="recommended-use-the-ingress-cacertificate-chain">Recommended: Use the Ingress CA/Certificate Chain</h3>
+<p>For OpenShift clusters with self-signed or internal certificates, use the ingress trust chain (or your platform-provided CA bundle) with <code>curl --cacert</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Get ingress certificate chain/trust bundle (platform-specific source)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>oc<span class="w"> </span>get<span class="w"> </span>secret<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>router-certs-default<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.data.tls\.crt}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span>&gt;<span class="w"> </span>/tmp/ingress-cert-chain.crt
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Use --cacert in curl commands</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>curl<span class="w"> </span>-sS<span class="w"> </span>--cacert<span class="w"> </span>/tmp/ingress-cert-chain.crt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">/maas-api/v1/models&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</code></pre></div>
+<p>Alternatively, if your cluster uses the OpenShift service CA:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Extract the service CA bundle</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>oc<span class="w"> </span>get<span class="w"> </span>configmap<span class="w"> </span>-n<span class="w"> </span>openshift-config-managed<span class="w"> </span>service-ca-bundle<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.data.service-ca\.crt}&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>/tmp/service-ca.crt
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1"># Use --cacert in curl commands</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>curl<span class="w"> </span>-sS<span class="w"> </span>--cacert<span class="w"> </span>/tmp/service-ca.crt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">/maas-api/v1/models&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</code></pre></div>
+<h3 id="developmenttesting-only-disable-verification">Development/Testing Only: Disable Verification</h3>
+<div class="admonition danger">
+<p class="admonition-title">Security Warning</p>
+<p>The <code>-k</code> flag disables all TLS certificate validation. An attacker on the network path can present a forged certificate and intercept your API key, token, or other credentials. <strong>Never use <code>-k</code> in production or when sending credentials over untrusted networks.</strong></p>
+</div>
+<p>For <strong>isolated development or test environments only</strong>, you can add the <code>-k</code> flag:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># INSECURE: Only for isolated dev/test environments</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>curl<span class="w"> </span>-sS<span class="w"> </span>-k<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">/maas-api/v1/models&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+</code></pre></div>
+<h3 id="adding-the-ca-to-your-system-trust-store">Adding the CA to Your System Trust Store</h3>
+<p>For a permanent solution, add the ingress certificate chain to your system trust store so that all tools (curl, Python, browsers) trust it automatically:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Linux (Fedora/RHEL)</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>sudo<span class="w"> </span>cp<span class="w"> </span>/tmp/ingress-cert-chain.crt<span class="w"> </span>/etc/pki/ca-trust/source/anchors/
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>sudo<span class="w"> </span>update-ca-trust
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># Linux (Debian/Ubuntu)</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>sudo<span class="w"> </span>cp<span class="w"> </span>/tmp/ingress-cert-chain.crt<span class="w"> </span>/usr/local/share/ca-certificates/ingress-cert-chain.crt
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>sudo<span class="w"> </span>update-ca-certificates
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="c1"># macOS</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>sudo<span class="w"> </span>security<span class="w"> </span>add-trusted-cert<span class="w"> </span>-d<span class="w"> </span>-r<span class="w"> </span>trustRoot<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">  </span>-k<span class="w"> </span>/Library/Keychains/System.keychain<span class="w"> </span>/tmp/ingress-cert-chain.crt
+</code></pre></div>
+<p>For detailed TLS configuration options, see <a href="../../configuration-and-management/tls-configuration/">TLS Configuration</a>.</p>
 <h2 id="additional-resources">Additional Resources</h2>
 <ul>
 <li><a href="../validation/">Validation Guide</a> — Manual validation steps</li>
@@ -2801,7 +2952,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 30, 2026 13:22:41 UTC">April 30, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 7, 2026 14:37:02 UTC">May 7, 2026</span>
   </span>
 
     
