@@ -330,22 +330,13 @@ apply_supplemental_rbac() {
   echo "  Applying maas-controller supplemental RBAC..."
   local controller_rbac="${PROJECT_ROOT}/deployment/base/maas-controller/rbac/clusterrole.yaml"
 
-  # Build a supplemental role from the repo's full role to avoid fighting the operator
+  # Apply the repo's full ClusterRole under a separate name to avoid fighting the operator's version.
+  # A simple name substitution is sufficient — the file is a single ClusterRole with only one name field.
   if [[ -f "$controller_rbac" ]]; then
-    local controller_rules
-    # Always read from file — kubectl get -f would fetch the operator's (incomplete) version from the cluster
-    controller_rules=$(python3 -c "import yaml,json,sys; d=yaml.safe_load(open('$controller_rbac')); print(json.dumps(d.get('rules',[])))")
+    sed 's/name: maas-controller-role/name: maas-controller-supplemental/' "$controller_rbac" | \
+      kubectl apply --server-side=true --force-conflicts -f -
 
     kubectl apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: maas-controller-supplemental
-  labels:
-    app.kubernetes.io/name: maas-controller
-    app.kubernetes.io/component: rbac
-rules: ${controller_rules}
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -461,9 +452,26 @@ apply_operator_workarounds() {
       odh_ns=$(echo "$odh_deploy" | awk '{print $1}')
       odh_deploy=$(echo "$odh_deploy" | awk '{print $2}')
 
+      local odh_replicas=""
+      local _odh_scaled=false
+
       if [[ -n "$odh_ns" && -n "$odh_deploy" ]]; then
-        echo "  Scaling down operator ($odh_deploy in $odh_ns)..."
+        odh_replicas=$(kubectl get deployment/"$odh_deploy" -n "$odh_ns" \
+          -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "3")
+
+        # Restore operator replicas on early exit
+        # shellcheck disable=SC2317
+        _restore_operator() {
+          if [[ "$_odh_scaled" == "true" && -n "$odh_ns" && -n "$odh_deploy" ]]; then
+            echo "  Restoring operator replicas ($odh_replicas)..."
+            kubectl scale deployment/"$odh_deploy" -n "$odh_ns" --replicas="$odh_replicas" 2>/dev/null || true
+          fi
+        }
+        trap _restore_operator EXIT
+
+        echo "  Scaling down operator ($odh_deploy in $odh_ns, was $odh_replicas replicas)..."
         kubectl scale deployment/"$odh_deploy" -n "$odh_ns" --replicas=0
+        _odh_scaled=true
         sleep 5
       fi
 
@@ -480,9 +488,11 @@ apply_operator_workarounds() {
       kubectl annotate deployment maas-api -n "$NAMESPACE" \
         opendatahub.io/managed=false --overwrite
 
-      if [[ -n "$odh_ns" && -n "$odh_deploy" ]]; then
-        echo "  Scaling operator back up..."
-        kubectl scale deployment/"$odh_deploy" -n "$odh_ns" --replicas=3
+      if [[ "$_odh_scaled" == "true" ]]; then
+        echo "  Scaling operator back up ($odh_replicas replicas)..."
+        kubectl scale deployment/"$odh_deploy" -n "$odh_ns" --replicas="$odh_replicas"
+        _odh_scaled=false
+        trap - EXIT
       fi
     else
       echo "  maas-api selector labels OK"
