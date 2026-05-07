@@ -413,16 +413,22 @@ apply_operator_workarounds() {
     current_args=$(kubectl get deployment maas-controller -n "$NAMESPACE" \
       -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || echo "")
 
-    if echo "$current_args" | grep -q "cluster-audience"; then
+    if echo "$current_args" | grep -q -- "--cluster-audience"; then
       echo "  Fixing maas-controller args (removing unsupported --cluster-audience flag)..."
       kubectl annotate deployment maas-controller -n "$NAMESPACE" \
         opendatahub.io/managed=false --overwrite
-      kubectl patch deployment maas-controller -n "$NAMESPACE" --type='json' -p='[
-        {"op":"replace","path":"/spec/template/spec/containers/0/args",
-         "value":["--leader-elect","--health-probe-bind-address=:8081",
-                  "--gateway-name=$(GATEWAY_NAME)","--gateway-namespace=$(GATEWAY_NAMESPACE)",
-                  "--maas-api-namespace=$(MAAS_API_NAMESPACE)",
-                  "--maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)"]}]'
+
+      # Find the 0-based index of the --cluster-audience arg and remove only that element
+      local arg_idx
+      arg_idx=$(kubectl get deployment maas-controller -n "$NAMESPACE" \
+        -o jsonpath='{range .spec.template.spec.containers[0].args[*]}{@}{"\n"}{end}' | \
+        grep -n -- "^--cluster-audience" | head -1 | cut -d: -f1)
+
+      if [[ -n "$arg_idx" ]]; then
+        arg_idx=$((arg_idx - 1))
+        kubectl patch deployment maas-controller -n "$NAMESPACE" --type='json' \
+          -p="[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/args/$arg_idx\"}]"
+      fi
       kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"
     else
       echo "  maas-controller args OK (no --cluster-audience)"

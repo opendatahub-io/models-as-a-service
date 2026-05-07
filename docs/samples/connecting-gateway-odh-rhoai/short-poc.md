@@ -1,15 +1,12 @@
 # MaaS Gateway Setup (ODH/RHOAI)
 
 When the ODH/RHOAI operator is installed from OperatorHub and a DataScienceCluster
-is created with `modelsAsService: Managed`, the operator gets stuck:
+is created with `modelsAsService: Managed`, the operator gets stuck with
+`ModelsAsServiceReady: False` because several prerequisites are missing (database,
+Authorino, gateway — the exact error varies by operator version).
 
-```
-ModelsAsServiceReady: False - blocking prerequisites missing: database Secret 'maas-db-config'
-not found in namespace 'opendatahub' [...]; no Authorino instances found [...]
-```
-
-The operator will not create maas-api, maas-controller, or MaaS CRDs until these
-prerequisites are satisfied. This script fills that gap.
+The operator will not fully deploy MaaS until these prerequisites are satisfied.
+This script fills that gap.
 
 ## Prerequisites
 
