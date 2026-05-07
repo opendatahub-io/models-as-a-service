@@ -100,17 +100,17 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
 By default, `curl` validates TLS certificates against your system CA bundle. If you encounter certificate verification errors (e.g., `curl: (60) SSL certificate problem: self-signed certificate`), use one of the approaches below.
 
-### Recommended: Use Cluster CA Certificate
+### Recommended: Use the Ingress CA/Certificate Chain
 
-For OpenShift clusters with self-signed or internal CA certificates, obtain the cluster CA and pass it to `curl`:
+For OpenShift clusters with self-signed or internal certificates, use the ingress trust chain (or your platform-provided CA bundle) with `curl --cacert`:
 
 ```bash
-# Get the cluster CA certificate
+# Get ingress certificate chain/trust bundle (platform-specific source)
 oc get secret -n openshift-ingress router-certs-default \
-  -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/cluster-ca.crt
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/ingress-cert-chain.crt
 
 # Use --cacert in curl commands
-curl -sS --cacert /tmp/cluster-ca.crt \
+curl -sS --cacert /tmp/ingress-cert-chain.crt \
   -H "Authorization: Bearer $API_KEY" \
   "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
 ```
@@ -143,20 +143,20 @@ curl -sS -k -H "Authorization: Bearer $API_KEY" \
 
 ### Adding the CA to Your System Trust Store
 
-For a permanent solution, add the cluster CA to your system trust store so that all tools (curl, Python, browsers) trust it automatically:
+For a permanent solution, add the ingress certificate chain to your system trust store so that all tools (curl, Python, browsers) trust it automatically:
 
 ```bash
 # Linux (Fedora/RHEL)
-sudo cp /tmp/cluster-ca.crt /etc/pki/ca-trust/source/anchors/
+sudo cp /tmp/ingress-cert-chain.crt /etc/pki/ca-trust/source/anchors/
 sudo update-ca-trust
 
 # Linux (Debian/Ubuntu)
-sudo cp /tmp/cluster-ca.crt /usr/local/share/ca-certificates/cluster-ca.crt
+sudo cp /tmp/ingress-cert-chain.crt /usr/local/share/ca-certificates/ingress-cert-chain.crt
 sudo update-ca-certificates
 
 # macOS
 sudo security add-trusted-cert -d -r trustRoot \
-  -k /Library/Keychains/System.keychain /tmp/cluster-ca.crt
+  -k /Library/Keychains/System.keychain /tmp/ingress-cert-chain.crt
 ```
 
 For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).
