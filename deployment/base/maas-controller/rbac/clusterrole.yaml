@@ -8,7 +8,9 @@ rules:
   - ""
   resources:
   - configmaps
+  - serviceaccounts
   verbs:
+  - create
   - delete
   - get
   - list
@@ -32,17 +34,6 @@ rules:
   - create
   - get
   - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - serviceaccounts
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
   - watch
 - apiGroups:
   - ""
