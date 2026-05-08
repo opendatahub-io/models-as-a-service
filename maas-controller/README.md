@@ -468,7 +468,7 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 ### CLI Flags
 
-The controller accepts the following command-line flags (configured via `deployment/overlays/odh/params.env` when using kustomize):
+The controller accepts the following command-line flags (configured via `deployment/overlays/odh/params.env` for ODH operator deployments):
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -495,21 +495,7 @@ kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
 
 Use this issuer URL as the `cluster-audience` value.
 
-**Configure via params.env (kustomize deployment):**
-
-Edit `deployment/overlays/odh/params.env` and update the `cluster-audience` line:
-
-```env
-cluster-audience=https://your-cluster-oidc-issuer
-```
-
-Then redeploy:
-
-```bash
-kustomize build deployment/overlays/odh | kubectl apply -f -
-```
-
-**Configure via kubectl patch (running deployment):**
+**Configure via `maas-parameters` ConfigMap (running cluster):**
 
 ```bash
 # Replace 'opendatahub' with your controller namespace if different
@@ -523,9 +509,19 @@ kubectl patch configmap maas-parameters -n $CONTROLLER_NS \
 kubectl rollout restart deployment/maas-controller -n $CONTROLLER_NS
 ```
 
+**Configure via `deployment/overlays/odh/params.env` (changing source defaults):**
+
+Edit `deployment/overlays/odh/params.env` and update the `cluster-audience` line:
+
+```env
+cluster-audience=https://your-cluster-oidc-issuer
+```
+
+The ODH operator reads this file at install time and injects the value into the `maas-parameters` ConfigMap.
+
 ### Other Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
-- **MaaS subscription namespace**: Default is `models-as-a-service`. Override `maas-subscription-namespace` in `params.env`.
-- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override `maas-controller-image` in `params.env`.
-- **Gateway name/namespace**: Override `gateway-name` and `gateway-namespace` in `params.env`.
+- **MaaS subscription namespace**: Default is `models-as-a-service`. Override `maas-subscription-namespace` in `deployment/overlays/odh/params.env` (ODH operator) or patch `maas-parameters` ConfigMap directly.
+- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override `maas-controller-image` in `deployment/overlays/odh/params.env` (ODH operator).
+- **Gateway name/namespace**: Override `gateway-name` and `gateway-namespace` in `deployment/overlays/odh/params.env` (ODH operator) or patch `maas-parameters` ConfigMap directly.

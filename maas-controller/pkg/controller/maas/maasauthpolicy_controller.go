@@ -256,10 +256,6 @@ const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
 func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSAuthPolicy", req.NamespacedName)
 
-	// Fetch OIDC configuration from Tenant CR (if present)
-	// This is checked on every reconcile to handle dynamic updates to the CR
-	oidcConfig := r.fetchOIDCConfig(ctx, log)
-
 	policy := &maasv1alpha1.MaaSAuthPolicy{}
 	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -268,6 +264,10 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Error(err, "unable to fetch MaaSAuthPolicy")
 		return ctrl.Result{}, err
 	}
+
+	// Fetch OIDC configuration from Tenant CR after confirming the policy exists,
+	// so stale or deleted-race events do not trigger an unnecessary Tenant Get.
+	oidcConfig := r.fetchOIDCConfig(ctx, log)
 
 	if !policy.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, log, policy)
