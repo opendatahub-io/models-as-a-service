@@ -34,7 +34,7 @@ MAAS_API_URL="https://maas.${CLUSTER_DOMAIN}"
 Create a new API key with a name, description, and expiration:
 
 ```bash
-API_KEY_RESPONSE=$(curl -sSk \
+API_KEY_RESPONSE=$(curl -sS \
   -H "Authorization: Bearer ${OC_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -47,6 +47,9 @@ echo "API Key: ${API_KEY}"
 
 !!! warning "API key shown only once"
     The plaintext API key is returned **only at creation time**. Store it securely when displayed. If you lose it, you must create a new key.
+
+!!! tip "TLS certificate errors"
+    If `curl` returns `curl: (60) SSL certificate problem`, see [Troubleshooting - TLS Certificate Validation](../install/troubleshooting.md#tls-certificate-validation).
 
 **Request body fields:**
 
@@ -91,7 +94,7 @@ The response includes the bound `subscription` name.
 Search for your API keys with optional filters:
 
 ```bash
-curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -d '{
@@ -116,7 +119,7 @@ Get metadata for a specific key by ID:
 
 ```bash
 KEY_ID="550e8400-e29b-41d4-a716-446655440000"
-curl -sSk "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
+curl -sS "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   -H "Authorization: Bearer $(oc whoami -t)" | jq .
 ```
 
@@ -151,7 +154,7 @@ Set `expiresIn` to a duration string (`"90d"`, `"30d"`, `"1h"`), or omit it to u
 
 ```bash
 KEY_ID="550e8400-e29b-41d4-a716-446655440000"
-curl -sSk -X DELETE "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
+curl -sS -X DELETE "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   -H "Authorization: Bearer $(oc whoami -t)"
 ```
 
@@ -162,7 +165,7 @@ Revocation takes effect immediately (Authorino may cache briefly).
 Revoke all active keys for your user:
 
 ```bash
-curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" | jq .
 ```
@@ -182,7 +185,7 @@ curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
 - Rotating all credentials as part of security policy
 
 !!! note "Administrator bulk revocation"
-    Administrators can revoke keys for any user. See [API Key Administration](../configuration-and-management/api-key-administration.md#bulk-revocation).
+    Administrators can revoke keys for any user. See [API Key Administration](../configuration-and-management/api-key-administration.md#bulk-key-revocation).
 
 ---
 
@@ -203,7 +206,7 @@ Ephemeral keys are short-lived credentials for temporary access (e.g., playgroun
 **Create an ephemeral key:**
 
 ```bash
-curl -sSk -X POST "${MAAS_API_URL}/maas-api/v1/api-keys" \
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys" \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -d '{"ephemeral": true, "expiresIn": "30m"}' | jq .

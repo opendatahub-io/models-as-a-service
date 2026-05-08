@@ -8,9 +8,6 @@ metadata:
     app.kubernetes.io/component: monitoring
     monitoring.opendatahub.io/scrape: "true"
 spec:
-  namespaceSelector:
-    matchLabels:
-      opendatahub.io/dashboard: "true"
   selector:
     matchLabels:
       app.kubernetes.io/name: maas-api
