@@ -311,9 +311,26 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	r.updateAuthPolicyRefStatus(ctx, log, policy, refs)
 
 	// Detect conflicting (non-MaaS) AuthPolicies on MaaS-managed HTTPRoutes
-	conflicts := r.detectConflictingAuthPolicies(ctx, log, policy)
-	setConflictingAuthPolicyCondition(policy, conflicts)
-	if len(conflicts) > 0 && r.Recorder != nil {
+	prevConflict := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
+	conflicts, detectErr := r.detectConflictingAuthPolicies(ctx, log, policy)
+	if detectErr != nil {
+		apimeta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+			Type:               ConditionConflictingAuthPolicy,
+			Status:             metav1.ConditionUnknown,
+			Reason:             "ConflictCheckFailed",
+			Message:            detectErr.Error(),
+			ObservedGeneration: policy.GetGeneration(),
+		})
+	} else {
+		setConflictingAuthPolicyCondition(policy, conflicts)
+	}
+	currConflict := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
+	shouldEmitConflictEvent := currConflict != nil &&
+		currConflict.Status == metav1.ConditionTrue &&
+		(prevConflict == nil ||
+			prevConflict.Status != currConflict.Status ||
+			prevConflict.Message != currConflict.Message)
+	if shouldEmitConflictEvent && r.Recorder != nil {
 		var names []string
 		for _, c := range conflicts {
 			names = append(names, c.String())

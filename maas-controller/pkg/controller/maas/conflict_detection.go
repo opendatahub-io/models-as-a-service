@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -49,17 +50,34 @@ func (c conflictingPolicyInfo) String() string {
 // detectConflictingAuthPolicies finds non-MaaS Kuadrant AuthPolicies that target
 // the same HTTPRoutes used by MaaS-governed models. These "rogue" policies can
 // interfere with MaaS authentication/authorization enforcement.
-func (r *MaaSAuthPolicyReconciler) detectConflictingAuthPolicies(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) []conflictingPolicyInfo {
+func (r *MaaSAuthPolicyReconciler) detectConflictingAuthPolicies(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) ([]conflictingPolicyInfo, error) {
 	var conflicts []conflictingPolicyInfo
 
 	for _, ref := range policy.Spec.ModelRefs {
 		httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, ref.Namespace, ref.Name)
 		if err != nil {
-			continue
+			if errors.Is(err, ErrModelNotFound) || errors.Is(err, ErrHTTPRouteNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("resolve HTTPRoute for model %s/%s: %w", ref.Namespace, ref.Name, err)
 		}
 
-		modelConflicts := r.findConflictsForHTTPRoute(ctx, log, httpRouteName, httpRouteNS, ref.Name, ref.Namespace)
+		modelConflicts, err := r.findConflictsForHTTPRoute(ctx, log, httpRouteName, httpRouteNS, ref.Name, ref.Namespace)
+		if err != nil {
+			return nil, err
+		}
 		conflicts = append(conflicts, modelConflicts...)
+	}
+
+	// Deduplicate: one rogue AuthPolicy can appear multiple times when
+	// multiple modelRefs resolve to the same HTTPRoute.
+	uniq := make(map[string]conflictingPolicyInfo, len(conflicts))
+	for _, c := range conflicts {
+		uniq[c.Namespace+"/"+c.Name] = c
+	}
+	conflicts = conflicts[:0]
+	for _, c := range uniq {
+		conflicts = append(conflicts, c)
 	}
 
 	sort.Slice(conflicts, func(i, j int) bool {
@@ -67,20 +85,19 @@ func (r *MaaSAuthPolicyReconciler) detectConflictingAuthPolicies(ctx context.Con
 		kj := conflicts[j].Namespace + "/" + conflicts[j].Name
 		return ki < kj
 	})
-	return conflicts
+	return conflicts, nil
 }
 
 // findConflictsForHTTPRoute lists all AuthPolicies in the given namespace and returns
 // any that target the specified HTTPRoute but are not managed by MaaS.
-func (r *MaaSAuthPolicyReconciler) findConflictsForHTTPRoute(ctx context.Context, log logr.Logger, httpRouteName, httpRouteNS, modelName, modelNS string) []conflictingPolicyInfo {
+func (r *MaaSAuthPolicyReconciler) findConflictsForHTTPRoute(ctx context.Context, log logr.Logger, httpRouteName, httpRouteNS, modelName, modelNS string) ([]conflictingPolicyInfo, error) {
 	allAPs := &unstructured.UnstructuredList{}
 	allAPs.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"})
 	if err := r.List(ctx, allAPs, client.InNamespace(httpRouteNS)); err != nil {
 		if apimeta.IsNoMatchError(err) {
-			return nil
+			return nil, nil
 		}
-		log.Error(err, "failed to list AuthPolicies for conflict detection", "namespace", httpRouteNS)
-		return nil
+		return nil, fmt.Errorf("list AuthPolicies in namespace %s: %w", httpRouteNS, err)
 	}
 
 	var conflicts []conflictingPolicyInfo
@@ -111,7 +128,7 @@ func (r *MaaSAuthPolicyReconciler) findConflictsForHTTPRoute(ctx context.Context
 				"model", modelNS+"/"+modelName)
 		}
 	}
-	return conflicts
+	return conflicts, nil
 }
 
 // setConflictingAuthPolicyCondition updates the ConflictingAuthPolicy condition
