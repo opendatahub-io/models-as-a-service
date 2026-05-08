@@ -254,3 +254,8 @@ replacements:
       name: maas-controller-configmap-write-rolebinding-gateway
     fieldPaths:
     - subjects.0.namespace
+  - select:
+      kind: RoleBinding
+      name: maas-controller-secret-read-rolebinding
+    fieldPaths:
+    - subjects.0.namespace
