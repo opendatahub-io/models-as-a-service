@@ -1,5 +1,5 @@
 /*
-Copyright 2025.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -436,6 +436,48 @@ func TestDetectConflictingAuthPolicies_GatewayTarget(t *testing.T) {
 	}
 	if cond.Status != metav1.ConditionFalse {
 		t.Errorf("expected ConflictingAuthPolicy=False (Gateway target, not HTTPRoute), got %v", cond.Status)
+	}
+}
+
+// TestDetectConflictingAuthPolicies_Deduplication verifies that when multiple
+// modelRefs resolve to the same HTTPRoute, a single rogue AuthPolicy on that
+// route is reported only once (not once per modelRef).
+func TestDetectConflictingAuthPolicies_Deduplication(t *testing.T) {
+	const (
+		namespace      = "default"
+		sharedRoute    = "shared-route"
+		maasPolicyName = "policy-a"
+		rogueName      = "kserve-route-authn"
+	)
+
+	modelA := newMaaSModelRef("model-a", namespace, "ExternalModel", sharedRoute)
+	modelB := newMaaSModelRef("model-b", namespace, "ExternalModel", sharedRoute)
+	route := newHTTPRoute(sharedRoute, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: "model-a", Namespace: namespace},
+		maasv1alpha1.ModelRef{Name: "model-b", Namespace: namespace},
+	)
+	rogueAP := newRogueAuthPolicy(rogueName, namespace, sharedRoute)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(modelA, modelB, route, maasPolicy, rogueAP).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	log := ctrl.Log.WithName("test")
+
+	conflicts, err := r.detectConflictingAuthPolicies(context.Background(), log, maasPolicy)
+	if err != nil {
+		t.Fatalf("detectConflictingAuthPolicies: unexpected error: %v", err)
+	}
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 deduplicated conflict, got %d: %v", len(conflicts), conflicts)
+	}
+	if conflicts[0].Name != rogueName {
+		t.Errorf("expected conflict name %q, got %q", rogueName, conflicts[0].Name)
 	}
 }
 

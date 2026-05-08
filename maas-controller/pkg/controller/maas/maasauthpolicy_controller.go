@@ -339,6 +339,14 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			"Detected %d non-MaaS AuthPolic%s on MaaS auth surfaces: %s",
 			len(conflicts), pluralY(len(conflicts)), strings.Join(names, "; "))
 	}
+	shouldEmitResolvedEvent := currConflict != nil &&
+		currConflict.Status == metav1.ConditionFalse &&
+		prevConflict != nil &&
+		prevConflict.Status == metav1.ConditionTrue
+	if shouldEmitResolvedEvent && r.Recorder != nil {
+		r.Recorder.Event(policy, "Normal", "ConflictingAuthPolicyResolved",
+			"All conflicting AuthPolicies on MaaS auth surfaces have been resolved")
+	}
 
 	// Derive final phase based on model and AuthPolicy health
 	phase, message := r.deriveAuthPolicyPhase(policy, missingModels)
