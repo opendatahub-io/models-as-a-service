@@ -161,7 +161,7 @@ USERNAME="testuser"
 PASSWORD="testpass"
 
 # Get token
-curl -k -X POST \
+curl -X POST \
   "https://${KEYCLOAK_HOST}/realms/${REALM_NAME}/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password" \

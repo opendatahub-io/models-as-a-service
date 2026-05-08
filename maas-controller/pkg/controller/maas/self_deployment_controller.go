@@ -62,6 +62,11 @@ type LifecycleReconciler struct {
 	TenantNamespace string
 }
 
+// LifecycleReconciler watches the controller's own Deployment and cleans up cluster-scoped resources
+// (ClusterRoles, CRDs, ClusterRoleBindings stamped with app.opendatahub.io/modelsasservice=true)
+// when the Deployment is deleted (i.e. when ODH disables the modelsAsService component).
+// clusterroles/clusterrolebindings list;delete and customresourcedefinitions list;delete are
+// teardown-only verbs — narrower than TenantReconciler's CRUD grant above.
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=list;delete
@@ -80,6 +85,11 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if !controllerutil.ContainsFinalizer(&dep, CleanupFinalizer) {
+		// The finalizer is absent on a terminating Deployment. This happens if the controller
+		// is deployed against a pre-existing Deployment that is deleted before the first
+		// reconcile sets the finalizer, or if a previous run already removed it. Teardown
+		// is skipped; cluster-scoped resources (ClusterRoles, CRDs) will not be cleaned up.
+		log.Info("Deployment terminating but CleanupFinalizer absent; skipping teardown")
 		return ctrl.Result{}, nil
 	}
 
@@ -158,9 +168,14 @@ func (r *LifecycleReconciler) deleteTenants(ctx context.Context, log logr.Logger
 // still grants the SA the permissions to do so. ClusterRoleBindings are deleted last
 // because removing them revokes all RBAC permissions for this SA.
 func (r *LifecycleReconciler) deleteClusterScopedResources(ctx context.Context) error {
+	log := ctrl.LoggerFrom(ctx)
+
 	crList := &rbacv1.ClusterRoleList{}
 	if err := r.List(ctx, crList, componentLabel); err != nil {
 		return fmt.Errorf("list maas-controller ClusterRoles: %w", err)
+	}
+	if len(crList.Items) == 0 {
+		log.Info("no ClusterRoles matched component label; skipping deletion (operator may not have stamped the label)")
 	}
 	for i := range crList.Items {
 		if err := r.Delete(ctx, &crList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
@@ -171,6 +186,9 @@ func (r *LifecycleReconciler) deleteClusterScopedResources(ctx context.Context) 
 	crdList := &apiextensionsv1.CustomResourceDefinitionList{}
 	if err := r.List(ctx, crdList, componentLabel); err != nil {
 		return fmt.Errorf("list maas-controller CRDs: %w", err)
+	}
+	if len(crdList.Items) == 0 {
+		log.Info("no CRDs matched component label; skipping deletion (operator may not have stamped the label)")
 	}
 	for i := range crdList.Items {
 		if err := r.Delete(ctx, &crdList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
@@ -183,6 +201,9 @@ func (r *LifecycleReconciler) deleteClusterScopedResources(ctx context.Context) 
 	crbList := &rbacv1.ClusterRoleBindingList{}
 	if err := r.List(ctx, crbList, componentLabel); err != nil {
 		return fmt.Errorf("list maas-controller ClusterRoleBindings: %w", err)
+	}
+	if len(crbList.Items) == 0 {
+		log.Info("no ClusterRoleBindings matched component label; skipping deletion (operator may not have stamped the label)")
 	}
 	for i := range crbList.Items {
 		if err := r.Delete(ctx, &crbList.Items[i]); err != nil && !apierrors.IsNotFound(err) {

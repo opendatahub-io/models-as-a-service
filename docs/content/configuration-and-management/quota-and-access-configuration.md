@@ -179,7 +179,7 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
     Both **MaaSAuthPolicy** and **MaaSSubscription** must be installed in the `models-as-a-service` namespace. Each `modelRefs` entry must specify the `namespace` where the MaaSModelRef lives (e.g. `llm`).
 
 !!! warning "Using the `users` field"
-    The `subjects.users` (MaaSAuthPolicy) and `owner.users` (MaaSSubscription) fields should be used only for **Service Accounts** and similar programmatic identities, not for many individual human users. Having too many distinct users can cause cardinality issues in rate limiting and policy enforcement. Prefer `groups` for human users.
+    The `subjects.users` (MaaSAuthPolicy) and `owner.users` (MaaSSubscription) fields should be used only for **Service Accounts** and similar programmatic identities, not for many individual human users. Having too many distinct users can cause cardinality issues in rate limiting and policy enforcement. Prefer `groups` for human users. For detailed guidance on cardinality limits, monitoring, and when to use groups vs users, see [Subscription Cardinality](../advanced-administration/subscription-cardinality.md).
 
 **Premium example** with higher limits:
 

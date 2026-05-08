@@ -46,3 +46,50 @@ Both promotion workflows support `workflow_dispatch`, so they can be triggered o
 3. Click **Run workflow**
 
 This is useful when a fix needs to be fast-tracked without waiting for the next scheduled run.
+
+## Release Notes
+
+Release notes in `docs/content/release-notes/index.md` summarize user-visible changes for each MaaS version. Keep them concise and focused on **what changed** and **why it matters**—link to detailed docs for **how** to migrate or configure.
+
+### What to Capture
+
+**Always include:**
+- Breaking changes with migration links
+- New features and user-visible capabilities
+- Critical bug fixes (security, data loss, production blockers)
+- Deprecations with timeline
+- Known limitations (link to detailed docs, don't duplicate)
+
+**Defer to other docs:**
+- Migration procedures → link to `docs/content/migration/`
+- Configuration details → link to `docs/content/configuration-and-management/`
+- Troubleshooting → link to admin/ops pages
+
+### Process for New Releases
+
+1. **Generate commit log:** `git log --oneline --no-merges vPREV..vNEW > /tmp/commits.txt`
+2. **Categorize:** Identify breaking changes (`feat!:`), new features (`feat:`), critical fixes
+3. **Draft:** Add new `## v0.X.Y` section at top of `docs/content/release-notes/index.md`
+4. **Link:** Ensure breaking changes link to migration guides; home page links to latest release
+5. **Validate:** Confirm all breaking changes have migration links, limitations link (not duplicate) detailed docs
+
+**Template:**
+
+```markdown
+## v0.X.Y
+
+**Release Date:** YYYY-MM-DD
+
+### Breaking Changes
+- **What changed:** Impact and migration link
+
+### New Features
+- Brief description with benefit
+
+### Known Limitations
+- **Title:** Brief description. See [link] for workarounds.
+
+[Full Changelog](https://github.com/.../compare/vPREV...vNEW)
+```
+
+Release notes should fit on ~2 screens. If longer, content belongs in migration or reference docs.

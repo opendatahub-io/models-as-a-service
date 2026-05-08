@@ -46,8 +46,8 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Verify TokenRateLimitPolicy is applied (e.g. gateway-default-deny or per-route policies)
       - [ ] If **multiple** TokenRateLimitPolicies target the **same** HTTPRoute, see [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md)
       - [ ] Verify the model is deployed and the `LLMInferenceService` has the `maas-default-gateway` gateway specified
-      - [ ] Verify that the model is rate limited by checking the inference endpoint (see [Validation Guide - Test Rate Limiting](validation.md#6-test-rate-limiting))
-      - [ ] Verify that the model is token rate limited by checking the inference endpoint (see [Validation Guide - Test Rate Limiting](validation.md#6-test-rate-limiting))
+      - [ ] Verify that the model is rate limited for request bursts (request-rate limiting) — see [Validation Guide - Test Rate Limiting](validation.md#7-test-rate-limiting)
+      - [ ] Verify that the model returns 429 for token-heavy prompts (token-rate limiting) — see [Validation Guide - Test Rate Limiting](validation.md#7-test-rate-limiting)
 6. **Routes not accessible (503 errors)**: Check MaaS Default Gateway status and HTTPRoute configuration
       - [ ] Verify Gateway is in `Programmed` state: `kubectl get gateway -n openshift-ingress maas-default-gateway`
       - [ ] Check HTTPRoute configuration and status
@@ -93,6 +93,73 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 10. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
+
+11. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+
+## TLS Certificate Validation
+
+By default, `curl` validates TLS certificates against your system CA bundle. If you encounter certificate verification errors (e.g., `curl: (60) SSL certificate problem: self-signed certificate`), use one of the approaches below.
+
+### Recommended: Use the Ingress CA/Certificate Chain
+
+For OpenShift clusters with self-signed or internal certificates, use the ingress trust chain (or your platform-provided CA bundle) with `curl --cacert`:
+
+```bash
+# Get ingress certificate chain/trust bundle (platform-specific source)
+oc get secret -n openshift-ingress router-certs-default \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/ingress-cert-chain.crt
+
+# Use --cacert in curl commands
+curl -sS --cacert /tmp/ingress-cert-chain.crt \
+  -H "Authorization: Bearer $API_KEY" \
+  "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
+```
+
+Alternatively, if your cluster uses the OpenShift service CA:
+
+```bash
+# Extract the service CA bundle
+oc get configmap -n openshift-config-managed service-ca-bundle \
+  -o jsonpath='{.data.service-ca\.crt}' > /tmp/service-ca.crt
+
+# Use --cacert in curl commands
+curl -sS --cacert /tmp/service-ca.crt \
+  -H "Authorization: Bearer $API_KEY" \
+  "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
+```
+
+### Development/Testing Only: Disable Verification
+
+!!! danger "Security Warning"
+    The `-k` flag disables all TLS certificate validation. An attacker on the network path can present a forged certificate and intercept your API key, token, or other credentials. **Never use `-k` in production or when sending credentials over untrusted networks.**
+
+For **isolated development or test environments only**, you can add the `-k` flag:
+
+```bash
+# INSECURE: Only for isolated dev/test environments
+curl -sS -k -H "Authorization: Bearer $API_KEY" \
+  "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
+```
+
+### Adding the CA to Your System Trust Store
+
+For a permanent solution, add the ingress certificate chain to your system trust store so that all tools (curl, Python, browsers) trust it automatically:
+
+```bash
+# Linux (Fedora/RHEL)
+sudo cp /tmp/ingress-cert-chain.crt /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust
+
+# Linux (Debian/Ubuntu)
+sudo cp /tmp/ingress-cert-chain.crt /usr/local/share/ca-certificates/ingress-cert-chain.crt
+sudo update-ca-certificates
+
+# macOS
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain /tmp/ingress-cert-chain.crt
+```
+
+For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).
 
 ## Additional Resources
 
