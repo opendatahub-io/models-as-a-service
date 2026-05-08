@@ -1961,10 +1961,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#via-paramsenv-odh-overlay" class="md-nav__link">
+  <a href="#via-maas-parameters-configmap-running-cluster" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Via params.env (ODH Overlay)
+        Via maas-parameters ConfigMap (running cluster)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#via-deploymentoverlaysodhparamsenv-changing-source-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Via deployment/overlays/odh/params.env (changing source defaults)
       
     </span>
   </a>
@@ -1975,7 +1986,7 @@
   <a href="#via-manageryaml-base-deployment" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Via manager.yaml (Base Deployment)
+        Via manager.yaml (base deployment)
       
     </span>
   </a>
@@ -2866,10 +2877,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#via-paramsenv-odh-overlay" class="md-nav__link">
+  <a href="#via-maas-parameters-configmap-running-cluster" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Via params.env (ODH Overlay)
+        Via maas-parameters ConfigMap (running cluster)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#via-deploymentoverlaysodhparamsenv-changing-source-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Via deployment/overlays/odh/params.env (changing source defaults)
       
     </span>
   </a>
@@ -2880,7 +2902,7 @@
   <a href="#via-manageryaml-base-deployment" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Via manager.yaml (Base Deployment)
+        Via manager.yaml (base deployment)
       
     </span>
   </a>
@@ -3014,24 +3036,35 @@
 </table>
 <p><strong>Authorization cache TTL capping:</strong> Authorization caches are automatically capped at the metadata cache TTL to prevent stale authorization decisions. If <code>AUTHZ_CACHE_TTL &gt; METADATA_CACHE_TTL</code>, the authorization cache uses the metadata TTL instead, and a warning is logged at startup.</p>
 <h3 id="deployment-configuration">Deployment Configuration</h3>
-<h4 id="via-paramsenv-odh-overlay">Via params.env (ODH Overlay)</h4>
-<p>Edit <code>deployment/overlays/odh/params.env</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>metadata-cache-ttl=300  # 5 minutes
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>authz-cache-ttl=30      # 30 seconds
+<h4 id="via-maas-parameters-configmap-running-cluster">Via <code>maas-parameters</code> ConfigMap (running cluster)</h4>
+<p>Patch the ConfigMap and restart the controller to pick up the changes:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">CONTROLLER_NS</span><span class="o">=</span>opendatahub
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>configmap<span class="w"> </span>maas-parameters<span class="w"> </span>-n<span class="w"> </span><span class="nv">$CONTROLLER_NS</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--type<span class="w"> </span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;data&quot;:{&quot;metadata-cache-ttl&quot;:&quot;300&quot;,&quot;authz-cache-ttl&quot;:&quot;30&quot;}}&#39;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>kubectl<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment/maas-controller<span class="w"> </span>-n<span class="w"> </span><span class="nv">$CONTROLLER_NS</span>
 </code></pre></div>
-<p>These values are injected into the maas-controller deployment via ConfigMap.</p>
-<h4 id="via-manageryaml-base-deployment">Via manager.yaml (Base Deployment)</h4>
-<p>Edit <code>deployment/base/maas-controller/manager/manager.yaml</code> to change hardcoded values and add env vars:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">args</span><span class="p">:</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="c1"># ... other args ...</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--metadata-cache-ttl=$(METADATA_CACHE_TTL)</span><span class="w">  </span><span class="c1"># Change from hardcoded 60</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--authz-cache-ttl=$(AUTHZ_CACHE_TTL)</span><span class="w">        </span><span class="c1"># Change from hardcoded 60</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nt">env</span><span class="p">:</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">METADATA_CACHE_TTL</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;300&quot;</span><span class="w">  </span><span class="c1"># 5 minutes</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">AUTHZ_CACHE_TTL</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;30&quot;</span><span class="w">   </span><span class="c1"># 30 seconds</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span><span class="c1"># ... other env vars ...</span>
+<h4 id="via-deploymentoverlaysodhparamsenv-changing-source-defaults">Via <code>deployment/overlays/odh/params.env</code> (changing source defaults)</h4>
+<p>This file is read by the ODH operator at install time to populate <code>maas-parameters</code>. Edit it to change the defaults baked into the deployment:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a># 5 minutes
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>metadata-cache-ttl=300
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a># 30 seconds
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>authz-cache-ttl=30
+</code></pre></div>
+<h4 id="via-manageryaml-base-deployment">Via manager.yaml (base deployment)</h4>
+<p>Edit <code>deployment/base/maas-controller/manager/manager.yaml</code> to change hardcoded values:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">args</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="c1"># ... other args ...</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--metadata-cache-ttl=$(METADATA_CACHE_TTL)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--authz-cache-ttl=$(AUTHZ_CACHE_TTL)</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nt">env</span><span class="p">:</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">METADATA_CACHE_TTL</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;300&quot;</span><span class="w">  </span><span class="c1"># 5 minutes</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">AUTHZ_CACHE_TTL</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;30&quot;</span><span class="w">   </span><span class="c1"># 30 seconds</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="c1"># ... other env vars ...</span>
 </code></pre></div>
 <blockquote>
 <p><strong>Note on Customization:</strong> Direct modification of Authorino deployments or settings may interact with operator reconciliation during upgrades. Test changes in non-production environments and document any customizations for support handoff.</p>
@@ -3090,7 +3123,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 6, 2026 15:15:25 UTC">May 6, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 8, 2026 14:24:02 UTC">May 8, 2026</span>
   </span>
 
     
