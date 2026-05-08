@@ -23,6 +23,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -75,14 +76,24 @@ func serve() error {
 		gin.SetMode(gin.DebugMode)
 	}
 
-	router := gin.Default()
+	// Use gin.New() instead of gin.Default() to control middleware order
+	router := gin.New()
 
+	// Add request ID middleware first so it's available to logger
+	router.Use(middleware.RequestID())
+
+	// Add Logger and Recovery middleware after RequestID
+	router.Use(gin.Logger())
+	router.Use(gin.Recovery())
+
+	// Add metrics middleware
 	metricsRecorder, err := metrics.NewPrometheusRecorder(metricsRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to create metrics recorder: %w", err)
 	}
 	router.Use(metrics.NewMiddleware(metricsRecorder))
 
+	// Start metrics server
 	metricsSrv, err := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to create metrics server: %w", err)

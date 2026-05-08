@@ -8,13 +8,13 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "main"
+      == "stable"
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
     appstudio.openshift.io/component: odh-maas-controller-ci
     pipelines.appstudio.openshift.io/type: build
-  name: odh-maas-controller-on-push
+  name: odh-maas-controller-on-push-stable
   namespace: open-data-hub-tenant
 spec:
   params:
@@ -23,7 +23,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/maas-controller:latest
+    value: quay.io/opendatahub/maas-controller:odh-stable
   - name: dockerfile
     value: maas-controller/Dockerfile
   - name: path-context
