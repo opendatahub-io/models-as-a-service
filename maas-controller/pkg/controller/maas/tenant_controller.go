@@ -54,19 +54,17 @@ type TenantReconciler struct {
 	TenantNamespace string
 }
 
+// Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=operator.authorino.kuadrant.io,resources=authorinos,verbs=get;list;watch
@@ -79,9 +77,19 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 
-// maas-controller creates the maas-api ClusterRole via SSA.
-// The rules below mirror the maas-api ClusterRole so the controller can pass the API-server escalation check.
-//
+// clusterroles/clusterrolebindings: TenantReconciler SSA-applies the maas-api and payload-processing-reader
+// ClusterRoles. The API-server escalation check requires the applying SA to already hold every permission those
+// ClusterRoles grant — which is why secrets get;list;watch must remain unrestricted (payload-processing-reader
+// grants unrestricted get on secrets; Kubernetes also does not support resourceNames on list/watch).
+// The client-side predicate secretNamedMaaSDB() filters informer events to maas-db-config only.
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
+
+// Escalation-check mirror for maas-api ClusterRole — maas-controller must hold every verb it grants.
+// namespaces create: bootstrap the subscription namespace at startup (ensureSubscriptionNamespaceWithClient).
+// serviceaccounts/token create, tokenreviews, subjectaccessreviews: required by maas-api for bound SA token
+// projection and access checks. maasmodelrefs/maassubscriptions: read-only cross-reconciler references.
 // +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch

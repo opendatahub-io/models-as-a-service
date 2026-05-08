@@ -38,14 +38,14 @@ Client → Gateway (TLS termination) → [DestinationRule] → maas-api:8443 (TL
 ### Standalone (maas-api with TLS only)
 
 ```bash
-kustomize build deployment/overlays/tls | kubectl apply -f -
+kustomize build deployment/base/maas-api/overlays/tls | kubectl apply -f -
 ```
 
 ### As part of Tenant reconciler
 
-This overlay is referenced by `maas-api/deploy/overlays/odh` (the Tenant reconciler overlay)
-and `deployment/overlays/odh` (the ODH operator overlay). The Tenant reconciler also applies
-gateway policies and configures DestinationRule namespace via PostRender.
+This overlay is referenced by `maas-api/deploy/overlays/odh` (the Tenant reconciler overlay).
+The Tenant reconciler also applies gateway policies and configures DestinationRule namespace
+via PostRender.
 
 ## Certificate Management
 

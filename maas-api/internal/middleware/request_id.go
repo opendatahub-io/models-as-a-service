@@ -39,8 +39,12 @@ func RequestID() gin.HandlerFunc {
 		// Check if request ID already exists (from gateway or client)
 		requestID := c.GetHeader(RequestIDHeader)
 
-		// Use client-supplied ID only if it passes validation; otherwise generate one.
-		if !isValidRequestID(requestID) {
+		// Validate client-supplied request ID to prevent log injection
+		if requestID != "" && !isValidRequestID(requestID) {
+			// Reject invalid request ID, generate a new one
+			requestID = uuid.New().String()
+		} else if requestID == "" {
+			// Generate new UUID if not present
 			requestID = uuid.New().String()
 		}
 

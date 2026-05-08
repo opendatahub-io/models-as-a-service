@@ -29,12 +29,15 @@ var (
 )
 
 // initHMACKey initializes the per-process HMAC key for header redaction.
+// Panics if random key generation fails (which should never happen on modern systems).
 func initHMACKey() {
 	hmacKeyOnce.Do(func() {
 		hmacKey = make([]byte, 32)
 		if _, err := rand.Read(hmacKey); err != nil {
-			// Fallback to deterministic key if randomness fails
-			hmacKey = []byte("fallback-hmac-key-for-header-redaction")
+			// crypto/rand.Read never fails on Linux/modern systems.
+			// If it does, something is seriously wrong - panic rather than
+			// silently falling back to a deterministic key that defeats rainbow table protection.
+			panic("failed to generate HMAC key for header redaction: " + err.Error())
 		}
 	})
 }

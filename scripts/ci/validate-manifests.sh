@@ -15,7 +15,8 @@ validate_kustomization() {
     local kustomization_file="$1"
     local project_root="${2:-$(git rev-parse --show-toplevel)}"
     
-    local dir=$(dirname "$kustomization_file")
+    local dir
+    dir=$(dirname "$kustomization_file")
     local relative_path=${kustomization_file#"$project_root/"}
     local message="${bold}Validating${normal} ${underline}$relative_path${normal}"
     
@@ -49,10 +50,42 @@ validate_all() {
     return $exit_code
 }
 
-# When script is not sourced, but directly invoked, validate all manifests in the project
+# ---------------------------------------------------------------------------
+# Canonical root validation
+# ---------------------------------------------------------------------------
+# These are the two production kustomize roots. Failures here are critical.
+
+CANONICAL_ROOTS=(
+    "deployment/base/maas-controller/default"
+    "maas-api/deploy/overlays/odh"
+)
+
+validate_canonical_roots() {
+    local project_root="${1:-$(git rev-parse --show-toplevel)}"
+    local exit_code=0
+
+    echo ""
+    echo -e "${bold}Checking canonical production roots exist${normal}"
+    for root in "${CANONICAL_ROOTS[@]}"; do
+        local abs_path="$project_root/$root/kustomization.yaml"
+        if [[ ! -f "$abs_path" ]]; then
+            echo -e "❌ ${bold}MISSING${normal} canonical root: ${underline}$root${normal}"
+            exit_code=1
+        else
+            echo -e "✅ ${underline}$root${normal}"
+        fi
+    done
+
+    return $exit_code
+}
+
+# When script is not sourced, but directly invoked, run all validations
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     PROJECT_ROOT=$(git rev-parse --show-toplevel)
+    EXIT_CODE=0
 
-    validate_all "$PROJECT_ROOT"
-    exit $?
+    validate_all "$PROJECT_ROOT" || EXIT_CODE=1
+    validate_canonical_roots "$PROJECT_ROOT" || EXIT_CODE=1
+
+    exit $EXIT_CODE
 fi
