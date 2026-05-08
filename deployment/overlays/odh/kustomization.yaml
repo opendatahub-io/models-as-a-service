@@ -158,6 +158,11 @@ replacements:
       name: payload-processing-reader
     fieldPaths:
     - subjects.0.namespace
+  - select:
+      kind: RoleBinding
+      name: maas-controller-configmap-write-rolebinding-gateway
+    fieldPaths:
+    - metadata.namespace
 # Payload-processing EnvoyFilter must target the correct gateway name
 - source:
     kind: ConfigMap
@@ -237,5 +242,15 @@ replacements:
   - select:
       kind: RoleBinding
       name: maas-controller-leader-election-rolebinding
+    fieldPaths:
+    - subjects.0.namespace
+  - select:
+      kind: RoleBinding
+      name: maas-controller-configmap-write-rolebinding
+    fieldPaths:
+    - subjects.0.namespace
+  - select:
+      kind: RoleBinding
+      name: maas-controller-configmap-write-rolebinding-gateway
     fieldPaths:
     - subjects.0.namespace

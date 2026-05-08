@@ -1213,6 +1213,11 @@ replacements:
       name: payload-processing-reader
     fieldPaths:
     - subjects.0.namespace
+  - select:
+      kind: RoleBinding
+      name: maas-controller-configmap-write-rolebinding-gateway
+    fieldPaths:
+    - metadata.namespace
 - source:
     kind: ConfigMap
     version: v1

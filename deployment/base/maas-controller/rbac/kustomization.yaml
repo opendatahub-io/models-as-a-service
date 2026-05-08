@@ -4,5 +4,8 @@ resources:
   - service_account.yaml
   - leader_election_role.yaml
   - leader_election_role_binding.yaml
+  - configmap_write_clusterrole.yaml
+  - configmap_write_rolebinding.yaml
+  - configmap_write_rolebinding_gateway.yaml
   - owner_role.yaml
   - viewer_role.yaml

@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: maas-controller-configmap-write-rolebinding
+  namespace: opendatahub
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: maas-controller-configmap-write-role
+subjects:
+- kind: ServiceAccount
+  name: maas-controller
+  namespace: opendatahub
