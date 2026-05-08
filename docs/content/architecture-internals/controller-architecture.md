@@ -24,8 +24,8 @@ The controller does not run inference. It **reconciles** your high-level MaaS CR
 MaaS uses a two-layer deployment model that separates concerns between the operator (bootstrap) and the controller (platform):
 
 - **ODH operator = bootstrap layer** — deploys only `maas-controller` + CRDs + `maas-parameters` ConfigMap; nothing else.
-- **maas-controller self-bootstraps `default-tenant` CR** on startup and watches it continuously (every 30 s).
-- **Tenant reconciler = platform layer** — renders embedded kustomize manifests and SSA-applies all workloads (`maas-api`, gateway policies, telemetry, networking); any drift is self-healed.
+- **maas-controller self-bootstraps `default-tenant` CR** on startup, watches it continuously (event-driven), and performs periodic reconciliation every 30 s via requeue.
+- **Tenant reconciler = platform layer** — renders embedded kustomize manifests and SSA-applies all workloads (`maas-api`, gateway policies, telemetry, networking) on each reconcile; any drift is self-healed.
 
 ### End-to-End Ownership Chain
 
@@ -50,8 +50,8 @@ sequenceDiagram
     DSC->>Op: modelsAsService: Managed
     Op->>Ctrl: Deploy maas-controller + CRDs + maas-parameters
     Ctrl->>T: Self-bootstrap default-tenant (if absent)
-    loop Every 30 s
-        Ctrl->>T: Watch Tenant CR
+    loop Every 30 s (requeue/resync)
+        Ctrl->>T: Periodic reconcile tick
         T->>Plat: Tenant reconciler renders kustomize & SSA-applies
     end
     Note over Plat: maas-api, AuthPolicy,<br/>TokenRateLimitPolicy,<br/>TelemetryPolicy, DestinationRule,<br/>NetworkPolicy
@@ -67,7 +67,7 @@ The `maas-parameters` ConfigMap carries runtime configuration (images, gateway c
 | **Kustomize standalone** | `kustomize build` | `configMapGenerator` in the overlay `kustomization.yaml` generates it from `params.env` | Developer/testing workflow |
 
 !!! warning "Operator-managed deployments"
-    In ODH/RHOAI managed deployments the operator is authoritative for `maas-parameters`. The Tenant reconciler reads values from the ConfigMap but must not overwrite it — the operator controls image tags, gateway coordinates, and other build-time defaults via `params.env`.
+    In ODH/RHOAI-managed deployments the operator is authoritative for `maas-parameters`. The Tenant reconciler reads values from the ConfigMap but must not overwrite it — the operator controls image tags, gateway coordinates, and other build-time defaults via `params.env`.
 
 ---
 
