@@ -1,0 +1,61 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: maas-odh-overlay
+
+resources:
+  - ../../base/networking/maas
+  - ../../base/maas-controller/default
+  - ../../base/observability
+
+configMapGenerator:
+- name: maas-parameters
+  envs:
+    - params.env
+  options:
+    disableNameSuffixHash: true
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+replacements:
+  # App namespace RoleBinding
+  - source:
+      kind: ConfigMap
+      version: v1
+      name: maas-parameters
+      fieldPath: data.app-namespace
+    targets:
+    - select:
+        kind: RoleBinding
+        name: maas-controller-configmap-write-rolebinding
+      fieldPaths:
+      - metadata.namespace
+      - subjects.0.namespace
+
+  # Gateway namespace RoleBinding (metadata)
+  - source:
+      kind: ConfigMap
+      version: v1
+      name: maas-parameters
+      fieldPath: data.gateway-namespace
+    targets:
+    - select:
+        kind: RoleBinding
+        name: maas-controller-configmap-write-rolebinding-gateway
+      fieldPaths:
+      - metadata.namespace
+
+  # Gateway namespace RoleBinding (subject stays app-namespace)
+  - source:
+      kind: ConfigMap
+      version: v1
+      name: maas-parameters
+      fieldPath: data.app-namespace
+    targets:
+    - select:
+        kind: RoleBinding
+        name: maas-controller-configmap-write-rolebinding-gateway
+      fieldPaths:
+      - subjects.0.namespace
