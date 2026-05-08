@@ -90,10 +90,10 @@ func RedactHeaders(headers http.Header, hashPrefix bool) map[string]string {
 			if len(values) > 0 {
 				val = values[0]
 			}
-			result[name] = RedactHeader(val, hashPrefix)
+			result[canonical] = RedactHeader(val, hashPrefix)
 		} else if len(values) > 0 {
 			// Pass through non-sensitive headers
-			result[name] = values[0]
+			result[canonical] = values[0]
 		}
 	}
 
@@ -113,19 +113,11 @@ func IsSensitiveHeader(name string) bool {
 }
 
 // SensitiveHeadersSummaryForAccessLog returns presence-only key=value pairs for each
-// entry in SensitiveHeaders (uses RedactHeaders / RedactHeader).
+// entry in SensitiveHeaders (uses RedactHeader).
 func SensitiveHeadersSummaryForAccessLog(h http.Header) string {
-	redacted := RedactHeaders(h, false)
 	parts := make([]string, 0, len(SensitiveHeaders))
 	for _, name := range SensitiveHeaders {
-		canonical := textproto.CanonicalMIMEHeaderKey(name)
 		val := RedactHeader(h.Get(name), false)
-		for k, v := range redacted {
-			if textproto.CanonicalMIMEHeaderKey(k) == canonical {
-				val = v
-				break
-			}
-		}
 		parts = append(parts, fmt.Sprintf("%s=%s", name, val))
 	}
 	return strings.Join(parts, " ")

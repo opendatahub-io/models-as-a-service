@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -29,8 +30,6 @@ func accessLogFormatter(param gin.LogFormatterParams) string {
 		param.Latency = param.Latency.Truncate(time.Second)
 	}
 
-	summary := logger.SensitiveHeadersSummaryForAccessLog(param.Request.Header)
-
 	line := fmt.Sprintf("[GIN] %v |%s %3d %s| %13v | %15s |%s %-7s %s %#v\n%s",
 		param.TimeStamp.Format("2006/01/02 - 15:04:05"),
 		statusColor, param.StatusCode, resetColor,
@@ -40,10 +39,28 @@ func accessLogFormatter(param gin.LogFormatterParams) string {
 		param.Path,
 		param.ErrorMessage,
 	)
-	suffix := " | " + summary + "\n"
-	base, hadTrailingNL := strings.CutSuffix(line, "\n")
-	if hadTrailingNL {
-		return base + suffix
+
+	// Only append sensitive header summary if at least one is present
+	// (avoids noise on health checks and other requests with no auth)
+	if hasSensitiveHeaders(param.Request.Header) {
+		summary := logger.SensitiveHeadersSummaryForAccessLog(param.Request.Header)
+		suffix := " | " + summary + "\n"
+		base, hadTrailingNL := strings.CutSuffix(line, "\n")
+		if hadTrailingNL {
+			return base + suffix
+		}
+		return line + suffix
 	}
-	return line + suffix
+
+	return line
+}
+
+// hasSensitiveHeaders checks if any sensitive header has a non-empty value.
+func hasSensitiveHeaders(h http.Header) bool {
+	for _, name := range logger.SensitiveHeaders {
+		if h.Get(name) != "" {
+			return true
+		}
+	}
+	return false
 }
