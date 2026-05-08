@@ -33,6 +33,8 @@ For local development: [Limitador Persistence](../advanced-administration/limita
 kubectl logs -n kuadrant-system deployment/limitador | grep -i redis
 
 # Test persistence across restart
+# WARNING: Only run in non-production or during a maintenance window.
+# This will disrupt in-flight requests while pods restart.
 kubectl delete pod -n kuadrant-system -l app=limitador
 kubectl logs -n kuadrant-system deployment/limitador | grep -i redis
 # Counters should reload from Redis, not reset
@@ -42,15 +44,18 @@ kubectl logs -n kuadrant-system deployment/limitador | grep -i redis
 
 ### Grafana Datasource Token Rotation
 
-Grafana datasource uses ServiceAccount token valid for **30 days**.
+Grafana datasource uses ServiceAccount tokens with cluster-configured expiration. Token lifetime varies by cluster (Kubernetes and OpenShift have different defaults). Check your cluster's token expiration:
 
 ```bash
+# Check ServiceAccount token lifetime (if using TokenRequest API)
+kubectl get serviceaccount -n <grafana-namespace> <sa-name> -o yaml | grep expirationSeconds
+
 # Re-deploy dashboards to rotate token
 ./scripts/observability/install-grafana-dashboards.sh
 ```
 
 !!! tip "Production"
-    Automate token rotation using CronJob or external secrets operator to avoid outages.
+    Verify your cluster's token lifetime and automate rotation accordingly (e.g., CronJob or external secrets operator) to avoid outages.
 
 ### Monitor ServiceMonitor Health
 

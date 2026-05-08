@@ -84,7 +84,7 @@ kubectl patch tenant default-tenant -n models-as-a-service --type=merge \
 
 This creates:
 
-- **TelemetryPolicy** (`maas-telemetry`) - Adds `user`, `subscription`, `model` labels to Limitador metrics
+- **TelemetryPolicy** (`maas-telemetry`) - Adds `subscription`, `model`, `organization_id` labels to Limitador metrics (user and group labels disabled by default)
 - **Istio Telemetry** (`latency-per-subscription`) - Adds `subscription` label to gateway latency
 
 **Verify:**

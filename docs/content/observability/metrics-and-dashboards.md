@@ -122,9 +122,9 @@ topk(10, sum by (user) (authorized_calls))
 **Inference success rate:**
 
 ```promql
-# Success rate (handles counter resets)
-((sum(rate(vllm:request_success_total[5m])) /
-  sum(rate(vllm:e2e_request_latency_seconds_count[5m]))) >= 0) OR vector(1)
+# Success rate (defaults to 100% when no data)
+sum(rate(vllm:request_success_total[5m])) /
+  sum(rate(vllm:e2e_request_latency_seconds_count[5m])) OR vector(1)
 ```
 
 **Rate limiting:**
