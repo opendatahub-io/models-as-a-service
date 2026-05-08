@@ -507,9 +507,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Ensure the default-tenant CR exists in the MaaS subscription namespace
-	// (same namespace as MaaSSubscription / MaaSAuthPolicy CRs).
-	// maas-controller owns creation; ODH operator only reads status and deletes on disable.
+	// Startup ordering contract:
+	//   1. ensureSubscriptionNamespaceWithClient runs synchronously above, before the manager starts.
+	//   2. ensureDefaultTenantRunnable (below) runs after cache sync and creates the default-tenant CR.
+	//   3. TenantReconciler is registered after this runnable. If a reconcile fires before the
+	//      runnable creates the Tenant CR (narrow race window), IsNotFound returns ctrl.Result{}
+	//      with no error; the CRD watch re-triggers once the runnable creates the CR.
+	//   4. ODH operator may also apply the Tenant CR independently. The singleton check in
+	//      TenantReconciler (tenant.Name != TenantInstanceName) ensures only the expected CR is acted on.
 	if err := mgr.Add(ensureDefaultTenantRunnable(mgr, maasSubscriptionNamespace)); err != nil {
 		setupLog.Error(err, "unable to register ensureDefaultTenant runnable")
 		os.Exit(1)

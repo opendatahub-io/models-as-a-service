@@ -7,7 +7,5 @@ resources:
   - configmap_write_clusterrole.yaml
   - configmap_write_rolebinding.yaml
   - configmap_write_rolebinding_gateway.yaml
-  - secret_read_clusterrole.yaml
-  - secret_read_rolebinding.yaml
   - owner_role.yaml
   - viewer_role.yaml
