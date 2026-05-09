@@ -545,15 +545,29 @@ main() {
     fi
   fi
 
+  # Ensure maas-parameters ConfigMap exists with image defaults.
+  # maas-controller reads these via configMapKeyRef (RELATED_IMAGE_* env vars).
+  # Custom images from CLI flags override the defaults; other images keep defaults.
+  local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
+  local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
+  local cm_payload_processing_image="quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+  local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
+
+  log_info "  Ensuring maas-parameters ConfigMap..."
+  kubectl create configmap maas-parameters -n "$NAMESPACE" \
+    --from-literal="maas-api-image=${cm_maas_api_image}" \
+    --from-literal="maas-controller-image=${cm_maas_controller_image}" \
+    --from-literal="payload-processing-image=${cm_payload_processing_image}" \
+    --from-literal="maas-api-key-cleanup-image=${cm_cleanup_image}" \
+    --dry-run=client -o yaml | kubectl apply -f - || {
+    log_error "Failed to create/update maas-parameters ConfigMap"
+    return 1
+  }
+
   if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
     log_info "  Custom MaaS controller image: $MAAS_CONTROLLER_IMAGE"
     kubectl set image deployment/maas-controller manager="${MAAS_CONTROLLER_IMAGE}" -n "$NAMESPACE" || {
       log_error "Failed to set maas-controller container image"
-      return 1
-    }
-    kubectl set env deployment/maas-controller -n "$NAMESPACE" \
-      "RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE}" || {
-      log_error "Failed to set RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE on maas-controller"
       return 1
     }
   fi
@@ -564,22 +578,6 @@ main() {
     return 1
   fi
   log_info "  Controller ready."
-
-  # Pass custom maas-api image to the Tenant reconciler via RELATED_IMAGE env var.
-  # The reconciler reads this when building params.env for kustomize (ApplyParams).
-  local env_patches=()
-  if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
-    log_info "  Configuring custom MaaS API image: $MAAS_API_IMAGE"
-    env_patches+=("RELATED_IMAGE_ODH_MAAS_API_IMAGE=$MAAS_API_IMAGE")
-  fi
-
-  if [[ ${#env_patches[@]} -gt 0 ]]; then
-    log_info "  Patching maas-controller env vars: ${env_patches[*]}"
-    kubectl set env deployment/maas-controller -n "$NAMESPACE" "${env_patches[@]}"
-    if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
-      log_warn "maas-controller rollout after env patch did not complete in time (timeout: ${ROLLOUT_TIMEOUT}s)"
-    fi
-  fi
 
   # Wait for the Tenant reconciler to deploy maas-api.
   # The controller creates a default-tenant CR on startup, and the Tenant
