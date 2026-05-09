@@ -41,7 +41,6 @@ const (
 	GatewayDestinationRuleName                 = "maas-api-backend-tls"
 	TelemetryPolicyName                        = "maas-telemetry"
 	IstioTelemetryName                         = "latency-per-subscription"
-	MaaSParametersConfigMapName                = "maas-parameters"
 	MaaSAPIDeploymentName                      = "maas-api"
 	MaaSDBSecretName                           = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey                            = "DB_CONNECTION_URL"
@@ -57,18 +56,11 @@ const (
 	ReadyConditionType                  = "Ready"
 )
 
-// ImageParamKeys maps params.env keys to RELATED_IMAGE_* env vars (same layout as the ODH operator component support).
-var ImageParamKeys = map[string]string{
-	"maas-api-image":             "RELATED_IMAGE_ODH_MAAS_API_IMAGE",
-	"maas-controller-image":      "RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE",
-	"payload-processing-image":   "RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE",
-	"maas-api-key-cleanup-image": "RELATED_IMAGE_UBI_MINIMAL_IMAGE",
-}
-
 // GVKs used for post-render and readiness (mirrors opendatahub-operator/pkg/cluster/gvk selections).
 var (
-	GVKConfigMap            = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "ConfigMap"}
 	GVKDeployment           = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	GVKHTTPRoute            = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
+	GVKCronJob              = schema.GroupVersionKind{Group: "batch", Version: "v1", Kind: "CronJob"}
 	GVKAuthPolicy           = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}
 	GVKTokenRateLimitPolicy = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}
 	GVKDestinationRule      = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"}
