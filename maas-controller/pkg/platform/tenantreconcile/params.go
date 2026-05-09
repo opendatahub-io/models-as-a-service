@@ -1,6 +1,7 @@
 package tenantreconcile
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -19,9 +20,9 @@ type PlatformParams struct {
 	GatewayName      string
 	ClusterAudience  string
 
-	MaaSAPIImage             string
-	PayloadProcessingImage   string
-	MaaSAPIKeyCleanupImage   string
+	MaaSAPIImage           string
+	PayloadProcessingImage string
+	MaaSAPIKeyCleanupImage string
 
 	APIKeyMaxExpirationDays string
 }
@@ -230,7 +231,7 @@ func replaceHostNamespace(host, ns string) string {
 func setContainerImage(r *unstructured.Unstructured, containerName, image string) error {
 	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
 	if err != nil || !found {
-		return fmt.Errorf("containers not found")
+		return errors.New("containers not found")
 	}
 	for i, c := range containers {
 		if cm, ok := c.(map[string]any); ok && cm["name"] == containerName {
@@ -245,7 +246,7 @@ func setContainerImage(r *unstructured.Unstructured, containerName, image string
 func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envValue string) error {
 	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
 	if err != nil || !found {
-		return fmt.Errorf("containers not found")
+		return errors.New("containers not found")
 	}
 	for i, c := range containers {
 		cm, ok := c.(map[string]any)
@@ -270,4 +271,3 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 	}
 	return fmt.Errorf("container %q not found", containerName)
 }
-

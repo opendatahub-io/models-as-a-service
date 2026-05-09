@@ -326,4 +326,3 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 	}
 	return labels
 }
-
