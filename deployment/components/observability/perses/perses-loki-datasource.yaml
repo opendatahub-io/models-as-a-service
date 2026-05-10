@@ -1,16 +1,9 @@
-# Perses Datasource for Loki (via LokiStack Gateway)
+# Perses Datasource for Loki (admin — direct to LokiStack Gateway)
 #
-# Provides access to structured logs collected by the OTel Collector pipeline.
-# Uses SA token auth against the LokiStack gateway's OPA enforcement layer.
+# Admin dashboards access Loki directly via the gateway with SA token + mTLS.
+# No proxy needed — admins see all application logs without filtering.
 #
-# The LokiStack gateway in openshift-logging mode requires:
-# 1. HTTPS with service-serving CA
-# 2. Bearer token from a ServiceAccount with cluster-logging-application-view
-# 3. Tenant path prefix: /api/logs/v1/application/
-#
-# TLS: LokiStack gateway serves HTTPS signed by the OpenShift service CA.
-# The operator creates a Perses Secret named "loki-secret" from the
-# client.tls config below.
+# Deployed to openshift-operators for Platform Admin / AI Engineer dashboards.
 ---
 apiVersion: perses.dev/v1alpha2
 kind: PersesDatasource

@@ -167,8 +167,8 @@ else
         "$OBSERVABILITY_DIR/perses/perses-datasource-scoped.yaml" \
         | kubectl apply --server-side=true --force-conflicts -n "$TENANT_NAMESPACE" -f -
 
-    # Tenant Loki datasource (LogQL panels in Usage Dashboard need this)
-    kubectl apply --server-side=true --force-conflicts -f "$OBSERVABILITY_DIR/perses/perses-loki-datasource.yaml" -n "$TENANT_NAMESPACE"
+    # Tenant Loki datasource (user-scoped, routes through loki-query-proxy-user)
+    kubectl apply --server-side=true --force-conflicts -f "$OBSERVABILITY_DIR/perses/perses-loki-datasource-scoped.yaml" -n "$TENANT_NAMESPACE"
 
     # RBAC: adds metrics.k8s.io/pods 'create' verb for authenticated users
     kubectl apply --server-side=true --force-conflicts -f "$OBSERVABILITY_DIR/perses/perses-rbac-scoped.yaml" -n "$TENANT_NAMESPACE"

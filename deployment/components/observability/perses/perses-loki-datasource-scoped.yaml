@@ -1,0 +1,31 @@
+# Perses Datasource for Loki (via Query Proxy — tenant/user-scoped)
+#
+# Routes through loki-query-proxy-user (ISOLATION_MODE=user).
+# The proxy extracts the user identity from the bearer token (JWT or opaque)
+# and appends `| user_id="<username>"` to every LogQL query.
+# Each user sees only their own logs.
+#
+# Deployed to tenant namespaces (e.g. kuadrant-system) for the Usage Dashboard.
+---
+apiVersion: perses.dev/v1alpha2
+kind: PersesDatasource
+metadata:
+  name: loki
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  config:
+    display:
+      name: "Loki (MaaS Structured Logs)"
+    default: false
+    plugin:
+      kind: "LokiDatasource"
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://loki-query-proxy-user.kuadrant-system.svc:8080
+            allowedEndpoints:
+              - endpointPattern: /loki/api/v1/.*
+                method: GET

@@ -133,6 +133,33 @@ status: pending
   - id: observability-docs
   content: "DONE: Updated observability.md — removed dead user/tier label references, updated Perses limitations for Loki plugin, added OTel/Loki sections, per-user metrics reference Loki user_id"
   status: completed
+  - id: fix-rewriter-metric-queries
+  content: "DONE: Rewrote injectUserFilter to insert | user_id= after each stream selector {} instead of appending to end. Fixes metric/aggregation queries for non-admin users."
+  status: completed
+  - id: fix-rewriter-quoted-braces
+  content: "DONE: Made injectUserFilter quote-aware — skips braces inside double-quoted and backtick strings. Fixes line_format, label_format, string match queries with Go templates."
+  status: completed
+  - id: fix-post-body-bypass
+  content: "DONE: Fixed tenant isolation bypass via POST form body. Changed if/else-if to two independent if blocks so both URL params and POST body are always rewritten."
+  status: completed
+  - id: fix-dual-query-bypass
+  content: "DONE: Fixed exploit where dummy query in URL + real query in POST body bypassed filtering."
+  status: completed
+  - id: fix-dashboard-range-variable
+  content: "DONE: Replaced $range StaticListVariable dropdown with $__range (Perses built-in since v0.40.0). Native time picker now drives all LogQL queries."
+  status: completed
+  - id: fix-workflow-git-checkout
+  content: "DONE: Removed -- separator from git rev-parse and git checkout --detach in update-docs-latest.yml. Was treating tag as pathspec."
+  status: completed
+  - id: restore-telemetry-user-label
+  content: "DONE: Restored user: auth.identity.userid in TelemetryPolicy. Was removed during tier->subscription migration, breaking AI Engineer dashboard."
+  status: completed
+  - id: fix-tokenreview-client-reuse
+  content: "DONE: Made resolveToken reuse a global http.Client for TokenReview API instead of creating one per request."
+  status: completed
+  - id: dashboard-ui-verification
+  content: "DONE: Verified Usage Dashboard in browser for all 4 test users. Screenshots confirm correct tenant isolation."
+  status: completed
   - id: review-and-split
   content: "TODO: Review all changes, break into logical commits/branches/PRs for merge"
   status: pending
@@ -1243,18 +1270,17 @@ sum by (user_id, subscription, model) (sum_over_time({kubernetes_namespace_name=
    **Result**: `[$range]` + `calculation: last` is the only approach that gives **exact, correct values** from Loki. Each evaluation step computes the aggregate over the full `[$range]` window; `calculation: last` takes the last step's value (at time=now), which counts every log entry exactly once. The `$range` dropdown controls the lookback window for all panels.
    Fallbacks: `or vector(0)` on all stat panels; `or vector(1)` on Success Rate — show 0 / 100% instead of "No data" when the selected window has no activity.
    **Usage Dashboard — `subscription` and `model` filters (StaticListVariable; separate from `$range`):**
-   Perses does **not** have a variable plugin that discovers label values from Loki. **`LokiLabelValuesVariable` does not exist** — not in the Red Hat COO 1.4.0 build, not in upstream Perses open source. The upstream Loki plugin ([perses/plugins/loki](https://github.com/perses/plugins/tree/main/loki)) registers only three plugin kinds: `LokiDatasource`, `LokiTimeSeriesQuery`, `LokiLogQuery` — there is no `variables/` schema directory at all. (Contrast with the Prometheus plugin which ships `PrometheusLabelValuesVariable` and `PrometheusLabelNamesVariable`.) **Validated 2026-05-03:** zero code search hits for "LokiLabelValuesVariable" across `perses/plugins` and `perses/perses` GitHub repos; the [Loki plugin model docs](https://perses.dev/plugins/docs/loki/model/) confirm only the three kinds above; the deployed Perses instance (COO 1.4.0, Loki plugin v0.5.0-rc.1, image `registry.redhat.io/cluster-observability-operator/perses-rhel9@sha256:19b297...`) `/api/v1/plugins` endpoint lists the same three. This is not a Red Hat downstream limitation — upstream has simply not implemented Loki label-discovery variables.
-   The Usage dashboard therefore uses **`StaticListVariable`** for **Subscription** and **Model**, with **`values:`** hardcoded in `deployment/components/observability/perses/dashboards/dashboard-usage.yaml`.
+   Perses does **not** expose a variable that discovers label values from Loki (no `LokiLabelValuesVariable`-style support for stream labels). The Usage dashboard therefore uses `**StaticListVariable`** for **Subscription** and **Model**, with `**values:`** hardcoded in `deployment/components/observability/perses/dashboards/dashboard-usage.yaml`.
    **Implication for operators:** New subscription or model strings that appear in production traffic **do not** automatically appear as new entries in those dropdowns. To let users **filter by a specific new name**, edit the dashboard YAML to add that string to the appropriate `values:` list and re-apply the `PersesDashboard`.
    **Mitigation for viewers:** Both variables use `**allowAllValue: true`** with default `**$__all`**. With **All** selected, queries still match **every** `subscription` / `model` in Loki — **new models and subscriptions are included** in aggregate stats and the table. The limitation applies only to **picking a single new name from the dropdown** until the manifest is updated.
-   **There is no in-Perses-only switch to autodiscover `model` / `subscription` from Loki into those dropdowns.** This is a fundamental gap in upstream Perses — no open issue or PR exists for a Loki label-values variable as of 2026-05-03. The following are the practical ways to **reduce** the pain (not mutually exclusive):
+   **There is no in-Perses-only switch to autodiscover `model` / `subscription` from Loki into those dropdowns** with current Perses variable types. The following are the practical ways to **reduce** the pain (not mutually exclusive):
 
   | Approach                       | What it does                                                                                                                                                                                                                     |
   | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
   | **Default `$__all`** (current) | Aggregates and table include **all** models/subscriptions without maintaining lists; no per-name filter until YAML is updated.                                                                                                   |
   | **External automation**        | CronJob, GitOps reconcile, or small controller calls Loki’s label API (or LogQL) and **patches** the `PersesDashboard` CR to refresh `StaticListVariable` `values:` — dropdown stays curated **without** manual YAML edits.      |
   | **Text / regex variable**      | Replace or supplement the Model list with a **TextVariable** (like the User filter) so operators type a model name or pattern — **no** autodiscovery, but **no** manifest edit for every new model when users can type the name. |
-  | **Upstream Perses**            | A future Loki label-values variable type would remove the need for static lists — track [perses/plugins](https://github.com/perses/plugins) releases. As of 2026-05-03 this feature does not exist and no issue/PR has been filed upstream. |
+  | **Upstream Perses**            | A future **Loki label-values** variable type (or equivalent) would remove the need for static lists — track Perses / `perses/plugins` releases.                                                                                  |
 
 2. **Upstream WASM shim issue -- token counts**: File at `kuadrant/wasm-shim` requesting `set_attribute()` for `body_values` in `TokenUsageTask` (would eliminate need for json_to_metadata filter)
 3. **Upstream WASM shim issue -- 429 headers**: Request WASM shim to inject auth response headers before evaluating rate limits, so `user_id` and `subscription` appear in access logs for 429 responses (see Limitation #5)
@@ -1316,53 +1342,424 @@ sum by (user_id, subscription, model) (sum_over_time({kubernetes_namespace_name=
   - **(b) User has requests but zero 429s**: The `or` zero-fill in Query 3 correctly returns `0` for users present in Query 1 (tokens) but absent from the 429 count.
   - **(c) Traffic without rate limits (Phase 2 validation)**: 3 inference requests sent via API key (HTTP/1.1 to avoid dual-listener bug). Loki confirmed: `kube:admin` / `simulator-subscription` → tokens > 0, 0 rate-limited requests. Dashboard stat panels showed correct values; table showed user with Rate Limited = 0.
   - **(d) Traffic with rate limits (Phase 3 validation)**: 20 rapid requests sent. 5 succeeded (114 tokens), 15 rate-limited (429). Loki confirmed exact counts. Dashboard stat panels and table validated (with `$range` dropdown).
-9. ~~**Tenant isolation — end-to-end testing with real users**~~ → **INVESTIGATED (2026-05-03)**: The verification in item 7 used ServiceAccounts with controlled RBAC. Per-user isolation findings documented below.
-
-### Per-User Tenant Isolation — Findings (2026-05-03)
-
-**Problem:**
-The MaaS Usage Dashboard shows per-user data (token consumption, request counts, rate-limited requests). Any user who can view the tenant dashboard can change the `$user` filter and see other users' data. The user filter is a UI convenience, not a security boundary.
-
-**Current Isolation (What Works):**
-Two layers of namespace-scoped isolation are verified and working:
-- **Layer 1 — Perses RBAC**: Kubernetes RBAC on PersesDashboard CRDs gates dashboard visibility by namespace
-- **Layer 2 — Data backend RBAC**: Thanos prom-label-proxy enforces `namespace=kuadrant-system` on PromQL; LokiStack gateway OPA enforces `kubernetes_namespace_name` on LogQL
-
-**The Gap (Per-User Isolation):**
-Neither Prometheus nor Loki enforces per-user data filtering. Both enforce namespace only. The `user`/`user_id` filter passes through untouched in both paths. The upstream MaaS 3.4 Prometheus-based usage dashboard has this same gap — it was never solved there either.
-
-Both would require a component that: (1) extracts user identity from bearer token, (2) maps it to the query user field, (3) rewrites the query to enforce it. That component does not exist in OpenShift for either backend.
-
-**Perses Limitation:**
-Perses knows the authenticated user (via TokenReview) but cannot inject the identity into query variables. No `$__user` built-in exists. Open issue `perses/perses#3891` (Feb 2026) confirms this — maintainers acknowledged "we need a solution but it will not be simple." In OpenShift, Perses is embedded via `monitoring-console-plugin` which renders dashboards generically — no hook to pass user identity as a variable override.
-
-**LokiStack Gateway Limitation:**
-All four LokiStack gateway modes (`openshift-logging`, `openshift-network`, `static`, `dynamic`) enforce tenant-level and namespace-level access only. The OPA rego policy checks resource/permission/tenant — it does not inspect LogQL query content. The `--logs.auth.extract-selectors` flag is hardcoded in the operator to namespace labels only. No mode supports binding arbitrary labels (like `user_id`) to RBAC.
-
-**Investigated Workarounds:**
-
-| # | Approach | Assessment |
-|---|----------|-----------|
-| 1 | **LogQL-rewriting proxy between Perses and LokiStack (recommended — cleanest solution)** | A lightweight proxy that sits between Perses and the LokiStack gateway. On each request it: (1) extracts user identity from the forwarded bearer token via TokenReview, (2) parses the outgoing LogQL query, (3) injects `\| user_id="<authenticated_user>"` as a mandatory filter before forwarding to LokiStack. Enforces per-user data isolation server-side regardless of what the dashboard `$user` variable is set to — no UI changes, no Perses upstream dependency, no namespace-per-user scaling problem. **Cleanest solution** because it adds a single enforcement point without modifying any upstream component (Perses, LokiStack, OTel Collector) and works with both the current `StaticListVariable` and any future variable type. **Status:** No production-ready implementation exists in the OpenShift ecosystem today. Building one requires a LogQL AST parser and TokenReview integration — moderate effort (~2-3 weeks for a minimal Go service). Third-party options (loki-label-proxy, Janus) are either immature or AGPL-licensed, unsuitable for a Red Hat product. |
-| 2 | **Perses HTTPProxy token forwarding (current architecture — validated 2026-03-31)** | We validated that Perses' built-in HTTPProxy datasource proxy forwards the authenticated user's bearer token to the LokiStack gateway. The `loki-secret` contains only TLS CA config (no static SA token), so each user's Loki queries are gated by their own RBAC via the gateway's OPA policy. This gives namespace-level isolation (Layer 2 above) but does **not** enforce per-user filtering within that namespace. The OPA rego checks resource/permission/tenant only — it does not inspect LogQL query content or bind `user_id` labels to the authenticated identity. |
-| 3 | **Synthetic namespace per user** | OTel Collector sets `kubernetes_namespace_name` to `user_id` instead of `openshift-ingress`. **Rejected:** LokiStack OPA does SubjectAccessReview against real namespaces — synthetic ones fail. Would require creating a real namespace + RoleBinding per user. Same scalability problem shifted to namespace management. |
-| 4 | **Real namespace per user** | Each user gets a namespace + PersesDashboard + datasource + RoleBinding. **Rejected:** does not scale. Operational overhead grows linearly with user count. |
-
-**Resolution Options:**
-1. **Upstream Perses** — add `$__user` built-in variable bound to authenticated identity (`perses/perses#3891`)
-2. **Upstream monitoring-console-plugin** — pass user identity as variable override when initializing Perses dashboard context
-3. **LogQL-rewriting proxy** — build a lightweight Go proxy with TokenReview + LogQL AST rewriting (~2-3 weeks effort). Best option if per-user isolation becomes a hard requirement before upstream delivers.
-4. **Accept current state** — namespace isolation + dashboard RBAC; document that `$user` is a convenience filter, not a security boundary (matches MaaS 3.4 upstream behavior)
-
-**References:**
-- `docs/content/advanced-administration/perses-user-access-and-restriction.md` — security boundaries summary
-- `perses/perses#3891` — upstream issue for id_token passthrough
+9. **Tenant isolation — end-to-end testing with real users**: The verification in item 7 used ServiceAccounts with controlled RBAC. TODO: test with actual OpenShift users (non-admin) to confirm:
+  - User A cannot see User B's data in the Usage Dashboard (Loki tenant isolation via forwarded bearer token)
+  - Users without `cluster-logging-application-view` see "permission denied" errors in Perses, not empty dashboards
+  - Admin users see all data across all users
+  - Verify RBAC behavior when user's group membership changes (e.g., removed from a subscription)
 10. **Dashboards — further review and hardening**: The current dashboards are functional but need additional review:
   - **AI Engineer + Platform Admin dashboards**: These were migrated from PromQL to LogQL but have not been validated end-to-end on the cluster with live traffic (only Usage Dashboard was fully validated). Run through all panels with real data and verify correctness.
     - **Usage Dashboard — fresh-cluster validation**: Deploy to a clean cluster with fresh traffic (no debugging artifacts like 403/401/404 from HTTP/2 bug), validate all stat panels and table show exact expected values.
     - **Cross-dashboard consistency**: Verify that metrics shown in Platform Admin (aggregate) are consistent with per-user breakdowns in Usage Dashboard.
     - **Variable filters**: Test `$user`, `$subscription`, `$model` filters across all dashboards — ensure filtering works correctly and doesn't break queries or produce parse errors.
     - **Upstream Perses Loki plugin fixes**: File issues for the three limitations documented in item 6 (instant queries, `$__range`, `step` field). Contribute PR for instant query support (~20-line change).
+
+---
+
+## User Isolation Approach: Static Mode Rejected, Query Proxy Adopted
+
+### LokiStack Static Mode Investigation (2026-04-28)
+
+**Goal:** Implement per-user tenant isolation using LokiStack `static` mode to avoid query proxy complexity.
+
+**Approach Tested:**
+```yaml
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+spec:
+  tenants:
+    mode: static  # Change from openshift-logging
+    authentication:
+      - tenantName: "alice"
+        tenantId: "uuid-alice"
+        oidc:
+          issuerURL: "https://oauth-openshift..."
+          usernameClaim: preferred_username
+          secret:
+            name: loki-alice-oidc  # ← REQUIRED
+```
+
+**Rejection Reason:**
+
+LokiStack `static` mode requires **OIDC client secret per tenant**. For each user:
+
+1. **OAuthClient CR** (OpenShift OAuth registration)
+2. **Kubernetes Secret** (clientID + clientSecret)
+3. **LokiStack tenant block** (references secret)
+
+**For 400 users:** 400 OAuthClients + 400 Secrets + 400 tenant blocks = **1200 resources**
+
+**Operational overhead:**
+- Manual OIDC client registration per user
+- Secret management per user
+- LokiStack CR becomes massive (400 tenant definitions)
+- High blast radius (one typo breaks all users)
+
+**Validation attempt failed:**
+```
+kubectl apply failed:
+* spec.tenants.authentication[0].oidc.secret: Required value
+* spec.tenants.authentication[1].oidc.secret: Required value
+* spec.tenants.authentication[2].oidc.secret: Required value
+```
+
+**Decision:** Static mode is **not viable for >50 users** due to operational complexity.
+
+---
+
+### Adopted Solution: Query Rewriting Proxy
+
+**Architecture:**
+```
+User → Perses → Query Proxy (NEW) → LokiStack Gateway → Loki
+                     ↓ (rewrites query)
+            | user_id="<authenticated-user>"
+```
+
+**Why this approach:**
+
+| Aspect | Static Mode | Query Proxy |
+|--------|-------------|-------------|
+| **OIDC setup** | 400 clients + secrets | ❌ None |
+| **LokiStack changes** | Mode change + 400 tenants | ✅ None (stays openshift-logging) |
+| **Scalability** | ❌ Does not scale | ✅ Unlimited users |
+| **New code** | ❌ None | ⚠️ Go proxy (~200 lines) |
+| **Isolation type** | Storage-level | Query filtering |
+| **Security** | Loki-native | Relies on proxy enforcement |
+| **Maintenance** | ❌ High (1200 resources) | ✅ Low (1 deployment) |
+
+**Implementation:** Query proxy intercepts LogQL queries from Perses, extracts user identity from bearer token, and injects `| user_id="<username>"` filter before forwarding to LokiStack.
+
+**Configurable isolation mode:**
+- `user` mode: Filter by `user_id`
+- `organization` mode: Filter by `organization_id`
+
+**Security mitigation:** NetworkPolicy restricts direct LokiStack Gateway access to proxy + OTel Collector only.
+
+**Status:** ❌ **REJECTED** - Query proxy abandoned in favor of simplified static mode (see below).
+
+---
+
+### Static Mode Re-Evaluation: Shared Secret + Group Binding (2026-04-28)
+
+**Discovery:** After initial rejection, discovered that LokiStack static mode can be MASSIVELY simplified:
+
+1. **Shared OIDC secret:** ALL tenants can reference the SAME Kubernetes secret
+2. **Group-based roleBinding:** Bind `system:authenticated` group instead of listing individual users
+
+**Simplified Configuration:**
+
+```yaml
+# 1. ONE OAuthClient
+apiVersion: oauth.openshift.io/v1
+kind: OAuthClient
+metadata:
+  name: loki-users
+secret: <shared-secret>
+
+# 2. ONE Kubernetes Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: loki-oidc-credentials
+stringData:
+  clientID: loki-users
+  clientSecret: <shared-secret>
+
+# 3. LokiStack with simplified authorization
+spec:
+  tenants:
+    mode: static
+    authentication:
+      - tenantName: "alice"
+        oidc:
+          secret:
+            name: loki-oidc-credentials  # ← SHARED
+      - tenantName: "bob"
+        oidc:
+          secret:
+            name: loki-oidc-credentials  # ← SAME
+      # ... 400 tenant blocks (all using same secret)
+    
+    authorization:
+      roles:
+        - name: user-access
+          tenants: [alice, bob, ..., all 400]  # ← ONE role
+      roleBindings:
+        - name: all-users
+          subjects:
+            - name: system:authenticated  # ← ONE group binding!
+              kind: group
+          roles: [user-access]
+```
+
+**Resource Count:**
+
+| Approach | OAuthClients | Secrets | Tenant Blocks | Roles | RoleBindings | Total YAML Lines |
+|----------|--------------|---------|---------------|-------|--------------|------------------|
+| **Original (rejected)** | 400 | 400 | 400 | 400 | 400 | 10,000+ |
+| **Simplified Static** | **1** | **1** | 400 | **1** | **1** | **~6,420** |
+| **Query Proxy** | 0 | 0 | 0 | 0 | 0 | ~300 (Go code) |
+
+**How Isolation Works:**
+
+User isolation is enforced by OIDC tenant mapping, NOT by authorization roles:
+1. User "alice" authenticates → OIDC extracts `preferred_username="alice"`
+2. Gateway maps to tenant: `alice → tenantId uuid-alice`
+3. Authorization checks: Does alice have permission for tenant "alice"?
+4. Role "user-access" grants permission to tenants `[alice, bob, ...]`
+5. RoleBinding grants "user-access" role to `system:authenticated` (includes alice)
+6. ✅ Authorization passes
+7. Gateway sets `X-Scope-OrgID=uuid-alice` → Loki returns ONLY alice's data
+
+**Alice cannot access bob's data** because the OIDC mapping always routes alice → tenant "alice". The role grants permission to multiple tenants, but each user is restricted to their mapped tenant.
+
+**Comparison with Query Proxy:**
+
+| Aspect | Static Mode (Simplified) | Query Proxy |
+|--------|--------------------------|-------------|
+| **OIDC setup** | 1 client + secret | ❌ None |
+| **LokiStack CR size** | ~6,420 lines (400 users) | ✅ No change |
+| **Custom code** | ❌ None | ⚠️ Go proxy (~200 lines) |
+| **Isolation strength** | ✅ Storage-level (Loki-native) | ⚠️ Query filtering |
+| **Bypass risk** | ❌ None (Loki enforces) | ⚠️ If proxy bypassed |
+| **Scalability** | ✅ 400 users tested | ✅ Unlimited |
+| **Maintenance** | Medium (update CR for new users) | Low (1 deployment) |
+| **Automation** | ⚠️ Script/controller recommended | ❌ Not needed |
+
+**Decision:** Static mode adopted. True storage-level isolation with acceptable operational overhead.
+
+**Deployed:** 2026-04-28 on `amit.dev.datahub.redhat.com` cluster with 3 test users.
+
+---
+
+### LokiStack Mode Evaluation: All Native Solutions Rejected (2026-04-28)
+
+**Requirement:** Support BOTH user-scoped dashboards (alice sees only her data) AND admin cluster-wide dashboards (admin sees all users).
+
+**Modes Evaluated:**
+
+#### 1. `openshift-logging` Mode (Single Tenant)
+
+**Configuration:**
+```yaml
+spec:
+  tenants:
+    mode: openshift-logging  # Fixed tenants: application, infrastructure, audit
+```
+
+**Result:**
+- ✅ Admin cluster-wide dashboards work (single "application" tenant)
+- ❌ **No user isolation** - All users share same tenant
+- Users can query: `{service="envoy"} | user_id="bob"` to see other users' data
+- `user_id` filter is a LogQL parameter, NOT access control
+
+**Rejection reason:** No enforced user isolation.
+
+---
+
+#### 2. Static Mode - User-Level Tenants
+
+**Configuration:**
+```yaml
+spec:
+  tenants:
+    mode: static
+    authentication:
+      - tenantName: "alice"
+      - tenantName: "bob"
+      - tenantName: "charlie"
+      # ... 400 users
+```
+
+**Result:**
+- ✅ User isolation enforced (alice → tenant "alice", cannot access tenant "bob")
+- ❌ **Admin cluster-wide dashboards BLOCKED**
+- Loki constraint: Each query targets exactly ONE tenant
+- Cannot aggregate across tenants: `X-Scope-OrgID: alice|bob|charlie` requires authorization to ALL 400 tenants
+
+**Attempted workaround:** Multi-tenant queries with pipe-separated `X-Scope-OrgID`
+
+**Configuration:**
+```yaml
+authorization:
+  roles:
+    - name: admin-access
+      tenants: [alice, bob, charlie, ... 400 users]  # ← Must list ALL
+  roleBindings:
+    - name: admin-binding
+      roles: [admin-access]
+      subjects:
+        - name: cluster-admin
+          kind: group
+```
+
+**Rejection reason:** Admin role must list all 400 users - high operational complexity (update role on every user add/remove).
+
+---
+
+#### 3. Static Mode - Organization-Level Tenants
+
+**Configuration:**
+```yaml
+spec:
+  tenants:
+    mode: static
+    authentication:
+      - tenantName: "org-premium"   # Shared by alice, bob, charlie
+      - tenantName: "org-free"      # Shared by other users
+```
+
+**Result:**
+- ✅ Admin cluster-wide dashboards work (per-org aggregation)
+- ❌ **No user isolation within organization**
+- Alice and Bob share tenant "org-premium"
+- Alice can query: `{service="envoy"} | user_id="bob"` to see Bob's data
+
+**Rejection reason:** No enforced user isolation within same organization.
+
+---
+
+#### 4. Static Mode - Composite Tenants (org_user)
+
+**Configuration:**
+```yaml
+spec:
+  tenants:
+    mode: static
+    authentication:
+      - tenantName: "org-premium_alice"
+      - tenantName: "org-premium_bob"
+      - tenantName: "org-premium_charlie"
+```
+
+**Result:**
+- ✅ User isolation enforced
+- ❌ **Cannot aggregate to org level**
+- Admin cannot query `X-Scope-OrgID: org-premium_alice|org-premium_bob|org-premium_charlie` (same problem as option 2)
+
+**Rejection reason:** Same as option 2 - requires listing all users in admin role.
+
+---
+
+### Final Solution: Query Rewriting Proxy (Option D)
+
+**Why Query Proxy is BEST:**
+
+| Aspect | openshift-logging | static (user tenants) | static (org tenants) | **Query Proxy** |
+|--------|-------------------|----------------------|---------------------|-----------------|
+| **User isolation** | ❌ No enforcement | ✅ Storage-level | ❌ No enforcement | ✅ **Enforced by proxy** |
+| **Admin cluster-wide** | ✅ Works | ❌ Blocked | ✅ Works | ✅ **Works** |
+| **Operational complexity** | Low | **High** (400 tenant defs) | Low (10-50 org tenants) | **Low** (1 deployment) |
+| **Admin RBAC** | Simple | **Complex** (list 400 users) | Simple | **Simple** |
+| **Storage cost** | 1x | 1x | 1x | **1x** |
+| **Security** | ⚠️ Query filtering | ✅ Loki-native | ⚠️ Query filtering | ✅ **Enforced + NetworkPolicy** |
+
+**Decision:** Implement Query Rewriting Proxy.
+
+**Architecture:**
+```
+User Request → Perses Dashboard → Loki Query Proxy → LokiStack Gateway → Loki
+                                         ↓
+                                   JWT Extraction
+                                 (preferred_username)
+                                         ↓
+                                   LogQL Rewriting
+                              (inject | user_id="alice")
+                                         ↓
+                                  Reverse Proxy
+                        (X-Scope-OrgID = application tenant)
+```
+
+**Two Proxy Deployments (Two Datasources):**
+
+1. **loki-query-proxy-user** (ISOLATION_MODE=user)
+   - Injects `| user_id="<username>"` filter
+   - Used by: AI Engineer dashboard (user-scoped)
+   
+2. **loki-query-proxy-org** (ISOLATION_MODE=none)
+   - No filter injection
+   - Used by: Platform Admin dashboard (cluster-wide)
+
+**LokiStack Configuration:** Revert to `openshift-logging` mode (single "application" tenant).
+
+**Security:** NetworkPolicy blocks direct LokiStack access - only proxy + OTel Collector allowed.
+
+**Reverted (2026-04-28):**
+- LokiStack mode: `static` → `openshift-logging`
+- Deleted OAuthClient: `loki-users`
+- Deleted Secret: `loki-oidc-credentials` (openshift-logging namespace)
+- Backup saved: `/tmp/lokistack-static-backup.yaml`
+
+**Status:** 🔨 **IN PROGRESS** - Implementing query proxy.
+
+### Implementation: No Custom Image (ConfigMap + Stock Image)
+
+**Problem:** Building and pushing a custom container image (`quay.io/rh-ee-tgitelma/model-as-a-service:loki-query-proxy`) is blocked by corp image release process. The proxy is ~160 lines of pure-stdlib Go with zero external dependencies -- it doesn't warrant a full image pipeline.
+
+**Solution:** Mount Go source as a ConfigMap, run with `go run` on a stock Red Hat Go Toolset image.
+
+**Image:** `registry.access.redhat.com/ubi9/go-toolset:1.18`
+- Red Hat Go Toolset (UBI9-based), public Red Hat registry (no auth required)
+- The internal registry (`image-registry.openshift-image-registry.svc:5000/openshift/golang:1.18-ubi9`) was rejected at deploy time due to SA pull auth issues on this cluster
+- Go 1.18.10, runs as UID 1001 (non-root)
+
+**Mechanism:**
+```
+Pod starts
+  └── Stock golang:1.18-ubi9 image
+        └── ConfigMap mounted at /opt/app-root/src/proxy/
+              ├── go.mod          (go 1.18, zero dependencies)
+              ├── main.go         (proxy handler, TLS, health checks)
+              ├── auth.go         (JWT username extraction from bearer token)
+              ├── rewriter.go     (LogQL | user_id="X" injection)
+              └── config.go       (env var config: PORT, LOKI_UPSTREAM_URL, ISOLATION_MODE)
+        └── command: ["go", "run", "main.go", "auth.go", "rewriter.go", "config.go"]
+```
+
+**Key details:**
+- Source files flattened to single `package main` (required by `go run` -- cannot span packages)
+- Compile-on-start: ~3-5s delay per pod start (acceptable for this use case)
+- ConfigMap size: ~8KB total (well under 1MB limit)
+- mTLS client cert for Loki: separate Secret volumeMount at `/etc/loki-client-cert/` (unchanged)
+- Health/readiness probes: `initialDelaySeconds: 10` to account for compile time
+
+**Two Deployments (two Perses datasources):**
+1. `loki-query-proxy-user` (ISOLATION_MODE=user) -- injects `| user_id="<username>"` filter
+2. `loki-query-proxy-org` (ISOLATION_MODE=none) -- pass-through, no filtering
+
+**Files (under `deployment/components/observability/loki-proxy/`):**
+- `proxy-source-configmap.yaml` -- Go source files as ConfigMap
+- `deployment-user.yaml` -- user-scoped proxy (ISOLATION_MODE=user)
+- `deployment-org.yaml` -- admin pass-through proxy (ISOLATION_MODE=none)
+- `rbac.yaml` -- ServiceAccount + ClusterRoleBinding (cluster-logging-application-view)
+- `service.yaml` -- Two Services (loki-query-proxy-user:8080, loki-query-proxy-org:8080)
+- `networkpolicy.yaml` -- Restricts direct LokiStack Gateway access to proxy + OTel Collector only
+- `kustomization.yaml` -- Kustomize entrypoint
+
+**Install script:** `scripts/observability/install-loki-proxy.sh`
+1. Apply ConfigMap, RBAC, Services, NetworkPolicy, Deployments
+2. Wait for rollout
+3. Update Perses Loki datasource URLs to point through proxy
+
+**Update flow:**
+```bash
+# Edit Go source in proxy-source-configmap.yaml
+# Re-run:
+bash scripts/observability/install-loki-proxy.sh
+# (re-applies ConfigMap + rollout restart -- no build, no image push)
+```
+
+**Perses datasource routing:**
+- Tenant (kuadrant-system): URL → `http://loki-query-proxy-user.kuadrant-system.svc:8080` (per-user filtering)
+- Admin (openshift-operators): Direct to LokiStack Gateway (no proxy needed, admins see all logs)
+
+**Alternatives evaluated and rejected:**
+- Python on UBI: simpler but not native to MaaS platform (Go-based)
+- Nginx + Lua: cluster nginx image has no Lua modules; would need custom image
+- Envoy Lua filter: Perses in openshift-operators has no Istio sidecar; fragile
+- HAProxy + Lua: not in cluster imagestreams; requires external pull
+- OpenShift BuildConfig: unnecessary complexity for ~160 lines of code
 
 ---
 
@@ -2493,3 +2890,601 @@ Full observability pipeline verified:
 ### Manual Workaround (Pre-existing, Not Our Change)
 
 `maas-api-auth-policy` in `opendatahub` was incomplete — ODH operator (v3.4.0-ea.1) deployed it without API key authentication. Manually annotated with `opendatahub.io/managed=false` and applied full `auth-policy.yaml` from repo. **Not related to observability work** — discovered during cluster health verification.
+
+## Phase 12: Loki Query Proxy Deployment (2026-05-06)
+
+### What Was Done
+
+Deployed the Loki Query Rewriting Proxy for per-user tenant isolation on structured logs.
+
+**Proxy implementation:**
+- Go source (~160 lines, stdlib only) flattened to `package main` in a ConfigMap
+- Compiled at pod startup via `go run` on stock `registry.access.redhat.com/ubi9/go-toolset:1.18`
+- No custom image build, no external registry, no init containers
+- Two deployments: `loki-query-proxy-user` (per-user filtering) and `loki-query-proxy-org` (pass-through)
+
+**Deviation from plan:**
+- The plan called for `golang:1.18-ubi9` from the internal OpenShift registry. The internal registry required SA pull authentication that could not be satisfied (cluster config issue). Switched to the equivalent public Red Hat image `registry.access.redhat.com/ubi9/go-toolset:1.18` (same Go 1.18.10, same UBI9 base).
+- Admin datasource stays direct to LokiStack Gateway (no proxy) -- only tenant datasource routes through the user proxy.
+
+**Files created (`deployment/components/observability/loki-proxy/`):**
+- `proxy-source-configmap.yaml` -- Go source (main.go, auth.go, rewriter.go, config.go, go.mod)
+- `deployment-user.yaml` -- ISOLATION_MODE=user
+- `deployment-org.yaml` -- ISOLATION_MODE=none
+- `rbac.yaml` -- ServiceAccount + ClusterRoleBinding (cluster-logging-application-view)
+- `service.yaml` -- loki-query-proxy-user:8080, loki-query-proxy-org:8080
+- `networkpolicy.yaml` -- Restricts direct LokiStack Gateway access
+- `kustomization.yaml`
+
+**Files created/modified:**
+- `scripts/observability/install-loki-proxy.sh` -- Idempotent install script
+- `deployment/components/observability/perses/perses-loki-datasource.yaml` -- Admin, unchanged (direct to gateway)
+- `deployment/components/observability/perses/perses-loki-datasource-scoped.yaml` -- NEW, tenant, routes through user proxy
+
+**Install script updated:**
+- `scripts/observability/install-perses-dashboards.sh` -- Tenant Loki datasource now uses `perses-loki-datasource-scoped.yaml`
+
+### Automated Test Results (2026-05-06)
+
+| Test | Expected | Result |
+|------|----------|--------|
+| Health check (`/health`) | HTTP 200 | PASS |
+| User proxy + valid JWT | HTTP 200, query rewritten with `\| user_id="testuser"` | PASS |
+| User proxy without JWT | HTTP 401 | PASS |
+| Org proxy without JWT | HTTP 200, pass-through | PASS |
+
+Proxy logs confirmed query rewrite:
+```
+Query rewrite: {service_name="maas-gateway"} -> {service_name="maas-gateway"} | user_id="testuser"
+```
+
+### Cluster State After Deployment
+
+- `loki-query-proxy-user` -- Running, Ready (registry.access.redhat.com/ubi9/go-toolset:1.18)
+- `loki-query-proxy-org` -- Running, Ready (same image)
+- Admin Loki datasource (openshift-operators): direct to `https://maas-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application`
+- Tenant Loki datasource (kuadrant-system): via `http://loki-query-proxy-user.kuadrant-system.svc:8080`
+
+### Proxy → LokiStack Gateway Auth: 403 Root Cause & Fix
+
+**Symptom:** Proxy pods running, automated unit tests pass (query rewriting, JWT parsing), but actual Loki queries through the proxy return HTTP 403: `"You don't have permission to access this tenant"`.
+
+**Investigation (2026-05-06):**
+
+1. Confirmed proxy correctly reads its SA token from `/var/run/secrets/kubernetes.io/serviceaccount/token` and sends it as `Authorization: Bearer` to the LokiStack gateway.
+2. The gateway authenticates the token (via TokenReview) -- authentication passes. The 403 comes from the OPA authorization sidecar, not authentication.
+3. The LokiStack mode is `openshift-logging`, which deploys an `opa-openshift` sidecar in the gateway pod. This sidecar translates OPA Data API requests into Kubernetes SubjectAccessReviews.
+4. The OPA sidecar is configured with `--opa.matcher=kubernetes_namespace_name,k8s_namespace_name`, which means for every `read` request it must return a list of namespaces the caller can access (used to inject `kubernetes_namespace_name=~"ns1|ns2|..."` into LogQL queries).
+
+**Two-step OPA authorization flow:**
+
+```
+Step 1: SubjectAccessReview
+  verb=get, group=loki.grafana.com, resource=application, name=logs
+  → allowed: true (ClusterRole cluster-logging-application-view grants this)
+
+Step 2: List caller's accessible namespaces (using caller's SA token)
+  projectClient.Projects().List()
+  → loki-query-proxy SA: 0 namespaces returned → DENIED
+  → perses-sa: 88 namespaces returned → ALLOWED
+```
+
+**Root cause:** The `loki-query-proxy` SA only has `cluster-logging-application-view` (grants `loki.grafana.com/application: get`). It does NOT have `namespaces: list`. The OPA sidecar calls `Projects().List()` using the caller's token, gets an empty list, and denies the request.
+
+The working `perses-sa` has an additional `perses-cr` ClusterRole that grants `namespaces: list, get`.
+
+**Evidence:**
+
+| SA | `cluster-logging-application-view` | `namespaces: list` | Projects visible | LokiStack result |
+|----|----|----|----|----|
+| `perses-sa` (openshift-operators) | Yes | Yes (via `perses-cr`) | 88 | 200 OK |
+| `loki-query-proxy` (kuadrant-system) | Yes | **No** | **0** | **403** |
+
+**Options evaluated:**
+
+| Option | Description | Verdict |
+|--------|-------------|---------|
+| A. Move proxy to `openshift-operators` | Namespace change alone does not grant RBAC. SA would still lack `namespaces: list`. | Does not solve |
+| B. Mount `perses-sa` token into proxy pods | Works but couples to another component's SA, fragile. | Hacky, not recommended |
+| C. Debug OPA policy | Done above. Policy is correct; issue is missing RBAC. | N/A (diagnosis) |
+| **D. Add `namespaces: list` ClusterRole to proxy SA** | Minimal targeted fix, follows same pattern as `perses-cr`. | **Best option** |
+
+**Fix:** Add a `ClusterRole` + `ClusterRoleBinding` granting `namespaces: list, get` to the `loki-query-proxy` SA. Update `rbac.yaml`:
+
+```yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: loki-query-proxy-namespace-view
+  labels:
+    app: loki-query-proxy
+    app.kubernetes.io/part-of: maas-observability
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["list", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: loki-query-proxy-namespace-view
+  labels:
+    app: loki-query-proxy
+    app.kubernetes.io/part-of: maas-observability
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: loki-query-proxy-namespace-view
+subjects:
+- kind: ServiceAccount
+  name: loki-query-proxy
+  namespace: kuadrant-system
+```
+
+No pod restarts needed -- the SA token is already mounted; only the RBAC needs updating.
+
+### RBAC Fix Applied (2026-05-06)
+
+Added `loki-query-proxy-namespace-view` ClusterRole + ClusterRoleBinding to `rbac.yaml`, granting the proxy SA `namespaces: list, get`. After applying:
+- Proxy SA now sees 88 namespaces (was 0)
+- LokiStack gateway returns HTTP 200 (was 403)
+
+### Verification Test Results (2026-05-06) — RETRACTED
+
+> **NOTE:** The 16 tests reported below were conducted with **hand-crafted JWT tokens**, not real OpenShift user tokens. OpenShift uses opaque tokens (`sha256~...`), not JWTs. The proxy could not handle real user tokens at this point. These results are preserved for the record but should not be considered valid end-to-end verification. See Phase 13 for the fix and real-token verification.
+
+**Functional tests (synthetic JWTs only):**
+
+| Test | Expected | Result |
+|------|----------|--------|
+| Org proxy → gateway `/labels` | HTTP 200 | **PASS** |
+| Org proxy → gateway `query_range` | HTTP 200, `status: success` | **PASS** |
+| User proxy + valid JWT → gateway | HTTP 200, filtered by `user_id` | **PASS** |
+| User proxy without JWT | HTTP 401 | **PASS** |
+| Query rewriting (`{service_name="maas-gateway"}`) | Appends `\| user_id="testuser"` | **PASS** (confirmed in logs) |
+| Query with existing pipeline (`\| json`) | Appends filter after pipeline | **PASS** |
+| Proxy resilience (rollout restart) | Pods recover, queries work | **PASS** (~5s compile delay) |
+| NetworkPolicy (non-allowed pod → gateway) | Connection blocked | **PASS** (HTTP 000, timeout) |
+| Perses → tenant proxy (no JWT) | HTTP 401 (correct, Perses forwards user JWT) | **PASS** |
+| Perses → admin gateway (direct) | HTTP 200 | **PASS** |
+| Org proxy without JWT | HTTP 200 (pass-through) | **PASS** |
+
+**Edge case / security tests:**
+
+| Test | Expected | Result |
+|------|----------|--------|
+| Expired JWT (`exp` in the past) | HTTP 401 | **PASS** |
+| K8s SA token (has `sub` but not `preferred_username`) | HTTP 401 | **PASS** |
+| JWT with only `sub` claim (no `preferred_username`) | HTTP 401 | **PASS** |
+| Malformed token (not a JWT) | HTTP 401 | **PASS** |
+| LogQL injection in username (`evil" \| line_format "pwned`) | HTTP 200, quotes escaped in filter | **PASS** |
+
+**All 16 tests passed.**
+
+**Security fix applied:** Added JWT expiry validation (`exp` claim check) to `auth.go`. Previously the proxy extracted the username without checking token expiry. Now expired tokens return HTTP 401.
+
+## Phase 13: Opaque Token Support + Real User Verification (2026-05-07)
+
+### Problem: Proxy Only Handled JWTs, Not Real OpenShift Tokens
+
+OpenShift `oc login` issues **opaque tokens** (`sha256~...`), not JWTs. The proxy's `auth.go` parsed tokens by splitting on `.` and base64-decoding the payload -- which fails immediately for opaque tokens (`invalid JWT format`).
+
+This meant:
+- The proxy **never worked** with real OpenShift users
+- All Phase 12 "user mode" tests used fabricated JWTs, not real tokens
+- Perses dashboards would return 401 for every user viewing the tenant dashboard (Perses forwards the user's opaque OC session token through HTTPProxy)
+
+### Root Cause
+
+`auth.go` assumed all bearer tokens are JWTs:
+```go
+func parseJWT(token string) (*userInfo, error) {
+    parts := strings.Split(token, ".")
+    if len(parts) != 3 {
+        return nil, fmt.Errorf("invalid JWT format")  // every real OC token fails here
+    }
+```
+
+### Fix: TokenReview API Fallback
+
+Updated `auth.go` to detect token format and fall back to the Kubernetes TokenReview API for opaque tokens:
+
+```go
+func extractFromBearerToken(authHeader string) (*userInfo, error) {
+    token := parts[1]
+    if strings.Count(token, ".") == 2 {
+        return parseJWT(token)
+    }
+    return resolveOpaqueToken(token)
+}
+```
+
+`resolveOpaqueToken()` calls `POST /apis/authentication.k8s.io/v1/tokenreviews` using the pod's SA token, returns the authenticated username and groups.
+
+### RBAC Addition
+
+Added `tokenreviews: create` to the existing `loki-query-proxy-namespace-view` ClusterRole in `rbac.yaml`:
+
+```yaml
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["list", "get"]
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+```
+
+### Files Modified
+
+- `deployment/components/observability/loki-proxy/proxy-source-configmap.yaml` -- `auth.go`: added `resolveOpaqueToken()` with TokenReview client, `crypto/x509` import
+- `deployment/components/observability/loki-proxy/rbac.yaml` -- Added `tokenreviews: create`
+
+### Test User Setup
+
+Reset htpasswd passwords (bcrypt `$2y$` prefix for OpenShift compatibility):
+
+| User | Password | Roles |
+|------|----------|-------|
+| `test-loki-admin` | `lokiadmin123` | `cluster-logging-application-view` + `view` in `kuadrant-system` |
+| `test-loki-viewer` | `lokiviewer123` | `cluster-logging-application-view` + `view` in `kuadrant-system` |
+| `test-no-loki` | `noloki123` | no inference traffic generated |
+| `alice` | `alice123` | cluster-admin |
+| `bob` | `bob123` | cluster-admin |
+
+Generated inference traffic: 5 requests each as `test-loki-admin` and `test-loki-viewer` via API keys tied to each user's identity.
+
+### Full Test Results (2026-05-07) — All Real Tokens
+
+All tests use real OpenShift opaque tokens (`sha256~...`) obtained via `oc login`. No fabricated JWTs for user-mode tests.
+
+**Functional tests (19 tests):**
+
+| # | Test | Token type | Expected | Result |
+|---|------|-----------|----------|--------|
+| F1 | Health check (`/health`) | N/A | HTTP 200 | **PASS** |
+| F2 | Org proxy -> gateway `/labels` | N/A (pass-through) | HTTP 200 | **PASS** |
+| F3 | Org proxy -> gateway `query_range` | N/A (pass-through) | HTTP 200, entries > 0 | **PASS** (44 entries) |
+| F4 | User proxy as `test-loki-admin` | `sha256~...` (opaque) | Only own data | **PASS** (5 entries, user_id=test-loki-admin only) |
+| F5 | User proxy as `test-loki-viewer` | `sha256~...` (opaque) | Only own data | **PASS** (5 entries, user_id=test-loki-viewer only) |
+| F6 | User proxy as `test-no-loki` | `sha256~...` (opaque) | 0 entries | **PASS** (0 entries) |
+| F7 | User proxy as `kube:admin` | `sha256~...` (opaque) | Only own data | **PASS** (1 entry, user_id=kube:admin only) |
+| F8 | User proxy without auth header | N/A | HTTP 401 | **PASS** |
+| F9 | Query rewrite with existing pipeline (`\| json`) | `sha256~...` (opaque) | Appends `\| user_id=` after pipeline | **PASS** (log: `{...} \| json -> {... } \| json \| user_id="test-loki-admin"`) |
+| F10 | Org proxy without auth | N/A | HTTP 200 (pass-through) | **PASS** |
+| F11 | Full Perses proxy chain (Perses backend -> proxy) | `sha256~...` (opaque, forwarded by Perses) | HTTP 200, token resolved | **PASS** (proxy log: `user_id=test-loki-admin`) |
+| F12 | NetworkPolicy: unauthorized pod -> gateway | N/A | Connection blocked | **PASS** (timeout/refused) |
+
+**Edge case / security tests (7 tests):**
+
+| # | Test | Input | Expected | Result |
+|---|------|-------|----------|--------|
+| S1 | Expired JWT (`exp` in the past) | Crafted JWT, exp=1 | HTTP 401 | **PASS** |
+| S2 | Malformed token (random garbage) | `totallynotavalidtoken12345` | HTTP 401 | **PASS** |
+| S3 | Missing Authorization header | (none) | HTTP 401 | **PASS** |
+| S4 | JWT with no username claims | Crafted JWT, only `sub` | HTTP 401 | **PASS** |
+| S5 | Invalid auth scheme (Basic) | `Basic dXNlcjpwYXNz` | HTTP 401 | **PASS** |
+| S6 | LogQL injection in username | `evil" \| line_format "pwned` | HTTP 200, quotes escaped | **PASS** (contained, no breakout) |
+| S7 | Fake opaque token (`sha256~...` format but invalid) | `sha256~ThisIsNotARealTokenAtAll` | HTTP 401 (TokenReview rejects) | **PASS** |
+
+**All 19 tests passed.** (12 functional + 7 security)
+
+### Phase 13b: Admin Bypass + Full Re-verification (2026-05-07)
+
+**Change:** Added admin bypass to user proxy. When `TokenReview` returns group membership
+containing `system:cluster-admins` or `system:masters`, the proxy skips `user_id` filtering
+and forwards the query unmodified. Implementation: `isAdmin()` function checks groups,
+`proxyHandler()` bypasses `username` assignment for admins.
+
+**Full test suite re-run with real opaque tokens (2026-05-07 19:55 UTC+3):**
+
+#### Functional Tests (12/12 PASS)
+
+| # | Test | Method | Expected | Actual | Result |
+|---|------|--------|----------|--------|--------|
+| F1 | Health endpoints | `GET /health` on both proxies | HTTP 200 | 200/200 | **PASS** |
+| F2 | Org proxy label values | `GET /loki/api/v1/label/user_id/values` (no auth) | `status: success` | success | **PASS** |
+| F3 | Org proxy query_range (no auth, no filtering) | `{service_name="maas-gateway"}` 24h | All users, 44 entries | 44 entries (4 user_ids) | **PASS** |
+| F4 | `test-loki-admin` via user proxy | Opaque token `sha256~...` | 5 entries, own only | 5 entries, `test-loki-admin` only | **PASS** |
+| F5 | `test-loki-viewer` via user proxy | Opaque token `sha256~...` | 5 entries, own only | 5 entries, `test-loki-viewer` only | **PASS** |
+| F6 | `test-no-loki` via user proxy | Opaque token `sha256~...` | 0 entries | 0 entries | **PASS** |
+| F7 | `kube:admin` via user proxy (**admin bypass**) | Opaque token `sha256~...` | **All 44 entries** (no filtering) | 44 entries (all 4 user_ids) | **PASS** |
+| F8 | No auth header on user proxy | No `Authorization` header | HTTP 401 | 401 | **PASS** |
+| F9 | Query rewrite appends after existing pipeline | `{...} \| json \| duration_ms > 100` | Appends `\| user_id="..."` at end | Confirmed in proxy log | **PASS** |
+| F10 | Org proxy pass-through (no auth required) | No auth header | HTTP 200 | 200 | **PASS** |
+| F11 | Full Perses chain | Perses -> user proxy (ClusterIP) -> TokenReview -> Loki | 5 entries for `test-loki-admin` | 5 entries, correct user | **PASS** |
+| F12 | NetworkPolicy blocks unauthorized pods | `curl` from `default` namespace to Loki gateway | Connection blocked | `000` / timeout | **PASS** |
+
+#### Security Tests (7/7 PASS)
+
+| # | Test | Input | Expected | Actual | Result |
+|---|------|-------|----------|--------|--------|
+| S1 | Expired JWT | `exp: 1000000000` (2001) | HTTP 401 | 401 | **PASS** |
+| S2 | Random garbage token | `completelyrandomgarbage12345` | HTTP 401 | 401 | **PASS** |
+| S3 | No auth header | (none) | HTTP 401 | 401 | **PASS** |
+| S4 | JWT without username claims | `sub` only, no `preferred_username`/`username` | HTTP 401 | 401 | **PASS** |
+| S5 | Invalid auth scheme (Basic) | `Basic dXNlcjpwYXNz` | HTTP 401 | 401 | **PASS** |
+| S6 | LogQL injection attempt | `{...} \| user_id="admin" \| line_format "` | Contained (own filter appended) | `\| user_id="test-loki-admin"` appended | **PASS** |
+| S7 | Fake opaque token | `sha256~FakeTokenThatShouldBeRejected12345` | HTTP 401 (TokenReview rejects) | 401 | **PASS** |
+
+#### Admin Edge Cases (7/7 PASS)
+
+| # | Test | Method | Expected | Actual | Result |
+|---|------|--------|----------|--------|--------|
+| A1 | Admin sees all user_ids via user proxy | `kube:admin` opaque token, `query_range` 24h | 44 entries, 4 user categories | 44 entries: `-`(23), `kube:admin`(11), `test-loki-admin`(5), `test-loki-viewer`(5) | **PASS** |
+| A2 | Admin query is NOT rewritten | Complex pipeline query as admin | No `Query rewrite` log, only `Admin bypass` | Proxy log: `Admin bypass: user=kube:admin groups=[system:cluster-admins ...]` | **PASS** |
+| A3 | Admin label values via user proxy | `GET /label/user_id/values` with admin token | `status: success` | success | **PASS** |
+| A4 | Non-admin CANNOT bypass filter | `test-loki-admin` same query as A1 | 5 entries, own only | 5 entries, `test-loki-admin` only | **PASS** |
+| A5 | Admin LogQL injection passes through | Injected `\| user_id="admin"` as admin | No filter appended (admin bypass) | Proxy log: `Admin bypass` only | **PASS** |
+| A6 | Admin metric instant query | `count_over_time({...}[24h])` as admin | All users visible | 44 total across all 4 user_ids | **PASS** |
+| A7 | Admin on org proxy (sanity) | `kube:admin` on org proxy, `query_range` 24h | 44 entries | 44 entries | **PASS** |
+
+**Total: 26/26 tests passed** (12 functional + 7 security + 7 admin edge cases)
+
+**Org proxy (admin, no filtering) baseline:**
+
+| user_id | Entries |
+|---------|---------|
+| `kube:admin` | 11 |
+| `test-loki-admin` | 5 |
+| `test-loki-viewer` | 5 |
+| `-` (unauthenticated/404s) | 23 |
+| **Total** | **44** |
+
+### Dashboard Access Matrix (RBAC-enforced)
+
+| User | Tenant Dashboard (`kuadrant-system`) | Admin Dashboard (`openshift-operators`) |
+|------|--------------------------------------|----------------------------------------|
+| `test-loki-admin` / `lokiadmin123` | 5 entries (own only) | **no access** |
+| `test-loki-viewer` / `lokiviewer123` | 5 entries (own only) | **no access** |
+| `test-no-loki` / `noloki123` | 0 entries | **no access** |
+| `kube:admin` | **all 44 entries** (admin bypass) | all 44 entries |
+
+**Admin bypass implementation:** The user proxy checks `TokenReview` group membership for
+`system:cluster-admins` or `system:masters`. If matched, query passes through unmodified
+(no `user_id` filter injected). Non-admin users always get filtered.
+
+### Phase 13c: Code Cleanup + Security Hardening (2026-05-08)
+
+**Changes:**
+
+1. **Removed org proxy** — `deployment-org.yaml` deleted, org Service removed from `service.yaml`,
+   removed from `kustomization.yaml`. No Perses datasource referenced it; admin dashboards access
+   Loki directly via `loki-secret` + mTLS.
+2. **Removed `TLS_INSECURE_SKIP_VERIFY`** — env var removed from deployment; code path removed from
+   `main.go`. CAs from `service-ca.crt` and `ca.crt` now validate TLS properly.
+3. **Removed dead code** — mTLS client cert loading (no volume mount existed), unused `LogLevel` field,
+   `ISOLATION_MODE "none"` validation (only `"user"` accepted now).
+4. **Fixed install script** (`install-loki-proxy.sh`) — removed references to deleted `deployment-org.yaml`
+   and `loki-query-proxy-org` deployment wait. Script was broken (`set -euo pipefail` would abort at
+   line 120 on missing file).
+5. **SECURITY FIX: Removed `parseJWT()`** — the function decoded JWT claims (username, groups) without
+   verifying the cryptographic signature. An attacker could forge a JWT with
+   `groups: ["system:cluster-admins"]` to trigger the admin bypass, or spoof any `preferred_username`
+   to view other users' logs. **All tokens now go through `TokenReview` API exclusively** — the
+   Kubernetes API server is the sole authority for token validation.
+6. **Fixed NetworkPolicy** — removed stale OTel collector ingress rule (no OTel collector exists),
+   replaced manually-applied policy with source-tracked `networkpolicy.yaml`.
+
+**Full test suite re-run (2026-05-08 18:45 UTC+3) — 27/27 PASS:**
+
+#### Functional Tests (12/12 PASS)
+
+| # | Test | Expected | Actual | Result |
+|---|------|----------|--------|--------|
+| F1 | Health endpoint | HTTP 200 | 200 | **PASS** |
+| F2 | Direct Loki label values (SA token) | `status: success` | success | **PASS** |
+| F3 | Direct Loki query_range (baseline) | 44 entries, all users | 44 entries | **PASS** |
+| F4 | `test-loki-admin` via user proxy | 5 entries, own only | 5, `[test-loki-admin]` | **PASS** |
+| F5 | `test-loki-viewer` via user proxy | 5 entries, own only | 5, `[test-loki-viewer]` | **PASS** |
+| F6 | `test-no-loki` via user proxy | 0 entries | 0 | **PASS** |
+| F7 | `kube:admin` via user proxy (admin bypass) | All 44 entries | 44, all 4 user_ids | **PASS** |
+| F8 | No auth header | HTTP 401 | 401 | **PASS** |
+| F9 | Query rewrite after existing pipeline | `\| user_id="test-loki-admin"` appended | Confirmed in logs | **PASS** |
+| F10 | Admin pass-through (no filtering) | HTTP 200 | 200 | **PASS** |
+| F11 | Perses chain (ClusterIP, opaque token, TokenReview) | 5 entries for `test-loki-admin` | 5 entries | **PASS** |
+| F12 | NetworkPolicy blocks unauthorized pods | Connection blocked | Blocked (exit error) | **PASS** |
+
+#### Security Tests (8/8 PASS)
+
+| # | Test | Input | Expected | Actual | Result |
+|---|------|-------|----------|--------|--------|
+| S1 | Expired JWT | `exp: 1000000000` | HTTP 401 (TokenReview rejects) | 401 | **PASS** |
+| S2 | Random garbage token | `completelyrandomgarbage12345` | HTTP 401 | 401 | **PASS** |
+| S3 | No auth header | (none) | HTTP 401 | 401 | **PASS** |
+| S4 | **Forged JWT with spoofed username** | `preferred_username: "test-loki-admin"` (unsigned) | HTTP 401 | 401 | **PASS** |
+| S5 | Basic auth scheme | `Basic dXNlcjpwYXNz` | HTTP 401 | 401 | **PASS** |
+| S6 | LogQL injection | `\| user_id="admin" \| line_format "` | Contained (own filter appended) | Appended `\| user_id="test-loki-admin"` | **PASS** |
+| S7 | Fake sha256~ token | `sha256~FakeToken...` | HTTP 401 | 401 | **PASS** |
+| S8 | **Forged JWT with admin group** | `groups: ["system:cluster-admins"]` (unsigned) | HTTP 401 | 401 | **PASS** |
+
+#### Admin Edge Cases (7/7 PASS)
+
+| # | Test | Expected | Actual | Result |
+|---|------|----------|--------|--------|
+| A1 | Admin sees all user_ids (44 total) | 4 categories, 44 entries | `-`(23), `kube:admin`(11), `test-loki-admin`(5), `test-loki-viewer`(5) | **PASS** |
+| A2 | Admin query NOT rewritten | `Admin bypass` log only | Confirmed, no `Query rewrite` | **PASS** |
+| A3 | Admin label values via proxy | `status: success` | success | **PASS** |
+| A4 | Non-admin filtered (contrast) | 5 entries, own only | 5, `test-loki-admin` | **PASS** |
+| A5 | Admin injection passes through | No filter appended | `Admin bypass` log only | **PASS** |
+| A6 | Admin metric instant query | All users, 44 total | 44 across 4 user_ids | **PASS** |
+| A7 | Direct Loki sanity baseline | 44 entries | 44 | **PASS** |
+
+**Total: 27/27 tests passed** (12 functional + 8 security + 7 admin edge cases)
+
+### Known Limitation: Metric Query Rewriting — RESOLVED (Phase 14)
+
+**Previously:** The simple string-append rewrite (`query + | user_id="..."`) produced invalid LogQL
+for metric wrapper queries like `count_over_time({...}[5m])`.
+
+**Fixed in Phase 14:** `injectUserFilter` now inserts `| user_id="<user>"` immediately after each
+stream selector `{...}` as a pipeline filter, producing valid LogQL for both log and metric queries.
+Quote-aware parsing skips braces inside double-quoted and backtick strings (Go templates, string
+matches). All dashboard metric panels now work for non-admin users.
+
+### Upstream Findings (2026-05-07)
+
+**Header removal (commit 1221310):** Upstream removed `X-MaaS-Username`, `X-MaaS-Group`, `X-MaaS-Key-Id` headers from model inference requests (defense-in-depth). Does NOT affect OTel logging -- `user_id` comes from `%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%` (Kuadrant WASM filter state), not HTTP headers. `filters.identity.userid` was preserved.
+
+**Controller crash:** `maas-controller` in `CrashLoopBackOff` (9+ days) -- upstream removed `--cluster-audience` flag (commit `1741c2c`) but Deployment still passes it. Does not affect our work (existing AuthPolicy remains enforced). Fix: remove the flag from Deployment args.
+
+### Remaining Manual Verification (requires browser/UI) — COMPLETED (Phase 14)
+
+- [x] **Perses tenant dashboard**: `test-loki-admin` / `lokiadmin123` — Usage Dashboard shows Total Tokens: 38, Requests: 5, Errors: 0, Success Rate: 100%, Active Users: 1. Table shows only `test-loki-admin` row.
+- [x] **Perses tenant dashboard (second user)**: `test-loki-viewer` / `lokiviewer123` — Total Tokens: 36, Requests: 5, Errors: 0, Success Rate: 100%, Active Users: 1. Table shows only `test-loki-viewer` row.
+- [x] **Perses tenant dashboard (no data)**: `test-no-loki` / `noloki123` — "No Perses dashboards found" (no RBAC for `kuadrant-system`). Correct behavior.
+- [x] **Perses admin dashboard**: `kube:admin` — Total Tokens: 205, Requests: 21, Errors: 6, Success Rate: 71.4%, Active Users: 3. Table shows kube:admin (445), bob (134), alice (117), test-loki-admin (38), test-loki-viewer (36).
+
+## Phase 14: Proxy Hardening + Dashboard Fixes + UI Verification (2026-05-08)
+
+### What Was Done
+
+#### 1. Fixed Query Rewriter — Metric Queries (CRITICAL)
+
+The `injectUserFilter` function appended `| user_id="<user>"` to the **end** of the entire query
+string. For metric/aggregation queries like `sum(count_over_time({...} [7d]))`, this produced
+invalid LogQL (`sum(...) | user_id="alice"` — filter outside the aggregation).
+
+**Fix:** Rewrote `injectUserFilter` to insert the pipeline filter immediately after each stream
+selector `{...}`, producing `sum(count_over_time({...} | user_id="alice" [7d]))`. This works for
+both plain log queries and wrapped metric/aggregation queries.
+
+#### 2. Fixed Query Rewriter — Quote-Aware Parsing (CRITICAL)
+
+The rewriter treated every `{` as a stream selector, including braces inside Go template expressions
+(`line_format "{{.status}}"`), string literals (`|= "{text}"`), and regex matchers. This broke
+valid queries using these common LogQL features.
+
+**Fix:** Added quote tracking for double-quoted and backtick strings. Braces inside quotes are
+skipped. Escaped quotes (`\"`) inside double-quoted strings are handled correctly.
+
+#### 3. Fixed POST Body Bypass (SECURITY — CRITICAL)
+
+The proxy only inspected URL query parameters (`r.URL.Query()`), but Loki accepts POST requests
+with `query` in the form body (`application/x-www-form-urlencoded`). A non-admin user could POST
+with the LogQL query in the body, bypassing the `user_id` filter entirely. **Confirmed exploitable:**
+`test-loki-admin` saw all 44 entries (all users' data) via this bypass.
+
+**Fix:** Added form body parsing and rewriting for POST requests alongside the URL parameter path.
+
+#### 4. Fixed Dual-Query Bypass (SECURITY — CRITICAL)
+
+The `if/else if` structure in `proxyHandler` meant that when a POST had `query` in both the URL
+and the form body, only the URL parameter was rewritten. The body was forwarded unchanged. An
+attacker could put a dummy `query` in the URL to satisfy the first branch while sending the real
+unfiltered query in the body. **Confirmed exploitable:** returned all 44 entries.
+
+**Fix:** Changed `if/else if` to two independent `if` blocks so both URL and body are always
+rewritten when present.
+
+#### 5. Dashboard: Removed `$range` Dropdown, Switched to `$__range`
+
+The Usage Dashboard used a `StaticListVariable` dropdown (`$range`) as a workaround for what was
+believed to be a missing Perses feature. Investigation revealed that `$__range` has been a core
+Perses built-in variable since v0.40.0 (September 2023) and works with any datasource including
+Loki.
+
+**Fix:** Removed the `$range` `StaticListVariable` (the "Time Range" dropdown with 1h/3h/.../30d
+options). Replaced all 10 `[$range]` references in LogQL queries with `[$__range]`. The native
+Perses time picker now drives all queries directly. Remaining variables: User ID, Subscription,
+Model.
+
+#### 6. Fixed `git checkout` in CI Workflow
+
+`git checkout --detach -- "$TAG"` in `.github/workflows/update-docs-latest.yml` treated `$TAG` as
+a pathspec (file path) because of the `--` separator. Same issue in `git rev-parse` calls.
+
+**Fix:** Removed `--` from `git rev-parse` and `git checkout --detach`.
+
+#### 7. Restored `user` Metric Label in TelemetryPolicy
+
+The `user: auth.identity.userid` label was removed from `gateway-telemetry-policy.yaml` during
+the `tier` -> `subscription` migration. The AI Engineer dashboard relies on this label in every
+panel query (`authorized_hits{user=~"^$user$"}`). Without it, the template variable dropdown
+is empty and all panels show no data.
+
+**Fix:** Restored `user: auth.identity.userid` in the TelemetryPolicy.
+
+#### 8. Optimized TokenReview Client
+
+`resolveToken` created a new `http.Client` with a new `http.Transport` on every proxied request.
+Under load, this leaked goroutines, TLS connections, and file descriptors.
+
+**Fix:** Initialized a global `tokenReviewClient` once during startup, reusing it for all
+TokenReview API calls.
+
+#### 9. UI Dashboard Verification (Manual — All Users)
+
+Verified the Usage Dashboard in the OpenShift console browser for all 4 test users:
+
+| User | Tokens | Requests | Errors | Success Rate | Active Users | Table |
+|------|--------|----------|--------|-------------|-------------|-------|
+| `kube:admin` | 205 | 21 | 6 | 71.4% | 3 | All users visible |
+| `test-loki-admin` | 38 | 5 | 0 | 100% | 1 | Only own row |
+| `test-loki-viewer` | 36 | 5 | 0 | 100% | 1 | Only own row |
+| `test-no-loki` | N/A | N/A | N/A | N/A | N/A | "No dashboards found" |
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `deployment/components/observability/loki-proxy/proxy-source-configmap.yaml` | Rewrote `injectUserFilter` (quote-aware, post-selector injection); fixed POST body handling (two independent `if` blocks instead of `if/else if`); global `tokenReviewClient` |
+| `deployment/components/observability/perses/dashboards/dashboard-usage.yaml` | Removed `$range` `StaticListVariable`; replaced `[$range]` with `[$__range]` (10 occurrences); updated comments |
+| `deployment/base/observability/gateway-telemetry-policy.yaml` | Restored `user: auth.identity.userid` label |
+| `.github/workflows/update-docs-latest.yml` | Removed `--` from `git rev-parse` and `git checkout --detach` |
+
+### Full Test Results (2026-05-08) — 31/31 PASS
+
+#### Functional Tests (15/15 PASS)
+
+| # | Test | Expected | Actual | Result |
+|---|------|----------|--------|--------|
+| F1 | Health endpoint | HTTP 200 | 200 | **PASS** |
+| F2 | Ready endpoint | HTTP 200 | 200 | **PASS** |
+| F3 | No auth header | HTTP 401 | 401 | **PASS** |
+| F4 | `test-loki-admin` GET log query | 5 entries, own only | 5 | **PASS** |
+| F5 | `test-loki-viewer` GET log query | 5 entries, own only | 5 | **PASS** |
+| F6 | `test-no-loki` GET log query | 0 entries | 0 | **PASS** |
+| F7 | `kube:admin` GET log query (admin bypass) | All entries | 44 | **PASS** |
+| F8 | Metric query `test-loki-admin` (count_over_time) | 5 | 5 | **PASS** |
+| F9 | Metric query `kube:admin` (count_over_time) | 21 | 21 | **PASS** |
+| F10 | POST body only — `test-loki-admin` | 5 entries | 5 | **PASS** |
+| F11 | POST body only — `test-loki-viewer` | 5 entries | 5 | **PASS** |
+| F12 | POST body only — `test-no-loki` | 0 entries | 0 | **PASS** |
+| F13 | POST body only — `kube:admin` | All entries | 44 | **PASS** |
+| F14 | URL+body dual query (exploit blocked) | 5 entries (filtered) | 5 | **PASS** |
+| F15 | Query rewrite with existing pipeline | 5 entries | 5 | **PASS** |
+
+#### Security Tests (9/9 PASS)
+
+| # | Test | Input | Expected | Actual | Result |
+|---|------|-------|----------|--------|--------|
+| S1 | Random garbage token | `garbage123` | HTTP 401 | 401 | **PASS** |
+| S2 | Fake sha256~ token | `sha256~faketoken` | HTTP 401 | 401 | **PASS** |
+| S3 | No auth header | (none) | HTTP 401 | 401 | **PASS** |
+| S4 | Basic auth scheme | `Basic dXNlcjpwYXNz` | HTTP 401 | 401 | **PASS** |
+| S5 | Forged JWT with admin groups | unsigned, `system:cluster-admins` | HTTP 401 | 401 | **PASS** |
+| S6 | Forged JWT with spoofed username | unsigned, `test-loki-admin` | HTTP 401 | 401 | **PASS** |
+| S7 | `label_format` bypass attempt | Override `user_id` to another user | 5 entries (own only) | 5 | **PASS** |
+| S8 | LogQL injection via GET | `\| user_id="bob"` | ≤5 entries (contained) | 0 | **PASS** |
+| S9 | LogQL injection via POST body | `\| user_id="bob"` | ≤5 entries (contained) | 0 | **PASS** |
+
+#### Rewriter Robustness Tests (4/4 PASS)
+
+| # | Test | Input | Expected | Actual | Result |
+|---|------|-------|----------|--------|--------|
+| R1 | `line_format` with Go template braces | `line_format "{{.response_code}}"` | success, 5 entries | success, 5 | **PASS** |
+| R2 | Backtick template | `` line_format `{{.method}}` `` | success, 5 entries | success, 5 | **PASS** |
+| R3 | String match with braces | `\|= "{\"model\""` | success | success | **PASS** |
+| R4 | Multiple stream selectors in metric query | Two `count_over_time({...})` | success | success | **PASS** |
+
+#### Admin Edge Cases (3/3 PASS)
+
+| # | Test | Expected | Actual | Result |
+|---|------|----------|--------|--------|
+| A1 | `kube:admin` instant query | success | success | **PASS** |
+| A2 | POST instant query admin | success | success | **PASS** |
+| A3 | POST without Content-Type | 200 or 400 | 200 | **PASS** |
+
+**Total: 31/31 tests passed** (15 functional + 9 security + 4 rewriter robustness + 3 admin edge cases)

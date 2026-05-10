@@ -1,0 +1,406 @@
+# Loki Query Proxy -- Go source mounted as ConfigMap
+# Runs on stock golang:1.18-ubi9 via `go run`.
+# All files are package main (flattened from the multi-package original).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-query-proxy-source
+  labels:
+    app: loki-query-proxy
+    app.kubernetes.io/part-of: maas-observability
+data:
+  go.mod: |
+    module loki-query-proxy
+
+    go 1.18
+
+  main.go: |
+    package main
+
+    import (
+        "crypto/tls"
+        "crypto/x509"
+        "fmt"
+        "io"
+        "log"
+        "net/http"
+        "net/url"
+        "os"
+        "strings"
+    )
+
+    var (
+        cfg             *proxyConfig
+        lokiUpstream    *url.URL
+        httpClient      *http.Client
+        tokenReviewClient *http.Client
+        saTokenPath     = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    )
+
+    func main() {
+        var err error
+        cfg, err = loadConfigFromEnv()
+        if err != nil {
+            log.Fatalf("Failed to load config: %v", err)
+        }
+
+        log.Printf("Starting loki-query-proxy on port %s", cfg.Port)
+        log.Printf("Isolation mode: %s", cfg.IsolationMode)
+        log.Printf("Loki upstream: %s", cfg.LokiUpstreamURL)
+
+        lokiUpstream, err = url.Parse(cfg.LokiUpstreamURL)
+        if err != nil {
+            log.Fatalf("Invalid LOKI_UPSTREAM_URL: %v", err)
+        }
+
+        caCertPool := x509.NewCertPool()
+        for _, caPath := range []string{
+            "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt",
+            "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+        } {
+            if caCert, err := os.ReadFile(caPath); err == nil {
+                caCertPool.AppendCertsFromPEM(caCert)
+                log.Printf("Loaded CA certificate from %s", caPath)
+            }
+        }
+
+        httpClient = &http.Client{
+            Transport: &http.Transport{TLSClientConfig: &tls.Config{
+                RootCAs:    caCertPool,
+                MinVersion: tls.VersionTLS12,
+            }},
+        }
+
+        tokenReviewClient = &http.Client{
+            Transport: &http.Transport{TLSClientConfig: &tls.Config{
+                RootCAs:    caCertPool,
+                MinVersion: tls.VersionTLS12,
+            }},
+        }
+
+        http.HandleFunc("/health", healthHandler)
+        http.HandleFunc("/ready", healthHandler)
+        http.HandleFunc("/", proxyHandler)
+
+        log.Printf("Proxy listening on :%s", cfg.Port)
+        if err := http.ListenAndServe(":"+cfg.Port, nil); err != nil {
+            log.Fatalf("Server failed: %v", err)
+        }
+    }
+
+    func healthHandler(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+        fmt.Fprintln(w, "OK")
+    }
+
+    var adminGroups = map[string]bool{
+        "system:cluster-admins": true,
+        "system:masters":        true,
+    }
+
+    func isAdmin(groups []string) bool {
+        for _, g := range groups {
+            if adminGroups[g] {
+                return true
+            }
+        }
+        return false
+    }
+
+    func proxyHandler(w http.ResponseWriter, r *http.Request) {
+        var username string
+        if cfg.IsolationMode == "user" {
+            authHeader := r.Header.Get("Authorization")
+            userInfo, err := extractFromBearerToken(authHeader)
+            if err != nil {
+                log.Printf("Auth extraction failed: %v", err)
+                http.Error(w, "Unauthorized", http.StatusUnauthorized)
+                return
+            }
+            if isAdmin(userInfo.Groups) {
+                log.Printf("Admin bypass: user=%s groups=%v (no filtering)", userInfo.Username, userInfo.Groups)
+            } else {
+                username = userInfo.Username
+                log.Printf("User mode: filtering by user_id=%s", username)
+            }
+        }
+
+        query := r.URL.Query()
+        var bodyToForward io.Reader = r.Body
+
+        if username != "" {
+            if query.Has("query") {
+                originalQuery := query.Get("query")
+                rewrittenQuery := injectUserFilter(originalQuery, username)
+                query.Set("query", rewrittenQuery)
+                log.Printf("Query rewrite (URL): %s -> %s", originalQuery, rewrittenQuery)
+            }
+            if r.Method == http.MethodPost &&
+                strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+                bodyBytes, err := io.ReadAll(r.Body)
+                if err != nil {
+                    log.Printf("Failed to read request body: %v", err)
+                    http.Error(w, "Bad request", http.StatusBadRequest)
+                    return
+                }
+                form, err := url.ParseQuery(string(bodyBytes))
+                if err != nil {
+                    log.Printf("Failed to parse form body: %v", err)
+                    http.Error(w, "Bad request", http.StatusBadRequest)
+                    return
+                }
+                if form.Has("query") {
+                    originalQuery := form.Get("query")
+                    rewrittenQuery := injectUserFilter(originalQuery, username)
+                    form.Set("query", rewrittenQuery)
+                    log.Printf("Query rewrite (POST body): %s -> %s", originalQuery, rewrittenQuery)
+                }
+                encoded := form.Encode()
+                bodyToForward = strings.NewReader(encoded)
+            }
+        }
+
+        upstreamURL := *lokiUpstream
+        upstreamURL.Path = upstreamURL.Path + r.URL.Path
+        upstreamURL.RawQuery = query.Encode()
+
+        proxyReq, err := http.NewRequest(r.Method, upstreamURL.String(), bodyToForward)
+        if err != nil {
+            log.Printf("Failed to create upstream request: %v", err)
+            http.Error(w, "Internal server error", http.StatusInternalServerError)
+            return
+        }
+
+        for key, values := range r.Header {
+            if key == "Authorization" {
+                continue
+            }
+            for _, value := range values {
+                proxyReq.Header.Add(key, value)
+            }
+        }
+        proxyReq.Header.Set("X-Scope-OrgID", "application")
+
+        // Authenticate to the LokiStack gateway using the pod's SA token
+        if tokenBytes, err := os.ReadFile(saTokenPath); err == nil {
+            proxyReq.Header.Set("Authorization", "Bearer "+string(tokenBytes))
+        }
+
+        resp, err := httpClient.Do(proxyReq)
+        if err != nil {
+            log.Printf("Upstream request failed: %v", err)
+            http.Error(w, "Bad gateway", http.StatusBadGateway)
+            return
+        }
+        defer resp.Body.Close()
+
+        for key, values := range resp.Header {
+            for _, value := range values {
+                w.Header().Add(key, value)
+            }
+        }
+        w.WriteHeader(resp.StatusCode)
+        if _, err := io.Copy(w, resp.Body); err != nil {
+            log.Printf("Failed to copy response body: %v", err)
+        }
+    }
+
+  auth.go: |
+    package main
+
+    import (
+        "bytes"
+        "encoding/json"
+        "fmt"
+        "io"
+        "net/http"
+        "os"
+        "strings"
+    )
+
+    type userInfo struct {
+        Username string
+        Groups   []string
+    }
+
+    // extractFromBearerToken extracts user info from Authorization: Bearer <token>.
+    // All tokens are validated server-side via the Kubernetes TokenReview API.
+    func extractFromBearerToken(authHeader string) (*userInfo, error) {
+        if authHeader == "" {
+            return nil, fmt.Errorf("missing Authorization header")
+        }
+
+        parts := strings.SplitN(authHeader, " ", 2)
+        if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+            return nil, fmt.Errorf("invalid Authorization header format")
+        }
+
+        return resolveToken(parts[1])
+    }
+
+    // resolveToken calls the Kubernetes TokenReview API to validate any bearer
+    // token and resolve it to a username + groups. This is the sole authentication
+    // path -- tokens are never parsed or trusted locally.
+    func resolveToken(token string) (*userInfo, error) {
+        saToken, err := os.ReadFile(saTokenPath)
+        if err != nil {
+            return nil, fmt.Errorf("cannot read SA token for TokenReview: %w", err)
+        }
+
+        body, _ := json.Marshal(map[string]interface{}{
+            "apiVersion": "authentication.k8s.io/v1",
+            "kind":       "TokenReview",
+            "spec":       map[string]string{"token": token},
+        })
+
+        apiHost := os.Getenv("KUBERNETES_SERVICE_HOST")
+        apiPort := os.Getenv("KUBERNETES_SERVICE_PORT")
+        if apiPort == "" {
+            apiPort = "443"
+        }
+        apiURL := fmt.Sprintf("https://%s:%s/apis/authentication.k8s.io/v1/tokenreviews", apiHost, apiPort)
+
+        req, err := http.NewRequest("POST", apiURL, bytes.NewReader(body))
+        if err != nil {
+            return nil, fmt.Errorf("failed to build TokenReview request: %w", err)
+        }
+        req.Header.Set("Content-Type", "application/json")
+        req.Header.Set("Authorization", "Bearer "+string(saToken))
+
+        resp, err := tokenReviewClient.Do(req)
+        if err != nil {
+            return nil, fmt.Errorf("TokenReview request failed: %w", err)
+        }
+        defer resp.Body.Close()
+
+        respBody, _ := io.ReadAll(resp.Body)
+        var result struct {
+            Status struct {
+                Authenticated bool   `json:"authenticated"`
+                User          struct {
+                    Username string   `json:"username"`
+                    Groups   []string `json:"groups"`
+                } `json:"user"`
+                Error string `json:"error"`
+            } `json:"status"`
+        }
+
+        if err := json.Unmarshal(respBody, &result); err != nil {
+            return nil, fmt.Errorf("failed to parse TokenReview response: %w", err)
+        }
+
+        if !result.Status.Authenticated {
+            errMsg := result.Status.Error
+            if errMsg == "" {
+                errMsg = "token not authenticated"
+            }
+            return nil, fmt.Errorf("TokenReview: %s", errMsg)
+        }
+
+        if result.Status.User.Username == "" {
+            return nil, fmt.Errorf("TokenReview returned empty username")
+        }
+
+        return &userInfo{
+            Username: result.Status.User.Username,
+            Groups:   result.Status.User.Groups,
+        }, nil
+    }
+
+  rewriter.go: |
+    package main
+
+    import (
+        "fmt"
+        "strings"
+    )
+
+    // injectUserFilter inserts a pipeline filter `| user_id="<user>"` immediately
+    // after every LogQL stream selector `{...}`. It skips braces inside quoted
+    // strings (double-quote and backtick) so that Go template expressions like
+    // `line_format "{{.status}}"` and string matches like `|= "{text}"` are not
+    // mistaken for stream selectors.
+    //
+    //   log:    {app="x"} | line_format "{{.msg}}"
+    //        -> {app="x"} | user_id="alice" | line_format "{{.msg}}"
+    //
+    //   metric: sum(count_over_time({app="x"} [5m]))
+    //        -> sum(count_over_time({app="x"} | user_id="alice" [5m]))
+    func injectUserFilter(query, username string) string {
+        if query == "" || username == "" {
+            return query
+        }
+        filter := fmt.Sprintf(` | user_id="%s"`, escapeLogQLValue(username))
+        var result strings.Builder
+        inSelector := false
+        inDoubleQuote := false
+        inBacktick := false
+        for i := 0; i < len(query); i++ {
+            ch := query[i]
+
+            if ch == '\\' && inDoubleQuote && i+1 < len(query) {
+                result.WriteByte(ch)
+                i++
+                result.WriteByte(query[i])
+                continue
+            }
+            if ch == '"' && !inBacktick {
+                inDoubleQuote = !inDoubleQuote
+            }
+            if ch == '`' && !inDoubleQuote {
+                inBacktick = !inBacktick
+            }
+
+            inQuote := inDoubleQuote || inBacktick
+
+            if ch == '{' && !inQuote {
+                inSelector = true
+            }
+            result.WriteByte(ch)
+            if ch == '}' && inSelector && !inQuote {
+                result.WriteString(filter)
+                inSelector = false
+            }
+        }
+        return result.String()
+    }
+
+    func escapeLogQLValue(value string) string {
+        value = strings.ReplaceAll(value, `\`, `\\`)
+        value = strings.ReplaceAll(value, `"`, `\"`)
+        return value
+    }
+
+  config.go: |
+    package main
+
+    import (
+        "fmt"
+        "os"
+    )
+
+    type proxyConfig struct {
+        Port            string
+        LokiUpstreamURL string
+        IsolationMode   string
+    }
+
+    func loadConfigFromEnv() (*proxyConfig, error) {
+        cfg := &proxyConfig{
+            Port:            getEnv("PORT", "8080"),
+            LokiUpstreamURL: getEnv("LOKI_UPSTREAM_URL", "https://maas-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/application"),
+            IsolationMode:   getEnv("ISOLATION_MODE", "user"),
+        }
+        if cfg.IsolationMode != "user" {
+            return nil, fmt.Errorf("invalid ISOLATION_MODE: %s (must be 'user')", cfg.IsolationMode)
+        }
+        return cfg, nil
+    }
+
+    func getEnv(key, defaultValue string) string {
+        if value := os.Getenv(key); value != "" {
+            return value
+        }
+        return defaultValue
+    }

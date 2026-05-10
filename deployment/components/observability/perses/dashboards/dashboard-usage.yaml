@@ -1,22 +1,17 @@
 # Perses Dashboard: Usage Dashboard
-# Hybrid Prometheus + Loki: all per-user panels query Loki structured logs via LogQL.
+# All per-user panels query Loki structured logs via LogQL.
 #
-# Ideally, in Grafana/Prometheus, the dashboard time range drives every LogQL window (e.g. $__range).
-# Perses does not bind the native time picker to Loki that way. Workaround: a separate Time Range
-# variable built with StaticListVariable; users pick 24h etc. there; queries use [$range] from that
-# list. Set the native picker >= $range so results are not clipped.
-#
-# Perses cannot do dynamic time binding to Loki queries or dynamic Loki label pickers, so we use
-# StaticListVariable — hardcoded dropdown options — instead. The same applies to the Subscription
-# and Model dropdowns: label auto-discovery is not available in Perses. To add new names, update
-# values: in YAML; default $__all still includes all models/subscriptions in aggregates.
+# $__range is a Perses built-in variable (since v0.40.0) that binds to the native
+# time picker, so all LogQL windows track the dashboard time range automatically.
 #
 # user_id, tokens_total, etc. are Loki structured metadata — accessible via
 # pipeline filters (| user_id=~"..." | unwrap tokens_total) without | json.
 # Stream labels (from groupbyattrs): subscription, model, response_code, method.
 #
-# The Perses Loki plugin lacks $__range tied to the picker and reliable instant query
-# behavior for tables/stats; $range remains the single source of truth for query windows.
+# Subscription and Model dropdowns use StaticListVariable because Perses has no
+# LokiLabelValuesVariable plugin yet. To add new values, update the YAML;
+# default $__all still includes all models/subscriptions in aggregates.
+#
 # user_id!="-" filters out health-check / probe traffic (user_id="-").
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
@@ -32,28 +27,6 @@ spec:
   duration: 1h
 
   variables:
-    - kind: ListVariable
-      spec:
-        name: range
-        display:
-          name: "Time Range"
-        allowMultiple: false
-        allowAllValue: false
-        defaultValue: "24h"
-        plugin:
-          kind: StaticListVariable
-          spec:
-            values:
-              - "1h"
-              - "3h"
-              - "6h"
-              - "12h"
-              - "24h"
-              - "3d"
-              - "7d"
-              - "14d"
-              - "21d"
-              - "30d"
     - kind: TextVariable
       spec:
         name: user
@@ -93,7 +66,7 @@ spec:
       spec:
         display:
           name: "Total Tokens"
-          description: "Total tokens consumed over the selected Time Range."
+          description: "Total tokens consumed over the selected time window."
         plugin:
           kind: StatChart
           spec:
@@ -114,7 +87,7 @@ spec:
                   query: >-
                     sum(sum_over_time({service_name="maas-gateway", response_code=~"2..",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [$range]))
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [$__range]))
                     or vector(0)
 
     totalRequests:
@@ -122,7 +95,7 @@ spec:
       spec:
         display:
           name: "Total Requests"
-          description: "Total API requests (authorized + rate-limited) over the selected Time Range."
+          description: "Total API requests (authorized + rate-limited) over the selected time window."
         plugin:
           kind: StatChart
           spec:
@@ -143,7 +116,7 @@ spec:
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="-" [$range]))
+                    | user_id=~"$user" | user_id!="-" [$__range]))
                     or vector(0)
 
     totalErrors:
@@ -151,7 +124,7 @@ spec:
       spec:
         display:
           name: "Total Errors"
-          description: "Total rate-limited requests over the selected Time Range."
+          description: "Total rate-limited requests over the selected time window."
         plugin:
           kind: StatChart
           spec:
@@ -172,14 +145,14 @@ spec:
                   query: >-
                     sum(count_over_time({service_name="maas-gateway", response_code="429",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="-" [$range]))
+                    | user_id=~"$user" | user_id!="-" [$__range]))
                     or vector(0)
 
     successRate:
       kind: Panel
       spec:
         display:
-          description: "Percentage of authorized vs total requests over the selected Time Range."
+          description: "Percentage of authorized vs total requests over the selected time window."
           name: Success Rate
         plugin:
           kind: StatChart
@@ -200,11 +173,11 @@ spec:
                   query: >-
                     (sum(count_over_time({service_name="maas-gateway", response_code=~"2..",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="-" [$range]))
+                    | user_id=~"$user" | user_id!="-" [$__range]))
                     /
                     sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="-" [$range])))
+                    | user_id=~"$user" | user_id!="-" [$__range])))
                     or vector(1)
 
     activeUsers:
@@ -212,7 +185,7 @@ spec:
       spec:
         display:
           name: "Active Users"
-          description: "Distinct users with API activity over the selected Time Range."
+          description: "Distinct users with API activity over the selected time window."
         plugin:
           kind: StatChart
           spec:
@@ -231,7 +204,7 @@ spec:
                   query: >-
                     count(sum by (user_id) (count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="" | user_id!="-" [$range])))
+                    | user_id=~"$user" | user_id!="" | user_id!="-" [$__range])))
                     or vector(0)
 
     tokenConsumptionByUser:
@@ -239,7 +212,7 @@ spec:
       spec:
         display:
           name: "Token Consumption by User"
-          description: "Per-user totals over the Time Range dropdown window."
+          description: "Per-user totals over the selected time window."
         plugin:
           kind: Table
           spec:
@@ -295,7 +268,7 @@ spec:
                     {service_name="maas-gateway", response_code=~"2..",
                     subscription=~"$subscription", model=~"$model"}
                     | user_id=~"$user" | user_id!="" | user_id!="-"
-                    | unwrap tokens_total [$range]))
+                    | unwrap tokens_total [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -308,7 +281,7 @@ spec:
                     sum by (user_id, subscription) (count_over_time(
                     {service_name="maas-gateway", response_code=~"2..",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="" | user_id!="-" [$range]))
+                    | user_id=~"$user" | user_id!="" | user_id!="-" [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -321,13 +294,13 @@ spec:
                     sum by (user_id, subscription) (count_over_time(
                     {service_name="maas-gateway", response_code="429",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="" | user_id!="-" [$range]))
+                    | user_id=~"$user" | user_id!="" | user_id!="-" [$__range]))
                     or
                     sum by (user_id, subscription) (sum_over_time(
                     {service_name="maas-gateway", response_code=~"2..",
                     subscription=~"$subscription", model=~"$model"}
                     | user_id=~"$user" | user_id!="" | user_id!="-"
-                    | unwrap tokens_total [$range])) * 0
+                    | unwrap tokens_total [$__range])) * 0
 
   layouts:
     - kind: Grid

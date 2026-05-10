@@ -44,17 +44,17 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
         run: |
-          if ! git rev-parse -- "$TAG" >/dev/null 2>&1; then
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "❌ Error: Tag '$TAG' does not exist."
             echo "This workflow requires an existing tag. Create a release first."
             exit 1
           fi
-          echo "✅ Tag '$TAG' found at $(git rev-parse -- "$TAG")"
+          echo "✅ Tag '$TAG' found at $(git rev-parse "$TAG")"
 
       - name: Checkout tag
         env:
           TAG: ${{ inputs.tag }}
-        run: git checkout --detach -- "$TAG"
+        run: git checkout --detach "$TAG"
 
       - name: Setup Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
