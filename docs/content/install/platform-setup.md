@@ -153,7 +153,7 @@ Now install the Gateway API controller for your platform:
 
 === "Open Data Hub"
 
-    Install Kuadrant using the OLM method. MaaS requires Kuadrant v1.3.1 or later.
+    Install Kuadrant using the OLM method. MaaS requires Kuadrant v1.4.2 or later.
 
     Create the `kuadrant-system` namespace and OperatorGroup:
 
@@ -253,7 +253,7 @@ Now install the Gateway API controller for your platform:
 === "Red Hat OpenShift AI"
 
     Install Red Hat Connectivity Link (RHCL) Operator from OpenShift's built-in OperatorHub.
-    MaaS requires RHCL v1.2 or later:
+    MaaS requires RHCL v1.3 or later:
 
     ```yaml
     kubectl apply -f - <<EOF
@@ -454,7 +454,7 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
     Wait for the operator webhook to be ready:
 
     ```shell
-    kubectl wait --for=condition=Available --timeout=120s deployment/rhods-operator-controller-manager -n redhat-ods-operator
+    kubectl wait --for=condition=Available --timeout=120s deployment/rhods-operator -n redhat-ods-operator
     ```
 
     Once ready, the RHOAI Operator automatically creates a `DSCInitialization` resource.

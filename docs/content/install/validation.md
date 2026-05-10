@@ -33,7 +33,7 @@ echo "Gateway endpoint: $HOST"
 !!! note "Optional"
     List MaaSSubscriptions you can access (authenticate with your OpenShift token; requires `HOST` from above):
     ```bash
-    curl -sS -k -H "Authorization: Bearer $(oc whoami -t)" \
+    curl -sS -H "Authorization: Bearer $(oc whoami -t)" \
       "${HOST}/maas-api/v1/subscriptions" | jq .
     ```
 
@@ -42,7 +42,7 @@ echo "Gateway endpoint: $HOST"
 Create an API key using your OpenShift token:
 
 ```bash
-API_KEY_RESPONSE=$(curl -sS -k \
+API_KEY_RESPONSE=$(curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -69,7 +69,7 @@ API key obtained successfully.
 !!! note "Optional"
     List your API keys (metadata only; plaintext secrets are never returned):
     ```bash
-    curl -sS -k \
+    curl -sS \
       -H "Authorization: Bearer $(oc whoami -t)" \
       -H "Content-Type: application/json" \
       -X POST \
@@ -94,7 +94,7 @@ API key obtained successfully.
 Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models` with an API key returns only models from that subscription. With an OpenShift token instead of an API key, you can send `X-MaaS-Subscription` to filter when you have access to multiple subscriptions.
 
 ```bash
-MODELS=$(curl -sS -k \
+MODELS=$(curl -sS \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" \
     "${HOST}/maas-api/v1/models")
@@ -134,7 +134,7 @@ Model URL: https://maas.apps.your-cluster.example.com/llm/facebook-opt-125m-simu
 Send a chat completion request to the model. You should get a 200 OK response with generated text:
 
 ```bash
-RESPONSE=$(curl -sS -k \
+RESPONSE=$(curl -sS \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
@@ -171,7 +171,7 @@ Expected output:
 !!! note
     Some models only support `/v1/completions` (prompt-based) instead of `/v1/chat/completions`. If you get a 404 or 400, try the completions endpoint:
     ```bash
-    RESPONSE=$(curl -sS -k \
+    RESPONSE=$(curl -sS \
       -H "Authorization: Bearer $API_KEY" \
       -H "Content-Type: application/json" \
       -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
@@ -191,7 +191,7 @@ Expected output:
 Send a request without any credentials. You should get a 401 Unauthorized response:
 
 ```bash
-curl -sS -k -o /dev/null -w "HTTP status: %{http_code}\n" \
+curl -sS -o /dev/null -w "HTTP status: %{http_code}\n" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
   "${MODEL_URL}/v1/chat/completions"
@@ -213,7 +213,7 @@ Send multiple requests to trigger the rate limit. After a few successful request
 
 ```bash
 for i in {1..16}; do
-  curl -sS -k -o /dev/null -w "%{http_code} " \
+  curl -sS -o /dev/null -w "%{http_code} " \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
@@ -291,8 +291,15 @@ kubectl get secret maas-api-serving-cert -n redhat-ods-applications \
 ### Test HTTPS Endpoint
 
 ```bash
-kubectl run curl --rm -it --image=curlimages/curl -- \
-  curl -vk https://maas-api.redhat-ods-applications.svc:8443/health
+kubectl port-forward -n <application-namespace> svc/maas-api 8443:8443
+
+oc get configmap -n openshift-config-managed service-ca-bundle \
+  -o jsonpath='{.data.service-ca\.crt}' > /tmp/service-ca.crt
+
+SVC_HOST="maas-api.<application-namespace>.svc"
+curl -v --cacert /tmp/service-ca.crt \
+  --resolve "${SVC_HOST}:8443:127.0.0.1" \
+  "https://${SVC_HOST}:8443/health"
 ```
 
 For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).

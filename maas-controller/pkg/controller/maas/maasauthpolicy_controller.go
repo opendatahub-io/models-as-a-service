@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -255,10 +256,6 @@ const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
 func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSAuthPolicy", req.NamespacedName)
 
-	// Fetch OIDC configuration from Tenant CR (if present)
-	// This is checked on every reconcile to handle dynamic updates to the CR
-	oidcConfig := r.fetchOIDCConfig(ctx, log)
-
 	policy := &maasv1alpha1.MaaSAuthPolicy{}
 	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -268,8 +265,20 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Fetch OIDC configuration from Tenant CR after confirming the policy exists,
+	// so stale or deleted-race events do not trigger an unnecessary Tenant Get.
+	oidcConfig := r.fetchOIDCConfig(ctx, log)
+
 	if !policy.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, log, policy)
+	}
+
+	// Handle no spec (e.g. legacy resources created before spec was required).
+	// No finalizer needed — there are no AuthPolicies to clean up.
+	if reflect.DeepEqual(policy.Spec, maasv1alpha1.MaaSAuthPolicySpec{}) {
+		statusSnapshot := policy.Status.DeepCopy()
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
+		return ctrl.Result{}, nil
 	}
 
 	// Add finalizer if not present
@@ -1108,6 +1117,9 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 	case maasv1alpha1.PhaseFailed:
 		status = metav1.ConditionFalse
 		reason = maasv1alpha1.ReasonReconcileFailed
+	case maasv1alpha1.PhaseInvalid:
+		status = metav1.ConditionFalse
+		reason = maasv1alpha1.ReasonInvalidSpec
 	default:
 		status = metav1.ConditionUnknown
 		reason = maasv1alpha1.ReasonUnknown

@@ -176,7 +176,7 @@ func (h *ModelsHandler) addSubscriptionIfNew(model *models.Model, subInfo models
 func (h *ModelsHandler) extractAndValidateAuth(c *gin.Context) (string, string, bool, error) {
 	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 	if authHeader == "" {
-		h.logger.Error("Authorization header missing")
+		h.logger.Debug("Authorization header missing") // SAFE: Logging that header is missing, not the value itself
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": gin.H{
 				"message": "Authorization required",

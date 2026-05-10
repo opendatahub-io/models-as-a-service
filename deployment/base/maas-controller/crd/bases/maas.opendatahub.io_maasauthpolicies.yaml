@@ -173,7 +173,13 @@ spec:
                       - NotEnforced
                       - BackendNotReady
                       - ConditionsNotFound
+                      - InvalidSpec
                       - Unknown
+                      - NoPairingFound
+                      - GovernancePaired
+                      - GovernanceGap
+                      - RuntimeHealthy
+                      - RuntimeHealthFailure
                       type: string
                   required:
                   - model
@@ -248,8 +254,11 @@ spec:
                 - Active
                 - Degraded
                 - Failed
+                - Invalid
                 type: string
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true

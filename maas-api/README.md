@@ -157,7 +157,7 @@ The API uses hash-based API keys with OpenAI-compatible format (`sk-oai-*`). Key
 HOST="$(kubectl get gateway -l app.kubernetes.io/instance=maas-default-gateway -n openshift-ingress -o jsonpath='{.items[0].status.addresses[0].value}')"
 
 # Create an API key (defaults to API_KEY_MAX_EXPIRATION_DAYS, typically 90 days)
-API_KEY_RESPONSE=$(curl -sSk \
+API_KEY_RESPONSE=$(curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -172,7 +172,7 @@ echo $API_KEY_RESPONSE | jq -r .
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 
 # Create an API key with custom expiration (30 days)
-API_KEY_RESPONSE=$(curl -sSk \
+API_KEY_RESPONSE=$(curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -198,7 +198,7 @@ API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 
 ```shell
 # Search your API keys
-curl -sSk \
+curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -207,12 +207,12 @@ curl -sSk \
 
 # Get specific API key by ID
 API_KEY_ID="<id-from-search>"
-curl -sSk \
+curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}" | jq .
 
 # Revoke specific API key
-curl -sSk \
+curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -X DELETE \
   "${HOST}/maas-api/v1/api-keys/${API_KEY_ID}"
@@ -235,7 +235,7 @@ Ephemeral keys are short-lived programmatic keys designed for temporary access s
 
 ```shell
 # Create an ephemeral key (1-hour default expiration, name auto-generated)
-API_KEY_RESPONSE=$(curl -sSk \
+API_KEY_RESPONSE=$(curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -246,7 +246,7 @@ echo $API_KEY_RESPONSE | jq -r .
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 
 # Create an ephemeral key with custom name and expiration (max 1hr)
-API_KEY_RESPONSE=$(curl -sSk \
+API_KEY_RESPONSE=$(curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -262,7 +262,7 @@ To include ephemeral keys in search results, use the `includeEphemeral` filter:
 
 ```shell
 # Search including ephemeral keys
-curl -sSk \
+curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -374,11 +374,11 @@ Using model discovery (maas-api URL matches the [validation guide](../docs/conte
 ```shell
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 MAAS_API="https://maas.${CLUSTER_DOMAIN}/maas-api"
-API_KEY=$(curl -sSk -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
+API_KEY=$(curl -sS -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
   -X POST -d '{"name":"rate-limit-demo","subscription":"simulator-subscription"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-MODELS=$(curl -sSk "${MAAS_API}/v1/models"  \
+MODELS=$(curl -sS "${MAAS_API}/v1/models"  \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${API_KEY}" | jq . -r)
 
@@ -388,7 +388,7 @@ MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id')
 
 for i in {1..16}
 do
-curl -sSk -o /dev/null -w "%{http_code}\n" \
+curl -sS -o /dev/null -w "%{http_code}\n" \
   -H "Authorization: Bearer ${API_KEY}" \
   -d "{
         \"model\": \"${MODEL_NAME}\",

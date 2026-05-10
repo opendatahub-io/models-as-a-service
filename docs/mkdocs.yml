@@ -56,11 +56,14 @@ nav:
     - Release Notes: release-notes/index.md
     - Migration:
       - Tier to Subscription: migration/tier-to-subscription.md
+      - Upgrade 3.2 to 3.4: migration/upgrade-3.2-to-3.4.md
   - Concepts:
     - Architecture: concepts/architecture.md
     - Personas: concepts/personas.md
     - Access and Quota Overview: concepts/subscription-overview.md
     - Model Reference: concepts/model-reference.md
+    - API Key Authentication: concepts/api-key-authentication.md
+    - Model Access Control: concepts/model-access-control.md
   - Install:
     - Quick Start: quickstart.md
     - Prerequisites:
@@ -68,33 +71,37 @@ nav:
       - Operator Setup: install/platform-setup.md
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
-      - Model Setup (On Cluster): install/model-setup.md
+      - Model Setup: install/model-setup.md
       - External Model Setup (Tech Preview): install/external-model-setup.md
       - Validation: install/validation.md
       - Troubleshooting: install/troubleshooting.md
   - Administration Guide:
     - Configuration & Management:
       - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
-      - Token Management: configuration-and-management/token-management.md
+      - API Key Administration: configuration-and-management/api-key-administration.md
       - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
+      - Troubleshooting ExternalModel RBAC: configuration-and-management/troubleshooting-external-model-rbac.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
-      - Subscription limitations & known issues: configuration-and-management/subscription-known-issues.md
+      - Gateway Patterns: configuration-and-management/gateway-patterns.md
     - Models:
-      - Model Setup (On Cluster): configuration-and-management/model-setup.md
+      - Model Setup: configuration-and-management/model-setup.md
       - Model Listing Flow: configuration-and-management/model-listing-flow.md
-      - MaaS Model Kinds: configuration-and-management/maas-model-kinds.md
-    - MaaS Controller:
-      - Controller Overview: configuration-and-management/maas-controller-overview.md
-      - CRD Annotations: configuration-and-management/crd-annotations.md
     - Advanced Administration:
-      - Observability: advanced-administration/observability.md
-      - Limitador Persistence: advanced-administration/limitador-persistence.md
+      - Observability Dashboard: advanced-administration/observability.md
       - Subscription Cardinality: advanced-administration/subscription-cardinality.md
+      - Limitador Persistence: advanced-administration/limitador-persistence.md
       - Authorino Caching: configuration-and-management/authorino-caching.md
   - User Guide:
-    - Self Service Model Access: user-guide/self-service-model-access.md
-  - Contributing:
-    - MaaS Testing and Contribution Guide: contributing/testing-guide.md
+    - API Key Management: user-guide/api-key-management.md
+    - Model Discovery: user-guide/model-discovery.md
+    - Inference: user-guide/inference.md
+  - Developer Guide:
+    - Controller Architecture: architecture-internals/controller-architecture.md
+    - Reconciliation Flow: architecture-internals/reconciliation-flow.md
+    - Authentication Internals: architecture-internals/authentication-internals.md
+    - Contributing:
+      - MaaS Testing and Contribution Guide: contributing/testing-guide.md
+      - Release Strategy: contributing/release-strategy.md
   - API Reference:
     - MaaS API Overview: reference/maas-api-overview.md
     - MaaS API (Swagger): reference/api-reference.md
@@ -103,6 +110,7 @@ nav:
       - ExternalModel: reference/crds/external-model.md
       - MaaSAuthPolicy: reference/crds/maas-auth-policy.md
       - MaaSSubscription: reference/crds/maas-subscription.md
+      - Tenant: reference/crds/tenant.md
 
 extra:
   version:

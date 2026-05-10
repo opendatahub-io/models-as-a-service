@@ -216,11 +216,11 @@ Create API keys with `POST /v1/api-keys` on the maas-api (authenticate with your
 
 ```bash
 MAAS_API="https://<gateway-host>/maas-api"
-API_KEY=$(curl -sSk -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
+API_KEY=$(curl -sS -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
   -X POST -d '{"name":"demo","subscription":"<maas-subscription-name>"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-curl -sSk "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
+curl -sS "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}],"max_tokens":10}'
@@ -325,24 +325,24 @@ MAAS_API="https://${GATEWAY_HOST}/maas-api"
 TOKEN=$(oc whoami -t)
 
 # Regular tier: log in as a user in free-user, then mint a key for simulator-subscription
-FREE_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+FREE_API_KEY=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -X POST -d '{"name":"readme-free","subscription":"simulator-subscription"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Authorization: Bearer $FREE_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 
 # Premium tier: log in as a user in premium-user, mint a key for premium-simulator-subscription, then call the premium route
-PREMIUM_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+PREMIUM_API_KEY=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -X POST -d '{"name":"readme-premium","subscription":"premium-simulator-subscription"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Authorization: Bearer $PREMIUM_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 ```
@@ -468,7 +468,7 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 ### CLI Flags
 
-The controller accepts the following command-line flags (configured via `deployment/overlays/odh/params.env` when using kustomize):
+The controller accepts the following command-line flags (configured via `deployment/overlays/odh/params.env` for ODH operator deployments):
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -495,21 +495,7 @@ kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
 
 Use this issuer URL as the `cluster-audience` value.
 
-**Configure via params.env (kustomize deployment):**
-
-Edit `deployment/overlays/odh/params.env` and update the `cluster-audience` line:
-
-```env
-cluster-audience=https://your-cluster-oidc-issuer
-```
-
-Then redeploy:
-
-```bash
-kustomize build deployment/overlays/odh | kubectl apply -f -
-```
-
-**Configure via kubectl patch (running deployment):**
+**Configure via `maas-parameters` ConfigMap (running cluster):**
 
 ```bash
 # Replace 'opendatahub' with your controller namespace if different
@@ -523,9 +509,19 @@ kubectl patch configmap maas-parameters -n $CONTROLLER_NS \
 kubectl rollout restart deployment/maas-controller -n $CONTROLLER_NS
 ```
 
+**Configure via `deployment/overlays/odh/params.env` (changing source defaults):**
+
+Edit `deployment/overlays/odh/params.env` and update the `cluster-audience` line:
+
+```env
+cluster-audience=https://your-cluster-oidc-issuer
+```
+
+The ODH operator reads this file at install time and injects the value into the `maas-parameters` ConfigMap.
+
 ### Other Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
-- **MaaS subscription namespace**: Default is `models-as-a-service`. Override `maas-subscription-namespace` in `params.env`.
-- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override `maas-controller-image` in `params.env`.
-- **Gateway name/namespace**: Override `gateway-name` and `gateway-namespace` in `params.env`.
+- **MaaS subscription namespace**: Default is `models-as-a-service`. Override `maas-subscription-namespace` in `deployment/overlays/odh/params.env` (ODH operator) or patch `maas-parameters` ConfigMap directly.
+- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override `maas-controller-image` in `deployment/overlays/odh/params.env` (ODH operator).
+- **Gateway name/namespace**: Override `gateway-name` and `gateway-namespace` in `deployment/overlays/odh/params.env` (ODH operator) or patch `maas-parameters` ConfigMap directly.

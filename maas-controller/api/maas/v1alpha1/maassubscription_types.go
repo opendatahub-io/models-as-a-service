@@ -154,7 +154,7 @@ type MaaSSubscription struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   MaaSSubscriptionSpec   `json:"spec,omitempty"`
+	Spec   MaaSSubscriptionSpec   `json:"spec"`
 	Status MaaSSubscriptionStatus `json:"status,omitempty"`
 }
 

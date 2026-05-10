@@ -49,7 +49,7 @@ Thanks for your interest in contributing. This guide explains how to work with t
 
 ## Release strategy
 
-This project follows a **Stream-Lake-Ocean** release model. Code flows from active development (`main`) through quality-gated branches (`stable`, `rhoai`) to the downstream RHOAI repository. See the full details in [docs/release-strategy.md](docs/release-strategy.md).
+This project follows a **Stream-Lake-Ocean** release model. Code flows from active development (`main`) through quality-gated branches (`stable`, `rhoai`) to the downstream RHOAI repository. See the full details in [docs/content/contributing/release-strategy.md](docs/content/contributing/release-strategy.md).
 
 ## Repository layout
 
@@ -114,10 +114,10 @@ Konflux builds multi-arch container images (x86_64, arm64, ppc64le, s390x) for b
 
 - **Source:** [docs/content/](docs/content/) (MkDocs structure; see [docs/README.md](docs/README.md)).
 - **Build/docs CI:** See `.github/workflows/docs.yml`.
-- When changing behavior or flags, update the [deployment guide](docs/content/quickstart.md) or the [README](README.md) as appropriate.
+- When changing behavior or flags, update the [Installation Guide](docs/content/quickstart.md) or the [README](README.md) as appropriate.
 
 ## Getting help
 
 - **Open an issue** on GitHub for bugs or feature ideas.
-- **Deployment issues:** See the [deployment guide](docs/content/quickstart.md) and [README](README.md).
+- **Deployment issues:** See the [Installation Guide](docs/content/quickstart.md) and [README](README.md).
 - **Reviewers/approvers:** Listed in [OWNERS](OWNERS).
