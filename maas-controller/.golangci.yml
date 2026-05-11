@@ -129,6 +129,9 @@ linters:
       - linters:
           - modernize
         text: "(omitzero|mapsloop|rangeint):"
+      - linters:
+          - lll
+        source: "^// \\+kubebuilder:"
 formatters:
   enable:
     - gci
