@@ -52,8 +52,18 @@ def require_tenant_crd():
         text=True,
     )
     if r.returncode != 0:
-        pytest.fail(
-            f"Missing CRD {TENANT_CRD}; install MaaS / maas-controller before running this module."
+        pytest.skip(
+            f"Missing CRD {TENANT_CRD}; these tests require operator-based deployment (kustomize mode does not create Tenant CR)."
+        )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def require_tenant_singleton():
+    """Skip all tests if Tenant singleton doesn't exist (e.g., kustomize deployment mode)."""
+    if _tenant_status() is None:
+        pytest.skip(
+            f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found; these tests require operator-based deployment. "
+            "Kustomize mode does not create Tenant CR automatically."
         )
 
 
