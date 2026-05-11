@@ -510,24 +510,6 @@ main() {
     return 1
   fi
 
-  if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
-    log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
-  else
-    log_info "  Installing controller (CRDs, RBAC, deployment)..."
-    if [[ "$NAMESPACE" != "opendatahub" ]]; then
-      (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
-        sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
-        log_error "Failed to apply maas-controller manifests"
-        return 1
-      }
-    else
-      kubectl apply -k "$config_dir" || {
-        log_error "Failed to apply maas-controller manifests"
-        return 1
-      }
-    fi
-  fi
-
   # Ensure maas-parameters ConfigMap exists with image defaults.
   # maas-controller reads these via configMapKeyRef (RELATED_IMAGE_* env vars).
   # Custom images from CLI flags override the defaults; other images keep defaults.
@@ -547,12 +529,34 @@ main() {
     return 1
   }
 
-  if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
-    log_info "  Custom MaaS controller image: $MAAS_CONTROLLER_IMAGE"
-    kubectl set image deployment/maas-controller manager="${MAAS_CONTROLLER_IMAGE}" -n "$NAMESPACE" || {
-      log_error "Failed to set maas-controller container image"
-      return 1
-    }
+  if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
+    log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
+    if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
+      log_info "  Custom MaaS controller image: $MAAS_CONTROLLER_IMAGE"
+      kubectl set image deployment/maas-controller manager="${MAAS_CONTROLLER_IMAGE}" -n "$NAMESPACE" || {
+        log_error "Failed to set maas-controller container image"
+        return 1
+      }
+    fi
+  else
+    log_info "  Installing controller (CRDs, RBAC, deployment)..."
+    if [[ "$cm_maas_controller_image" != "quay.io/opendatahub/maas-controller:latest" ]]; then
+      log_info "  Installing maas-controller with image: $cm_maas_controller_image"
+    fi
+    if [[ "$NAMESPACE" != "opendatahub" ]]; then
+      (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
+        sed -e "s/namespace: opendatahub/namespace: $NAMESPACE/g" \
+            -e "s|image: quay.io/opendatahub/maas-controller:latest|image: $cm_maas_controller_image|g") | kubectl apply -f - || {
+        log_error "Failed to apply maas-controller manifests"
+        return 1
+      }
+    else
+      (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
+        sed -e "s|image: quay.io/opendatahub/maas-controller:latest|image: $cm_maas_controller_image|g") | kubectl apply -f - || {
+        log_error "Failed to apply maas-controller manifests"
+        return 1
+      }
+    fi
   fi
 
   log_info "  Waiting for maas-controller to be ready..."
