@@ -68,21 +68,33 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 				return err
 			}
 		case gvk == GVKDeployment && name == "payload-processing":
-			patchPayloadProcessingDeployment(log, r, params)
+			if err := patchPayloadProcessingDeployment(log, r, params); err != nil {
+				return err
+			}
 		case gvk == GVKCronJob && name == "maas-api-key-cleanup":
-			patchCleanupCronJobImage(log, r, params)
+			if err := patchCleanupCronJobImage(log, r, params); err != nil {
+				return err
+			}
 		case gvk == GVKHTTPRoute && name == "maas-api-route":
-			patchHTTPRoute(log, r, params)
+			if err := patchHTTPRoute(log, r, params); err != nil {
+				return err
+			}
 		case gvk == GVKAuthPolicy && name == MaaSAPIAuthPolicyName:
 			if err := patchMaaSAPIAuthPolicy(log, r, params); err != nil {
 				return err
 			}
 		case gvk == GVKDestinationRule && name == "maas-api-backend-tls":
-			patchMaaSAPIDestinationRule(log, r, params)
+			if err := patchMaaSAPIDestinationRule(log, r, params); err != nil {
+				return err
+			}
 		case gvk == GVKDestinationRule && name == "payload-processing":
-			patchPayloadProcessingDestinationRule(log, r, params)
+			if err := patchPayloadProcessingDestinationRule(log, r, params); err != nil {
+				return err
+			}
 		case gvk == GVKEnvoyFilter && name == "payload-processing":
-			patchPayloadProcessingEnvoyFilter(log, r, params)
+			if err := patchPayloadProcessingEnvoyFilter(log, r, params); err != nil {
+				return err
+			}
 		case gvk.Kind == "Service" && name == "payload-processing":
 			r.SetNamespace(params.GatewayNamespace)
 		case gvk.Kind == "ServiceAccount" && name == "payload-processing":
@@ -90,7 +102,9 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 		case gvk.Kind == "ConfigMap" && name == "payload-processing-plugins":
 			r.SetNamespace(params.GatewayNamespace)
 		case gvk.Kind == "ClusterRoleBinding" && name == "payload-processing-reader":
-			patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace)
+			if err := patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -115,106 +129,176 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	return nil
 }
 
-func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) {
+func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
 	if params.PayloadProcessingImage != "" {
 		log.V(4).Info("Patching payload-processing image", "image", params.PayloadProcessingImage)
-		_ = setContainerImage(r, "payload-processing", params.PayloadProcessingImage)
-	}
-}
-
-func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) {
-	if params.MaaSAPIKeyCleanupImage != "" {
-		log.V(4).Info("Patching cleanup CronJob image", "image", params.MaaSAPIKeyCleanupImage)
-		_ = unstructured.SetNestedField(r.Object, params.MaaSAPIKeyCleanupImage,
-			"spec", "jobTemplate", "spec", "template", "spec", "containers", "0", "image")
-	}
-}
-
-func patchHTTPRoute(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) {
-	log.V(4).Info("Patching HTTPRoute parentRefs", "namespace", params.GatewayNamespace, "name", params.GatewayName)
-	parentRefs, _, _ := unstructured.NestedSlice(r.Object, "spec", "parentRefs")
-	if len(parentRefs) > 0 {
-		if ref, ok := parentRefs[0].(map[string]any); ok {
-			ref["namespace"] = params.GatewayNamespace
-			ref["name"] = params.GatewayName
-			_ = unstructured.SetNestedSlice(r.Object, parentRefs, "spec", "parentRefs")
+		if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
+			return fmt.Errorf("patch payload-processing image: %w", err)
 		}
 	}
+	return nil
+}
+
+func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	if params.MaaSAPIKeyCleanupImage != "" {
+		log.V(4).Info("Patching cleanup CronJob image", "image", params.MaaSAPIKeyCleanupImage)
+		if err := setCronJobContainerImage(r, "cleanup", params.MaaSAPIKeyCleanupImage); err != nil {
+			return fmt.Errorf("patch cleanup CronJob image: %w", err)
+		}
+	}
+	return nil
+}
+
+func patchHTTPRoute(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	log.V(4).Info("Patching HTTPRoute parentRefs", "namespace", params.GatewayNamespace, "name", params.GatewayName)
+	parentRefs, found, err := unstructured.NestedSlice(r.Object, "spec", "parentRefs")
+	if err != nil {
+		return fmt.Errorf("read HTTPRoute parentRefs: %w", err)
+	}
+	if !found || len(parentRefs) == 0 {
+		return errors.New("HTTPRoute parentRefs not found")
+	}
+	ref, ok := parentRefs[0].(map[string]any)
+	if !ok {
+		return errors.New("HTTPRoute parentRefs[0] is not an object")
+	}
+	ref["namespace"] = params.GatewayNamespace
+	ref["name"] = params.GatewayName
+	parentRefs[0] = ref
+	if err := unstructured.SetNestedSlice(r.Object, parentRefs, "spec", "parentRefs"); err != nil {
+		return fmt.Errorf("write HTTPRoute parentRefs: %w", err)
+	}
+	return nil
 }
 
 func patchMaaSAPIAuthPolicy(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	if params.ClusterAudience != "" {
 		log.V(4).Info("Patching AuthPolicy cluster-audience", "audience", params.ClusterAudience)
-		audiences, _, _ := unstructured.NestedSlice(r.Object,
+		audiences, found, err := unstructured.NestedSlice(r.Object,
 			"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences")
-		if len(audiences) > 0 {
-			audiences[0] = params.ClusterAudience
-			_ = unstructured.SetNestedSlice(r.Object, audiences,
-				"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences")
+		if err != nil {
+			return fmt.Errorf("read AuthPolicy audiences: %w", err)
+		}
+		if !found || len(audiences) == 0 {
+			return errors.New("AuthPolicy audiences not found")
+		}
+		audiences[0] = params.ClusterAudience
+		if err := unstructured.SetNestedSlice(r.Object, audiences,
+			"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences"); err != nil {
+			return fmt.Errorf("write AuthPolicy audiences: %w", err)
 		}
 	}
 
-	url, _, _ := unstructured.NestedString(r.Object,
+	url, found, err := unstructured.NestedString(r.Object,
 		"spec", "rules", "metadata", "apiKeyValidation", "http", "url")
+	if err != nil {
+		return fmt.Errorf("read AuthPolicy validation URL: %w", err)
+	}
+	if !found {
+		return errors.New("AuthPolicy validation URL not found")
+	}
 	if url != "" && strings.Contains(url, ".placehold.") {
 		newURL := strings.Replace(url, ".placehold.", "."+params.AppNamespace+".", 1)
 		log.V(4).Info("Patching AuthPolicy validation URL", "old", url, "new", newURL)
-		_ = unstructured.SetNestedField(r.Object, newURL,
-			"spec", "rules", "metadata", "apiKeyValidation", "http", "url")
+		if err := unstructured.SetNestedField(r.Object, newURL,
+			"spec", "rules", "metadata", "apiKeyValidation", "http", "url"); err != nil {
+			return fmt.Errorf("write AuthPolicy validation URL: %w", err)
+		}
 	}
 	return nil
 }
 
-func patchMaaSAPIDestinationRule(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) {
+func patchMaaSAPIDestinationRule(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
-	host, _, _ := unstructured.NestedString(r.Object, "spec", "host")
+	host, found, err := unstructured.NestedString(r.Object, "spec", "host")
+	if err != nil {
+		return fmt.Errorf("read maas-api DestinationRule host: %w", err)
+	}
+	if !found {
+		return errors.New("maas-api DestinationRule host not found")
+	}
 	if host != "" {
 		newHost := replaceHostNamespace(host, params.AppNamespace)
 		log.V(4).Info("Patching maas-api DestinationRule host", "old", host, "new", newHost)
-		_ = unstructured.SetNestedField(r.Object, newHost, "spec", "host")
+		if err := unstructured.SetNestedField(r.Object, newHost, "spec", "host"); err != nil {
+			return fmt.Errorf("write maas-api DestinationRule host: %w", err)
+		}
 	}
+	return nil
 }
 
-func patchPayloadProcessingDestinationRule(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) {
+func patchPayloadProcessingDestinationRule(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
-	host, _, _ := unstructured.NestedString(r.Object, "spec", "host")
+	host, found, err := unstructured.NestedString(r.Object, "spec", "host")
+	if err != nil {
+		return fmt.Errorf("read payload-processing DestinationRule host: %w", err)
+	}
+	if !found {
+		return errors.New("payload-processing DestinationRule host not found")
+	}
 	if host != "" {
 		newHost := replaceHostNamespace(host, params.GatewayNamespace)
 		log.V(4).Info("Patching payload-processing DestinationRule host", "old", host, "new", newHost)
-		_ = unstructured.SetNestedField(r.Object, newHost, "spec", "host")
-	}
-}
-
-func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) {
-	r.SetNamespace(params.GatewayNamespace)
-
-	targetRefs, _, _ := unstructured.NestedSlice(r.Object, "spec", "targetRefs")
-	if len(targetRefs) > 0 {
-		if ref, ok := targetRefs[0].(map[string]any); ok {
-			ref["name"] = params.GatewayName
-			_ = unstructured.SetNestedSlice(r.Object, targetRefs, "spec", "targetRefs")
+		if err := unstructured.SetNestedField(r.Object, newHost, "spec", "host"); err != nil {
+			return fmt.Errorf("write payload-processing DestinationRule host: %w", err)
 		}
 	}
+	return nil
+}
 
-	clusterName, _, _ := unstructured.NestedString(r.Object,
-		"spec", "configPatches", "0", "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
+func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	r.SetNamespace(params.GatewayNamespace)
+
+	targetRefs, found, err := unstructured.NestedSlice(r.Object, "spec", "targetRefs")
+	if err != nil {
+		return fmt.Errorf("read EnvoyFilter targetRefs: %w", err)
+	}
+	if !found || len(targetRefs) == 0 {
+		return errors.New("EnvoyFilter targetRefs not found")
+	}
+	ref, ok := targetRefs[0].(map[string]any)
+	if !ok {
+		return errors.New("EnvoyFilter targetRefs[0] is not an object")
+	}
+	ref["name"] = params.GatewayName
+	targetRefs[0] = ref
+	if err := unstructured.SetNestedSlice(r.Object, targetRefs, "spec", "targetRefs"); err != nil {
+		return fmt.Errorf("write EnvoyFilter targetRefs: %w", err)
+	}
+
+	clusterName, err := getEnvoyFilterClusterName(r)
+	if err != nil {
+		return err
+	}
 	if clusterName != "" {
 		newCluster := replaceHostNamespace(clusterName, params.GatewayNamespace)
 		log.V(4).Info("Patching EnvoyFilter cluster_name", "old", clusterName, "new", newCluster)
-		_ = unstructured.SetNestedField(r.Object, newCluster,
-			"spec", "configPatches", "0", "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
-	}
-}
-
-func patchClusterRoleBindingSubjectNS(r *unstructured.Unstructured, ns string) {
-	subjects, _, _ := unstructured.NestedSlice(r.Object, "subjects")
-	if len(subjects) > 0 {
-		if subj, ok := subjects[0].(map[string]any); ok {
-			subj["namespace"] = ns
-			_ = unstructured.SetNestedSlice(r.Object, subjects, "subjects")
+		if err := setEnvoyFilterClusterName(r, newCluster); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func patchClusterRoleBindingSubjectNS(r *unstructured.Unstructured, ns string) error {
+	subjects, found, err := unstructured.NestedSlice(r.Object, "subjects")
+	if err != nil {
+		return fmt.Errorf("read ClusterRoleBinding subjects: %w", err)
+	}
+	if !found || len(subjects) == 0 {
+		return errors.New("ClusterRoleBinding subjects not found")
+	}
+	subj, ok := subjects[0].(map[string]any)
+	if !ok {
+		return errors.New("ClusterRoleBinding subjects[0] is not an object")
+	}
+	subj["namespace"] = ns
+	subjects[0] = subj
+	if err := unstructured.SetNestedSlice(r.Object, subjects, "subjects"); err != nil {
+		return fmt.Errorf("write ClusterRoleBinding subjects: %w", err)
+	}
+	return nil
 }
 
 // replaceHostNamespace replaces the second segment of a dot-separated FQDN.
@@ -270,4 +354,65 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
 	}
 	return fmt.Errorf("container %q not found", containerName)
+}
+
+func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image string) error {
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return errors.New("containers not found")
+	}
+	for i, c := range containers {
+		if cm, ok := c.(map[string]any); ok && cm["name"] == containerName {
+			cm["image"] = image
+			containers[i] = cm
+			return unstructured.SetNestedSlice(r.Object, containers, "spec", "jobTemplate", "spec", "template", "spec", "containers")
+		}
+	}
+	return fmt.Errorf("container %q not found", containerName)
+}
+
+func getEnvoyFilterClusterName(r *unstructured.Unstructured) (string, error) {
+	configPatches, found, err := unstructured.NestedSlice(r.Object, "spec", "configPatches")
+	if err != nil {
+		return "", fmt.Errorf("read EnvoyFilter configPatches: %w", err)
+	}
+	if !found || len(configPatches) == 0 {
+		return "", errors.New("EnvoyFilter configPatches not found")
+	}
+	firstPatch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return "", errors.New("EnvoyFilter configPatches[0] is not an object")
+	}
+	clusterName, found, err := unstructured.NestedString(firstPatch,
+		"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
+	if err != nil {
+		return "", fmt.Errorf("read EnvoyFilter cluster_name: %w", err)
+	}
+	if !found {
+		return "", errors.New("EnvoyFilter cluster_name not found")
+	}
+	return clusterName, nil
+}
+
+func setEnvoyFilterClusterName(r *unstructured.Unstructured, clusterName string) error {
+	configPatches, found, err := unstructured.NestedSlice(r.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
+	}
+	if !found || len(configPatches) == 0 {
+		return errors.New("EnvoyFilter configPatches not found")
+	}
+	firstPatch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return errors.New("EnvoyFilter configPatches[0] is not an object")
+	}
+	if err := unstructured.SetNestedField(firstPatch, clusterName,
+		"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"); err != nil {
+		return fmt.Errorf("write EnvoyFilter cluster_name: %w", err)
+	}
+	configPatches[0] = firstPatch
+	if err := unstructured.SetNestedSlice(r.Object, configPatches, "spec", "configPatches"); err != nil {
+		return fmt.Errorf("write EnvoyFilter configPatches: %w", err)
+	}
+	return nil
 }
