@@ -100,4 +100,8 @@ spec:
             cpu: 10m
             memory: 64Mi
       serviceAccountName: maas-controller
-      terminationGracePeriodSeconds: 10
+      # Allow up to 10 minutes for the LifecycleReconciler to complete the full
+      # teardown sequence (Tenants → ClusterRoles → CRDs → ClusterRoleBindings)
+      # before the pod is killed. The default 10s is far too short for Tenant
+      # finalizers to cascade through maas-api, auth policies, and dashboards.
+      terminationGracePeriodSeconds: 600
