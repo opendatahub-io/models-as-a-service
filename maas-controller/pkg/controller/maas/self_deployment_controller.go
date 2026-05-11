@@ -109,23 +109,35 @@ func (r *LifecycleReconciler) ensureFinalizer(ctx context.Context, log logr.Logg
 	return nil
 }
 
+// cleanupTimeout bounds the total time we wait for Tenants to terminate.
+// If exceeded, we force-remove the finalizer so the Deployment (and its
+// namespace) can be deleted. Without this, a namespace delete kills the
+// controller pod before cleanup finishes, leaving the finalizer stuck.
+const cleanupTimeout = 2 * time.Minute
+
 // runCleanup drives the teardown sequence when the Deployment is terminating:
 // delete Tenants, wait for them to be gone, then delete RBAC and CRDs, then
-// release the finalizer.
+// release the finalizer. If the cleanup takes longer than cleanupTimeout
+// (measured from DeletionTimestamp), the finalizer is force-removed.
 func (r *LifecycleReconciler) runCleanup(ctx context.Context, log logr.Logger, dep *appsv1.Deployment) (ctrl.Result, error) {
 	log.Info("Deployment is terminating; running cleanup before releasing finalizer")
 
+	timedOut := time.Since(dep.DeletionTimestamp.Time) > cleanupTimeout
+
 	pending, err := r.deleteTenants(ctx, log)
 	if err != nil {
-		return ctrl.Result{}, err
+		log.Error(err, "error deleting Tenants during cleanup")
 	}
-	if pending {
+	if pending && !timedOut {
 		log.Info("waiting for Tenant CRs to finish terminating")
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
+	if timedOut && pending {
+		log.Info("cleanup timeout exceeded with Tenants still pending; force-releasing finalizer")
+	}
 
 	if err := r.deleteClusterScopedResources(ctx); err != nil {
-		return ctrl.Result{}, err
+		log.Error(err, "error deleting cluster-scoped resources during cleanup")
 	}
 
 	controllerutil.RemoveFinalizer(dep, CleanupFinalizer)
