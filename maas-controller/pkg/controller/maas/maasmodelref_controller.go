@@ -81,6 +81,8 @@ func (r *MaaSModelRefReconciler) gatewayNamespace() string {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs/finalizers,verbs=update
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -161,7 +163,7 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	endpoint, ready, err := handler.Status(ctx, log, model)
+	endpoint, runtimeReady, err := handler.Status(ctx, log, model)
 	if err != nil {
 		if errors.Is(err, ErrKindNotImplemented) {
 			model.Status.Endpoint = ""
@@ -180,15 +182,82 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	} else {
 		model.Status.Endpoint = endpoint
 	}
-	if ready {
-		model.Status.Phase = "Ready"
-		r.updateStatus(ctx, model, "Ready", "Successfully reconciled", statusSnapshot)
-	} else {
-		model.Status.Phase = "Pending"
+
+	governed := r.checkGovernanceAttached(ctx, model)
+	r.setGovernanceCondition(model, governed)
+	r.setRuntimeReadyCondition(model, runtimeReady)
+
+	phase, message := deriveModelPhase(governed, runtimeReady)
+	if phase != "Ready" {
 		model.Status.Endpoint = ""
-		r.updateStatus(ctx, model, "Pending", "Waiting for backend to become ready", statusSnapshot)
 	}
+	r.updateStatus(ctx, model, phase, message, statusSnapshot)
 	return ctrl.Result{}, nil
+}
+
+// checkGovernanceAttached returns true if there is at least one active
+// MaaSSubscription AND at least one active MaaSAuthPolicy referencing this model.
+// No admin CR names, namespaces, or UIDs are propagated to status.
+func (r *MaaSModelRefReconciler) checkGovernanceAttached(ctx context.Context, model *maasv1alpha1.MaaSModelRef) bool {
+	sub := findAnySubscriptionForModel(ctx, r.Client, model.Namespace, model.Name)
+	if sub == nil {
+		return false
+	}
+	ap := findAnyAuthPolicyForModel(ctx, r.Client, model.Namespace, model.Name)
+	return ap != nil
+}
+
+func (r *MaaSModelRefReconciler) setGovernanceCondition(model *maasv1alpha1.MaaSModelRef, governed bool) {
+	cond := metav1.Condition{
+		Type:               maasv1alpha1.ConditionGovernanceAttached,
+		ObservedGeneration: model.GetGeneration(),
+	}
+	if governed {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = string(maasv1alpha1.ReasonGovernancePaired)
+		cond.Message = "Active governance pairing found"
+	} else {
+		prev := apimeta.FindStatusCondition(model.Status.Conditions, maasv1alpha1.ConditionGovernanceAttached)
+		cond.Status = metav1.ConditionFalse
+		if prev != nil && prev.Status == metav1.ConditionTrue {
+			cond.Reason = string(maasv1alpha1.ReasonGovernanceGap)
+			cond.Message = "Governance pairing lost"
+		} else {
+			cond.Reason = string(maasv1alpha1.ReasonNoPairingFound)
+			cond.Message = "No active subscription and auth policy pairing found"
+		}
+	}
+	apimeta.SetStatusCondition(&model.Status.Conditions, cond)
+}
+
+func (r *MaaSModelRefReconciler) setRuntimeReadyCondition(model *maasv1alpha1.MaaSModelRef, ready bool) {
+	cond := metav1.Condition{
+		Type:               maasv1alpha1.ConditionRuntimeReady,
+		ObservedGeneration: model.GetGeneration(),
+	}
+	if ready {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = string(maasv1alpha1.ReasonRuntimeHealthy)
+		cond.Message = "Backend is healthy"
+	} else {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = string(maasv1alpha1.ReasonRuntimeHealthFailure)
+		cond.Message = "Backend is not ready"
+	}
+	apimeta.SetStatusCondition(&model.Status.Conditions, cond)
+}
+
+func deriveModelPhase(governed, runtimeReady bool) (phase, message string) {
+	switch {
+	case governed && runtimeReady:
+		return "Ready", "Governed and runtime-healthy"
+	case governed && !runtimeReady:
+		return "Unhealthy", "Governed but backend is not ready"
+	case !governed && runtimeReady:
+		return "Pending", "Awaiting governance pairing"
+	default:
+		return "Pending", "Awaiting governance pairing and backend readiness"
+	}
 }
 
 func (r *MaaSModelRefReconciler) handleDeletion(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (ctrl.Result, error) {
@@ -349,6 +418,16 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
 			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
 		).
+		// Watch MaaSSubscriptions so we re-reconcile when governance state changes
+		// (spec, status/phase, or deletion). No predicate filter — the reconciler's
+		// equality.Semantic.DeepEqual check gates unnecessary status writes.
+		Watches(&maasv1alpha1.MaaSSubscription{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapMaaSSubscriptionToMaaSModelRefs,
+		)).
+		// Watch MaaSAuthPolicies so we re-reconcile when governance state changes.
+		Watches(&maasv1alpha1.MaaSAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapMaaSAuthPolicyToMaaSModelRefs,
+		)).
 		Complete(r)
 }
 
@@ -367,6 +446,46 @@ func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context
 		requests = append(requests, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
 		})
+	}
+	return requests
+}
+
+// mapMaaSSubscriptionToMaaSModelRefs returns reconcile requests for all MaaSModelRefs
+// referenced by the given MaaSSubscription.
+func (r *MaaSModelRefReconciler) mapMaaSSubscriptionToMaaSModelRefs(_ context.Context, obj client.Object) []reconcile.Request {
+	sub, ok := obj.(*maasv1alpha1.MaaSSubscription)
+	if !ok {
+		return nil
+	}
+	seen := make(map[types.NamespacedName]struct{})
+	var requests []reconcile.Request
+	for _, ref := range sub.Spec.ModelRefs {
+		key := types.NamespacedName{Name: ref.Name, Namespace: ref.Namespace}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		requests = append(requests, reconcile.Request{NamespacedName: key})
+	}
+	return requests
+}
+
+// mapMaaSAuthPolicyToMaaSModelRefs returns reconcile requests for all MaaSModelRefs
+// referenced by the given MaaSAuthPolicy.
+func (r *MaaSModelRefReconciler) mapMaaSAuthPolicyToMaaSModelRefs(_ context.Context, obj client.Object) []reconcile.Request {
+	policy, ok := obj.(*maasv1alpha1.MaaSAuthPolicy)
+	if !ok {
+		return nil
+	}
+	seen := make(map[types.NamespacedName]struct{})
+	var requests []reconcile.Request
+	for _, ref := range policy.Spec.ModelRefs {
+		key := types.NamespacedName{Name: ref.Name, Namespace: ref.Namespace}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		requests = append(requests, reconcile.Request{NamespacedName: key})
 	}
 	return requests
 }
