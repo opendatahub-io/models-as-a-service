@@ -257,17 +257,21 @@ Deploy the entire MaaS stack in one command. The script installs prerequisites (
 
 ### Option B: Add controller to an existing deployment
 
-If MaaS infrastructure is already deployed, install just the controller:
+If MaaS infrastructure is already deployed, install just the controller (same kustomize root the ODH operator uses):
 
 ```bash
 kubectl apply -k deployment/base/maas-controller/default
 ```
+
+On a **fresh** cluster, a single apply can race the `Config` CR against CRD establishment. **`./scripts/deploy.sh`** avoids that by applying `deployment/base/maas-controller/crd` and waiting until every MaaS CRD is **Established**, then applying the full `deployment/base/maas-controller/default` bundle unchanged.
 
 To install into another namespace:
 
 ```bash
 kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: my-namespace/g" | kubectl apply -f -
 ```
+
+For a cold cluster with a custom namespace, run `install_maas_controller_crds_and_wait` from `scripts/deployment-helpers.sh` before the `kustomize build … | kubectl apply` line (same order as `deploy.sh`).
 
 ### Verify
 
@@ -280,7 +284,8 @@ kubectl get crd | grep maas.opendatahub.io
 
 | Component | Path | Description |
 | --------- | ---- | ----------- |
-| CRDs | `deployment/base/maas-controller/crd/` | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, Tenant |
+| CRDs (also in default kustomize) | `deployment/base/maas-controller/crd/bases/` | Config, Tenant, MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, ExternalModel |
+| Default bundle (operator) | `deployment/base/maas-controller/default/` | Includes `../crd` + RBAC + Deployment + monitoring + `Config/default` |
 | RBAC | `deployment/base/maas-controller/rbac/` | ClusterRole, ServiceAccount, bindings |
 | Controller | `deployment/base/maas-controller/manager/` | Deployment (`quay.io/opendatahub/maas-controller:latest`) |
 | Default auth policy | `deployment/base/maas-controller/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |

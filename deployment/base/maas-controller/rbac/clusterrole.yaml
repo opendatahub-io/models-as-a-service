@@ -58,7 +58,6 @@ rules:
   resources:
   - customresourcedefinitions
   verbs:
-  - delete
   - get
   - list
   - watch

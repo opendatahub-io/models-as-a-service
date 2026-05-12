@@ -19,12 +19,9 @@ package maas
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -39,45 +36,24 @@ import (
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
-// CleanupFinalizer is added to the maas-controller Deployment so that when ODH
-// deletes it (on MaaS disable), the controller can clean up Tenant CRs, RBAC,
-// and CRDs before the Deployment object is removed. Config deletion starts
-// garbage collection of platform operands owned by that anchor.
+// CleanupFinalizer was historically added to the maas-controller Deployment for coordinated
+// teardown when ODH removed MaaS. It is no longer set; this constant remains so reconciles
+// can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
-// componentLabel selects all resources belonging to the MaaS component.
-// The ODH operator stamps every deployed resource with app.opendatahub.io/<component-name>=true.
-var componentLabel = client.MatchingLabels{"app.opendatahub.io/modelsasservice": "true"}
-
-// requeueInterval is how often we recheck while Tenants are still terminating.
-const requeueInterval = 5 * time.Second
-
-// LifecycleReconciler watches the maas-controller Deployment and manages
-// the cleanup finalizer lifecycle. While running it ensures CleanupFinalizer
-// is present on the Deployment. When DeletionTimestamp is set (ODH disabled
-// MaaS) it deletes Config first, deletes Tenant CRs, waits for them to be gone,
-// then removes cluster-scoped RBAC and CRDs,
-// then releases the finalizer so the Deployment object can be fully removed.
-// Deleting Config first lets garbage collection tear down platform operands
-// owned by that anchor; Tenant CRs are then deleted and the controller waits for them to go away.
+// LifecycleReconciler watches the maas-controller Deployment and links it to Config/default
+// via a non-controller ownerReference so the workload participates in the same GC graph as
+// other operands. Legacy CleanupFinalizer entries are removed when present.
 type LifecycleReconciler struct {
 	client.Client
-	Scheme          *runtime.Scheme
-	DeploymentName  string
-	DeploymentNS    string
-	TenantNamespace string
+	Scheme           *runtime.Scheme
+	DeploymentName   string
+	DeploymentNS     string
 }
 
-// LifecycleReconciler watches the controller's own Deployment and cleans up cluster-scoped resources
-// (ClusterRoles, CRDs, ClusterRoleBindings stamped with app.opendatahub.io/modelsasservice=true)
-// when the Deployment is deleted (i.e. when ODH disables the modelsAsService component).
-// clusterroles/clusterrolebindings list;delete and customresourcedefinitions list;delete are
-// teardown-only verbs — narrower than TenantReconciler's CRUD grant above.
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
-//+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=list;delete
-//+kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=list;delete
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch;delete
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -88,37 +64,36 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if dep.DeletionTimestamp.IsZero() {
-		if err := r.ensureFinalizer(ctx, log, &dep); err != nil {
-			return ctrl.Result{}, err
-		}
 		if err := r.ensureDeploymentReferencesConfig(ctx, req.NamespacedName); err != nil {
 			return ctrl.Result{}, err
 		}
+		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
-	if !controllerutil.ContainsFinalizer(&dep, CleanupFinalizer) {
-		// The finalizer is absent on a terminating Deployment. This happens if the controller
-		// is deployed against a pre-existing Deployment that is deleted before the first
-		// reconcile sets the finalizer, or if a previous run already removed it. Teardown
-		// is skipped; cluster-scoped resources (ClusterRoles, CRDs) will not be cleaned up.
-		log.Info("Deployment terminating but CleanupFinalizer absent; skipping teardown")
-		return ctrl.Result{}, nil
+	// Terminating: remove legacy finalizer only so deletion is not blocked.
+	if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
+		return ctrl.Result{}, err
 	}
-
-	return r.runCleanup(ctx, log, &dep)
+	return ctrl.Result{}, nil
 }
 
-// ensureFinalizer adds the CleanupFinalizer to the Deployment when it is absent.
-func (r *LifecycleReconciler) ensureFinalizer(ctx context.Context, log logr.Logger, dep *appsv1.Deployment) error {
-	if controllerutil.ContainsFinalizer(dep, CleanupFinalizer) {
+func (r *LifecycleReconciler) stripLegacyCleanupFinalizer(ctx context.Context, log logr.Logger, key types.NamespacedName) error {
+	var dep appsv1.Deployment
+	if err := r.Get(ctx, key, &dep); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !controllerutil.ContainsFinalizer(&dep, CleanupFinalizer) {
 		return nil
 	}
-	controllerutil.AddFinalizer(dep, CleanupFinalizer)
-	if err := r.Update(ctx, dep); err != nil {
-		return fmt.Errorf("add cleanup finalizer to Deployment: %w", err)
+	base := dep.DeepCopy()
+	controllerutil.RemoveFinalizer(&dep, CleanupFinalizer)
+	if err := r.Patch(ctx, &dep, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("remove legacy cleanup finalizer from Deployment: %w", err)
 	}
-	log.Info("added cleanup finalizer to Deployment")
+	log.Info("removed legacy cleanup finalizer from Deployment")
 	return nil
 }
 
@@ -160,131 +135,6 @@ func (r *LifecycleReconciler) ensureDeploymentReferencesConfig(ctx context.Conte
 		return fmt.Errorf("patch deployment ownerReferences: %w", err)
 	}
 	log.Info("set Config owner reference on maas-controller Deployment")
-	return nil
-}
-
-// runCleanup drives the teardown sequence when the Deployment is terminating:
-// delete Config (starts GC of platform operands), delete Tenants, wait for them to be gone,
-// then delete RBAC and CRDs, then release the finalizer.
-func (r *LifecycleReconciler) runCleanup(ctx context.Context, log logr.Logger, dep *appsv1.Deployment) (ctrl.Result, error) {
-	log.Info("Deployment is terminating; running cleanup before releasing finalizer")
-
-	if err := r.deleteConfig(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	pending, err := r.deleteTenants(ctx, log)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if pending {
-		log.Info("waiting for Tenant CRs to finish terminating")
-		return ctrl.Result{RequeueAfter: requeueInterval}, nil
-	}
-
-	if err := r.deleteClusterScopedResources(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	controllerutil.RemoveFinalizer(dep, CleanupFinalizer)
-	if err := r.Update(ctx, dep); err != nil {
-		return ctrl.Result{}, fmt.Errorf("remove cleanup finalizer from Deployment: %w", err)
-	}
-	log.Info("removed cleanup finalizer from Deployment; cleanup complete")
-	return ctrl.Result{}, nil
-}
-
-func (r *LifecycleReconciler) deleteConfig(ctx context.Context) error {
-	log := ctrl.LoggerFrom(ctx)
-	var cfg maasv1alpha1.Config
-	key := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
-	if err := r.Get(ctx, key, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	if err := r.Delete(ctx, &cfg); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete Config %s: %w", cfg.Name, err)
-	}
-	log.Info("deleted Config", "name", cfg.Name)
-	return nil
-}
-
-// deleteTenants deletes all Tenant CRs and returns true while any are still terminating.
-func (r *LifecycleReconciler) deleteTenants(ctx context.Context, log logr.Logger) (pending bool, _ error) {
-	tenantList := &maasv1alpha1.TenantList{}
-	if err := r.List(ctx, tenantList, client.InNamespace(r.TenantNamespace)); err != nil {
-		return false, fmt.Errorf("list Tenants in %q: %w", r.TenantNamespace, err)
-	}
-	for i := range tenantList.Items {
-		t := &tenantList.Items[i]
-		if !t.DeletionTimestamp.IsZero() {
-			pending = true
-			continue
-		}
-		if err := r.Delete(ctx, t); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("delete Tenant %s/%s: %w", t.Namespace, t.Name, err)
-		}
-		log.Info("deleted Tenant", "namespace", t.Namespace, "name", t.Name)
-		pending = true
-	}
-	return pending, nil
-}
-
-// deleteClusterScopedResources removes the cluster-scoped resources (ClusterRole,
-// ClusterRoleBinding, CRDs) that the ODH operator deployed for maas-controller,
-// selected by the component label.
-//
-// We list+delete individually rather than DeleteAllOf to avoid the deletecollection
-// verb, which is often restricted in managed environments.
-//
-// Order matters: ClusterRoles and CRDs are deleted first while the ClusterRoleBinding
-// still grants the SA the permissions to do so. ClusterRoleBindings are deleted last
-// because removing them revokes all RBAC permissions for this SA.
-func (r *LifecycleReconciler) deleteClusterScopedResources(ctx context.Context) error {
-	log := ctrl.LoggerFrom(ctx)
-
-	crList := &rbacv1.ClusterRoleList{}
-	if err := r.List(ctx, crList, componentLabel); err != nil {
-		return fmt.Errorf("list maas-controller ClusterRoles: %w", err)
-	}
-	if len(crList.Items) == 0 {
-		log.Info("no ClusterRoles matched component label; skipping deletion (operator may not have stamped the label)")
-	}
-	for i := range crList.Items {
-		if err := r.Delete(ctx, &crList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete ClusterRole %s: %w", crList.Items[i].Name, err)
-		}
-	}
-
-	crdList := &apiextensionsv1.CustomResourceDefinitionList{}
-	if err := r.List(ctx, crdList, componentLabel); err != nil {
-		return fmt.Errorf("list maas-controller CRDs: %w", err)
-	}
-	if len(crdList.Items) == 0 {
-		log.Info("no CRDs matched component label; skipping deletion (operator may not have stamped the label)")
-	}
-	for i := range crdList.Items {
-		if err := r.Delete(ctx, &crdList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete CRD %s: %w", crdList.Items[i].Name, err)
-		}
-	}
-
-	// ClusterRoleBindings are deleted last: removing them revokes all cluster-scoped
-	// permissions for the maas-controller SA, so this must come after ClusterRoles and CRDs.
-	crbList := &rbacv1.ClusterRoleBindingList{}
-	if err := r.List(ctx, crbList, componentLabel); err != nil {
-		return fmt.Errorf("list maas-controller ClusterRoleBindings: %w", err)
-	}
-	if len(crbList.Items) == 0 {
-		log.Info("no ClusterRoleBindings matched component label; skipping deletion (operator may not have stamped the label)")
-	}
-	for i := range crbList.Items {
-		if err := r.Delete(ctx, &crbList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete ClusterRoleBinding %s: %w", crbList.Items[i].Name, err)
-		}
-	}
 	return nil
 }
 
