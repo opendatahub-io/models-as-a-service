@@ -160,6 +160,42 @@ func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
 	g.Expect(updated.Finalizers).To(BeEmpty())
 }
 
+func TestTenantReconcile_ManagedStripsLegacyFinalizerOnReconcile(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const testNS = "models-as-a-service"
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       maasv1alpha1.TenantInstanceName,
+			Namespace:  testNS,
+			Finalizers: []string{legacyTenantFinalizer},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Tenant{}).
+		WithObjects(tenant).
+		Build()
+
+	r := &TenantReconciler{
+		Client:       cl,
+		Scheme:       s,
+		AppNamespace: testNS,
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(BeEmpty())
+}
+
 func TestTenantReconcile_ManagementStateRemovedDeletesConfigAndStripsLegacyFinalizer(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)

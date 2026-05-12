@@ -47,7 +47,8 @@ const (
 )
 
 // legacyTenantFinalizer was used before teardown moved to Config GC + management-state Removed.
-// It is stripped on delete / idle reconcile so upgraded clusters are not stuck terminating.
+// It is stripped on delete / idle reconcile, and proactively on any non-deleting reconcile so
+// upgraded clusters lose the finalizer without a delete or annotation change.
 const legacyTenantFinalizer = "maas.opendatahub.io/tenant-finalizer"
 
 func managementState(ann map[string]string) string {
@@ -97,6 +98,20 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, r.stripLegacyTenantFinalizerIfPresent(ctx, &tenant)
+	}
+
+	// Proactively strip the legacy finalizer on non-deleting reconciles (startup / steady state)
+	// so clusters upgraded from older releases converge without manual patch.
+	if tenant.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(&tenant, legacyTenantFinalizer) {
+		if err := r.stripLegacyTenantFinalizerIfPresent(ctx, &tenant); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.Get(ctx, req.NamespacedName, &tenant); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, err
+		}
 	}
 
 	ms := managementState(tenant.Annotations)
