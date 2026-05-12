@@ -223,7 +223,7 @@ echo ""
 
 echo "📝 Metrics collection configured:"
 echo "   Limitador: authorized_hits, authorized_calls, limited_calls, limitador_up"
-echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status"
+echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, auth_server_evaluator_* (metadata HTTP)"
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:kv_cache_usage_perc"
 echo ""

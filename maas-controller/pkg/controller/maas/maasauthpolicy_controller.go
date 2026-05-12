@@ -473,7 +473,8 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 						},
 						"ttl": r.MetadataCacheTTL,
 					},
-					"metrics":  false,
+					// Enables auth_server_evaluator_* metrics for this HTTP metadata evaluator (Authorino opt-in).
+					"metrics":  true,
 					"priority": int64(0),
 				},
 				// Resolve subscription via maas-api
@@ -506,7 +507,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 						},
 						"ttl": r.MetadataCacheTTL,
 					},
-					"metrics":  false,
+					"metrics":  true,
 					"priority": int64(1),
 				},
 			},
