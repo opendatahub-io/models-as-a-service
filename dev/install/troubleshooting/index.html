@@ -1338,6 +1338,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#conflicting-authpolicy-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conflicting AuthPolicy Detection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Conflicting AuthPolicy Detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#symptoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symptoms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diagnosis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnosis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#remediation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remediation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tls-certificate-validation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2770,6 +2820,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#conflicting-authpolicy-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conflicting AuthPolicy Detection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Conflicting AuthPolicy Detection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#symptoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symptoms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diagnosis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnosis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#remediation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remediation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tls-certificate-validation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2960,28 +3060,71 @@
 <p><strong>TLS certificate errors (<code>curl: (60) SSL certificate problem</code>)</strong>: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See <a href="#tls-certificate-validation">TLS Certificate Validation</a> below.</p>
 </li>
 </ol>
+<h2 id="conflicting-authpolicy-detection">Conflicting AuthPolicy Detection</h2>
+<p>MaaS automatically detects non-MaaS AuthPolicies (e.g., from KServe or other controllers) that target the same HTTPRoutes used by MaaS-governed models. When a conflict is detected, MaaS sets a <code>ConflictingAuthPolicy</code> condition on the affected MaaSAuthPolicy resource and emits a Kubernetes warning event.</p>
+<h3 id="symptoms">Symptoms</h3>
+<ul>
+<li>MaaSAuthPolicy has condition <code>ConflictingAuthPolicy=True</code></li>
+<li>Warning events on MaaSAuthPolicy resources referencing non-MaaS AuthPolicies</li>
+<li>Unexpected authentication behavior (wrong policy may win when multiple AuthPolicies target the same HTTPRoute)</li>
+</ul>
+<h3 id="diagnosis">Diagnosis</h3>
+<p>Check for conflicting AuthPolicy conditions:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Check MaaSAuthPolicy conditions</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasauthpolicy<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{range .items[*]}{.metadata.name}{&quot;\t&quot;}{range .status.conditions[?(@.type==&quot;ConflictingAuthPolicy&quot;)]}{.status}{&quot;\t&quot;}{.message}{end}{&quot;\n&quot;}{end}&#39;</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># List all AuthPolicies targeting a specific model&#39;s HTTPRoute</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nv">MODEL_NS</span><span class="o">=</span><span class="s2">&quot;&lt;model-namespace&gt;&quot;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nv">MODEL_NAME</span><span class="o">=</span><span class="s2">&quot;&lt;model-name&gt;&quot;</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>kubectl<span class="w"> </span>get<span class="w"> </span>authpolicy<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$MODEL_NS</span><span class="s2">&quot;</span><span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s2">&quot;.items[] | select(.spec.targetRef.name == \&quot;</span><span class="nv">$MODEL_NAME</span><span class="s2">\&quot; and .spec.targetRef.kind == \&quot;HTTPRoute\&quot;) | .metadata.name + \&quot; (managed-by: \&quot; + (.metadata.labels[\&quot;app.kubernetes.io/managed-by\&quot;] // \&quot;unknown\&quot;) + \&quot;)\&quot;&quot;</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># Check for warning events</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>kubectl<span class="w"> </span>get<span class="w"> </span>events<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>--field-selector<span class="w"> </span><span class="nv">reason</span><span class="o">=</span>ConflictingAuthPolicy
+</code></pre></div>
+<h3 id="remediation">Remediation</h3>
+<ol>
+<li>
+<p><strong>KServe anonymous auth policies</strong> (<code>*-kserve-route-authn</code>): These are typically created when <code>security.opendatahub.io/enable-auth</code> is misconfigured on the InferenceService. Set the annotation to <code>"true"</code> on MaaS-governed InferenceServices to prevent KServe from creating conflicting anonymous AuthPolicies:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>annotate<span class="w"> </span>inferenceservice<span class="w"> </span>&lt;name&gt;<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>security.opendatahub.io/enable-auth<span class="o">=</span><span class="s2">&quot;true&quot;</span><span class="w"> </span>--overwrite
+</code></pre></div>
+</li>
+<li>
+<p><strong>Custom AuthPolicies</strong>: If another team deployed a custom AuthPolicy targeting the same HTTPRoute, coordinate to determine which controller should own authentication for that route. Either:</p>
+<ul>
+<li>Remove the conflicting AuthPolicy if MaaS is the intended auth authority</li>
+<li>Or remove the model from the MaaSAuthPolicy if MaaS should not govern that route</li>
+</ul>
+</li>
+<li>
+<p><strong>Verify resolution</strong>: After applying the fix, the <code>ConflictingAuthPolicy</code> condition should transition to <code>False</code> on the next reconciliation:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasauthpolicy<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{range .items[*]}{.metadata.name}{&quot;: &quot;}{range .status.conditions[?(@.type==&quot;ConflictingAuthPolicy&quot;)]}{.status}{end}{&quot;\n&quot;}{end}&#39;</span>
+</code></pre></div>
+</li>
+</ol>
 <h2 id="tls-certificate-validation">TLS Certificate Validation</h2>
 <p>By default, <code>curl</code> validates TLS certificates against your system CA bundle. If you encounter certificate verification errors (e.g., <code>curl: (60) SSL certificate problem: self-signed certificate</code>), use one of the approaches below.</p>
 <h3 id="recommended-use-the-ingress-cacertificate-chain">Recommended: Use the Ingress CA/Certificate Chain</h3>
 <p>For OpenShift clusters with self-signed or internal certificates, use the ingress trust chain (or your platform-provided CA bundle) with <code>curl --cacert</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Get ingress certificate chain/trust bundle (platform-specific source)</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>oc<span class="w"> </span>get<span class="w"> </span>secret<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>router-certs-default<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.data.tls\.crt}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span>&gt;<span class="w"> </span>/tmp/ingress-cert-chain.crt
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Use --cacert in curl commands</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>curl<span class="w"> </span>-sS<span class="w"> </span>--cacert<span class="w"> </span>/tmp/ingress-cert-chain.crt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">/maas-api/v1/models&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Get ingress certificate chain/trust bundle (platform-specific source)</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>oc<span class="w"> </span>get<span class="w"> </span>secret<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>router-certs-default<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.data.tls\.crt}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span>&gt;<span class="w"> </span>/tmp/ingress-cert-chain.crt
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># Use --cacert in curl commands</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>curl<span class="w"> </span>-sS<span class="w"> </span>--cacert<span class="w"> </span>/tmp/ingress-cert-chain.crt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">  </span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">/maas-api/v1/models&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </code></pre></div>
 <p>Alternatively, if your cluster uses the OpenShift service CA:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Extract the service CA bundle</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>oc<span class="w"> </span>get<span class="w"> </span>configmap<span class="w"> </span>-n<span class="w"> </span>openshift-config-managed<span class="w"> </span>service-ca-bundle<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.data.service-ca\.crt}&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>/tmp/service-ca.crt
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1"># Use --cacert in curl commands</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>curl<span class="w"> </span>-sS<span class="w"> </span>--cacert<span class="w"> </span>/tmp/service-ca.crt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">/maas-api/v1/models&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Extract the service CA bundle</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>oc<span class="w"> </span>get<span class="w"> </span>configmap<span class="w"> </span>-n<span class="w"> </span>openshift-config-managed<span class="w"> </span>service-ca-bundle<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.data.service-ca\.crt}&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>/tmp/service-ca.crt
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1"># Use --cacert in curl commands</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>curl<span class="w"> </span>-sS<span class="w"> </span>--cacert<span class="w"> </span>/tmp/service-ca.crt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">/maas-api/v1/models&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </code></pre></div>
 <h3 id="developmenttesting-only-disable-verification">Development/Testing Only: Disable Verification</h3>
 <div class="admonition danger">
@@ -2989,23 +3132,23 @@
 <p>The <code>-k</code> flag disables all TLS certificate validation. An attacker on the network path can present a forged certificate and intercept your API key, token, or other credentials. <strong>Never use <code>-k</code> in production or when sending credentials over untrusted networks.</strong></p>
 </div>
 <p>For <strong>isolated development or test environments only</strong>, you can add the <code>-k</code> flag:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># INSECURE: Only for isolated dev/test environments</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>curl<span class="w"> </span>-sS<span class="w"> </span>-k<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">/maas-api/v1/models&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># INSECURE: Only for isolated dev/test environments</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>curl<span class="w"> </span>-sS<span class="w"> </span>-k<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="s2">&quot;https://maas.</span><span class="si">${</span><span class="nv">CLUSTER_DOMAIN</span><span class="si">}</span><span class="s2">/maas-api/v1/models&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.
 </code></pre></div>
 <h3 id="adding-the-ca-to-your-system-trust-store">Adding the CA to Your System Trust Store</h3>
 <p>For a permanent solution, add the ingress certificate chain to your system trust store so that all tools (curl, Python, browsers) trust it automatically:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Linux (Fedora/RHEL)</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>sudo<span class="w"> </span>cp<span class="w"> </span>/tmp/ingress-cert-chain.crt<span class="w"> </span>/etc/pki/ca-trust/source/anchors/
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>sudo<span class="w"> </span>update-ca-trust
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># Linux (Debian/Ubuntu)</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>sudo<span class="w"> </span>cp<span class="w"> </span>/tmp/ingress-cert-chain.crt<span class="w"> </span>/usr/local/share/ca-certificates/ingress-cert-chain.crt
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>sudo<span class="w"> </span>update-ca-certificates
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="c1"># macOS</span>
-<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>sudo<span class="w"> </span>security<span class="w"> </span>add-trusted-cert<span class="w"> </span>-d<span class="w"> </span>-r<span class="w"> </span>trustRoot<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">  </span>-k<span class="w"> </span>/Library/Keychains/System.keychain<span class="w"> </span>/tmp/ingress-cert-chain.crt
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Linux (Fedora/RHEL)</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>sudo<span class="w"> </span>cp<span class="w"> </span>/tmp/ingress-cert-chain.crt<span class="w"> </span>/etc/pki/ca-trust/source/anchors/
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>sudo<span class="w"> </span>update-ca-trust
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="c1"># Linux (Debian/Ubuntu)</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>sudo<span class="w"> </span>cp<span class="w"> </span>/tmp/ingress-cert-chain.crt<span class="w"> </span>/usr/local/share/ca-certificates/ingress-cert-chain.crt
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>sudo<span class="w"> </span>update-ca-certificates
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="c1"># macOS</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>sudo<span class="w"> </span>security<span class="w"> </span>add-trusted-cert<span class="w"> </span>-d<span class="w"> </span>-r<span class="w"> </span>trustRoot<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">  </span>-k<span class="w"> </span>/Library/Keychains/System.keychain<span class="w"> </span>/tmp/ingress-cert-chain.crt
 </code></pre></div>
 <p>For detailed TLS configuration options, see <a href="../../configuration-and-management/tls-configuration/">TLS Configuration</a>.</p>
 <h2 id="additional-resources">Additional Resources</h2>
@@ -3036,7 +3179,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 7, 2026 14:37:02 UTC">May 7, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 12, 2026 13:26:27 UTC">May 12, 2026</span>
   </span>
 
     
