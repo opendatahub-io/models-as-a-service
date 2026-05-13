@@ -43,9 +43,11 @@ pytest tests/<file>.py -v
 | `test_negative_security.py` | Security / negative paths |
 | `test_namespace_scoping.py` | Namespace wiring |
 | `test_external_models.py` | External model refs |
-| `test_tenant.py` | Tenant singleton checks: Ready/phase, workload presence, CRs not owned by Tenant; DSC deletion → operator CI |
+| `test_tenant.py` | Tenant singleton: `maas-controller` bootstraps `default-tenant`; Ready/phase; optional payload-processing; CRs not owned by Tenant; DSC deletion → operator CI |
 
 Other modules (for example `test_external_oidc.py`, `test_subscription_list_endpoints.py`) are not in the default Prow pytest list—run them explicitly or use `smoke.sh`, which executes all tests under `tests/`.
+
+**`test_tenant.py` skips:** If the Tenant CRD or `default-tenant` is missing, the whole module skips. That is **transitional** for partial or legacy clusters. The target E2E shape is **install `maas-controller` (and its CRDs)** in CI; the controller then creates the Tenant automatically—so skips should become rare and a missing Tenant after a proper controller install should be treated as a regression.
 
 ## CI
 

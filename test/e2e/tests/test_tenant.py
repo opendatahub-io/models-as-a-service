@@ -1,4 +1,9 @@
-"""Tenant singleton (`default-tenant`) checks; DSC disable/remove Tenant → operator CI."""
+"""Tenant singleton (`default-tenant`) checks; DSC disable/remove Tenant → operator CI.
+
+`maas-controller` bootstraps `default-tenant` on startup when the Tenant CRD is installed.
+Module-level skips below are transitional: legacy or partial clusters may lack CRD/singleton
+until CI consistently installs only the controller (dependencies from other pipelines).
+"""
 
 import json
 import os
@@ -53,17 +58,18 @@ def require_tenant_crd():
     )
     if r.returncode != 0:
         pytest.skip(
-            f"Missing CRD {TENANT_CRD}; these tests require operator-based deployment (kustomize mode does not create Tenant CR)."
+            f"Missing CRD {TENANT_CRD} (transitional skip: install maas-controller manifests "
+            f"so CRDs exist; then controller creates {TENANT_NAME})."
         )
 
 
 @pytest.fixture(scope="module", autouse=True)
 def require_tenant_singleton():
-    """Skip all tests if Tenant singleton doesn't exist (e.g., kustomize deployment mode)."""
+    """Skip if singleton missing (transitional: controller should create it once running)."""
     if _tenant_status() is None:
         pytest.skip(
-            f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found; these tests require operator-based deployment. "
-            "Kustomize mode does not create Tenant CR automatically."
+            f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found (transitional skip: "
+            "maas-controller should create this on startup once CRDs and controller are installed)."
         )
 
 
