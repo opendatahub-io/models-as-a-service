@@ -48,6 +48,12 @@ test/e2e/
 
 ## Running Tests
 
+!!! tip "Development images"
+    By default, `deploy.sh` uses `:odh-stable` images from the `odh` overlay. To deploy with `:latest` images (built from `main`), pass `--dev`:
+    ```bash
+    ./scripts/deploy.sh --dev
+    ```
+
 ### Unit Tests (Go)
 
 === "maas-api"
