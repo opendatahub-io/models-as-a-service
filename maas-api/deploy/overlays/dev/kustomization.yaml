@@ -5,7 +5,38 @@ metadata:
   name: maas-api-dev
 
 resources:
-- ../../../../deployment/base/maas-api
+  - ../odh
+
+configMapGenerator:
+- name: maas-parameters
+  envs:
+    - params.env
+  behavior: merge
+generatorOptions:
+  disableNameSuffixHash: true
 
 patches:
 - path: patches/debug-mode.yaml
+
+# Re-run image replacements with updated ConfigMap values
+replacements:
+- source:
+    kind: ConfigMap
+    name: maas-parameters
+    fieldPath: data.maas-api-image
+  targets:
+  - select:
+      kind: Deployment
+      name: maas-api
+    fieldPaths:
+    - spec.template.spec.containers.[name=maas-api].image
+- source:
+    kind: ConfigMap
+    name: maas-parameters
+    fieldPath: data.maas-controller-image
+  targets:
+  - select:
+      kind: Deployment
+      name: maas-controller
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].image
