@@ -51,10 +51,11 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
 	r := &LifecycleReconciler{
-		Client:         cl,
-		Scheme:         s,
-		DeploymentName: "maas-controller",
-		DeploymentNS:   depNS,
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: "",
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -110,10 +111,11 @@ func TestLifecycleReconciler_ConfigTerminatingRequeues(t *testing.T) {
 
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
-		Client:         cl,
-		Scheme:         s,
-		DeploymentName: "maas-controller",
-		DeploymentNS:   depNS,
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: "",
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -121,4 +123,60 @@ func TestLifecycleReconciler_ConfigTerminatingRequeues(t *testing.T) {
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+}
+
+func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-uid-tenant"),
+		},
+	}
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: tenantNS,
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, tenant).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: tenantNS,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS}, &updated)).To(Succeed())
+	g.Expect(updated.OwnerReferences).ToNot(BeEmpty())
+	ref := updated.OwnerReferences[0]
+	g.Expect(ref.UID).To(Equal(types.UID("cfg-uid-tenant")))
+	g.Expect(ref.Kind).To(Equal(maasv1alpha1.ConfigKind))
+	g.Expect(ref.Controller).To(BeNil())
 }

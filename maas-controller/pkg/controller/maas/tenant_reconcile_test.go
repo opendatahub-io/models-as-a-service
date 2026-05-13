@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,23 +30,7 @@ func tenantTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func TestSkipConfigBootstrap(t *testing.T) {
-	g := NewWithT(t)
-	g.Expect(SkipConfigBootstrap(nil)).To(BeFalse())
-	g.Expect(SkipConfigBootstrap(&maasv1alpha1.Tenant{})).To(BeFalse())
-	g.Expect(SkipConfigBootstrap(&maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-			managementStateAnnotation: managementStateRemoved,
-		}},
-	})).To(BeTrue())
-	g.Expect(SkipConfigBootstrap(&maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-			managementStateAnnotation: managementStateManaged,
-		}},
-	})).To(BeFalse())
-}
-
-func TestTenantReconcile_DeletionStripsLegacyFinalizer(t *testing.T) {
+func TestTenantReconcile_DeletionIsNoOp(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
 
@@ -59,7 +42,7 @@ func TestTenantReconcile_DeletionStripsLegacyFinalizer(t *testing.T) {
 			Namespace:         testNS,
 			UID:               types.UID("tenant-uid"),
 			DeletionTimestamp: &now,
-			Finalizers:        []string{legacyTenantFinalizer},
+			Finalizers:        []string{"example.com/hold"},
 		},
 	}
 
@@ -81,13 +64,8 @@ func TestTenantReconcile_DeletionStripsLegacyFinalizer(t *testing.T) {
 	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var updated maasv1alpha1.Tenant
-	err = cl.Get(context.Background(), client.ObjectKey{Name: tenant.Name, Namespace: testNS}, &updated)
-	if apierrors.IsNotFound(err) {
-		// Fake client may drop the object once the last finalizer is removed.
-		return
-	}
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(updated.Finalizers).NotTo(ContainElement(legacyTenantFinalizer))
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenant.Name, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(ContainElement("example.com/hold"), "Tenant reconciler does not mutate finalizers on delete")
 }
 
 func TestTenantReconcile_NonSingletonNameIsNoOp(t *testing.T) {
@@ -160,43 +138,7 @@ func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
 	g.Expect(updated.Finalizers).To(BeEmpty())
 }
 
-func TestTenantReconcile_ManagedStripsLegacyFinalizerOnReconcile(t *testing.T) {
-	g := NewWithT(t)
-	s := tenantTestScheme(t)
-
-	const testNS = "models-as-a-service"
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       maasv1alpha1.TenantInstanceName,
-			Namespace:  testNS,
-			Finalizers: []string{legacyTenantFinalizer},
-		},
-	}
-
-	cl := fake.NewClientBuilder().
-		WithScheme(s).
-		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
-		Build()
-
-	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
-	}
-
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
-	})
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
-
-	var updated maasv1alpha1.Tenant
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
-	g.Expect(updated.Finalizers).To(BeEmpty())
-}
-
-func TestTenantReconcile_ManagementStateRemovedIdlesAndStripsLegacyFinalizer(t *testing.T) {
+func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
 
@@ -214,7 +156,6 @@ func TestTenantReconcile_ManagementStateRemovedIdlesAndStripsLegacyFinalizer(t *
 			Annotations: map[string]string{
 				managementStateAnnotation: managementStateRemoved,
 			},
-			Finalizers: []string{legacyTenantFinalizer},
 		},
 	}
 
@@ -234,19 +175,67 @@ func TestTenantReconcile_ManagementStateRemovedIdlesAndStripsLegacyFinalizer(t *
 		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res).To(Equal(ctrl.Result{}))
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
 
 	var ctAfter maasv1alpha1.Config
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &ctAfter)).To(Succeed())
 
 	var updated maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
-	g.Expect(updated.Finalizers).NotTo(ContainElement(legacyTenantFinalizer))
 
 	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(readyCond).NotTo(BeNil())
 	g.Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(readyCond.Reason).To(Equal("ManagementStateIdle"))
+	g.Expect(readyCond.Reason).To(Equal("WaitingForRemovedTeardown"))
+}
+
+func TestTenantReconcile_ManagementStateRemoved_ConfigTerminatingPatchesStatus(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const testNS = "models-as-a-service"
+	now := metav1.NewTime(time.Now())
+	ct := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.ConfigInstanceName,
+			UID:               types.UID("ct-uid"),
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"test/finalizer"},
+		},
+	}
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: testNS,
+			Annotations: map[string]string{
+				managementStateAnnotation: managementStateRemoved,
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Tenant{}).
+		WithObjects(tenant, ct).
+		Build()
+
+	r := &TenantReconciler{
+		Client:       cl,
+		Scheme:       s,
+		AppNamespace: testNS,
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(readyCond).NotTo(BeNil())
+	g.Expect(readyCond.Reason).To(Equal("ConfigTerminating"))
 }
 
 func TestTenantReconcile_ManagementStateUnmanagedSetsIdle(t *testing.T) {
@@ -365,6 +354,49 @@ func TestTenantReconcile_ConfigMissingSkipsPlatform(t *testing.T) {
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Reason).To(Equal("ConfigMissing"))
+}
+
+func TestTenantReconcile_ConfigEmptyUIDPatchesWaitingForConfigUID(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const testNS = "models-as-a-service"
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: testNS,
+		},
+	}
+	ct := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  "",
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Tenant{}).
+		WithObjects(tenant, ct).
+		Build()
+
+	r := &TenantReconciler{
+		Client:       cl,
+		Scheme:       s,
+		AppNamespace: testNS,
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(5 * time.Second))
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenant.Name, Namespace: testNS}, &updated)).To(Succeed())
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("WaitingForConfigUID"))
 }
 
 func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {

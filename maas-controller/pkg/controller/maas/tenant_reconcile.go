@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -45,11 +44,6 @@ const (
 	managementStateRemoved    = "Removed"
 	managementStateUnmanaged  = "Unmanaged"
 )
-
-// legacyTenantFinalizer was used before teardown moved to Config GC + management-state Removed.
-// It is stripped on delete / idle reconcile, and proactively on any non-deleting reconcile so
-// upgraded clusters lose the finalizer without a delete or annotation change.
-const legacyTenantFinalizer = "maas.opendatahub.io/tenant-finalizer"
 
 func managementState(ann map[string]string) string {
 	if ann == nil {
@@ -73,33 +67,18 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	// Handle delete before Removed/Unmanaged idle. Legacy installs may still carry the old finalizer.
-	// Config anchor lifecycle is owned by the operator / ModelsAsService GC and the lifecycle
-	// reconciler; the Tenant reconciler does not delete Config.
+	// Handle delete before Unmanaged idle. Config anchor lifecycle is owned by the operator /
+	// ModelsAsService GC and the lifecycle reconciler; the Tenant reconciler does not delete Config.
 	if !tenant.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.stripLegacyTenantFinalizerIfPresent(ctx, &tenant)
-	}
-
-	// Proactively strip the legacy finalizer on non-deleting reconciles (startup / steady state)
-	// so clusters upgraded from older releases converge without manual patch.
-	if tenant.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(&tenant, legacyTenantFinalizer) {
-		if err := r.stripLegacyTenantFinalizerIfPresent(ctx, &tenant); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.Get(ctx, req.NamespacedName, &tenant); err != nil {
-			if apierrors.IsNotFound(err) {
-				return ctrl.Result{}, nil
-			}
-			return ctrl.Result{}, err
-		}
+		return ctrl.Result{}, nil
 	}
 
 	ms := managementState(tenant.Annotations)
-	if ms == managementStateRemoved || ms == managementStateUnmanaged {
+	if ms == managementStateUnmanaged {
 		return r.handleIdleManagementState(ctx, &tenant, ms)
 	}
 
-	if ms != "" && ms != managementStateManaged {
+	if ms != "" && ms != managementStateManaged && ms != managementStateRemoved {
 		if err := r.patchStatus(ctx, &tenant, "Failed", metav1.ConditionFalse, "UnexpectedManagementState",
 			fmt.Sprintf("unsupported %s=%q", managementStateAnnotation, ms)); err != nil {
 			return ctrl.Result{}, err
@@ -113,6 +92,18 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	if wait != nil {
 		return *wait, nil
+	}
+
+	// Removed: operator-driven teardown deletes the Config anchor; readyConfigOrWait already
+	// surfaces ConfigMissing / ConfigTerminating. If Config is still live, suspend platform apply
+	// until GC removes it (do not treat like Unmanaged — no platform while anchor exists).
+	if managementState(tenant.Annotations) == managementStateRemoved {
+		log.V(1).Info("Tenant in Removed management state with live Config; waiting for anchor teardown")
+		if err := r.patchStatus(ctx, &tenant, "Pending", metav1.ConditionFalse, "WaitingForRemovedTeardown",
+			"management state is Removed; platform reconcile is suspended until the Config anchor is deleted by component GC"); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	orig := tenant.DeepCopy()
@@ -265,34 +256,11 @@ func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logge
 	return &ct, nil, nil
 }
 
-// SkipConfigBootstrap returns true when the default Tenant is in Removed management state.
-// The manager startup runnable must not create or patch default-tenant in that state so we
-// do not fight operator teardown while the Config anchor is removed by component GC.
-func SkipConfigBootstrap(tenant *maasv1alpha1.Tenant) bool {
-	if tenant == nil || tenant.Annotations == nil {
-		return false
-	}
-	return tenant.Annotations[managementStateAnnotation] == managementStateRemoved
-}
-
-func (r *TenantReconciler) stripLegacyTenantFinalizerIfPresent(ctx context.Context, tenant *maasv1alpha1.Tenant) error {
-	if !controllerutil.ContainsFinalizer(tenant, legacyTenantFinalizer) {
-		return nil
-	}
-	base := client.MergeFrom(tenant.DeepCopy())
-	controllerutil.RemoveFinalizer(tenant, legacyTenantFinalizer)
-	return r.Patch(ctx, tenant, base)
-}
-
-// handleIdleManagementState handles Removed and Unmanaged states.
-// Platform teardown for Removed is driven by the operator deleting the Config anchor (and
-// related GC); this reconciler only records idle status and strips any legacy finalizer.
+// handleIdleManagementState handles Unmanaged: platform workloads are not driven by this
+// reconciler; record idle status.
 func (r *TenantReconciler) handleIdleManagementState(ctx context.Context, tenant *maasv1alpha1.Tenant, ms string) (ctrl.Result, error) {
 	if err := r.patchStatus(ctx, tenant, "", metav1.ConditionFalse, "ManagementStateIdle",
 		fmt.Sprintf("management state is %q; platform workloads are not driven by this reconciler in this state", ms)); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.stripLegacyTenantFinalizerIfPresent(ctx, tenant); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
