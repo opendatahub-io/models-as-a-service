@@ -18,6 +18,7 @@
 #   --namespace <namespace>       Target namespace
 #   --verbose                     Enable debug logging
 #   --dry-run                     Show what would be done
+#   --dev                         Use dev overlay with :latest images
 #   --help                        Show full help with all options
 #
 # ADVANCED OPTIONS (PR Testing):
@@ -102,6 +103,7 @@ ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 ENABLE_KEYCLOAK="${ENABLE_KEYCLOAK:-false}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
+DEV_MODE="${DEV_MODE:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
@@ -162,6 +164,10 @@ OPTIONS:
 
   --dry-run
       Show what would be done without applying changes
+
+  --dev
+      Use dev overlay with :latest images (for MaaS developers)
+      Default: uses odh overlay with :odh-stable images
 
   --help
       Display this help message
@@ -334,6 +340,10 @@ parse_arguments() {
         ;;
       --external-oidc)
         EXTERNAL_OIDC="true"
+        shift
+        ;;
+      --dev)
+        DEV_MODE="true"
         shift
         ;;
       --help|-h)
@@ -1434,13 +1444,15 @@ patch_operator_csv() {
 #──────────────────────────────────────────────────────────────
 
 # get_odh_overlay_param
-#   Reads a value from deployment/overlays/odh/params.env.
+#   Reads a value from the active overlay's params.env.
 get_odh_overlay_param() {
   local key="$1"
   local project_root
   project_root="$(find_project_root)" || return 1
 
-  local params_file="$project_root/deployment/overlays/odh/params.env"
+  local overlay="odh"
+  [[ "${DEV_MODE:-false}" == "true" ]] && overlay="dev"
+  local params_file="$project_root/deployment/overlays/$overlay/params.env"
   [[ -f "$params_file" ]] || return 1
 
   awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$params_file"
