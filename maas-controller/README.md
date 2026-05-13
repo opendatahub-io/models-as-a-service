@@ -26,7 +26,11 @@ The `RELATED_IMAGE_ODH_MAAS_API_IMAGE` environment variable controls which `maas
 
 **Self-bootstrap singleton.** The controller creates `default-tenant` on startup if it does not exist. A CEL validation rule (`self.metadata.name == 'default-tenant'`) enforces exactly one Tenant per namespace. This is consistent with the ODH component lifecycle (DSC enables → operator deploys controller → controller creates CR) while keeping the platform workload lifecycle inside `maas-controller`.
 
-**Cross-namespace ownership.** The Tenant CR lives in the app namespace but five resources are created in the gateway namespace (`openshift-ingress`): `AuthPolicy`, `TokenRateLimitPolicy`, `DestinationRule`, `TelemetryPolicy`, and `Istio Telemetry`. Kubernetes rejects cross-namespace `ownerReference`, so these use tracking labels instead:
+**Config anchor.** The cluster-scoped `Config` named `default` is the Kubernetes controller owner for platform operands (maas-api workloads, gateway policies, cluster RBAC, and so on). Namespaced children in any namespace may reference this cluster-scoped owner. The namespace-scoped `Tenant` (`default-tenant`) is also owned by `Config` so garbage collection removes it when the anchor is deleted. **`Config/default` is created by `LifecycleReconciler`** once the `maas-controller` Deployment is running (and recreated if accidentally deleted while the Deployment remains); the ODH operator may still create it via component reconcile. The manager bootstrap runnable creates **`default-tenant`** once `Config` exists (shell CR only); **`LifecycleReconciler`** applies the **`Config`→`Tenant`** non-controller owner reference the same way it links **`Config`→`Deployment`**. When the `Tenant` is set to `managementState: Removed`, teardown is driven by the **operator removing the `Config` anchor** (Models-as-a-Service component GC); the Tenant reconciler does not delete `Config`. The bootstrap runnable skips tenant create while the **`maas-controller` Deployment is terminating**, matching the signal `LifecycleReconciler` uses so bootstrap does not fight teardown.
+
+**RBAC (ODH reconciler).** `ClusterRole/maas-controller-role` is owned by the `ModelsAsService` component CR and the operator resets its rules to its embedded manifest, which may omit `configs` until the operator ships that API. A separate `ClusterRole` + `ClusterRoleBinding` (`maas-controller-cluster-config-role` → the same `maas-controller` ServiceAccount) grants only `configs` verbs and is not operator-owned, so it persists and merges at authorization time with the primary binding.
+
+**Cross-namespace ownership.** The `Tenant` CR lives in the subscription namespace (default `models-as-a-service`), while `maas-api` runs in the application namespace (e.g. `opendatahub`). Kubernetes rejects a namespaced owner in a different namespace, so platform resources do **not** use `Tenant` as the controller owner. Instead they use `Config` as controller owner and carry tracking labels (`maas.opendatahub.io/tenant-name`, `maas.opendatahub.io/tenant-namespace`) for human inspection and for any non-owner-driven automation. Example labels:
 
 ```yaml
 labels:
@@ -34,7 +38,7 @@ labels:
   maas.opendatahub.io/tenant-namespace: models-as-a-service
 ```
 
-Same-namespace children use standard `ownerReference` (automatic GC). Cluster-scoped and cross-namespace children use tracking labels and are cleaned up by the Tenant finalizer via label queries.
+The `maas-controller` Deployment in the application namespace is never given a controller owner reference to itself; it only receives the tracking labels above when present in the rendered manifests.
 
 ### Subscription model
 
@@ -253,17 +257,21 @@ Deploy the entire MaaS stack in one command. The script installs prerequisites (
 
 ### Option B: Add controller to an existing deployment
 
-If MaaS infrastructure is already deployed, install just the controller:
+If MaaS infrastructure is already deployed, install just the controller (same kustomize root the ODH operator uses):
 
 ```bash
 kubectl apply -k deployment/base/maas-controller/default
 ```
+
+On a **fresh** cluster, applying the full bundle in one shot can apply workloads before MaaS CRDs are **Established**. **`./scripts/deploy.sh`** applies `deployment/base/maas-controller/crd` first and waits until every MaaS CRD is **Established**, then applies the rest of `deployment/base/maas-controller/default` (RBAC, Deployment, and so on). After the controller pod starts, **`LifecycleReconciler` creates `Config/default`** and links **`Config`→`Deployment`** and **`Config`→`default-tenant`**; the bootstrap runnable may create the **`default-tenant`** shell before those owner refs converge.
 
 To install into another namespace:
 
 ```bash
 kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: my-namespace/g" | kubectl apply -f -
 ```
+
+For a cold cluster with a custom namespace, run `install_maas_controller_crds_and_wait` from `scripts/deployment-helpers.sh` before the `kustomize build … | kubectl apply` line (same order as `deploy.sh`).
 
 ### Verify
 
@@ -276,7 +284,8 @@ kubectl get crd | grep maas.opendatahub.io
 
 | Component | Path | Description |
 | --------- | ---- | ----------- |
-| CRDs | `deployment/base/maas-controller/crd/` | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, Tenant |
+| CRDs (also in default kustomize) | `deployment/base/maas-controller/crd/bases/` | Config, Tenant, MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, ExternalModel |
+| Default bundle (operator) | `deployment/base/maas-controller/default/` | Includes `../crd` + RBAC + Deployment + monitoring + `Config/default` |
 | RBAC | `deployment/base/maas-controller/rbac/` | ClusterRole, ServiceAccount, bindings |
 | Controller | `deployment/base/maas-controller/manager/` | Deployment (`quay.io/opendatahub/maas-controller:latest`) |
 | Default auth policy | `deployment/base/maas-controller/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |

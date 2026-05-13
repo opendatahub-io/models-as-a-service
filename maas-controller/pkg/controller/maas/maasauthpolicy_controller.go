@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -73,6 +74,9 @@ type MaaSAuthPolicyReconciler struct {
 	// AuthzCacheTTL is the TTL in seconds for Authorino OPA authorization caching.
 	// Applies to auth-valid, subscription-valid, and require-group-membership authorization evaluators.
 	AuthzCacheTTL int64
+
+	// Recorder emits Kubernetes events for conflict detection warnings.
+	Recorder record.EventRecorder
 }
 
 // oidcConfig holds OIDC configuration from Tenant CR
@@ -249,6 +253,7 @@ func authzCacheKeySelector(ns, name string) string {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
@@ -304,6 +309,44 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Update per-AuthPolicy status
 	r.updateAuthPolicyRefStatus(ctx, log, policy, refs)
+
+	// Detect conflicting (non-MaaS) AuthPolicies on MaaS-managed HTTPRoutes
+	prevConflict := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
+	conflicts, detectErr := r.detectConflictingAuthPolicies(ctx, log, policy)
+	if detectErr != nil {
+		apimeta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+			Type:               ConditionConflictingAuthPolicy,
+			Status:             metav1.ConditionUnknown,
+			Reason:             "ConflictCheckFailed",
+			Message:            detectErr.Error(),
+			ObservedGeneration: policy.GetGeneration(),
+		})
+	} else {
+		setConflictingAuthPolicyCondition(policy, conflicts)
+	}
+	currConflict := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
+	shouldEmitConflictEvent := currConflict != nil &&
+		currConflict.Status == metav1.ConditionTrue &&
+		(prevConflict == nil ||
+			prevConflict.Status != currConflict.Status ||
+			prevConflict.Message != currConflict.Message)
+	if shouldEmitConflictEvent && r.Recorder != nil {
+		var names []string
+		for _, c := range conflicts {
+			names = append(names, c.String())
+		}
+		r.Recorder.Eventf(policy, "Warning", "ConflictingAuthPolicy",
+			"Detected %d non-MaaS AuthPolic%s on MaaS auth surfaces: %s",
+			len(conflicts), pluralY(len(conflicts)), strings.Join(names, "; "))
+	}
+	shouldEmitResolvedEvent := currConflict != nil &&
+		currConflict.Status == metav1.ConditionFalse &&
+		prevConflict != nil &&
+		prevConflict.Status == metav1.ConditionTrue
+	if shouldEmitResolvedEvent && r.Recorder != nil {
+		r.Recorder.Event(policy, "Normal", "ConflictingAuthPolicyResolved",
+			"All conflicting AuthPolicies on MaaS auth surfaces have been resolved")
+	}
 
 	// Derive final phase based on model and AuthPolicy health
 	phase, message := r.deriveAuthPolicyPhase(policy, missingModels)
@@ -1158,6 +1201,10 @@ func (r *MaaSAuthPolicyReconciler) ValidateCacheTTLs() error {
 func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Validate cache TTL configuration
 	log := ctrl.Log.WithName("maas-authpolicy-controller")
+
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor("maas-authpolicy-controller")
+	}
 
 	// Reject negative TTL values
 	if err := r.ValidateCacheTTLs(); err != nil {

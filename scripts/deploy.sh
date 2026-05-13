@@ -530,7 +530,12 @@ main() {
   if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
-    log_info "  Installing controller (CRDs, RBAC, deployment)..."
+    log_info "  Phase 1: Applying MaaS CRDs and waiting until Established (controller creates Config after CRD is ready)..."
+    if ! install_maas_controller_crds_and_wait "${project_root}/deployment/base/maas-controller/crd"; then
+      log_error "MaaS CRD install or Established wait failed"
+      return 1
+    fi
+    log_info "  Phase 2: Applying full controller kustomize (same as operator: deployment/base/maas-controller/default)..."
     if [[ "$NAMESPACE" != "opendatahub" ]]; then
       (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
         sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
