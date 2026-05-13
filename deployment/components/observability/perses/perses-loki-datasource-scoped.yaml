@@ -5,7 +5,7 @@
 # and appends `| user_id="<username>"` to every LogQL query.
 # Each user sees only their own logs.
 #
-# Deployed to tenant namespaces (e.g. kuadrant-system) for the Usage Dashboard.
+# Deployed to the same namespace as the proxy and Loki (loki-stack-namespace).
 ---
 apiVersion: perses.dev/v1alpha2
 kind: PersesDatasource
@@ -25,7 +25,7 @@ spec:
         proxy:
           kind: HTTPProxy
           spec:
-            url: http://loki-query-proxy-user.kuadrant-system.svc:8080
+            url: http://loki-query-proxy-user.loki-stack-namespace.svc:8080
             allowedEndpoints:
               - endpointPattern: /loki/api/v1/.*
                 method: GET

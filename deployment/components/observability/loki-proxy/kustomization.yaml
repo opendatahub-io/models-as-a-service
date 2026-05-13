@@ -6,12 +6,24 @@ metadata:
   annotations:
     config.kubernetes.io/local-config: "true"
 
-namespace: kuadrant-system
+# Change this to deploy to a different namespace (e.g. for ODH or RHOAI).
+# All resources and ClusterRoleBinding subjects will follow automatically.
+namespace: loki-stack-namespace
 
 resources:
   - proxy-source-configmap.yaml
   - rbac.yaml
   - service.yaml
   - deployment-user.yaml
-  # networkpolicy.yaml targets openshift-logging (not kuadrant-system).
-  # Apply separately: oc apply -f networkpolicy.yaml
+  - networkpolicy.yaml
+
+replacements:
+  - source:
+      kind: ServiceAccount
+      name: loki-query-proxy
+      fieldPath: metadata.namespace
+    targets:
+      - select:
+          kind: ClusterRoleBinding
+        fieldPaths:
+          - subjects.[kind=ServiceAccount].namespace

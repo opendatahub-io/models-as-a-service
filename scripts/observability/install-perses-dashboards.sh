@@ -168,7 +168,11 @@ else
         | kubectl apply --server-side=true --force-conflicts -n "$TENANT_NAMESPACE" -f -
 
     # Tenant Loki datasource (user-scoped, routes through loki-query-proxy-user)
-    kubectl apply --server-side=true --force-conflicts -f "$OBSERVABILITY_DIR/perses/perses-loki-datasource-scoped.yaml" -n "$TENANT_NAMESPACE"
+    # Replace loki-stack-namespace placeholder with the namespace where the proxy runs
+    LOKI_STACK_NAMESPACE="${LOKI_STACK_NAMESPACE:-openshift-logging}"
+    sed "s/loki-stack-namespace/${LOKI_STACK_NAMESPACE}/g" \
+        "$OBSERVABILITY_DIR/perses/perses-loki-datasource-scoped.yaml" \
+        | kubectl apply --server-side=true --force-conflicts -n "$TENANT_NAMESPACE" -f -
 
     # RBAC: adds metrics.k8s.io/pods 'create' verb for authenticated users
     kubectl apply --server-side=true --force-conflicts -f "$OBSERVABILITY_DIR/perses/perses-rbac-scoped.yaml" -n "$TENANT_NAMESPACE"

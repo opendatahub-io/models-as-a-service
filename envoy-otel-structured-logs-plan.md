@@ -152,7 +152,7 @@ status: pending
   content: "DONE: Removed -- separator from git rev-parse and git checkout --detach in update-docs-latest.yml. Was treating tag as pathspec."
   status: completed
   - id: restore-telemetry-user-label
-  content: "DONE: Restored user: auth.identity.userid in TelemetryPolicy. Was removed during tier->subscription migration, breaking AI Engineer dashboard."
+  content: "DONE: user: auth.identity.userid was restored in Phase 14, then removed again after code review (ahadas c1) — high-cardinality label, per-user data served by Loki now."
   status: completed
   - id: fix-tokenreview-client-reuse
   content: "DONE: Made resolveToken reuse a global http.Client for TokenReview API instead of creating one per request."
@@ -160,6 +160,27 @@ status: pending
   - id: dashboard-ui-verification
   content: "DONE: Verified Usage Dashboard in browser for all 4 test users. Screenshots confirm correct tenant isolation."
   status: completed
+  - id: upgrade-loki-variable-plugins
+  content: "TODO: When perses/plugins releases with PR #651 (LokiLabelValuesVariable, LokiLabelNamesVariable, LokiLogQLVariable — merged 2026-05-07) and COO picks it up, replace StaticListVariable for model/subscription/user_id with dynamic LokiLabelValuesVariable in dashboard-usage.yaml. Upstream issue: perses/perses#4054."
+  status: pending
+  - id: fix-proxy-content-length
+  content: "TODO: When POST body is rewritten, stale Content-Length header is forwarded. Set Content-Length from rewritten body length or strip it and let http.Transport set it."
+  status: pending
+  - id: fix-proxy-json-post
+  content: "TODO: Proxy only rewrites application/x-www-form-urlencoded POST bodies. JSON POST bodies (application/json) are forwarded unfiltered. Add JSON body parsing or block unsupported content types for non-admin users."
+  status: pending
+  - id: fix-proxy-non-query-apis
+  content: "TODO: Label/value, series, and metadata Loki APIs that don't use a query param are forwarded without user_id injection. Evaluate allowlisting or restricting these endpoints for non-admin users."
+  status: pending
+  - id: fix-proxy-security-context
+  content: "TODO: Add securityContext to deployment-user.yaml: runAsNonRoot, allowPrivilegeEscalation: false, capabilities.drop: ALL, readOnlyRootFilesystem."
+  status: pending
+  - id: fix-proxy-client-timeouts
+  content: "TODO: Add explicit Timeout to httpClient and tokenReviewClient to prevent goroutine pile-up under load."
+  status: pending
+  - id: fix-proxy-sa-token-trim
+  content: "TODO: Use strings.TrimSpace() on SA token read from saTokenPath before setting Authorization header, to handle trailing newlines."
+  status: pending
   - id: review-and-split
   content: "TODO: Review all changes, break into logical commits/branches/PRs for merge"
   status: pending
@@ -1434,7 +1455,7 @@ User → Perses → Query Proxy (NEW) → LokiStack Gateway → Loki
 - `user` mode: Filter by `user_id`
 - `organization` mode: Filter by `organization_id`
 
-**Security mitigation:** NetworkPolicy restricts direct LokiStack Gateway access to proxy + OTel Collector only.
+**Security mitigation:** NetworkPolicy restricts direct LokiStack Gateway access to proxy pods and intra-namespace Loki components only.
 
 **Status:** ❌ **REJECTED** - Query proxy abandoned in favor of simplified static mode (see below).
 
@@ -1671,19 +1692,18 @@ User Request → Perses Dashboard → Loki Query Proxy → LokiStack Gateway →
                         (X-Scope-OrgID = application tenant)
 ```
 
-**Two Proxy Deployments (Two Datasources):**
+**Single Proxy Deployment:**
 
 1. **loki-query-proxy-user** (ISOLATION_MODE=user)
-   - Injects `| user_id="<username>"` filter
-   - Used by: AI Engineer dashboard (user-scoped)
-   
-2. **loki-query-proxy-org** (ISOLATION_MODE=none)
-   - No filter injection
-   - Used by: Platform Admin dashboard (cluster-wide)
+   - Injects `| user_id="<username>"` filter for non-admin users
+   - Admin bypass: `system:cluster-admins` / `system:masters` group members skip filtering
+   - Used by: Perses tenant dashboard (user-scoped); admin dashboards access Loki directly via mTLS
+
+*(Org proxy `loki-query-proxy-org` was removed in Phase 13c — admin dashboards use direct LokiStack access.)*
 
 **LokiStack Configuration:** Revert to `openshift-logging` mode (single "application" tenant).
 
-**Security:** NetworkPolicy blocks direct LokiStack access - only proxy + OTel Collector allowed.
+**Security:** NetworkPolicy blocks direct LokiStack access - only proxy pods and intra-namespace Loki components allowed.
 
 **Reverted (2026-04-28):**
 - LokiStack mode: `static` → `openshift-logging`
@@ -1691,7 +1711,7 @@ User Request → Perses Dashboard → Loki Query Proxy → LokiStack Gateway →
 - Deleted Secret: `loki-oidc-credentials` (openshift-logging namespace)
 - Backup saved: `/tmp/lokistack-static-backup.yaml`
 
-**Status:** 🔨 **IN PROGRESS** - Implementing query proxy.
+**Status:** ✅ **IMPLEMENTED** - Proxy deployed and validated (31/31 tests pass).
 
 ### Implementation: No Custom Image (ConfigMap + Stock Image)
 
@@ -1699,19 +1719,20 @@ User Request → Perses Dashboard → Loki Query Proxy → LokiStack Gateway →
 
 **Solution:** Mount Go source as a ConfigMap, run with `go run` on a stock Red Hat Go Toolset image.
 
-**Image:** `registry.access.redhat.com/ubi9/go-toolset:1.18`
+**Image:** `registry.access.redhat.com/ubi9/go-toolset:1.25`
 - Red Hat Go Toolset (UBI9-based), public Red Hat registry (no auth required)
 - The internal registry (`image-registry.openshift-image-registry.svc:5000/openshift/golang:1.18-ubi9`) was rejected at deploy time due to SA pull auth issues on this cluster
-- Go 1.18.10, runs as UID 1001 (non-root)
+- Originally deployed with Go 1.18; upgraded to Go 1.25 to match project standard and resolve CVEs
+- Runs as UID 1001 (non-root)
 
 **Mechanism:**
 ```
 Pod starts
-  └── Stock golang:1.18-ubi9 image
+  └── Stock ubi9/go-toolset:1.25 image
         └── ConfigMap mounted at /opt/app-root/src/proxy/
-              ├── go.mod          (go 1.18, zero dependencies)
+              ├── go.mod          (go 1.25, zero dependencies)
               ├── main.go         (proxy handler, TLS, health checks)
-              ├── auth.go         (JWT username extraction from bearer token)
+              ├── auth.go         (TokenReview API — resolves bearer token to username + groups)
               ├── rewriter.go     (LogQL | user_id="X" injection)
               └── config.go       (env var config: PORT, LOKI_UPSTREAM_URL, ISOLATION_MODE)
         └── command: ["go", "run", "main.go", "auth.go", "rewriter.go", "config.go"]
@@ -1721,37 +1742,51 @@ Pod starts
 - Source files flattened to single `package main` (required by `go run` -- cannot span packages)
 - Compile-on-start: ~3-5s delay per pod start (acceptable for this use case)
 - ConfigMap size: ~8KB total (well under 1MB limit)
-- mTLS client cert for Loki: separate Secret volumeMount at `/etc/loki-client-cert/` (unchanged)
+- Proxy authenticates to Loki gateway via SA token (`Authorization: Bearer`), not mTLS client certs
 - Health/readiness probes: `initialDelaySeconds: 10` to account for compile time
 
-**Two Deployments (two Perses datasources):**
-1. `loki-query-proxy-user` (ISOLATION_MODE=user) -- injects `| user_id="<username>"` filter
-2. `loki-query-proxy-org` (ISOLATION_MODE=none) -- pass-through, no filtering
+**Single Deployment:**
+- `loki-query-proxy-user` (ISOLATION_MODE=user) -- injects `| user_id="<username>"` filter; admins bypass filtering via group check
 
 **Files (under `deployment/components/observability/loki-proxy/`):**
 - `proxy-source-configmap.yaml` -- Go source files as ConfigMap
-- `deployment-user.yaml` -- user-scoped proxy (ISOLATION_MODE=user)
-- `deployment-org.yaml` -- admin pass-through proxy (ISOLATION_MODE=none)
-- `rbac.yaml` -- ServiceAccount + ClusterRoleBinding (cluster-logging-application-view)
-- `service.yaml` -- Two Services (loki-query-proxy-user:8080, loki-query-proxy-org:8080)
-- `networkpolicy.yaml` -- Restricts direct LokiStack Gateway access to proxy + OTel Collector only
-- `kustomization.yaml` -- Kustomize entrypoint
+- `deployment-user.yaml` -- user-scoped proxy (ISOLATION_MODE=user), securityContext hardened
+- `rbac.yaml` -- ServiceAccount + ClusterRoleBindings (cluster-logging-application-view, namespace-view with tokenreviews)
+- `service.yaml` -- loki-query-proxy-user:8080
+- `networkpolicy.yaml` -- Restricts direct LokiStack Gateway access (intra-namespace, no cross-namespace selectors)
+- `kustomization.yaml` -- Kustomize entrypoint with configurable namespace + ClusterRoleBinding replacements
 
-**Install script:** `scripts/observability/install-loki-proxy.sh`
-1. Apply ConfigMap, RBAC, Services, NetworkPolicy, Deployments
-2. Wait for rollout
-3. Update Perses Loki datasource URLs to point through proxy
+**Namespace configuration:**
+The kustomization uses `namespace: loki-stack-namespace` as a configurable default.
+A `replacements` block propagates this into ClusterRoleBinding subjects automatically.
+The `LOKI_UPSTREAM_URL` in `deployment-user.yaml` embeds `loki-stack-namespace` in the FQDN
+(`https://maas-loki-gateway-http.loki-stack-namespace.svc:8080/api/logs/v1/application`).
+
+Deploy with `sed` to target a specific namespace:
+```bash
+NS=openshift-logging
+
+# Proxy (RBAC, ConfigMap, Deployment, Service, NetworkPolicy)
+kustomize build deployment/components/observability/loki-proxy \
+  | sed "s/loki-stack-namespace/$NS/g" \
+  | kubectl apply --server-side=true -f -
+
+# Dashboards + datasources (scoped Loki datasource uses sed internally)
+LOKI_STACK_NAMESPACE="$NS" bash scripts/observability/install-perses-dashboards.sh
+```
 
 **Update flow:**
 ```bash
-# Edit Go source in proxy-source-configmap.yaml
-# Re-run:
-bash scripts/observability/install-loki-proxy.sh
-# (re-applies ConfigMap + rollout restart -- no build, no image push)
+# Edit Go source in proxy-source-configmap.yaml, then:
+NS=<target-namespace>
+kustomize build deployment/components/observability/loki-proxy \
+  | sed "s/loki-stack-namespace/$NS/g" \
+  | kubectl apply --server-side=true -f -
+kubectl rollout restart deployment/loki-query-proxy-user -n "$NS"
 ```
 
 **Perses datasource routing:**
-- Tenant (kuadrant-system): URL → `http://loki-query-proxy-user.kuadrant-system.svc:8080` (per-user filtering)
+- Tenant: URL → `http://loki-query-proxy-user.<loki-stack-namespace>.svc:8080` (per-user filtering, namespace replaced at deploy time)
 - Admin (openshift-operators): Direct to LokiStack Gateway (no proxy needed, admins see all logs)
 
 **Alternatives evaluated and rejected:**
@@ -2899,30 +2934,26 @@ Deployed the Loki Query Rewriting Proxy for per-user tenant isolation on structu
 
 **Proxy implementation:**
 - Go source (~160 lines, stdlib only) flattened to `package main` in a ConfigMap
-- Compiled at pod startup via `go run` on stock `registry.access.redhat.com/ubi9/go-toolset:1.18`
+- Compiled at pod startup via `go run` on stock `registry.access.redhat.com/ubi9/go-toolset:1.25`
 - No custom image build, no external registry, no init containers
-- Two deployments: `loki-query-proxy-user` (per-user filtering) and `loki-query-proxy-org` (pass-through)
+- Single deployment: `loki-query-proxy-user` (per-user filtering; admins bypass via group check)
 
 **Deviation from plan:**
-- The plan called for `golang:1.18-ubi9` from the internal OpenShift registry. The internal registry required SA pull authentication that could not be satisfied (cluster config issue). Switched to the equivalent public Red Hat image `registry.access.redhat.com/ubi9/go-toolset:1.18` (same Go 1.18.10, same UBI9 base).
+- The plan called for `golang:1.18-ubi9` from the internal OpenShift registry. The internal registry required SA pull authentication that could not be satisfied (cluster config issue). Switched to the public Red Hat image `registry.access.redhat.com/ubi9/go-toolset`. Later upgraded from `:1.18` to `:1.25` to match the project Go version standard.
 - Admin datasource stays direct to LokiStack Gateway (no proxy) -- only tenant datasource routes through the user proxy.
+- `install-loki-proxy.sh` deleted — deployment is now handled entirely via `kustomize build | sed | kubectl apply`.
 
-**Files created (`deployment/components/observability/loki-proxy/`):**
+**Files (`deployment/components/observability/loki-proxy/`):**
 - `proxy-source-configmap.yaml` -- Go source (main.go, auth.go, rewriter.go, config.go, go.mod)
-- `deployment-user.yaml` -- ISOLATION_MODE=user
-- `deployment-org.yaml` -- ISOLATION_MODE=none
-- `rbac.yaml` -- ServiceAccount + ClusterRoleBinding (cluster-logging-application-view)
-- `service.yaml` -- loki-query-proxy-user:8080, loki-query-proxy-org:8080
-- `networkpolicy.yaml` -- Restricts direct LokiStack Gateway access
-- `kustomization.yaml`
+- `deployment-user.yaml` -- ISOLATION_MODE=user, securityContext hardened (runAsNonRoot, no privilege escalation, capabilities dropped)
+- `rbac.yaml` -- ServiceAccount + ClusterRoleBindings (cluster-logging-application-view + namespace-view with tokenreviews)
+- `service.yaml` -- loki-query-proxy-user:8080
+- `networkpolicy.yaml` -- Restricts direct LokiStack Gateway access (intra-namespace only)
+- `kustomization.yaml` -- Configurable namespace (`loki-stack-namespace`) with `replacements` for ClusterRoleBinding subjects
 
-**Files created/modified:**
-- `scripts/observability/install-loki-proxy.sh` -- Idempotent install script
-- `deployment/components/observability/perses/perses-loki-datasource.yaml` -- Admin, unchanged (direct to gateway)
-- `deployment/components/observability/perses/perses-loki-datasource-scoped.yaml` -- NEW, tenant, routes through user proxy
-
-**Install script updated:**
-- `scripts/observability/install-perses-dashboards.sh` -- Tenant Loki datasource now uses `perses-loki-datasource-scoped.yaml`
+**Perses datasource files (unchanged by this phase):**
+- `deployment/components/observability/perses/perses-loki-datasource.yaml` -- Admin, direct to gateway
+- `deployment/components/observability/perses/perses-loki-datasource-scoped.yaml` -- Tenant, routes through user proxy
 
 ### Automated Test Results (2026-05-06)
 
@@ -2940,10 +2971,10 @@ Query rewrite: {service_name="maas-gateway"} -> {service_name="maas-gateway"} | 
 
 ### Cluster State After Deployment
 
-- `loki-query-proxy-user` -- Running, Ready (registry.access.redhat.com/ubi9/go-toolset:1.18)
-- `loki-query-proxy-org` -- Running, Ready (same image)
+- `loki-query-proxy-user` -- Running in `openshift-logging`, Ready (registry.access.redhat.com/ubi9/go-toolset:1.25)
 - Admin Loki datasource (openshift-operators): direct to `https://maas-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application`
-- Tenant Loki datasource (kuadrant-system): via `http://loki-query-proxy-user.kuadrant-system.svc:8080`
+- Tenant Loki datasource: via `http://loki-query-proxy-user.<loki-stack-namespace>.svc:8080` (replaced by sed at deploy time)
+- Deployed via: `kustomize build deployment/components/observability/loki-proxy | sed 's/loki-stack-namespace/openshift-logging/g' | kubectl apply --server-side=true -f -`
 
 ### Proxy → LokiStack Gateway Auth: 403 Root Cause & Fix
 
@@ -2978,7 +3009,7 @@ The working `perses-sa` has an additional `perses-cr` ClusterRole that grants `n
 | SA | `cluster-logging-application-view` | `namespaces: list` | Projects visible | LokiStack result |
 |----|----|----|----|----|
 | `perses-sa` (openshift-operators) | Yes | Yes (via `perses-cr`) | 88 | 200 OK |
-| `loki-query-proxy` (kuadrant-system) | Yes | **No** | **0** | **403** |
+| `loki-query-proxy` (loki-stack-namespace) | Yes | **No** | **0** | **403** |
 
 **Options evaluated:**
 
@@ -2989,7 +3020,7 @@ The working `perses-sa` has an additional `perses-cr` ClusterRole that grants `n
 | C. Debug OPA policy | Done above. Policy is correct; issue is missing RBAC. | N/A (diagnosis) |
 | **D. Add `namespaces: list` ClusterRole to proxy SA** | Minimal targeted fix, follows same pattern as `perses-cr`. | **Best option** |
 
-**Fix:** Add a `ClusterRole` + `ClusterRoleBinding` granting `namespaces: list, get` to the `loki-query-proxy` SA. Update `rbac.yaml`:
+**Fix:** Add a `ClusterRole` + `ClusterRoleBinding` granting `namespaces: list, get` and `tokenreviews: create` to the `loki-query-proxy` SA. Update `rbac.yaml`:
 
 ```yaml
 ---
@@ -3004,6 +3035,9 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["list", "get"]
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -3019,10 +3053,12 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: loki-query-proxy
-  namespace: kuadrant-system
+  namespace: loki-stack-namespace  # replaced by kustomize/sed at deploy time
 ```
 
 No pod restarts needed -- the SA token is already mounted; only the RBAC needs updating.
+
+**Namespace propagation:** The `kustomization.yaml` uses a `replacements` block to automatically set ClusterRoleBinding subject namespaces from the ServiceAccount's metadata.namespace, ensuring a single source of truth.
 
 ### RBAC Fix Applied (2026-05-06)
 
@@ -3258,7 +3294,7 @@ and forwards the query unmodified. Implementation: `isAdmin()` function checks g
    `ISOLATION_MODE "none"` validation (only `"user"` accepted now).
 4. **Fixed install script** (`install-loki-proxy.sh`) — removed references to deleted `deployment-org.yaml`
    and `loki-query-proxy-org` deployment wait. Script was broken (`set -euo pipefail` would abort at
-   line 120 on missing file).
+   line 120 on missing file). *(Script subsequently deleted — deployment handled via `kustomize build | sed | kubectl apply`.)*
 5. **SECURITY FIX: Removed `parseJWT()`** — the function decoded JWT claims (username, groups) without
    verifying the cryptographic signature. An attacker could forge a JWT with
    `groups: ["system:cluster-admins"]` to trigger the admin bypass, or spoof any `preferred_username`
@@ -3390,21 +3426,27 @@ options). Replaced all 10 `[$range]` references in LogQL queries with `[$__range
 Perses time picker now drives all queries directly. Remaining variables: User ID, Subscription,
 Model.
 
-#### 6. Fixed `git checkout` in CI Workflow
+#### 6. CI Workflow `git checkout` — Separate Concern
 
-`git checkout --detach -- "$TAG"` in `.github/workflows/update-docs-latest.yml` treated `$TAG` as
-a pathspec (file path) because of the `--` separator. Same issue in `git rev-parse` calls.
+The original commit removed `--` from `git rev-parse` and `git checkout --detach` in
+`.github/workflows/update-docs-latest.yml`. This was reverted: `--` restored in both commands.
+This change is not related to the Loki proxy work (ahadas comment c1) and should be addressed
+in a separate PR if needed.
 
-**Fix:** Removed `--` from `git rev-parse` and `git checkout --detach`.
+**Note:** `git checkout --detach -- "$TAG"` technically treats `$TAG` as a pathspec, but this
+only matters if `$TAG` collides with a file path — unlikely for semver tags.
 
-#### 7. Restored `user` Metric Label in TelemetryPolicy
+#### 7. `user` Metric Label in TelemetryPolicy — Reverted
 
-The `user: auth.identity.userid` label was removed from `gateway-telemetry-policy.yaml` during
-the `tier` -> `subscription` migration. The AI Engineer dashboard relies on this label in every
-panel query (`authorized_hits{user=~"^$user$"}`). Without it, the template variable dropdown
-is empty and all panels show no data.
+The `user: auth.identity.userid` label was initially restored in `gateway-telemetry-policy.yaml`
+during Phase 14 (the AI Engineer Grafana dashboard relied on it). However, it was subsequently
+removed again based on code review feedback (ahadas comment c1): the `user` label creates
+high-cardinality Prometheus time series (one series per user × model × subscription), and per-user
+data is now served by Loki structured logs via LogQL. The Perses dashboards do not depend on this
+Prometheus label.
 
-**Fix:** Restored `user: auth.identity.userid` in the TelemetryPolicy.
+**Current state:** `user: auth.identity.userid` is **removed** from the TelemetryPolicy.
+Labels kept: `subscription`, `model`, `organization_id`, `cost_center`.
 
 #### 8. Optimized TokenReview Client
 
@@ -3431,8 +3473,8 @@ Verified the Usage Dashboard in the OpenShift console browser for all 4 test use
 |------|--------|
 | `deployment/components/observability/loki-proxy/proxy-source-configmap.yaml` | Rewrote `injectUserFilter` (quote-aware, post-selector injection); fixed POST body handling (two independent `if` blocks instead of `if/else if`); global `tokenReviewClient` |
 | `deployment/components/observability/perses/dashboards/dashboard-usage.yaml` | Removed `$range` `StaticListVariable`; replaced `[$range]` with `[$__range]` (10 occurrences); updated comments |
-| `deployment/base/observability/gateway-telemetry-policy.yaml` | Restored `user: auth.identity.userid` label |
-| `.github/workflows/update-docs-latest.yml` | Removed `--` from `git rev-parse` and `git checkout --detach` |
+| `deployment/base/observability/gateway-telemetry-policy.yaml` | Removed `user: auth.identity.userid` label (unnecessary per review) |
+| `.github/workflows/update-docs-latest.yml` | Reverted: `--` restored in both `git rev-parse` and `git checkout --detach` (separate concern, not proxy work) |
 
 ### Full Test Results (2026-05-08) — 31/31 PASS
 
@@ -3488,3 +3530,97 @@ Verified the Usage Dashboard in the OpenShift console browser for all 4 test use
 | A3 | POST without Content-Type | 200 or 400 | 200 | **PASS** |
 
 **Total: 31/31 tests passed** (15 functional + 9 security + 4 rewriter robustness + 3 admin edge cases)
+
+## Phase 15: Code Review Hardening + Namespace Configurability (2026-05-13)
+
+Addressed review comments from ahadas (10 comments on commit `74ed20948c50bf30e6dee41ece7715a24cc83dfc`).
+
+### Changes Made
+
+#### 1. Namespace Configurability (ahadas comments c2, c3, c4)
+
+**Problem:** Namespace was hardcoded across multiple files (`kuadrant-system` in some, `openshift-logging` in others), making deployment to different environments (ODH, RHOAI) error-prone.
+
+**Solution:** Single source of truth in `kustomization.yaml`:
+- `namespace: loki-stack-namespace` as configurable default
+- `replacements` block propagates namespace into ClusterRoleBinding subjects from the ServiceAccount
+- `LOKI_UPSTREAM_URL` in `deployment-user.yaml` uses FQDN with `loki-stack-namespace` placeholder: `https://maas-loki-gateway-http.loki-stack-namespace.svc:8080/api/logs/v1/application`
+- Deploy with `sed 's/loki-stack-namespace/<target>/g'` to target any namespace
+
+#### 2. Security Hardening (deployment-user.yaml)
+
+- Upgraded Go image: `1.18` → `1.25`
+- Added `securityContext`: `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: ALL`, `seccompProfile: RuntimeDefault`
+
+#### 3. Proxy Source Hardening (proxy-source-configmap.yaml)
+
+- Removed hardcoded `LOKI_UPSTREAM_URL` default; validation ensures env var is set
+- Added `allowedPaths` whitelist: non-admin users restricted to `/loki/api/v1/query`, `/loki/api/v1/query_range`, `/loki/api/v1/tail`, `/loki/api/v1/index/stats`, `/loki/api/v1/index/volume`, `/loki/api/v1/index/volume_range`, `/health`, `/ready`
+- Added JSON body rewriting (in addition to URL params and form-encoded bodies)
+- Explicit HTTP client timeouts: 30s for Loki upstream, 10s for TokenReview API
+- `strings.TrimSpace()` on SA token read
+- Updated `go.mod` to `go 1.25`
+
+#### 4. NetworkPolicy Simplification (networkpolicy.yaml)
+
+Simplified for co-location (proxy + Loki in same namespace):
+- Removed cross-namespace selectors
+- Allows intra-namespace pods to reach the gateway (Loki components talking to each other)
+- Allows `loki-query-proxy` pods specifically
+- Removed explicit `metadata.namespace` (set by kustomization)
+
+#### 5. RBAC Cleanup (rbac.yaml)
+
+- ClusterRoleBinding subjects use `namespace: loki-stack-namespace` (propagated by kustomize replacements)
+- Added `tokenreviews: create` to `loki-query-proxy-namespace-view` ClusterRole
+- Removed temporary `loki-query-proxy-tenant-access` ClusterRole/Binding (was added during 403 debugging, found unnecessary)
+
+#### 6. Removed install-loki-proxy.sh
+
+Script deleted — deployment handled entirely via `kustomize build | sed | kubectl apply`.
+
+#### 7. Separate Concerns (Not Proxy Work)
+
+Two changes from ahadas's comments were identified as separate concerns, not part of the proxy work:
+- `gateway-telemetry-policy.yaml` — removed `user: auth.identity.userid` label (high-cardinality)
+- `.github/workflows/update-docs-latest.yml` — CI pathspec fix (`--` separator in git commands)
+
+### Deployment Procedure
+
+```bash
+# Target namespace (e.g., openshift-logging for current cluster)
+NS=openshift-logging
+
+# 1. Deploy proxy (RBAC, ConfigMap, Deployment, Service, NetworkPolicy)
+kustomize build deployment/components/observability/loki-proxy \
+  | sed "s/loki-stack-namespace/$NS/g" \
+  | kubectl apply --server-side=true -f -
+
+# 2. Wait for rollout
+kubectl rollout status deployment/loki-query-proxy-user -n "$NS" --timeout=120s
+
+# 3. Deploy dashboards + datasources (includes scoped Loki datasource with sed)
+LOKI_STACK_NAMESPACE="$NS" bash scripts/observability/install-perses-dashboards.sh
+```
+
+The `install-perses-dashboards.sh` script handles:
+- Admin dashboards (Platform Admin, AI Engineer) → `openshift-operators`
+- Admin Loki/Prometheus datasources → `openshift-operators` (direct to gateway)
+- Tenant Usage Dashboard → `kuadrant-system` (or `--tenant-namespace`)
+- Scoped Loki datasource → tenant namespace (URL uses `sed` to replace `loki-stack-namespace` with `$LOKI_STACK_NAMESPACE`, defaults to `openshift-logging`)
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `deployment/components/observability/loki-proxy/kustomization.yaml` | `namespace: loki-stack-namespace` + `replacements` for ClusterRoleBinding |
+| `deployment/components/observability/loki-proxy/deployment-user.yaml` | Go 1.25, securityContext, FQDN with `loki-stack-namespace` placeholder |
+| `deployment/components/observability/loki-proxy/proxy-source-configmap.yaml` | allowedPaths, JSON body rewrite, timeouts, TrimSpace, go.mod 1.25 |
+| `deployment/components/observability/loki-proxy/rbac.yaml` | namespace: loki-stack-namespace, tokenreviews verb, removed temp ClusterRole |
+| `deployment/components/observability/loki-proxy/networkpolicy.yaml` | Simplified for co-location, removed cross-namespace selectors |
+| `deployment/components/observability/loki-proxy/service.yaml` | Removed org proxy service |
+| `deployment/components/observability/perses/perses-loki-datasource-scoped.yaml` | URL uses `loki-stack-namespace` FQDN (replaced by sed at deploy time) |
+| `scripts/observability/install-perses-dashboards.sh` | Scoped Loki datasource now deployed via `sed` (replaces `loki-stack-namespace`) |
+| `scripts/observability/install-loki-proxy.sh` | **Deleted** |
+| `deployment/base/observability/gateway-telemetry-policy.yaml` | Removed `user: auth.identity.userid` (separate concern) |
+| `.github/workflows/update-docs-latest.yml` | Reverted `--` in git commands (separate concern) |

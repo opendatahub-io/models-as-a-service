@@ -1,5 +1,5 @@
 # Loki Query Proxy -- Go source mounted as ConfigMap
-# Runs on stock golang:1.18-ubi9 via `go run`.
+# Runs on stock ubi9/go-toolset:1.25 via `go run`.
 # All files are package main (flattened from the multi-package original).
 ---
 apiVersion: v1
@@ -13,14 +13,16 @@ data:
   go.mod: |
     module loki-query-proxy
 
-    go 1.18
+    go 1.25
 
   main.go: |
     package main
 
     import (
+        "bytes"
         "crypto/tls"
         "crypto/x509"
+        "encoding/json"
         "fmt"
         "io"
         "log"
@@ -28,6 +30,7 @@ data:
         "net/url"
         "os"
         "strings"
+        "time"
     )
 
     var (
@@ -66,6 +69,7 @@ data:
         }
 
         httpClient = &http.Client{
+            Timeout: 30 * time.Second,
             Transport: &http.Transport{TLSClientConfig: &tls.Config{
                 RootCAs:    caCertPool,
                 MinVersion: tls.VersionTLS12,
@@ -73,6 +77,7 @@ data:
         }
 
         tokenReviewClient = &http.Client{
+            Timeout: 10 * time.Second,
             Transport: &http.Transport{TLSClientConfig: &tls.Config{
                 RootCAs:    caCertPool,
                 MinVersion: tls.VersionTLS12,
@@ -108,6 +113,19 @@ data:
         return false
     }
 
+    // allowedPaths lists Loki API paths that non-admin users may access.
+    // All of these accept a "query" parameter that gets user_id injected.
+    var allowedPaths = map[string]bool{
+        "/loki/api/v1/query":       true,
+        "/loki/api/v1/query_range": true,
+        "/loki/api/v1/tail":        true,
+        "/loki/api/v1/index/stats": true,
+        "/loki/api/v1/index/volume": true,
+        "/loki/api/v1/index/volume_range": true,
+        "/health": true,
+        "/ready":  true,
+    }
+
     func proxyHandler(w http.ResponseWriter, r *http.Request) {
         var username string
         if cfg.IsolationMode == "user" {
@@ -123,11 +141,18 @@ data:
             } else {
                 username = userInfo.Username
                 log.Printf("User mode: filtering by user_id=%s", username)
+                if !allowedPaths[r.URL.Path] {
+                    log.Printf("Blocked non-admin access to %s for user=%s", r.URL.Path, username)
+                    http.Error(w, "Forbidden: endpoint not available for non-admin users", http.StatusForbidden)
+                    return
+                }
             }
         }
 
         query := r.URL.Query()
         var bodyToForward io.Reader = r.Body
+
+        var contentLength int64 = -1
 
         if username != "" {
             if query.Has("query") {
@@ -136,28 +161,57 @@ data:
                 query.Set("query", rewrittenQuery)
                 log.Printf("Query rewrite (URL): %s -> %s", originalQuery, rewrittenQuery)
             }
-            if r.Method == http.MethodPost &&
-                strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
-                bodyBytes, err := io.ReadAll(r.Body)
-                if err != nil {
-                    log.Printf("Failed to read request body: %v", err)
-                    http.Error(w, "Bad request", http.StatusBadRequest)
-                    return
+            if r.Method == http.MethodPost {
+                ct := r.Header.Get("Content-Type")
+                if strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+                    bodyBytes, err := io.ReadAll(r.Body)
+                    if err != nil {
+                        log.Printf("Failed to read request body: %v", err)
+                        http.Error(w, "Bad request", http.StatusBadRequest)
+                        return
+                    }
+                    form, err := url.ParseQuery(string(bodyBytes))
+                    if err != nil {
+                        log.Printf("Failed to parse form body: %v", err)
+                        http.Error(w, "Bad request", http.StatusBadRequest)
+                        return
+                    }
+                    if form.Has("query") {
+                        originalQuery := form.Get("query")
+                        rewrittenQuery := injectUserFilter(originalQuery, username)
+                        form.Set("query", rewrittenQuery)
+                        log.Printf("Query rewrite (POST body): %s -> %s", originalQuery, rewrittenQuery)
+                    }
+                    encoded := form.Encode()
+                    bodyToForward = strings.NewReader(encoded)
+                    contentLength = int64(len(encoded))
+                } else if strings.HasPrefix(ct, "application/json") {
+                    bodyBytes, err := io.ReadAll(r.Body)
+                    if err != nil {
+                        log.Printf("Failed to read JSON body: %v", err)
+                        http.Error(w, "Bad request", http.StatusBadRequest)
+                        return
+                    }
+                    var payload map[string]interface{}
+                    if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+                        log.Printf("Failed to parse JSON body: %v", err)
+                        http.Error(w, "Bad request", http.StatusBadRequest)
+                        return
+                    }
+                    if q, ok := payload["query"].(string); ok && q != "" {
+                        rewritten := injectUserFilter(q, username)
+                        payload["query"] = rewritten
+                        log.Printf("Query rewrite (JSON body): %s -> %s", q, rewritten)
+                    }
+                    reencoded, err := json.Marshal(payload)
+                    if err != nil {
+                        log.Printf("Failed to re-encode JSON body: %v", err)
+                        http.Error(w, "Internal server error", http.StatusInternalServerError)
+                        return
+                    }
+                    bodyToForward = bytes.NewReader(reencoded)
+                    contentLength = int64(len(reencoded))
                 }
-                form, err := url.ParseQuery(string(bodyBytes))
-                if err != nil {
-                    log.Printf("Failed to parse form body: %v", err)
-                    http.Error(w, "Bad request", http.StatusBadRequest)
-                    return
-                }
-                if form.Has("query") {
-                    originalQuery := form.Get("query")
-                    rewrittenQuery := injectUserFilter(originalQuery, username)
-                    form.Set("query", rewrittenQuery)
-                    log.Printf("Query rewrite (POST body): %s -> %s", originalQuery, rewrittenQuery)
-                }
-                encoded := form.Encode()
-                bodyToForward = strings.NewReader(encoded)
             }
         }
 
@@ -172,19 +226,28 @@ data:
             return
         }
 
+        hopByHop := map[string]bool{
+            "Connection": true, "Keep-Alive": true, "Proxy-Authenticate": true,
+            "Proxy-Authorization": true, "Te": true, "Trailers": true,
+            "Transfer-Encoding": true, "Upgrade": true,
+            "Authorization": true, "Content-Length": true,
+        }
         for key, values := range r.Header {
-            if key == "Authorization" {
+            if hopByHop[key] {
                 continue
             }
             for _, value := range values {
                 proxyReq.Header.Add(key, value)
             }
         }
+        proxyReq.Host = lokiUpstream.Host
         proxyReq.Header.Set("X-Scope-OrgID", "application")
+        if contentLength >= 0 {
+            proxyReq.ContentLength = contentLength
+        }
 
-        // Authenticate to the LokiStack gateway using the pod's SA token
         if tokenBytes, err := os.ReadFile(saTokenPath); err == nil {
-            proxyReq.Header.Set("Authorization", "Bearer "+string(tokenBytes))
+            proxyReq.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tokenBytes)))
         }
 
         resp, err := httpClient.Do(proxyReq)
@@ -266,13 +329,17 @@ data:
             return nil, fmt.Errorf("failed to build TokenReview request: %w", err)
         }
         req.Header.Set("Content-Type", "application/json")
-        req.Header.Set("Authorization", "Bearer "+string(saToken))
+        req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(saToken)))
 
         resp, err := tokenReviewClient.Do(req)
         if err != nil {
             return nil, fmt.Errorf("TokenReview request failed: %w", err)
         }
         defer resp.Body.Close()
+
+        if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+            return nil, fmt.Errorf("TokenReview returned HTTP %d", resp.StatusCode)
+        }
 
         respBody, _ := io.ReadAll(resp.Body)
         var result struct {
@@ -389,8 +456,11 @@ data:
     func loadConfigFromEnv() (*proxyConfig, error) {
         cfg := &proxyConfig{
             Port:            getEnv("PORT", "8080"),
-            LokiUpstreamURL: getEnv("LOKI_UPSTREAM_URL", "https://maas-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/application"),
+            LokiUpstreamURL: getEnv("LOKI_UPSTREAM_URL", ""),
             IsolationMode:   getEnv("ISOLATION_MODE", "user"),
+        }
+        if cfg.LokiUpstreamURL == "" {
+            return nil, fmt.Errorf("LOKI_UPSTREAM_URL is required")
         }
         if cfg.IsolationMode != "user" {
             return nil, fmt.Errorf("invalid ISOLATION_MODE: %s (must be 'user')", cfg.IsolationMode)

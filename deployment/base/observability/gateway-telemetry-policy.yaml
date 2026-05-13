@@ -10,7 +10,6 @@ spec:
     default:
       labels:
         model: responseBodyJSON("/model")
-        user: auth.identity.userid
         subscription: auth.identity.selected_subscription
         organization_id: auth.identity.subscription_info.organizationId
         cost_center: auth.identity.subscription_info.costCenter

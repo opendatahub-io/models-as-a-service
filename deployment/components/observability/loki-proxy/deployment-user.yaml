@@ -21,8 +21,16 @@ spec:
       serviceAccountName: loki-query-proxy
       containers:
       - name: proxy
-        image: registry.access.redhat.com/ubi9/go-toolset:1.18
+        image: registry.access.redhat.com/ubi9/go-toolset:1.25
         command: ["go", "run", "/opt/app-root/src/proxy/main.go", "/opt/app-root/src/proxy/auth.go", "/opt/app-root/src/proxy/rewriter.go", "/opt/app-root/src/proxy/config.go"]
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
         ports:
         - containerPort: 8080
           name: http
@@ -32,8 +40,9 @@ spec:
           value: "8080"
         - name: ISOLATION_MODE
           value: "user"
+        # Loki gateway FQDN — namespace portion is replaced by sed/overlay
         - name: LOKI_UPSTREAM_URL
-          value: "https://maas-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/application"
+          value: "https://maas-loki-gateway-http.loki-stack-namespace.svc:8080/api/logs/v1/application"
         - name: HOME
           value: "/tmp"
         - name: GOPATH

@@ -1,15 +1,10 @@
-# Restrict direct LokiStack Gateway access: only the query proxy is allowed.
+# Restrict direct LokiStack Gateway access: only the query proxy and
+# intra-namespace Loki components are allowed.
 # Users cannot bypass the proxy to query Loki directly.
-#
-# NOTE: This resource targets openshift-logging, not kuadrant-system.
-# The kustomization namespace override is suppressed for this file;
-# apply separately if your kustomize version doesn't support mixed namespaces:
-#   oc apply -f networkpolicy.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: loki-gateway-proxy-restriction
-  namespace: openshift-logging
   labels:
     app.kubernetes.io/part-of: maas-observability
 spec:
@@ -20,12 +15,9 @@ spec:
   policyTypes:
   - Ingress
   ingress:
-  # Allow loki-query-proxy pods from kuadrant-system
+  # Allow loki-query-proxy pods (same namespace)
   - from:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kuadrant-system
-      podSelector:
+    - podSelector:
         matchLabels:
           app: loki-query-proxy
     ports:
@@ -33,9 +25,7 @@ spec:
       port: 8080
   # Allow intra-namespace traffic (Loki components talking to gateway)
   - from:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: openshift-logging
+    - podSelector: {}
     ports:
     - protocol: TCP
       port: 8080
