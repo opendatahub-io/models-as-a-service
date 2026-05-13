@@ -171,16 +171,24 @@ rules:
   - list
   - patch
   - watch
-# configs: read-only here; mutate verbs live in clusterrole_maas_configs.yaml (second binding)
-# so the operator-owned maas-controller-role is not over-privileged on cluster-scoped configs.
 - apiGroups:
   - maas.opendatahub.io
   resources:
   - configs
+  - externalmodels
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
+  - externalmodels/finalizers
+  - maasauthpolicies/finalizers
+  - maasmodelrefs/finalizers
+  - maassubscriptions/finalizers
+  verbs:
+  - update
 - apiGroups:
   - maas.opendatahub.io
   resources:
@@ -199,15 +207,6 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
-  - externalmodels/finalizers
-  - maasauthpolicies/finalizers
-  - maasmodelrefs/finalizers
-  - maassubscriptions/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - maas.opendatahub.io
-  resources:
   - maasauthpolicies/status
   - maasmodelrefs/status
   - maassubscriptions/status
@@ -216,14 +215,6 @@ rules:
   - get
   - patch
   - update
-- apiGroups:
-  - maas.opendatahub.io
-  resources:
-  - externalmodels
-  verbs:
-  - get
-  - list
-  - watch
 - apiGroups:
   - monitoring.coreos.com
   resources:

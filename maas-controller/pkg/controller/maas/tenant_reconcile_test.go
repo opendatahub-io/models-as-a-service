@@ -196,7 +196,7 @@ func TestTenantReconcile_ManagedStripsLegacyFinalizerOnReconcile(t *testing.T) {
 	g.Expect(updated.Finalizers).To(BeEmpty())
 }
 
-func TestTenantReconcile_ManagementStateRemovedDeletesConfigAndStripsLegacyFinalizer(t *testing.T) {
+func TestTenantReconcile_ManagementStateRemovedIdlesAndStripsLegacyFinalizer(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
 
@@ -230,20 +230,14 @@ func TestTenantReconcile_ManagementStateRemovedDeletesConfigAndStripsLegacyFinal
 		AppNamespace: testNS,
 	}
 
-	res1, err := r.Reconcile(context.Background(), ctrl.Request{
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res1.RequeueAfter).To(Equal(10 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var ctAfter maasv1alpha1.Config
-	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &ctAfter))).To(BeTrue())
-
-	res2, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
-	})
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res2).To(Equal(ctrl.Result{}))
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &ctAfter)).To(Succeed())
 
 	var updated maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())

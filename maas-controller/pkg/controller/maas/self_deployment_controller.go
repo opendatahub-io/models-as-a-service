@@ -19,10 +19,12 @@ package maas
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -41,9 +43,11 @@ import (
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
-// LifecycleReconciler watches the maas-controller Deployment and links it to Config/default
-// via a non-controller ownerReference so the workload participates in the same GC graph as
-// other operands. Legacy CleanupFinalizer entries are removed when present.
+// LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
+// cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
+// standalone installs do not race applying a Config manifest before the Config CRD is ready).
+// It links the Deployment to Config via a non-controller ownerReference. Legacy CleanupFinalizer
+// entries are removed when present.
 type LifecycleReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
@@ -53,7 +57,7 @@ type LifecycleReconciler struct {
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -64,6 +68,11 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if dep.DeletionTimestamp.IsZero() {
+		if res, err := r.ensureSingletonConfig(ctx, &dep); err != nil {
+			return ctrl.Result{}, err
+		} else if res != nil {
+			return *res, nil
+		}
 		if err := r.ensureDeploymentReferencesConfig(ctx, req.NamespacedName); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -95,6 +104,51 @@ func (r *LifecycleReconciler) stripLegacyCleanupFinalizer(ctx context.Context, l
 	}
 	log.Info("removed legacy cleanup finalizer from Deployment")
 	return nil
+}
+
+// ensureSingletonConfig creates Config/default when it is missing and the watched Deployment
+// is still running. If Config is terminating, requeues until teardown completes (avoids racing
+// intentional anchor deletion). After accidental deletion while the Deployment remains, the
+// anchor is recreated on a later reconcile.
+func (r *LifecycleReconciler) ensureSingletonConfig(ctx context.Context, dep *appsv1.Deployment) (*ctrl.Result, error) {
+	if dep == nil || !dep.DeletionTimestamp.IsZero() {
+		return nil, nil
+	}
+	key := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
+	var cfg maasv1alpha1.Config
+	switch err := r.Get(ctx, key, &cfg); {
+	case err == nil:
+		if !cfg.DeletionTimestamp.IsZero() {
+			return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		if cfg.UID == "" {
+			return &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
+		return nil, nil
+	case apierrors.IsNotFound(err):
+		toCreate := &maasv1alpha1.Config{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: maasv1alpha1.GroupVersion.String(),
+				Kind:       maasv1alpha1.ConfigKind,
+			},
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName},
+		}
+		if err := r.Create(ctx, toCreate); err != nil && !apierrors.IsAlreadyExists(err) {
+			return nil, err
+		}
+		if err := r.Get(ctx, key, &cfg); err != nil {
+			if apierrors.IsNotFound(err) {
+				return &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+			}
+			return nil, err
+		}
+		if cfg.UID == "" {
+			return &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
+		return nil, nil
+	default:
+		return nil, err
+	}
 }
 
 // ensureDeploymentReferencesConfig links the controller Deployment to Config/default

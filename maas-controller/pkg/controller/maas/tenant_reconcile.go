@@ -74,29 +74,9 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Handle delete before Removed/Unmanaged idle. Legacy installs may still carry the old finalizer.
-	// When Config exists, delete it first (platform GC); otherwise only strip the legacy finalizer.
+	// Config anchor lifecycle is owned by the operator / ModelsAsService GC and the lifecycle
+	// reconciler; the Tenant reconciler does not delete Config.
 	if !tenant.DeletionTimestamp.IsZero() {
-		var cfg maasv1alpha1.Config
-		switch err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); {
-		case err == nil:
-			requeue, err2 := r.ensureConfigDeletedForRemoval(ctx)
-			if err2 != nil {
-				return ctrl.Result{}, err2
-			}
-			if requeue != nil {
-				return *requeue, nil
-			}
-		case apierrors.IsNotFound(err):
-			// No anchor: proceed to finalizer strip only.
-		default:
-			return ctrl.Result{}, err
-		}
-		if err := r.Get(ctx, req.NamespacedName, &tenant); err != nil {
-			if apierrors.IsNotFound(err) {
-				return ctrl.Result{}, nil
-			}
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, r.stripLegacyTenantFinalizerIfPresent(ctx, &tenant)
 	}
 
@@ -286,8 +266,8 @@ func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logge
 }
 
 // SkipConfigBootstrap returns true when the default Tenant is in Removed management state.
-// The manager startup runnable must not recreate Config or patch owner refs in that state,
-// because Removed reconciliation deletes Config to drive platform GC.
+// The manager startup runnable must not create or patch default-tenant in that state so we
+// do not fight operator teardown while the Config anchor is removed by component GC.
 func SkipConfigBootstrap(tenant *maasv1alpha1.Tenant) bool {
 	if tenant == nil || tenant.Annotations == nil {
 		return false
@@ -304,48 +284,13 @@ func (r *TenantReconciler) stripLegacyTenantFinalizerIfPresent(ctx context.Conte
 	return r.Patch(ctx, tenant, base)
 }
 
-// ensureConfigDeletedForRemoval issues delete on Config/default when present.
-// It requeues while the object is still terminating so callers can observe progress.
-func (r *TenantReconciler) ensureConfigDeletedForRemoval(ctx context.Context) (*ctrl.Result, error) {
-	var ct maasv1alpha1.Config
-	key := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
-	if err := r.Get(ctx, key, &ct); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if !ct.DeletionTimestamp.IsZero() {
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, nil
-	}
-	if err := r.Delete(ctx, &ct); err != nil && !apierrors.IsNotFound(err) {
-		return nil, err
-	}
-	res := ctrl.Result{RequeueAfter: 10 * time.Second}
-	return &res, nil
-}
-
 // handleIdleManagementState handles Removed and Unmanaged states.
-// Removed deletes Config/default so platform operands are garbage-collected; Unmanaged
-// leaves resources in place. Any legacy Tenant finalizer from older releases is stripped.
+// Platform teardown for Removed is driven by the operator deleting the Config anchor (and
+// related GC); this reconciler only records idle status and strips any legacy finalizer.
 func (r *TenantReconciler) handleIdleManagementState(ctx context.Context, tenant *maasv1alpha1.Tenant, ms string) (ctrl.Result, error) {
 	if err := r.patchStatus(ctx, tenant, "", metav1.ConditionFalse, "ManagementStateIdle",
 		fmt.Sprintf("management state is %q; platform workloads are not driven by this reconciler in this state", ms)); err != nil {
 		return ctrl.Result{}, err
-	}
-	if ms == managementStateRemoved {
-		requeue, err := r.ensureConfigDeletedForRemoval(ctx)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.stripLegacyTenantFinalizerIfPresent(ctx, tenant); err != nil {
-			return ctrl.Result{}, err
-		}
-		if requeue != nil {
-			return *requeue, nil
-		}
-		return ctrl.Result{}, nil
 	}
 	if err := r.stripLegacyTenantFinalizerIfPresent(ctx, tenant); err != nil {
 		return ctrl.Result{}, err

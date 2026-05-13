@@ -1071,7 +1071,8 @@ wait_for_crd() {
 }
 
 # Apply MaaS maas.opendatahub.io CRDs from deployment/base/maas-controller/crd and wait until
-# each is Established. Required before applying cluster-scoped or namespaced MaaS CRs (e.g. Config).
+# each is Established. Ensures the API server accepts CR writes before maas-controller starts
+# (the manager creates Config/default from code once the Deployment is running).
 install_maas_controller_crds_and_wait() {
   local crd_bundle_dir="$1"
   if [[ ! -d "$crd_bundle_dir" ]]; then

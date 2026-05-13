@@ -326,9 +326,10 @@ func getClusterServiceAccountIssuer(c client.Reader) (string, error) {
 	return issuer, nil
 }
 
-// ensureClusterBootstrapRunnable ensures Config/default exists, then default-tenant in the
-// subscription namespace with an owner reference to the Config. ODH or other installers
-// may create these first; the runnable converges state for standalone and upgrade paths.
+// ensureClusterBootstrapRunnable ensures default-tenant in the subscription namespace exists with
+// owner references to Config/default once that anchor is present. Config/default is created by
+// LifecycleReconciler when maas-controller is running; ODH may also create it via the operator.
+// This runnable converges Tenant owner refs for standalone and upgrade paths.
 func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace string) manager.RunnableFunc {
 	return func(ctx context.Context) error {
 		log := ctrl.Log.WithName("setup").WithName("ensureClusterBootstrap")
@@ -337,8 +338,6 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace string) ma
 
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-
-		apiReader := mgr.GetAPIReader()
 
 		ensure := func() {
 			tKey := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNamespace}
@@ -353,29 +352,13 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace string) ma
 			ctKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
 			var ct maasv1alpha1.Config
 			if err := c.Get(ctx, ctKey, &ct); err != nil {
-				if !errors.IsNotFound(err) {
-					log.Error(err, "failed to get Config")
+				if errors.IsNotFound(err) {
 					return
 				}
-				toCreate := &maasv1alpha1.Config{
-					TypeMeta: metav1.TypeMeta{
-						APIVersion: maasv1alpha1.GroupVersion.String(),
-						Kind:       maasv1alpha1.ConfigKind,
-					},
-					ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName},
-				}
-				if err := c.Create(ctx, toCreate); err != nil && !errors.IsAlreadyExists(err) {
-					log.Error(err, "failed to create Config")
-					return
-				}
-				// Avoid a cache-stale read immediately after Create: use the API reader.
-				if err := apiReader.Get(ctx, ctKey, &ct); err != nil {
-					log.Error(err, "re-read Config after create (API reader)")
-					return
-				}
-				log.Info("ensured Config exists", "name", maasv1alpha1.ConfigInstanceName)
+				log.Error(err, "failed to get Config")
+				return
 			}
-			if ct.UID == "" {
+			if !ct.DeletionTimestamp.IsZero() || ct.UID == "" {
 				return
 			}
 
@@ -577,17 +560,9 @@ func main() {
 
 	// Startup ordering contract:
 	//   1. ensureSubscriptionNamespaceWithClient runs synchronously above, before the manager starts.
-	//   2. ensureClusterBootstrapRunnable creates Config/default (if needed), then default-tenant
-	//      with an owner reference to Config.
-	//   3. TenantReconciler is registered after this runnable. If a reconcile fires before the
-	//      runnable creates the CRs (narrow race window), IsNotFound returns ctrl.Result{}
-	//      with no error; watches re-trigger once the runnable converges.
-	//   4. ODH operator may also apply Config and Tenant independently. The singleton checks
-	//      in TenantReconciler ensure only the expected Tenant name is acted on.
-	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace)); err != nil {
-		setupLog.Error(err, "unable to register ensureClusterBootstrap runnable")
-		os.Exit(1)
-	}
+	//   2. LifecycleReconciler creates Config/default when maas-controller is running (see Setup below).
+	//   3. ensureClusterBootstrapRunnable patches/creates default-tenant once Config/default exists.
+	//   4. If Tenant reconciles before Config exists, readyConfigOrWait requeues until the anchor appears.
 
 	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
 	if manifestPath == "" {
@@ -609,9 +584,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// LifecycleReconciler links the maas-controller Deployment to Config/default (owner ref)
-	// and strips the legacy cleanup finalizer if present. Coordinated CRD/RBAC teardown on
-	// uninstall is handled by operators or external scripts (e.g. .github/hack/cleanup-odh.sh).
+	// LifecycleReconciler creates Config/default when maas-controller is running, links the
+	// Deployment to Config (owner ref), and strips the legacy cleanup finalizer if present.
 	// maasAPINamespace is the namespace ODH deployed maas-controller into (same namespace).
 	if err := (&maas.LifecycleReconciler{
 		Client:         mgr.GetClient(),
@@ -620,6 +594,11 @@ func main() {
 		DeploymentNS:   maasAPINamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
+		os.Exit(1)
+	}
+
+	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace)); err != nil {
+		setupLog.Error(err, "unable to register ensureClusterBootstrap runnable")
 		os.Exit(1)
 	}
 

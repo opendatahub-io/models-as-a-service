@@ -530,7 +530,7 @@ main() {
   if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
-    log_info "  Phase 1: Applying MaaS CRDs and waiting until Established (avoids Config/Tenant apply race)..."
+    log_info "  Phase 1: Applying MaaS CRDs and waiting until Established (controller creates Config after CRD is ready)..."
     if ! install_maas_controller_crds_and_wait "${project_root}/deployment/base/maas-controller/crd"; then
       log_error "MaaS CRD install or Established wait failed"
       return 1
