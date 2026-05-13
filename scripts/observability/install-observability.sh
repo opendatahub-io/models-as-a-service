@@ -182,9 +182,16 @@ if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     # The Kuadrant operator's authorino-operator-monitor only scrapes /metrics (controller-runtime).
     # This additional ServiceMonitor scrapes /server-metrics for auth evaluation metrics
     # (auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, etc.)
-    if ! kubectl get service -n kuadrant-system -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
+    AUTHORINO_NAMESPACE=""
+    if kubectl get service -n kuadrant-system -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
+        AUTHORINO_NAMESPACE="kuadrant-system"
+    elif kubectl get service -n rh-connectivity-link -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
+        AUTHORINO_NAMESPACE="rh-connectivity-link"
+    fi
+
+    if [ -z "$AUTHORINO_NAMESPACE" ]; then
         echo "   ⚠️  Authorino service not found - skipping Authorino server-metrics"
-    elif kuadrant_already_scrapes "/server-metrics"; then
+    elif kuadrant_already_scrapes "/server-metrics" "$AUTHORINO_NAMESPACE"; then
         echo "   ℹ️  Kuadrant already scrapes Authorino /server-metrics - skipping MaaS ServiceMonitor (no duplicates)"
     else
         kubectl apply -f "$BASE_OBSERVABILITY_DIR/authorino-server-metrics-servicemonitor.yaml"
@@ -192,6 +199,18 @@ if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     fi
 else
     echo "   ⚠️  Base observability directory not found - TelemetryPolicy may be missing!"
+fi
+
+# Deploy OIDC PrometheusRule (for JWKS/authentication failure alerting)
+# This must be deployed to the namespace where Authorino runs
+if [ -n "$AUTHORINO_NAMESPACE" ]; then
+    # Substitute the namespace in the PrometheusRule and apply
+    OIDC_RULE_FILE="$BASE_OBSERVABILITY_DIR/authorino-maas-oidc-prometheusrule.yaml"
+    if [ -f "$OIDC_RULE_FILE" ]; then
+        # Use yq to update the namespace in the YAML, then apply
+        yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" "$OIDC_RULE_FILE" | kubectl apply -f -
+        echo "   ✅ OIDC PrometheusRule deployed (namespace: $AUTHORINO_NAMESPACE)"
+    fi
 fi
 
 # Deploy Istio Gateway metrics (if gateway exists)
@@ -227,6 +246,13 @@ echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authcon
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:kv_cache_usage_perc"
 echo ""
+
+if [ -n "$AUTHORINO_NAMESPACE" ]; then
+    echo "🚨 Alerting configured:"
+    echo "   MaaSAuthorinoOIDCAuthenticationHighFailureRate - OIDC authentication denial rate > 10%"
+    echo "   MaaSAuthorinoOIDCAuthenticationHighLatency - OIDC authentication P95 latency > 2s"
+    echo ""
+fi
 
 echo "💡 To install MaaS Grafana dashboards (discovers Grafana cluster-wide, warn-only):"
 echo "   $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"

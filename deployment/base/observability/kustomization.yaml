@@ -16,6 +16,7 @@ resources:
 # when the gateway deployment exists.
 - gateway-telemetry-policy.yaml
 - istio-gateway-telemetry.yaml
+- authorino-maas-oidc-prometheusrule.yaml
 
 labels:
 - pairs:
