@@ -10,12 +10,12 @@ import time
 
 import pytest
 
+from oc_helper import oc_json, oc_not_found, oc_run
+
 
 TENANT_NAME = "default-tenant"
 # Tenant CR is reconciled in the subscription namespace (see maas-controller --maas-subscription-namespace).
 TENANT_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
-# maas-api / maas-controller Deployment and gateway-adjacent workloads (payload-processing) use the app namespace.
-APP_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 # BBR / payload-processing deploys into the gateway namespace by default (see maas-api params.env).
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 TENANT_CRD = "tenants.maas.opendatahub.io"
@@ -27,38 +27,23 @@ _KIND_PLURAL = {
 }
 
 
-def _oc_json(args):
-    result = subprocess.run(
-        ["oc"] + args,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise subprocess.CalledProcessError(
-            result.returncode, ["oc"] + args, result.stdout, result.stderr
-        )
-    return json.loads(result.stdout)
-
-
 def _tenant_doc():
-    return _oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
+    return oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
 
 
 def _tenant_status():
     try:
         doc = _tenant_doc()
         return doc.get("status") or {}
-    except subprocess.CalledProcessError:
-        return None
+    except subprocess.CalledProcessError as exc:
+        if oc_not_found(exc):
+            return None
+        raise
 
 
 @pytest.fixture(scope="module", autouse=True)
 def require_tenant_crd():
-    r = subprocess.run(
-        ["oc", "get", "crd", TENANT_CRD],
-        capture_output=True,
-        text=True,
-    )
+    r = oc_run(["get", "crd", TENANT_CRD])
     if r.returncode != 0:
         pytest.skip(
             f"Missing CRD {TENANT_CRD} (transitional skip: install maas-controller manifests "
@@ -109,9 +94,8 @@ class TestTenantLifecycle:
         if phase != "Active":
             pytest.skip("Tenant not Active (e.g. Degraded); payload-processing not asserted")
 
-        result = subprocess.run(
+        result = oc_run(
             [
-                "oc",
                 "get",
                 "deployment",
                 "payload-processing",
@@ -119,9 +103,7 @@ class TestTenantLifecycle:
                 GATEWAY_NAMESPACE,
                 "-o",
                 "name",
-            ],
-            capture_output=True,
-            text=True,
+            ]
         )
         if result.returncode != 0:
             pytest.skip(
@@ -163,11 +145,7 @@ class TestTenantNoFalseOwnership:
         ]
         for cr_type, namespace in checks:
             plural = _KIND_PLURAL[cr_type]
-            result = subprocess.run(
-                ["oc", "get", plural, "-n", namespace, "-o", "json"],
-                capture_output=True,
-                text=True,
-            )
+            result = oc_run(["get", plural, "-n", namespace, "-o", "json"])
             if result.returncode != 0:
                 continue
             for item in json.loads(result.stdout).get("items") or []:

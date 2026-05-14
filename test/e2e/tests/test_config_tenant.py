@@ -10,6 +10,8 @@ import time
 
 import pytest
 
+from oc_helper import oc_json, oc_not_found, oc_run
+
 
 CONFIG_CRD = "configs.maas.opendatahub.io"
 CONFIG_NAME = "default"
@@ -22,25 +24,12 @@ CONTROLLER_DEPLOY_NS = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 CONTROLLER_DEPLOYMENT = "maas-controller"
 
 
-def _oc_json(args):
-    result = subprocess.run(
-        ["oc"] + args,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise subprocess.CalledProcessError(
-            result.returncode, ["oc"] + args, result.stdout, result.stderr
-        )
-    return json.loads(result.stdout)
-
-
 def _config_doc():
-    return _oc_json(["get", CONFIG_CRD, CONFIG_NAME, "-o", "json"])
+    return oc_json(["get", CONFIG_CRD, CONFIG_NAME, "-o", "json"])
 
 
 def _tenant_doc():
-    return _oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
+    return oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
 
 
 def _config_uid_or_none():
@@ -48,8 +37,10 @@ def _config_uid_or_none():
         doc = _config_doc()
         uid = doc.get("metadata", {}).get("uid") or ""
         return uid if uid else None
-    except subprocess.CalledProcessError:
-        return None
+    except subprocess.CalledProcessError as exc:
+        if oc_not_found(exc):
+            return None
+        raise
 
 
 def _ref_to_config(refs):
@@ -65,11 +56,7 @@ def _ref_to_config(refs):
 
 @pytest.fixture(scope="module", autouse=True)
 def require_config_crd():
-    r = subprocess.run(
-        ["oc", "get", "crd", CONFIG_CRD],
-        capture_output=True,
-        text=True,
-    )
+    r = oc_run(["get", "crd", CONFIG_CRD])
     if r.returncode != 0:
         pytest.skip(
             f"Missing CRD {CONFIG_CRD} (transitional skip: install maas-controller bundle from "
@@ -107,10 +94,12 @@ class TestConfigTenantOwnership:
     def test_tenant_lists_config_owner_reference(self):
         try:
             doc = _tenant_doc()
-        except subprocess.CalledProcessError:
-            pytest.skip(
-                f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found; run after Tenant bootstrap."
-            )
+        except subprocess.CalledProcessError as exc:
+            if oc_not_found(exc):
+                pytest.skip(
+                    f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found; run after Tenant bootstrap."
+                )
+            raise
         ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))
         assert ref is not None, (
             f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} should reference Config/{CONFIG_NAME} "
@@ -118,9 +107,8 @@ class TestConfigTenantOwnership:
         )
 
     def test_maas_controller_deployment_lists_config_owner_reference(self):
-        result = subprocess.run(
+        result = oc_run(
             [
-                "oc",
                 "get",
                 "deployment",
                 CONTROLLER_DEPLOYMENT,
@@ -128,9 +116,7 @@ class TestConfigTenantOwnership:
                 CONTROLLER_DEPLOY_NS,
                 "-o",
                 "json",
-            ],
-            capture_output=True,
-            text=True,
+            ]
         )
         if result.returncode != 0:
             pytest.skip(
