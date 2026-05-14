@@ -43,14 +43,17 @@ pytest tests/<file>.py -v
 | `test_negative_security.py` | Security / negative paths |
 | `test_namespace_scoping.py` | Namespace wiring |
 | `test_external_models.py` | External model refs |
-| `test_tenant.py` | Tenant singleton: `maas-controller` bootstraps `default-tenant`; Ready/phase; optional payload-processing; CRs not owned by Tenant; DSC deletion → operator CI |
+| `test_tenant.py` | Tenant singleton in `MAAS_SUBSCRIPTION_NAMESPACE` (default `models-as-a-service`): Ready/phase; optional `payload-processing` in `GATEWAY_NAMESPACE` (default `openshift-ingress`); CRs not owned by Tenant; DSC deletion → operator CI |
+| `test_config_tenant.py` | Cluster `Config/default` anchor (#894): presence + UID, not terminating; owner refs from `default-tenant` and `maas-controller` Deployment → Config (GC wiring). Read-only — no Config delete in CI |
 
 Other modules (for example `test_external_oidc.py`, `test_subscription_list_endpoints.py`) are not in the default Prow pytest list—run them explicitly or use `smoke.sh`, which executes all tests under `tests/`.
 
 **`test_tenant.py` skips:** If the Tenant CRD or `default-tenant` is missing, the whole module skips. That is **transitional** for partial or legacy clusters. The target E2E shape is **install `maas-controller` (and its CRDs)** in CI; the controller then creates the Tenant automatically—so skips should become rare and a missing Tenant after a proper controller install should be treated as a regression.
 
+**`test_config_tenant.py`:** Asserts the post-#894 Config anchor and owner references. Skips whole module if the `configs.maas.opendatahub.io` CRD is missing (pre-#894 bundles). Deleting `Config/default` to assert Tenant GC is **not** run here (destructive); use a manual or dedicated teardown job.
+
 ## CI
 
-CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`: pytest on `test_api_keys.py`, `test_namespace_scoping.py`, `test_negative_security.py`, `test_subscription.py`, `test_models_endpoint.py`, `test_external_models.py`, `test_tenant.py`, then deployment validation; reports under `ARTIFACT_DIR` when set.
+CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`: pytest on `test_api_keys.py`, `test_namespace_scoping.py`, `test_negative_security.py`, `test_subscription.py`, `test_models_endpoint.py`, `test_external_models.py`, `test_tenant.py`, `test_config_tenant.py`, then deployment validation; reports under `ARTIFACT_DIR` when set.
 
 External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, `OIDC_PASSWORD` per your deploy/test setup.

@@ -1,6 +1,7 @@
 """Tenant singleton (`default-tenant`) checks; DSC disable/remove Tenant → operator CI.
 
-`maas-controller` bootstraps `default-tenant` on startup when the Tenant CRD is installed.
+`default-tenant` lives in `MAAS_SUBSCRIPTION_NAMESPACE` (default `models-as-a-service`), not the
+controller/maas-api namespace. `maas-controller` bootstraps the Tenant when the Tenant CRD is installed.
 Module-level skips below are transitional: legacy or partial clusters may lack CRD/singleton
 until CI consistently installs only the controller (dependencies from other pipelines).
 """
@@ -14,7 +15,12 @@ import pytest
 
 
 TENANT_NAME = "default-tenant"
-TENANT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+# Tenant CR is reconciled in the subscription namespace (see maas-controller --maas-subscription-namespace).
+TENANT_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+# maas-api / maas-controller Deployment and gateway-adjacent workloads (payload-processing) use the app namespace.
+APP_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+# BBR / payload-processing deploys into the gateway namespace by default (see maas-api params.env).
+GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 TENANT_CRD = "tenants.maas.opendatahub.io"
 
 _KIND_PLURAL = {
@@ -113,7 +119,7 @@ class TestTenantLifecycle:
                 "deployment",
                 "payload-processing",
                 "-n",
-                TENANT_NAMESPACE,
+                GATEWAY_NAMESPACE,
                 "-o",
                 "name",
             ],
@@ -122,7 +128,7 @@ class TestTenantLifecycle:
         )
         if result.returncode != 0:
             pytest.skip(
-                f"payload-processing deployment not found in namespace {TENANT_NAMESPACE!r}; "
+                f"payload-processing deployment not found in namespace {GATEWAY_NAMESPACE!r}; "
                 "skipping (optional workload in some CI or partial installs)."
             )
         assert result.stdout.strip(), "payload-processing deployment get succeeded but returned no name"
