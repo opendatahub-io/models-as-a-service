@@ -20,16 +20,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -42,10 +43,6 @@ const (
 	managementStateManaged    = "Managed"
 	managementStateRemoved    = "Removed"
 	managementStateUnmanaged  = "Unmanaged"
-)
-
-const (
-	tenantFinalizer = "maas.opendatahub.io/tenant-finalizer"
 )
 
 func managementState(ann map[string]string) string {
@@ -70,46 +67,43 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	// Handle delete before Removed/Unmanaged idle so we still run teardown when the CR is being deleted.
+	// Handle delete before Unmanaged idle. Config anchor lifecycle is owned by the operator /
+	// ModelsAsService GC and the lifecycle reconciler; the Tenant reconciler does not delete Config.
 	if !tenant.DeletionTimestamp.IsZero() {
-		if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-			return ctrl.Result{}, nil
-		}
-		pending, err := r.finalizeTenantDeletion(ctx, &tenant)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if pending {
-			return ctrl.Result{RequeueAfter: finalizeRequeueInterval}, nil
-		}
-		patchBase := client.MergeFrom(tenant.DeepCopy())
-		controllerutil.RemoveFinalizer(&tenant, tenantFinalizer)
-		if err := r.Patch(ctx, &tenant, patchBase); err != nil {
-			return ctrl.Result{}, err
-		}
 		return ctrl.Result{}, nil
 	}
 
 	ms := managementState(tenant.Annotations)
-	if ms == managementStateRemoved || ms == managementStateUnmanaged {
+	if ms == managementStateUnmanaged {
 		return r.handleIdleManagementState(ctx, &tenant, ms)
 	}
 
-	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-		patchBase := client.MergeFrom(tenant.DeepCopy())
-		controllerutil.AddFinalizer(&tenant, tenantFinalizer)
-		if err := r.Patch(ctx, &tenant, patchBase); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{Requeue: true}, nil
-	}
-
-	if ms != "" && ms != managementStateManaged {
+	if ms != "" && ms != managementStateManaged && ms != managementStateRemoved {
 		if err := r.patchStatus(ctx, &tenant, "Failed", metav1.ConditionFalse, "UnexpectedManagementState",
 			fmt.Sprintf("unsupported %s=%q", managementStateAnnotation, ms)); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	mcfg, wait, err := r.readyConfigOrWait(ctx, log, &tenant)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if wait != nil {
+		return *wait, nil
+	}
+
+	// Removed: operator-driven teardown deletes the Config anchor; readyConfigOrWait already
+	// surfaces ConfigMissing / ConfigTerminating. If Config is still live, suspend platform apply
+	// until GC removes it (do not treat like Unmanaged — no platform while anchor exists).
+	if managementState(tenant.Annotations) == managementStateRemoved {
+		log.V(1).Info("Tenant in Removed management state with live Config; waiting for anchor teardown")
+		if err := r.patchStatus(ctx, &tenant, "Pending", metav1.ConditionFalse, "WaitingForRemovedTeardown",
+			"management state is Removed; platform reconcile is suspended until the Config anchor is deleted by component GC"); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	orig := tenant.DeepCopy()
@@ -177,7 +171,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{RequeueAfter: 45 * time.Second}, nil
 	}
 
-	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, &tenant, r.ManifestPath, appNs)
+	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, &tenant, r.ManifestPath, appNs, mcfg)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(&tenant, false, "PlatformReconcileFailed", err.Error())
@@ -225,31 +219,61 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
-// handleIdleManagementState handles Removed and Unmanaged states.
-// Removed tears down owned resources before dropping the finalizer;
-// Unmanaged simply drops the finalizer, leaving resources in place.
+// readyConfigOrWait returns the singleton Config when it exists, is not deleting,
+// and has a UID. Otherwise it updates Tenant status and returns a Result the caller should return
+// immediately without running gateway, dependency, prerequisite, or platform work.
+func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) (*maasv1alpha1.Config, *ctrl.Result, error) {
+	var ct maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &ct); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("Config not found; skipping reconcile until it exists", "name", maasv1alpha1.ConfigInstanceName)
+			if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "ConfigMissing",
+				fmt.Sprintf("Config %q is required before platform apply", maasv1alpha1.ConfigInstanceName)); err2 != nil {
+				return nil, nil, err2
+			}
+			res := ctrl.Result{RequeueAfter: 10 * time.Second}
+			return nil, &res, nil
+		}
+		return nil, nil, err
+	}
+	if !ct.DeletionTimestamp.IsZero() {
+		log.Info("Config is terminating; skipping platform reconcile", "name", ct.Name)
+		if err := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "ConfigTerminating",
+			fmt.Sprintf("Config %q is deleting; platform reconcile is suspended until the anchor is gone or recreated", ct.Name)); err != nil {
+			return nil, nil, err
+		}
+		res := ctrl.Result{RequeueAfter: 10 * time.Second}
+		return nil, &res, nil
+	}
+	if ct.UID == "" {
+		if err := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "WaitingForConfigUID",
+			fmt.Sprintf("Config %q has no UID yet; waiting before platform apply", maasv1alpha1.ConfigInstanceName)); err != nil {
+			return nil, nil, err
+		}
+		res := ctrl.Result{RequeueAfter: 5 * time.Second}
+		return nil, &res, nil
+	}
+	return &ct, nil, nil
+}
+
+// handleIdleManagementState handles Unmanaged: platform workloads are not driven by this
+// reconciler; record idle status.
 func (r *TenantReconciler) handleIdleManagementState(ctx context.Context, tenant *maasv1alpha1.Tenant, ms string) (ctrl.Result, error) {
 	if err := r.patchStatus(ctx, tenant, "", metav1.ConditionFalse, "ManagementStateIdle",
 		fmt.Sprintf("management state is %q; platform workloads are not driven by this reconciler in this state", ms)); err != nil {
 		return ctrl.Result{}, err
 	}
-	if controllerutil.ContainsFinalizer(tenant, tenantFinalizer) {
-		if ms == managementStateRemoved {
-			pending, err := r.finalizeTenantDeletion(ctx, tenant)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			if pending {
-				return ctrl.Result{RequeueAfter: finalizeRequeueInterval}, nil
-			}
-		}
-		patchBase := client.MergeFrom(tenant.DeepCopy())
-		controllerutil.RemoveFinalizer(tenant, tenantFinalizer)
-		if err := r.Patch(ctx, tenant, patchBase); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
 	return ctrl.Result{}, nil
+}
+
+func (r *TenantReconciler) operatorNamespace() string {
+	if r.OperatorNamespace != "" {
+		return r.OperatorNamespace
+	}
+	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+		return ns
+	}
+	return os.Getenv("WATCH_NAMESPACE")
 }
 
 func applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {

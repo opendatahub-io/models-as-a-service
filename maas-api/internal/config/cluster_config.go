@@ -1,10 +1,13 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/dynamic"
@@ -138,6 +141,51 @@ func (c *ClusterConfig) StartAndWaitForSync(stopCh <-chan struct{}) bool {
 		start(stopCh)
 	}
 	return cache.WaitForCacheSync(stopCh, c.informersSynced...)
+}
+
+// ResolveGatewayInternalHost finds the cluster-internal DNS name of the gateway's
+// Service by looking up Services labeled with the standard Gateway API label
+// gateway.networking.k8s.io/gateway-name=<gatewayName> in gatewayNamespace.
+// Only Services owned by a Gateway resource (via ownerReferences) and exposing
+// port 443 are considered. Returns "<service-name>.<namespace>.svc.cluster.local".
+func ResolveGatewayInternalHost(ctx context.Context, clientset kubernetes.Interface, gatewayName, gatewayNamespace string) (string, error) {
+	labelSelector := fmt.Sprintf("gateway.networking.k8s.io/gateway-name=%s", gatewayName)
+	svcs, err := clientset.CoreV1().Services(gatewayNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list services in %s with label %s: %w", gatewayNamespace, labelSelector, err)
+	}
+
+	var candidates []string
+	for _, svc := range svcs.Items {
+		ownedByGateway := false
+		for _, ref := range svc.OwnerReferences {
+			if ref.Kind == "Gateway" && ref.Name == gatewayName &&
+				strings.HasPrefix(ref.APIVersion, "gateway.networking.k8s.io/") {
+				ownedByGateway = true
+				break
+			}
+		}
+		if !ownedByGateway {
+			continue
+		}
+		for _, port := range svc.Spec.Ports {
+			if port.Port == 443 {
+				candidates = append(candidates, svc.Name)
+				break
+			}
+		}
+	}
+
+	switch len(candidates) {
+	case 0:
+		return "", fmt.Errorf("no gateway-owned service with HTTPS port found for gateway %s/%s (label: %s)", gatewayNamespace, gatewayName, labelSelector)
+	case 1:
+		return fmt.Sprintf("%s.%s.svc.cluster.local", candidates[0], gatewayNamespace), nil
+	default:
+		return "", fmt.Errorf("expected 1 gateway service for %s/%s, found %d: %v", gatewayNamespace, gatewayName, len(candidates), candidates)
+	}
 }
 
 // LoadRestConfig creates a *rest.Config using client-go loading rules.

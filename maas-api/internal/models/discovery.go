@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -45,16 +46,20 @@ const (
 
 // Manager runs access validation (probe model endpoints) for models listed from MaaSModelRef.
 type Manager struct {
-	logger             *logger.Logger
-	httpClient         *http.Client
-	accessCheckTimeout time.Duration
+	logger              *logger.Logger
+	httpClient          *http.Client
+	accessCheckTimeout  time.Duration
+	gatewayInternalHost string
 }
 
 // NewManager creates a Manager for filtering models by access. The client uses InsecureSkipVerify
 // for cluster-internal probes; auth is enforced by the gateway/model server.
 // accessCheckTimeoutSeconds controls the total duration bound for access validation;
 // if <= 0, the default of 15 seconds is used.
-func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int) (*Manager, error) {
+// gatewayInternalHost, when non-empty, routes all probe TCP connections to this
+// cluster-internal address while preserving the original URL hostname for TLS SNI
+// and the Host header, so gateway routing and Authorino auth work identically.
+func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayInternalHost string) (*Manager, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
@@ -62,19 +67,31 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int) (*Manager, er
 	if accessCheckTimeoutSeconds > 0 {
 		timeout = time.Duration(accessCheckTimeoutSeconds) * time.Second
 	}
+
+	transport := &http.Transport{
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, //nolint:gosec // cluster-internal only
+		MaxIdleConns:        httpMaxIdleConns,
+		MaxIdleConnsPerHost: maxDiscoveryConcurrency,
+		IdleConnTimeout:     httpIdleConnTimeout,
+	}
+
+	if gatewayInternalHost != "" {
+		dialer := &net.Dialer{}
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				port = "443"
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(gatewayInternalHost, port))
+		}
+	}
+
 	return &Manager{
-		logger:             log,
-		accessCheckTimeout: timeout,
+		logger:              log,
+		accessCheckTimeout:  timeout,
+		gatewayInternalHost: gatewayInternalHost,
 		httpClient: &http.Client{
-			// No per-client Timeout — each request inherits the accessCheckTimeout
-			// deadline via its context. This ensures that configuring a longer
-			// ACCESS_CHECK_TIMEOUT_SECONDS actually allows slower backends to respond.
-			Transport: &http.Transport{
-				TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // cluster-internal only
-				MaxIdleConns:        httpMaxIdleConns,
-				MaxIdleConnsPerHost: maxDiscoveryConcurrency,
-				IdleConnTimeout:     httpIdleConnTimeout,
-			},
+			Transport: transport,
 		},
 	}, nil
 }

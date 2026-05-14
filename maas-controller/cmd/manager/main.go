@@ -26,6 +26,7 @@ import (
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -325,47 +326,79 @@ func getClusterServiceAccountIssuer(c client.Reader) (string, error) {
 	return issuer, nil
 }
 
-// ensureDefaultTenantRunnable returns a manager.Runnable that periodically ensures the
-// default-tenant CR exists. If the Tenant is deleted (e.g. during testing or operator
-// lifecycle), it will be recreated on the next tick.
-func ensureDefaultTenantRunnable(mgr ctrl.Manager, tenantNamespace string) manager.RunnableFunc {
+// ensureClusterBootstrapRunnable ensures default-tenant in the subscription namespace exists once
+// Config/default is present (created by LifecycleReconciler). It does not set owner references:
+// LifecycleReconciler patches Config→Tenant the same way it patches Config→Deployment. ODH may
+// create the Tenant first; this runnable converges the Tenant shell for standalone installs. It
+// does not create or patch the Tenant while the maas-controller Deployment is terminating.
+func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, controllerDeploymentNS, controllerDeploymentName string) manager.RunnableFunc {
 	return func(ctx context.Context) error {
-		log := ctrl.Log.WithName("setup").WithName("ensureDefaultTenant")
+		log := ctrl.Log.WithName("setup").WithName("ensureClusterBootstrap")
 		c := mgr.GetClient()
 
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 
 		ensure := func() {
-			key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNamespace}
-			var existing maasv1alpha1.Tenant
-			if err := c.Get(ctx, key, &existing); err == nil {
-				return
-			} else if !errors.IsNotFound(err) {
-				log.Error(err, "failed to check for default-tenant")
-				return
-			}
-
-			tenant := &maasv1alpha1.Tenant{
-				TypeMeta: metav1.TypeMeta{
-					APIVersion: maasv1alpha1.GroupVersion.String(),
-					Kind:       maasv1alpha1.TenantKind,
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      maasv1alpha1.TenantInstanceName,
-					Namespace: tenantNamespace,
-				},
-			}
-			tenantreconcile.EnsureTenantGatewayDefaults(tenant)
-
-			if err := c.Create(ctx, tenant); err != nil {
-				if errors.IsAlreadyExists(err) {
+			depKey := types.NamespacedName{Namespace: controllerDeploymentNS, Name: controllerDeploymentName}
+			var dep appsv1.Deployment
+			if err := c.Get(ctx, depKey, &dep); err != nil {
+				if errors.IsNotFound(err) {
 					return
 				}
-				log.Error(err, "failed to create default-tenant", "namespace", tenantNamespace)
+				log.Error(err, "failed to get maas-controller Deployment for bootstrap gate")
 				return
 			}
-			log.Info("created default-tenant", "namespace", tenantNamespace)
+			if !dep.DeletionTimestamp.IsZero() {
+				return
+			}
+
+			tKey := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNamespace}
+			var tenant maasv1alpha1.Tenant
+			if err := c.Get(ctx, tKey, &tenant); err != nil && !errors.IsNotFound(err) {
+				log.Error(err, "failed to get default Tenant for bootstrap gate")
+				return
+			}
+
+			ctKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
+			var ct maasv1alpha1.Config
+			if err := c.Get(ctx, ctKey, &ct); err != nil {
+				if errors.IsNotFound(err) {
+					return
+				}
+				log.Error(err, "failed to get Config")
+				return
+			}
+			if !ct.DeletionTimestamp.IsZero() || ct.UID == "" {
+				return
+			}
+
+			if err := c.Get(ctx, tKey, &tenant); err != nil {
+				if !errors.IsNotFound(err) {
+					log.Error(err, "failed to get default Tenant")
+					return
+				}
+				t := &maasv1alpha1.Tenant{
+					TypeMeta: metav1.TypeMeta{
+						APIVersion: maasv1alpha1.GroupVersion.String(),
+						Kind:       maasv1alpha1.TenantKind,
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      maasv1alpha1.TenantInstanceName,
+						Namespace: tenantNamespace,
+					},
+				}
+				tenantreconcile.EnsureTenantGatewayDefaults(t)
+				if err := c.Create(ctx, t); err != nil && !errors.IsAlreadyExists(err) {
+					log.Error(err, "failed to create default-tenant", "namespace", tenantNamespace)
+					return
+				}
+				if err := c.Get(ctx, tKey, &tenant); err != nil {
+					log.Error(err, "re-fetch default Tenant after create")
+					return
+				}
+				log.Info("ensured default-tenant exists", "namespace", tenantNamespace)
+			}
 		}
 
 		ensure()
@@ -509,16 +542,10 @@ func main() {
 
 	// Startup ordering contract:
 	//   1. ensureSubscriptionNamespaceWithClient runs synchronously above, before the manager starts.
-	//   2. ensureDefaultTenantRunnable (below) runs after cache sync and creates the default-tenant CR.
-	//   3. TenantReconciler is registered after this runnable. If a reconcile fires before the
-	//      runnable creates the Tenant CR (narrow race window), IsNotFound returns ctrl.Result{}
-	//      with no error; the CRD watch re-triggers once the runnable creates the CR.
-	//   4. ODH operator may also apply the Tenant CR independently. The singleton check in
-	//      TenantReconciler (tenant.Name != TenantInstanceName) ensures only the expected CR is acted on.
-	if err := mgr.Add(ensureDefaultTenantRunnable(mgr, maasSubscriptionNamespace)); err != nil {
-		setupLog.Error(err, "unable to register ensureDefaultTenant runnable")
-		os.Exit(1)
-	}
+	//   2. LifecycleReconciler creates Config/default when maas-controller is running (see Setup below).
+	//   3. ensureClusterBootstrapRunnable creates default-tenant once Config/default exists (no owner refs).
+	//   4. LifecycleReconciler patches Config→Tenant owner refs (and enqueues on Tenant events).
+	//   5. If Tenant reconciles before Config exists, readyConfigOrWait requeues until the anchor appears.
 
 	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
 	if manifestPath == "" {
@@ -540,17 +567,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// LifecycleReconciler manages the cleanup finalizer on the maas-controller
-	// Deployment. When ODH deletes the Deployment (MaaS disable), the finalizer ensures
-	// Tenant CRs are cleaned up before the controller process exits.
-	// maasAPINamespace is the namespace ODH deployed maas-controller into (same namespace).
+	// LifecycleReconciler creates Config/default when maas-controller is running, links the
+	// Deployment and default-tenant to Config (non-controller owner refs), and strips the legacy
+	// cleanup finalizer if present. maasAPINamespace is where ODH deployed maas-controller.
 	if err := (&maas.LifecycleReconciler{
-		Client:          mgr.GetClient(),
-		DeploymentName:  "maas-controller",
-		DeploymentNS:    maasAPINamespace,
-		TenantNamespace: maasSubscriptionNamespace,
+		Client:                      mgr.GetClient(),
+		Scheme:                      mgr.GetScheme(),
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                maasAPINamespace,
+		TenantSubscriptionNamespace: maasSubscriptionNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
+		os.Exit(1)
+	}
+
+	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, maasAPINamespace, "maas-controller")); err != nil {
+		setupLog.Error(err, "unable to register ensureClusterBootstrap runnable")
 		os.Exit(1)
 	}
 

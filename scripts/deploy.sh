@@ -539,10 +539,12 @@ main() {
       }
     fi
   else
-    log_info "  Installing controller (CRDs, RBAC, deployment)..."
-    if [[ "$cm_maas_controller_image" != "quay.io/opendatahub/maas-controller:latest" ]]; then
-      log_info "  Installing maas-controller with image: $cm_maas_controller_image"
+    log_info "  Phase 1: Applying MaaS CRDs and waiting until Established (controller creates Config after CRD is ready)..."
+    if ! install_maas_controller_crds_and_wait "${project_root}/deployment/base/maas-controller/crd"; then
+      log_error "MaaS CRD install or Established wait failed"
+      return 1
     fi
+    log_info "  Phase 2: Applying full controller kustomize (same as operator: deployment/base/maas-controller/default)..."
     if [[ "$NAMESPACE" != "opendatahub" ]]; then
       (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
         sed -e "s/namespace: opendatahub/namespace: $NAMESPACE/g" \

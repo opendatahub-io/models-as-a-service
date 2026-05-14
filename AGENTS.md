@@ -55,7 +55,7 @@ If you change any file under `maas-controller/api/` or modify `//+kubebuilder:rb
 
 ## Kustomize / deployment
 
-- `deployment/base/maas-controller/default` — operator bootstrap (CRDs, RBAC, Deployment)
+- `deployment/base/maas-controller/default` — operator bootstrap (CRDs, RBAC, Deployment, default CRs such as `Config`). `./scripts/deploy.sh` applies `deployment/base/maas-controller/crd` first and waits **Established**, then applies this bundle unchanged (avoids CRD/CR ordering issues on install).
 - `maas-api/deploy/overlays/odh` — tenant overlay rendered at runtime inside the controller container
 - `deployment/overlays/odh/params.env` — build-time defaults; runtime values come from Tenant CR via `PostRender`
 - The controller image embeds `maas-api/deploy`, `deployment/base/maas-api`, components, and policies via Dockerfile COPY
@@ -71,6 +71,24 @@ Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `buil
 ## PR review process
 
 After creating a PR, immediately add a comment with `@coderabbitai review` to trigger automated code review.
+
+## PR description: risk analysis
+
+When you open or draft a pull request, include a **Risk analysis** in the PR body:
+
+- **Risk rating**: an integer from 0 (lowest) to 5 (highest).
+- **Why**: a short explanation of how you chose the rating (what could break, what is untested, or why it is safe).
+
+Use this scale consistently:
+
+| Rating | Typical meaning |
+|--------|-----------------|
+| 0 | Documentation-only or other changes with negligible runtime impact (e.g. typo fixes, clarifications under `docs/` that do not change product behavior). |
+| 1–3 | Any change to code (Go, scripts that affect builds/deploys, Kustomize, CI logic, etc.) is at least 1. Most code changes fall in 2–3 depending on scope, blast radius, and how well unit/integration tests cover the path. |
+| 4–5 | Automatically 4 or 5 if the behavior is unlikely to be covered by the Prow smoke path in `test/e2e/scripts/prow_run_smoke_test.sh` (review that script's steps and env flags — e.g. full deploy, API keys, subscriptions, models endpoints, deployment validation; paths gated by variables may not run in default CI). |
+| 4–5 | Automatically 4 or 5 for changes involving external systems or tight coupling to upstream operators (e.g. OpenDataHub / parent operator integration, operator catalog images, or contracts outside this repo). |
+
+If multiple rules apply, use the **highest** justified rating and explain the main drivers in **Why**.
 
 ## Testing conventions
 

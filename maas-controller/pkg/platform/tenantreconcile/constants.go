@@ -42,8 +42,10 @@ const (
 	TelemetryPolicyName                        = "maas-telemetry"
 	IstioTelemetryName                         = "latency-per-subscription"
 	MaaSAPIDeploymentName                      = "maas-api"
-	MaaSDBSecretName                           = "maas-db-config" //nolint:gosec // secret name reference, not a credential
-	MaaSDBSecretKey                            = "DB_CONNECTION_URL"
+	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
+	MaaSControllerDeploymentName = "maas-controller"
+	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
+	MaaSDBSecretKey              = "DB_CONNECTION_URL"
 
 	MonitoringNamespace         = "openshift-monitoring"
 	ClusterMonitoringConfigName = "cluster-monitoring-config"
