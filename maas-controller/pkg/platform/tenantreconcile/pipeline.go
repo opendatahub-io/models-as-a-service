@@ -36,7 +36,7 @@ func CheckDependencies(ctx context.Context, c client.Client) error {
 
 // RunPlatform runs kustomize render, apply, and deployment readiness after dependencies and prerequisites
 // have succeeded and gateway ref is valid (caller validates gateway existence).
-func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, manifestPath string, appNs string) (*RunResult, error) {
+func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, manifestPath string, appNs string, mcfg *maasv1alpha1.Config) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("manifest path: %w", err)
@@ -75,7 +75,7 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 		return nil, fmt.Errorf("post-render: %w", err)
 	}
 
-	if err := ApplyRendered(ctx, c, scheme, tenant, resources); err != nil {
+	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
 		return nil, fmt.Errorf("apply: %w", err)
 	}
 
@@ -91,7 +91,7 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 
 // Run executes the Tenant platform pipeline (dependencies → prerequisites → render → apply → status).
 // The application namespace is derived from tenant.Namespace (Tenant CR is co-located with workloads).
-func Run(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, manifestPath string) (*RunResult, error) {
+func Run(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, manifestPath string, mcfg *maasv1alpha1.Config) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("manifest path: %w", err)
@@ -110,7 +110,7 @@ func Run(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.
 		return nil, fmt.Errorf("prerequisites: %w", err)
 	}
 
-	return RunPlatform(ctx, log, c, scheme, tenant, manifestPath, appNs)
+	return RunPlatform(ctx, log, c, scheme, tenant, manifestPath, appNs, mcfg)
 }
 
 // MaasAPIDeploymentReady mirrors ODH deployments action for maas-api.

@@ -55,7 +55,7 @@ If you change any file under `maas-controller/api/` or modify `//+kubebuilder:rb
 
 ## Kustomize / deployment
 
-- `deployment/base/maas-controller/default` — operator bootstrap (CRDs, RBAC, Deployment)
+- `deployment/base/maas-controller/default` — operator bootstrap (CRDs, RBAC, Deployment, default CRs such as `Config`). `./scripts/deploy.sh` applies `deployment/base/maas-controller/crd` first and waits **Established**, then applies this bundle unchanged (avoids CRD/CR ordering issues on install).
 - `maas-api/deploy/overlays/odh` — tenant overlay rendered at runtime inside the controller container
 - `deployment/overlays/odh/params.env` — build-time defaults; runtime values come from Tenant CR via `CustomizeParams`
 - The controller image embeds `maas-api/deploy`, `deployment/base/maas-api`, components, and policies via Dockerfile COPY

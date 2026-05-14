@@ -120,7 +120,8 @@ verify-codegen: generate manifests ##	run generate + manifests and fail if files
 
 ##@ Deployment
 
-# Install CRDs, RBAC, and manager deployment (default: opendatahub namespace)
+# Install CRDs, RBAC, and manager deployment (default: opendatahub namespace).
+# For cold clusters, ./scripts/deploy.sh applies CRDs and waits Established before the controller bundle.
 .PHONY: install
 install: ##	apply deployment/base/maas-controller/default (CRDs, RBAC, deployment)
 	kubectl apply -k ../deployment/base/maas-controller/default
