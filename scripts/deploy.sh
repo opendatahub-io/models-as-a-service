@@ -185,7 +185,7 @@ ADVANCED OPTIONS (PR Testing):
 
   --channel <channel>
       Operator channel override
-      Default: fast-3 (ODH), fast-3.x (RHOAI)
+      Default: fast-3 (ODH), stable-3.x (RHOAI)
 
   --external-oidc
       Enable external OIDC on the maas-api AuthPolicy.
@@ -973,9 +973,9 @@ install_primary_operator() {
         channel="${OPERATOR_CHANNEL:-fast}"
       else
         catalog_source="redhat-operators"
-        # Use 'fast-3.x' channel for RHOAI v3 (with MaaS support)
+        # Use 'stable-3.x' channel for RHOAI v3 (with MaaS support)
         # RHOAI 2.x (fast channel) does not support modelsAsService
-        channel="${OPERATOR_CHANNEL:-fast-3.x}"
+        channel="${OPERATOR_CHANNEL:-stable-3.x}"
       fi
 
       log_info "Installing RHOAI v3 operator..."
