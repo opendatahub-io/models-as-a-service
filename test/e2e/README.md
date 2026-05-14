@@ -43,14 +43,12 @@ pytest tests/<file>.py -v
 | `test_negative_security.py` | Security / negative paths |
 | `test_namespace_scoping.py` | Namespace wiring |
 | `test_external_models.py` | External model refs |
-| `test_tenant.py` | Tenant singleton in `MAAS_SUBSCRIPTION_NAMESPACE` (default `models-as-a-service`): Ready/phase; optional `payload-processing` in `GATEWAY_NAMESPACE` (default `openshift-ingress`); CRs not owned by Tenant; DSC deletion → operator CI |
-| `test_config_tenant.py` | Cluster `Config/default` anchor (#894): presence + UID, not terminating; owner refs from `default-tenant` and `maas-controller` Deployment → Config (GC wiring). Read-only — no Config delete in CI |
+| `test_tenant.py` | `default-tenant` (subscription namespace): Ready/phase, optional payload-processing (gateway namespace), user CRs not owned by Tenant |
+| `test_config_tenant.py` | Cluster `Config/default`: anchor present, owner refs on Tenant and `maas-controller` Deployment (skips if Config CRD missing) |
 
 Other modules (for example `test_external_oidc.py`, `test_subscription_list_endpoints.py`) are not in the default Prow pytest list—run them explicitly or use `smoke.sh`, which executes all tests under `tests/`.
 
-**`test_tenant.py` skips:** If the Tenant CRD or `default-tenant` is missing, the whole module skips. That is **transitional** for partial or legacy clusters. The target E2E shape is **install `maas-controller` (and its CRDs)** in CI; the controller then creates the Tenant automatically—so skips should become rare and a missing Tenant after a proper controller install should be treated as a regression.
-
-**`test_config_tenant.py`:** Asserts the post-#894 Config anchor and owner references. Skips whole module if the `configs.maas.opendatahub.io` CRD is missing (pre-#894 bundles). Deleting `Config/default` to assert Tenant GC is **not** run here (destructive); use a manual or dedicated teardown job.
+**Skips:** `test_tenant.py` and `test_config_tenant.py` skip the whole module when the needed CRD or object is absent (partial cluster or older bundle). Neither module deletes Config or exercises DSC disable; that stays in operator or manual teardown.
 
 ## CI
 

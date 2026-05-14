@@ -1,9 +1,6 @@
-"""Cluster-scoped Config anchor (see #894) and linkage to Tenant / maas-controller.
+"""Read-only E2E for cluster Config/default (anchor + owner refs on Tenant and maas-controller).
 
-`Config/default` gates Tenant platform reconcile; Kubernetes GC removes the Tenant when the
-Config anchor is deleted (owner references). These checks are read-only — do not delete Config in CI.
-
-Destructive GC validation (delete Config → Tenant removed) stays manual or operator-focused jobs.
+Does not delete Config; destructive GC checks belong in operator or dedicated jobs.
 """
 
 import json

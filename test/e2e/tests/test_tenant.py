@@ -1,9 +1,6 @@
-"""Tenant singleton (`default-tenant`) checks; DSC disable/remove Tenant → operator CI.
+"""`default-tenant` in `MAAS_SUBSCRIPTION_NAMESPACE`: lifecycle, contract, ownership.
 
-`default-tenant` lives in `MAAS_SUBSCRIPTION_NAMESPACE` (default `models-as-a-service`), not the
-controller/maas-api namespace. `maas-controller` bootstraps the Tenant when the Tenant CRD is installed.
-Module-level skips below are transitional: legacy or partial clusters may lack CRD/singleton
-until CI consistently installs only the controller (dependencies from other pipelines).
+DSC-driven disable/remove stays in operator CI. Module skips if CRD or singleton missing.
 """
 
 import json
