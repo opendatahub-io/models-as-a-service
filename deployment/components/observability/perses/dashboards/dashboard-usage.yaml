@@ -12,6 +12,9 @@
 # LokiLabelValuesVariable plugin yet. To add new values, update the YAML;
 # default $__all still includes all models/subscriptions in aggregates.
 #
+# Token consumption: Perses ``stack: all`` + ``areaOpacity: 1`` when the console honors it.
+# **Filled-line mock (Grafana):** ``docs/samples/dashboards/grafana-usage-loki-token-mock.json``.
+#
 # user_id!="-" filters out health-check / probe traffic (user_id="-").
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
@@ -20,10 +23,15 @@ metadata:
   labels:
     app: perses
     app.kubernetes.io/part-of: maas-observability
+  annotations:
+    maas.observability/visual-revision: "2026-05-14-stack-area-grafana-mock-doc"
 spec:
   display:
     name: "Usage Dashboard"
-    description: "Token consumption overview and per-user usage breakdown"
+    description: >-
+      Token consumption overview and per-user usage breakdown.
+      Filled chart mock (Grafana): import docs/samples/dashboards/grafana-usage-loki-token-mock.json
+      and select Loki — Perses console often omits Loki area fill.
   duration: 1h
 
   variables:
@@ -46,6 +54,8 @@ spec:
           spec:
             values:
               - "simulator-subscription"
+              - "standard-subscription"
+              - "sh-older-subscription"
     - kind: ListVariable
       spec:
         name: model
@@ -59,6 +69,26 @@ spec:
           spec:
             values:
               - "facebook/opt-125m"
+              # Friendly label in the UI; LogQL still uses value the-best-gpt-3.5-m
+              - value: "the-best-gpt-3.5-m"
+                label: "My model"
+              - "meta-llama/Llama-3.2-1B-Instruct"
+    - kind: ListVariable
+      spec:
+        name: token_split
+        display:
+          name: "Token chart"
+        allowMultiple: false
+        allowAllValue: false
+        defaultValue: "model"
+        plugin:
+          kind: StaticListVariable
+          spec:
+            values:
+              - value: model
+                label: By model
+              - value: subscription
+                label: By subscription
 
   panels:
     totalTokens:
@@ -207,6 +237,52 @@ spec:
                     | user_id=~"$user" | user_id!="" | user_id!="-" [$__range])))
                     or vector(0)
 
+    tokenConsumptionOverTime:
+      kind: Panel
+      spec:
+        display:
+          name: "Token consumption"
+          description: >-
+            Grafana filled mock: docs/samples/dashboards/grafana-usage-loki-token-mock.json (import + Loki).
+            Tokens from successful requests (2xx) over time by model or subscription
+            (**Token chart** uses ``${token_split:raw}`` in LogQL `by (...)` —
+            [Perses Variable interpolation](https://perses.dev/perses/docs/concepts/variable/)).
+            LogQL ``[30m]`` matches Perses ``step: "30m"``.
+            Visual: OpenShift Perses pattern — ``line`` + ``areaOpacity: 1`` + ``stack: all``.
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+              values: []
+            visual:
+              display: line
+              lineWidth: 3
+              areaOpacity: 1
+              connectNulls: true
+              stack: all
+              showPoints: always
+              pointRadius: 8
+            yAxis:
+              min: 0
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  step: "30m"
+                  query: >-
+                    sum by (${token_split:raw}) (sum_over_time({service_name="maas-gateway", response_code=~"2..",
+                    subscription=~"$subscription", model=~"$model"}
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [30m]))
+
     tokenConsumptionByUser:
       kind: Panel
       spec:
@@ -344,7 +420,21 @@ spec:
     - kind: Grid
       spec:
         display:
-          title: "Token Consumption by User"
+          title: "Token consumption"
+          collapse:
+            open: true
+        items:
+          - x: 0
+            "y": 0
+            width: 24
+            height: 10
+            content:
+              "$ref": "#/spec/panels/tokenConsumptionOverTime"
+
+    - kind: Grid
+      spec:
+        display:
+          title: "Token consumption by user"
           collapse:
             open: true
         items:

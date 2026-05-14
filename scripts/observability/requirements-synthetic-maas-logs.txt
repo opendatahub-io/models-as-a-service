@@ -1,0 +1,6 @@
+# Dev-only: inject synthetic maas-gateway-shaped OTLP logs into otel-collector:4317.
+# pip install -r scripts/observability/requirements-synthetic-maas-logs.txt
+opentelemetry-api>=1.27,<2
+opentelemetry-sdk>=1.27,<2
+opentelemetry-exporter-otlp-proto-grpc>=1.27,<2
+grpcio>=1.50,<2

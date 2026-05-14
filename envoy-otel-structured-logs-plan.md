@@ -1186,61 +1186,102 @@ This affects ~20 panels across 3 Perses dashboards. The remaining ~30 panels sta
 - OPA policy validates bearer token identity against namespace RBAC
 - Supports both `kubernetes_namespace_name` and `k8s_namespace_name` (OTel semantics, Loki PR #16031)
 
-### Isolation Approach: RBAC-Enforced via LokiStack Gateway (SA Tokens)
+### Isolation Approach: Two-Path Architecture (Admin Direct + User Proxy)
 
-Chosen over query-filtered (no server-side enforcement) and Grafana LBAC (Cloud-only).
+Two separate datasource paths serve different audiences:
 
-**How it works:**
+**Path 1 — Admin (direct to LokiStack Gateway):**
 
-1. Perses datasource points to LokiStack gateway at `/api/logs/v1/application/`
-2. ServiceAccount token is forwarded as bearer token
-3. Gateway OPA verifies SA has `cluster-logging-application-view` in target namespace
-4. LogQL queries are restricted to namespaces the SA can access
+1. Admin Perses datasource (`openshift-operators`) points directly to LokiStack gateway
+2. Perses Operator forwards a ServiceAccount token via `loki-secret` + mTLS (CA cert from `loki-gateway-serving-ca`)
+3. Gateway OPA verifies SA has `cluster-logging-application-view` ClusterRole
+4. Admin sees all application logs — no per-user filtering
+
+**Path 2 — Tenant/User (via Loki Query Proxy):**
+
+1. Scoped Perses datasource (`kuadrant-system`) points to `loki-query-proxy-user` in `openshift-logging`
+2. Perses forwards the **user's own bearer token** (from OpenShift Console session) to the proxy
+3. Proxy performs Kubernetes TokenReview API to extract the username
+4. Proxy rewrites every LogQL query by appending `| user_id="<username>"` — server-side enforcement
+5. Proxy forwards the rewritten query to LokiStack gateway using its own SA token + mTLS
+6. Each user sees only their own logs — isolation enforced at the proxy layer, not Loki RBAC
 
 **RBAC setup:**
 
 - `cluster-logging-application-view` ClusterRole (provided by LokiStack operator)
-- Admin datasource: `ClusterRoleBinding` granting cluster-wide log read access
-- Tenant datasource: `RoleBinding` per namespace granting scoped log access
+- Proxy SA: `ClusterRoleBinding` granting cluster-wide log read access (proxy needs to query on behalf of all users)
+- Proxy SA: `loki-query-proxy-namespace-view` ClusterRole granting `tokenreviews` create permission
+- Admin datasource: SA token stored in `loki-secret` Secret with TLS CA cert
 
-**Auth choice: SA tokens only** (not OIDC). Rationale:
+**Auth choice:** User tokens forwarded via Perses (not fixed SA tokens for scoped path). Rationale:
 
-- Perses runs server-side with a fixed SA token -- no user-interactive token flow
-- Dashboard viewers access Perses through OpenShift Console (uses OpenShift identity, not Keycloak)
-- LokiStack gateway only trusts OpenShift OIDC issuer -- Keycloak would need explicit gateway config
-- Keycloak OIDC integration (PR #598) is for model inference, not observability
+- OpenShift Console users already have bearer tokens — Perses proxy forwards them transparently
+- Proxy validates tokens via Kubernetes TokenReview API — works with any OpenShift-issued token
+- No Keycloak dependency — model inference OIDC (PR #598) is separate from observability
 - If Keycloak users need dashboard access later, add OAuth proxy in front of Perses (separate concern)
 
 ### Datasource Configuration
 
-**Admin Loki datasource** (`openshift-operators`):
+**Admin Loki datasource** (`openshift-operators`) — direct to gateway:
 
 ```yaml
-apiVersion: perses.dev/v1alpha1
+apiVersion: perses.dev/v1alpha2
 kind: PersesDatasource
 metadata:
   name: loki
   namespace: openshift-operators
 spec:
-  default: false
-  plugin:
-    kind: LokiDatasource
-    spec:
-      proxy:
-        kind: HTTPProxy
-        spec:
-          url: https://maas-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application
-          headers:
-            Authorization: "Bearer <SA_TOKEN>"
-          allowedEndpoints:
-            - endpointPattern: /loki/api/v1/.*
-              method: GET
+  config:
+    display:
+      name: "Loki (MaaS Structured Logs)"
+    default: false
+    plugin:
+      kind: "LokiDatasource"
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: https://maas-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application
+            secret: "loki-secret"
+            allowedEndpoints:
+              - endpointPattern: /loki/api/v1/.*
+                method: GET
+  client:
+    tls:
+      enable: true
+      insecureSkipVerify: false
+      caCert:
+        type: configmap
+        name: loki-gateway-serving-ca
+        certPath: service-ca.crt
 ```
 
-**Scoped Loki datasource** (tenant namespace, e.g., `kuadrant-system`):
+**Scoped Loki datasource** (`kuadrant-system`) — via proxy:
 
-- Same structure, SA token scoped to namespace via RoleBinding
-- LogQL queries additionally filter `{kubernetes_namespace_name="TENANT_NS"}`
+```yaml
+apiVersion: perses.dev/v1alpha2
+kind: PersesDatasource
+metadata:
+  name: loki
+  namespace: kuadrant-system
+spec:
+  config:
+    display:
+      name: "Loki (MaaS Structured Logs)"
+    default: false
+    plugin:
+      kind: "LokiDatasource"
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://loki-query-proxy-user.<loki-stack-namespace>.svc:8080
+            allowedEndpoints:
+              - endpointPattern: /loki/api/v1/.*
+                method: GET
+```
+
+No TLS, no secret — the proxy handles authentication (TokenReview) and authorization (user_id injection) internally. The `loki-stack-namespace` placeholder is replaced via `sed` during deployment.
 
 ### TelemetryPolicy Cleanup
 
@@ -1280,17 +1321,14 @@ sum by (user_id, subscription, model) (sum_over_time({kubernetes_namespace_name=
 
 ## Remaining / Deferred Work
 
-1. ~~**Perses dashboards**: Create Perses dashboard equivalents~~ → **DONE**: All per-user panels migrated from PromQL to LogQL (LokiTimeSeriesQuery). AI Engineer: 11/12 panels. Platform Admin: 6 panels. Usage: 6/6 panels. User variables changed from PrometheusLabelValuesVariable to TextVariable. `| json` removed from all queries (log body is plain text; `user_id`, `tokens_total` etc. are Loki structured metadata accessible via pipeline filters without a parser).
-  **Usage Dashboard — `$range` dropdown as sole time control (2026-03-31):**
-   All panels (stat panels, Success Rate, Active Users, and Table) use `[$range]` + `calculation: last`. The `$range` StaticListVariable (renamed from "Table Range" to "Time Range", values: 1h/3h/6h/12h/24h/3d/7d/14d/21d/30d) is the single time control for the entire dashboard. The native Perses time picker has no meaningful effect on displayed values.
-   **Why:** Loki stores exact structured logs — each request is one log entry. An instant query like `count_over_time({...} [1h])` returns exact counts with zero duplication. However, Perses forces all Loki queries through `query_range` (multiple evaluation steps), which breaks aggregation:
-  - `**[5m]` + `calculation: sum` overcounts ~5x**: Perses auto-calculates a small step interval (e.g., 60s). Each log entry falls in ~5 overlapping 5-minute evaluation windows. Validated: 21 actual requests showed as 444 on the dashboard.
-  - **No `step` field**: Unlike the Prometheus plugin (which has `minStep`), the `LokiTimeSeriesQuery` spec has only `query`, `datasource`, and `format`. No way to force non-overlapping windows. Confirmed via [official Perses Loki plugin docs](https://perses.dev/plugins/docs/loki/model/).
-  - `**calculation: mean` fails for ratios**: Empty windows return `1.0` via `or vector(1)` fallback, inflating the mean (validated: 0.949 mean vs 0.278 actual). Without fallback, "no data" periods show "No data" instead of 100%. Mean of per-window ratios ≠ ratio of totals (Simpson's paradox).
-  - `**calculation: max` fails for Active Users**: Only correct when all users are active in the same window. Undercounts when users are spread across different windows (production traffic).
-   **Result**: `[$range]` + `calculation: last` is the only approach that gives **exact, correct values** from Loki. Each evaluation step computes the aggregate over the full `[$range]` window; `calculation: last` takes the last step's value (at time=now), which counts every log entry exactly once. The `$range` dropdown controls the lookback window for all panels.
-   Fallbacks: `or vector(0)` on all stat panels; `or vector(1)` on Success Rate — show 0 / 100% instead of "No data" when the selected window has no activity.
-   **Usage Dashboard — `subscription` and `model` filters (StaticListVariable; separate from `$range`):**
+1. ~~**Perses dashboards**: Create Perses dashboard equivalents~~ → **DONE**: All per-user panels migrated from PromQL to LogQL (LokiTimeSeriesQuery). AI Engineer: 11/12 panels. Platform Admin: 6 panels. Usage: stat row + token-consumption time series + table. User variables changed from PrometheusLabelValuesVariable to TextVariable. `| json` removed from all queries (log body is plain text; `user_id`, `tokens_total` etc. are Loki structured metadata accessible via pipeline filters without a parser).
+  **Usage Dashboard — token consumption time series (2026-05-14):**
+  A `TimeSeriesChart` sits **above** the usage table. LogQL: ``sum by (${groupby:raw}) (sum_over_time(... | unwrap tokens_total [5m]))`` with Perses **`step: "1m"`** (see [LokiTimeSeriesQuerySpec `step`](https://github.com/perses/plugins/blob/main/loki/src/queries/loki-time-series-query/loki-time-series-query-types.ts)). **Verified against Loki:** with `step=300` (5m) over 7d the matrix often has **only 1–2 samples** (bars/lines invisible on a week-wide axis); with **`step=60` (1m)** the same query returns **13+ samples** so the chart can render. The inner **`[5m]`** is a rolling sum window; the outer step only controls how often Loki evaluates it along the range. **`model!=""`** was removed from this panel so the selector matches the stat cards (`totalTokens`). `${groupby:raw}` avoids list-variable `(a|b)` interpolation inside LogQL `by (...)` ([Variable concepts](https://perses.dev/perses/docs/concepts/variable/)).
+  **Usage Dashboard — time window for stat panels and table (`$__range`, 2026-05-14):**
+  Stat panels, Success Rate, Active Users, and the usage table use **``[$__range]``** with **`calculation: last`**. `$__range` is a Perses built-in that tracks the dashboard time selection (see dashboard YAML header in `deployment/components/observability/perses/dashboards/dashboard-usage.yaml`). Variable expansion in queries is described in [Perses Variable concepts](https://perses.dev/perses/docs/concepts/variable/).
+  **Why `calculation: last` with `query_range`:** Loki stores one log line per request. Perses Loki queries go through `query_range` with multiple evaluation steps. Using a short sliding window (for example `[5m]`) **without** explicit `step` control and then **`calculation: sum`** across steps can over-count because windows overlap (validated: 21 requests displayed as ~444). **``[$__range]`` + `calculation: last`** makes each step aggregate over the full selected window; taking the last step counts each log line once for totals (see item 6 — Limitation C and [Loki plugin model](https://perses.dev/plugins/docs/loki/model/)).
+  Fallbacks: `or vector(0)` on stat panels; `or vector(1)` on Success Rate — show 0 / 100% instead of "No data" when the selected window has no activity.
+   **Usage Dashboard — `subscription` and `model` filters (StaticListVariable; separate from the `$__range` time window):**
    Perses does **not** expose a variable that discovers label values from Loki (no `LokiLabelValuesVariable`-style support for stream labels). The Usage dashboard therefore uses `**StaticListVariable`** for **Subscription** and **Model**, with `**values:`** hardcoded in `deployment/components/observability/perses/dashboards/dashboard-usage.yaml`.
    **Implication for operators:** New subscription or model strings that appear in production traffic **do not** automatically appear as new entries in those dropdowns. To let users **filter by a specific new name**, edit the dashboard YAML to add that string to the appropriate `values:` list and re-apply the `PersesDashboard`.
    **Mitigation for viewers:** Both variables use `**allowAllValue: true`** with default `**$__all`**. With **All** selected, queries still match **every** `subscription` / `model` in Loki — **new models and subscriptions are included** in aggregate stats and the table. The limitation applies only to **picking a single new name from the dropdown** until the manifest is updated.
@@ -1307,41 +1345,42 @@ sum by (user_id, subscription, model) (sum_over_time({kubernetes_namespace_name=
 3. **Upstream WASM shim issue -- 429 headers**: Request WASM shim to inject auth response headers before evaluating rate limits, so `user_id` and `subscription` appear in access logs for 429 responses (see Limitation #5)
 4. **Upstream Kuadrant bug -- dual-listener duplicate ActionSets**: File issue that HTTP+HTTPS listeners cause duplicate ActionSets with overlapping path predicates, leading to double auth evaluation and 403 (see Limitation #6)
 5. **Documentation**: Update `docs/content/advanced-administration/observability.md` with OTel architecture, LogQL examples, streaming limitations
-6. **Usage Dashboard — Perses Loki plugin limitations (investigated + validated 2026-03-31)**:
-  The Usage Dashboard uses the `$range` dropdown as the sole time control because the Perses Loki plugin has three missing features that prevent the native time picker from working correctly. All three were validated against the live cluster.
+6. **Usage Dashboard — Perses Loki plugin limitations (investigated + validated 2026-03-31; doc refreshed 2026-05-14)**:
+  The Usage dashboard relies on Perses built-in **`$__range`** for LogQL lookback on stat panels and the table (see `deployment/components/observability/perses/dashboards/dashboard-usage.yaml` and [Perses Variable concepts](https://perses.dev/perses/docs/concepts/variable/)). **Four upstream gaps** in the Loki plugin / `query_range` / console rendering interaction are material: **A–C** were validated on-cluster in 2026-03-31; **D** documents spec vs OpenShift Console (2026-05-14). Official `LokiTimeSeriesQuery` surface: [Loki plugin model](https://perses.dev/plugins/docs/loki/model/).
   ### Limitation A: No instant query support (affects Table panel)
    **Root cause:** The Perses Loki plugin (`LokiTimeSeriesQuery` in `[perses/plugins](https://github.com/perses/plugins)`) ignores `context.mode` and always calls Loki's `query_range` API. The Table panel plugin requests `mode: 'instant'` via `getTablePanelQueryOptions()` → `getTablePanelQueryMode()` (returns `'instant'` by default). The Perses core correctly propagates `mode` to `context.mode`. The Prometheus plugin respects this (`switch (context.mode)` → `client.instantQuery()`), but the Loki plugin has no equivalent branch.
    **Impact:** Table panels get multi-step `query_range` results instead of a single instant result per series. This causes stale/duplicate rows from old evaluation steps.
    **Fix:** ~20-line change in `loki/src/queries/loki-time-series-query/get-loki-time-series-data.ts` to add a `switch (context.mode)` block mirroring the Prometheus plugin. The `LokiClient` already has a `query()` method that calls `/loki/api/v1/query` (instant endpoint).
    **Action:** File upstream issue + PR on `[perses/plugins](https://github.com/perses/plugins)`. Prometheus instant support was added via [perses/perses#1456](https://github.com/perses/perses/issues/1456) (Oct 2024). No Loki equivalent filed yet.
-  ### Limitation B: No `$__range` variable for Loki (affects all panels)
-   **Root cause:** The Prometheus plugin supports `$__rate_interval` and `$__interval` which dynamically expand to the native picker's duration. The Loki plugin has no equivalent `$__range` variable. LogQL aggregation functions (`sum_over_time`, `count_over_time`) require an explicit lookback window (e.g., `[1h]`), so a variable is needed.
-   **Impact:** Without `$__range`, the only way to pass a dynamic aggregation window to LogQL queries is via a manual dropdown (`$range` StaticListVariable). The native time picker cannot control the LogQL lookback window.
-   **Fix:** Add `$__range` support to the Perses Loki plugin, expanding to the dashboard's selected time range duration.
-  ### Limitation C: No `step` field in `LokiTimeSeriesQuery` (affects stat panels)
+  ### Limitation B: LogQL lookback must match dashboard time (historical vs current)
+   **Historical (early 2026):** Before relying on Perses **`$__range`**, the practical workaround was a manual **`$range` StaticListVariable** (fixed windows such as `1h`, `24h`) because LogQL range aggregations need an explicit bracket duration and `query_range` stepping made short windows misleading for totals.
+   **Current (Usage dashboard):** Stat panels and the table use **``[$__range]``** so the lookback tracks the dashboard time selection. Interpolation is a Perses concern ([Variable concepts](https://perses.dev/perses/docs/concepts/variable/)); the string sent to Loki still comes through `LokiTimeSeriesQuery` ([model](https://perses.dev/plugins/docs/loki/model/)).
+   **Remaining upstream improvement:** First-class **`$__interval` / `$__rate_interval`-style** ergonomics for LogQL (parity with the Prometheus plugin) is still desirable for mixed panels and plugins that do not expand `$__range` the same way.
+  ### Limitation C: No `step` field in `LokiTimeSeriesQuery` (stat panels + token time series)
    **Root cause:** The Prometheus plugin has a `minStep` field to control the evaluation step interval. The `LokiTimeSeriesQuery` spec has only three fields: `query`, `datasource`, `format`. No `step` field exists. Confirmed via [official Perses Loki plugin docs](https://perses.dev/plugins/docs/loki/model/).
    **Impact:** Without step control, `[5m]` + `calculation: sum` overcounts because Perses auto-calculates a small step interval (e.g., 60s), creating overlapping 5-minute evaluation windows. **Validated: 21 actual requests inflated to 444 on the dashboard (~21× overcounting).** If `step` were available and set to match the window size (e.g., `step: "5m"` with `[5m]`), windows would not overlap and `calculation: sum` would give exact totals. **Validated: `query_range` with explicit `step=300` gave sum=21, matching the actual count.**
    **Fix:** Add a `step` (or `minStep`) field to `LokiTimeSeriesQuery`, equivalent to the Prometheus plugin's `minStep`.
    **Workaround attempted and rejected:** We attempted to use the undocumented `step` field that the Loki plugin v0.5.0-rc.1 frontend JS reads but the backend CUE schema (`close({})`) rejects. This required patching the CUE schema on the Perses pod and directly modifying the Perses file DB — bypassing official validation. This was rejected for two reasons:
   1. **Undocumented/unsupported**: `step` is not in the official `LokiTimeSeriesQuery` model. Any Perses upgrade could silently drop it.
   2. **Double-counting at step boundaries**: Prometheus/Loki range vectors use closed intervals `[T-range, T]` — both ends inclusive ([prometheus#14007](https://github.com/prometheus/prometheus/issues/14007), [prometheus#6438](https://github.com/prometheus/prometheus/issues/6438)). When `window == step`, a log line at exactly a step boundary is counted in two consecutive windows. Prometheus 3.0 plans to fix this with half-open intervals; current Loki still uses closed intervals.
-    Decision:** All panels use `[$range]` + `calculation: last` — the only correct, officially supported pattern. No unofficial workarounds to upstream tools.
-    # Combined effect: why the dropdown is required
-    th all three limitations present, the only correct query pattern is `[$range]` + `calculation: last`:
-    Each evaluation step computes the aggregate over the full `[$range]` window
-    `calculation: last` takes the last step's value (at time=now)
-    This counts every log entry **exactly once** — no duplication, no approximation
-     fully eliminate the dropdown and use the native time picker, **all three upstream fixes are needed**:
+    **Decision:** For **exact totals** on stat panels and the usage table under `query_range`, use **``[$__range]`` + `calculation: last`** — the supported pattern in `deployment/components/observability/perses/dashboards/dashboard-usage.yaml`. No unofficial `step` patches on Perses.
+    **Combined effect:** With limitations A–C still present in the broader ecosystem, **``[$__range]`` + `calculation: last`** remains the robust choice for non-rate totals: each evaluation step aggregates over the full selected window; **`calculation: last`** picks the final step so each log line is counted once. See [Loki plugin model](https://perses.dev/plugins/docs/loki/model/).
+    To **fully** align table behavior with instant queries and remove remaining foot-guns for arbitrary panels, **all three upstream fixes remain valuable**:
 
     | Fix                       | Eliminates                                                                         |
     | ------------------------- | ---------------------------------------------------------------------------------- |
-    | Instant query support (A) | Stale table rows; table becomes independent of native picker                       |
-    | `$__range` variable (B)   | The `$range` dropdown; native picker controls the LogQL window directly            |
-    | `step` field (C)          | Overcounting in stat panels; `calculation: sum` works correctly with native picker |
+    | Instant query support (A) | Stale table rows; table becomes independent of `query_range` step semantics         |
+    | Richer time macros (B)    | Gaps where `$__range` is unavailable or awkward for a given panel/plugin combo     |
+    | `step` field (C)          | Overcounting when using short fixed windows (for example `[5m]`) + `calculation: sum` without explicit step control |
 
-    th only (A): Table works perfectly, but stat panels still need dropdown.
-    th only (A)+(B): All panels can use native picker. Full solution.
-    th only (C): Stat panels (Tokens, Requests, Errors) work with native picker, but Success Rate and Active Users still need dropdown (ratios and distinct counts are not additive across windows).
+    **With only (A):** Table can be correct with `/query`, but stat-style totals still need a careful window/step story unless (C) exists.
+    **With (A)+(B)+(C):** Broad parity with Prometheus-style panels becomes realistic for more LogQL patterns.
+    **With only (C):** Simple sum/count rates over short windows improve, but ratios / distinct users can still be wrong if computed per-step then averaged.
+  ### Limitation D: `TimeSeriesChart` area fill (`areaOpacity` / `stack`) vs OpenShift Console (2026-05-14)
+  **Upstream spec:** The official Perses `TimeSeriesChart` model documents `visual.areaOpacity` (0–1), `visual.display` (`line` \| `bar`), and `visual.stack` (`all` \| `percent`) — [TimeSeriesChart model](https://perses.dev/plugins/docs/timeserieschart/model/).
+  **Upstream feature:** [perses/plugins#386](https://github.com/perses/plugins/pull/386) (merged 2025-09-22) adds **per-query** area opacity overrides in TimeSeriesChart query settings (global `visual.areaOpacity` remains). Grafana migration for those overrides is noted as follow-up in the PR thread.
+  **Red Hat COO narrative:** The Red Hat Developer article on COO + Perses states that **the panel that supports Loki is the *Logs table*** ([Red Hat Developer, 2026](https://developers.redhat.com/articles/2026/04/02/red-hat-build-perses-cluster-observability-operator)) — it does not position `TimeSeriesChart` + LogQL as the primary Loki *metrics-style* visualization, which matches uneven UX when expecting Grafana-style fill-under-curve in the console.
+  **Mitigation in this repo:** `docs/samples/dashboards/grafana-usage-loki-token-mock.json` imports into **Grafana** with `fillOpacity`, line width, and stacking for the same LogQL as the Usage **Token consumption** panel when filled ribbons are required for design review.
     # Alternatives evaluated
 
     | Approach                                        | Result                                                                                                                      |
@@ -1354,26 +1393,27 @@ sum by (user_id, subscription, model) (sum_over_time({kubernetes_namespace_name=
     | Per-panel time range override                   | Perses has no panel-level duration; only global `duration` per dashboard                                                    |
     | Custom plugin archive via `plugin.archive_path` | Possible interim workaround but COO may not expose this config                                                              |
 
-7. ~~**Tenant isolation verification**~~ → **DONE (2026-03-31)**: Two-layer isolation confirmed:
+7. ~~**Tenant isolation verification**~~ → **DONE (2026-03-31, updated 2026-05-14)**: Three-layer isolation confirmed:
   - **Layer 1 — Perses project RBAC**: Users without Kubernetes RBAC access to the `kuadrant-system` namespace are blocked by Perses itself (`"missing 'read' permission in 'kuadrant-system' project for 'Datasource' kind"`). Tested with a SA in the `default` namespace.
-  - **Layer 2 — LokiStack gateway RBAC**: Users with namespace access but without `cluster-logging-application-view` ClusterRole are blocked by the LokiStack gateway (`"You don't have permission to access this tenant"`). Tested with a SA in `kuadrant-system` that had `view` role but no logging RBAC.
-  - **Token forwarding**: Perses proxy forwards the authenticated user's bearer token to the LokiStack gateway (no static SA token in the `loki-secret`; the Perses secret only contains TLS CA config). This means each user's Loki access is governed by their own RBAC, not a shared service account.
+  - **Layer 2 — Loki Query Proxy (user_id injection)**: The proxy performs TokenReview on the user's bearer token, extracts the username, and appends `| user_id="<username>"` to every LogQL query. Each user sees only their own logs — server-side enforcement, cannot be bypassed by crafting queries. Tested with `test-loki-admin` (5 entries) and `test-loki-viewer` (5 entries) vs `kube:admin` (44 entries, admin bypass).
+  - **Layer 3 — Proxy path restriction**: Non-admin users are restricted to `allowedPaths` whitelist (`/loki/api/v1/query_range`, `/loki/api/v1/query`). Access to `/loki/api/v1/labels`, `/loki/api/v1/series`, etc. returns 403. Tested and confirmed.
+  - **Admin path**: Admin datasource in `openshift-operators` bypasses the proxy entirely — connects directly to LokiStack gateway with SA token + mTLS. Admins see all data unfiltered.
 8. ~~**Edge case: no data / no rate-limited requests**~~ → **DONE (2026-03-31)**: All edge cases verified via direct Loki queries through the Perses proxy:
   - **(a) No activity in time window**: All stat panel queries return correct fallback values — Total Tokens: `0`, Total Requests: `0`, Total Errors: `0`, Success Rate: `1` (100%), Active Users: `0`. Table queries return empty results → panel shows "No data".
   - **(b) User has requests but zero 429s**: The `or` zero-fill in Query 3 correctly returns `0` for users present in Query 1 (tokens) but absent from the 429 count.
   - **(c) Traffic without rate limits (Phase 2 validation)**: 3 inference requests sent via API key (HTTP/1.1 to avoid dual-listener bug). Loki confirmed: `kube:admin` / `simulator-subscription` → tokens > 0, 0 rate-limited requests. Dashboard stat panels showed correct values; table showed user with Rate Limited = 0.
-  - **(d) Traffic with rate limits (Phase 3 validation)**: 20 rapid requests sent. 5 succeeded (114 tokens), 15 rate-limited (429). Loki confirmed exact counts. Dashboard stat panels and table validated (with `$range` dropdown).
-9. **Tenant isolation — end-to-end testing with real users**: The verification in item 7 used ServiceAccounts with controlled RBAC. TODO: test with actual OpenShift users (non-admin) to confirm:
-  - User A cannot see User B's data in the Usage Dashboard (Loki tenant isolation via forwarded bearer token)
-  - Users without `cluster-logging-application-view` see "permission denied" errors in Perses, not empty dashboards
-  - Admin users see all data across all users
-  - Verify RBAC behavior when user's group membership changes (e.g., removed from a subscription)
+  - **(d) Traffic with rate limits (Phase 3 validation)**: 20 rapid requests sent. 5 succeeded (114 tokens), 15 rate-limited (429). Loki confirmed exact counts. Dashboard stat panels and table validated with **`[$__range]`** (native time window / Perses built-in).
+9. ~~**Tenant isolation — end-to-end testing with real users**~~ → **DONE (2026-05-14)**: Tested with actual OpenShift users (`test-loki-admin`, `test-loki-viewer`) via the Loki Query Proxy:
+  - **User A cannot see User B's data**: Proxy injects `| user_id="<username>"` — each user gets exactly 5 entries (their own), while admin sees all 44. Confirmed via `curl` through `oc exec`.
+  - **Path restriction**: Non-admin users blocked from `/loki/api/v1/labels` (HTTP 403). Admin bypasses all restrictions.
+  - **Admin sees all data**: `kube:admin` token triggers admin bypass (cluster-admins group detected), no user_id filter applied.
+  - **Remaining TODO**: Verify RBAC behavior when user's group membership changes (e.g., removed from a subscription). Manual dashboard visual verification pending.
 10. **Dashboards — further review and hardening**: The current dashboards are functional but need additional review:
   - **AI Engineer + Platform Admin dashboards**: These were migrated from PromQL to LogQL but have not been validated end-to-end on the cluster with live traffic (only Usage Dashboard was fully validated). Run through all panels with real data and verify correctness.
     - **Usage Dashboard — fresh-cluster validation**: Deploy to a clean cluster with fresh traffic (no debugging artifacts like 403/401/404 from HTTP/2 bug), validate all stat panels and table show exact expected values.
     - **Cross-dashboard consistency**: Verify that metrics shown in Platform Admin (aggregate) are consistent with per-user breakdowns in Usage Dashboard.
     - **Variable filters**: Test `$user`, `$subscription`, `$model` filters across all dashboards — ensure filtering works correctly and doesn't break queries or produce parse errors.
-    - **Upstream Perses Loki plugin fixes**: File issues for the three limitations documented in item 6 (instant queries, `$__range`, `step` field). Contribute PR for instant query support (~20-line change).
+    - **Upstream Perses Loki plugin fixes**: File issues for limitations A–C in item 6 (instant queries, `$__range`, `step` field). Contribute PR for instant query support (~20-line change). For **D** (TimeSeriesChart fill in console), confirm bundled Perses/plugin version vs [perses/plugins#386](https://github.com/perses/plugins/pull/386) before opening console-specific issues.
 
 ---
 
@@ -1785,8 +1825,16 @@ kustomize build deployment/components/observability/loki-proxy \
 kubectl rollout restart deployment/loki-query-proxy-user -n "$NS"
 ```
 
+**Architecture — namespace layout:**
+
+| Namespace | Resources |
+|-----------|-----------|
+| `openshift-logging` | LokiStack (`maas-loki`), Loki Query Proxy (`loki-query-proxy-user`), NetworkPolicy |
+| `kuadrant-system` | Dashboards (`usage-dashboard`), Datasources (`loki` scoped, `prometheus`), RBAC |
+| `openshift-operators` | Admin dashboards (Platform Admin, AI Engineer), Admin datasources (`loki` direct, `prometheus`) |
+
 **Perses datasource routing:**
-- Tenant: URL → `http://loki-query-proxy-user.<loki-stack-namespace>.svc:8080` (per-user filtering, namespace replaced at deploy time)
+- Tenant (kuadrant-system): URL → `http://loki-query-proxy-user.<loki-stack-namespace>.svc:8080` (cross-namespace FQDN, per-user filtering)
 - Admin (openshift-operators): Direct to LokiStack Gateway (no proxy needed, admins see all logs)
 
 **Alternatives evaluated and rejected:**
@@ -2971,10 +3019,11 @@ Query rewrite: {service_name="maas-gateway"} -> {service_name="maas-gateway"} | 
 
 ### Cluster State After Deployment
 
-- `loki-query-proxy-user` -- Running in `openshift-logging`, Ready (registry.access.redhat.com/ubi9/go-toolset:1.25)
-- Admin Loki datasource (openshift-operators): direct to `https://maas-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application`
-- Tenant Loki datasource: via `http://loki-query-proxy-user.<loki-stack-namespace>.svc:8080` (replaced by sed at deploy time)
-- Deployed via: `kustomize build deployment/components/observability/loki-proxy | sed 's/loki-stack-namespace/openshift-logging/g' | kubectl apply --server-side=true -f -`
+- `openshift-logging`: `loki-query-proxy-user` Running + LokiStack `maas-loki`
+- `kuadrant-system`: `loki` datasource (scoped, via proxy), `prometheus` datasource, `usage-dashboard`
+- `openshift-operators`: `loki` datasource (admin, direct to gateway), admin dashboards
+- Proxy deployed via: `kustomize build deployment/components/observability/loki-proxy | sed 's/loki-stack-namespace/openshift-logging/g' | kubectl apply --server-side=true -f -`
+- Dashboards + datasources deployed via: `LOKI_STACK_NAMESPACE=openshift-logging bash scripts/observability/install-perses-dashboards.sh`
 
 ### Proxy → LokiStack Gateway Auth: 403 Root Cause & Fix
 
@@ -3607,7 +3656,13 @@ The `install-perses-dashboards.sh` script handles:
 - Admin dashboards (Platform Admin, AI Engineer) → `openshift-operators`
 - Admin Loki/Prometheus datasources → `openshift-operators` (direct to gateway)
 - Tenant Usage Dashboard → `kuadrant-system` (or `--tenant-namespace`)
-- Scoped Loki datasource → tenant namespace (URL uses `sed` to replace `loki-stack-namespace` with `$LOKI_STACK_NAMESPACE`, defaults to `openshift-logging`)
+- Scoped Loki datasource → `kuadrant-system` (URL uses `sed` to replace `loki-stack-namespace` with `$LOKI_STACK_NAMESPACE`, defaults to `openshift-logging`)
+- Scoped Prometheus datasource + RBAC → `kuadrant-system`
+
+**Namespace separation:**
+- `openshift-logging` contains only Loki + Proxy (infrastructure)
+- `kuadrant-system` contains dashboards, datasources, and RBAC (user-facing)
+- Datasources reference the proxy via cross-namespace FQDN
 
 ### Files Modified
 
@@ -3619,7 +3674,7 @@ The `install-perses-dashboards.sh` script handles:
 | `deployment/components/observability/loki-proxy/rbac.yaml` | namespace: loki-stack-namespace, tokenreviews verb, removed temp ClusterRole |
 | `deployment/components/observability/loki-proxy/networkpolicy.yaml` | Simplified for co-location, removed cross-namespace selectors |
 | `deployment/components/observability/loki-proxy/service.yaml` | Removed org proxy service |
-| `deployment/components/observability/perses/perses-loki-datasource-scoped.yaml` | URL uses `loki-stack-namespace` FQDN (replaced by sed at deploy time) |
+| `deployment/components/observability/perses/perses-loki-datasource-scoped.yaml` | Deployed to kuadrant-system; URL uses cross-namespace FQDN with `loki-stack-namespace` (sed) |
 | `scripts/observability/install-perses-dashboards.sh` | Scoped Loki datasource now deployed via `sed` (replaces `loki-stack-namespace`) |
 | `scripts/observability/install-loki-proxy.sh` | **Deleted** |
 | `deployment/base/observability/gateway-telemetry-policy.yaml` | Removed `user: auth.identity.userid` (separate concern) |

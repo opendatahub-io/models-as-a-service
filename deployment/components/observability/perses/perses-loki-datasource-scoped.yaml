@@ -5,7 +5,8 @@
 # and appends `| user_id="<username>"` to every LogQL query.
 # Each user sees only their own logs.
 #
-# Deployed to the same namespace as the proxy and Loki (loki-stack-namespace).
+# Deployed to kuadrant-system (with dashboards and RBAC).
+# The proxy runs in openshift-logging; the URL uses a cross-namespace FQDN.
 ---
 apiVersion: perses.dev/v1alpha2
 kind: PersesDatasource

@@ -29,3 +29,14 @@ spec:
     ports:
     - protocol: TCP
       port: 8080
+  # OTel collector (openshift-ingress) → Loki gateway OTLP HTTP ingest
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: openshift-ingress
+      podSelector:
+        matchLabels:
+          app: otel-collector
+    ports:
+    - protocol: TCP
+      port: 8080

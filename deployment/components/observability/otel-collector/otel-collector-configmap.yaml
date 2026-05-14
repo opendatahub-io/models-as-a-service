@@ -48,11 +48,19 @@ data:
         - method
       batch:
         timeout: 5s
-        send_batch_size: 1000
+        # Large batches + slow gateway → exporter timeouts and "Dropping data" (synthetic bursts hit this first).
+        send_batch_size: 100
+        send_batch_max_size: 200
 
     exporters:
       otlphttp/loki:
         endpoint: "LOKI_OTLP_ENDPOINT_PLACEHOLDER"
+        timeout: 45s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 2s
+          max_interval: 30s
+          max_elapsed_time: 10m
         auth:
           authenticator: bearertokenauth
         tls:
