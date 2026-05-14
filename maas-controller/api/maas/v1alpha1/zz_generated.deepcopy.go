@@ -324,6 +324,11 @@ func (in *MaaSAuthPolicySpec) DeepCopyInto(out *MaaSAuthPolicySpec) {
 		copy(*out, *in)
 	}
 	in.Subjects.DeepCopyInto(&out.Subjects)
+	if in.PublicPaths != nil {
+		in, out := &in.PublicPaths, &out.PublicPaths
+		*out = make([]PublicPath, len(*in))
+		copy(*out, *in)
+	}
 	if in.MeteringMetadata != nil {
 		in, out := &in.MeteringMetadata, &out.MeteringMetadata
 		*out = new(MeteringMetadata)
