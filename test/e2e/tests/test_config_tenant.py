@@ -5,12 +5,48 @@ Does not delete Config; destructive GC checks belong in operator or dedicated jo
 
 import json
 import os
+import shutil
 import subprocess
 import time
 
 import pytest
 
-from oc_helper import oc_json, oc_not_found, oc_run
+_OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
+
+
+def _oc_bin():
+    path = shutil.which("oc")
+    if not path:
+        raise RuntimeError("`oc` binary not found in PATH")
+    return path
+
+
+def _oc_run(args, *, timeout=None):
+    return subprocess.run(
+        [_oc_bin(), *args],
+        capture_output=True,
+        text=True,
+        timeout=_OC_TIMEOUT if timeout is None else timeout,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def _oc_not_found(exc):
+    combined = (exc.stderr or "") + (exc.stdout or "")
+    return "(NotFound)" in combined
+
+
+def _oc_json(args):
+    result = _oc_run(args)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            [_oc_bin(), *args],
+            result.stdout,
+            result.stderr,
+        )
+    return json.loads(result.stdout)
 
 
 CONFIG_CRD = "configs.maas.opendatahub.io"
@@ -25,11 +61,11 @@ CONTROLLER_DEPLOYMENT = "maas-controller"
 
 
 def _config_doc():
-    return oc_json(["get", CONFIG_CRD, CONFIG_NAME, "-o", "json"])
+    return _oc_json(["get", CONFIG_CRD, CONFIG_NAME, "-o", "json"])
 
 
 def _tenant_doc():
-    return oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
+    return _oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
 
 
 def _config_uid_or_none():
@@ -38,7 +74,7 @@ def _config_uid_or_none():
         uid = doc.get("metadata", {}).get("uid") or ""
         return uid if uid else None
     except subprocess.CalledProcessError as exc:
-        if oc_not_found(exc):
+        if _oc_not_found(exc):
             return None
         raise
 
@@ -56,7 +92,7 @@ def _ref_to_config(refs):
 
 @pytest.fixture(scope="module", autouse=True)
 def require_config_crd():
-    r = oc_run(["get", "crd", CONFIG_CRD])
+    r = _oc_run(["get", "crd", CONFIG_CRD])
     if r.returncode != 0:
         pytest.skip(
             f"Missing CRD {CONFIG_CRD} (transitional skip: install maas-controller bundle from "
@@ -95,7 +131,7 @@ class TestConfigTenantOwnership:
         try:
             doc = _tenant_doc()
         except subprocess.CalledProcessError as exc:
-            if oc_not_found(exc):
+            if _oc_not_found(exc):
                 pytest.skip(
                     f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found; run after Tenant bootstrap."
                 )
@@ -107,7 +143,7 @@ class TestConfigTenantOwnership:
         )
 
     def test_maas_controller_deployment_lists_config_owner_reference(self):
-        result = oc_run(
+        result = _oc_run(
             [
                 "get",
                 "deployment",

@@ -1,22 +1,51 @@
-"""`default-tenant` in `MAAS_SUBSCRIPTION_NAMESPACE`: lifecycle, contract, ownership.
-
-DSC-driven disable/remove stays in operator CI. Module skips if CRD or singleton missing.
-"""
-
 import json
 import os
+import shutil
 import subprocess
 import time
 
 import pytest
 
-from oc_helper import oc_json, oc_not_found, oc_run
+_OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
+
+
+def _oc_bin():
+    path = shutil.which("oc")
+    if not path:
+        raise RuntimeError("`oc` binary not found in PATH")
+    return path
+
+
+def _oc_run(args, *, timeout=None):
+    return subprocess.run(
+        [_oc_bin(), *args],
+        capture_output=True,
+        text=True,
+        timeout=_OC_TIMEOUT if timeout is None else timeout,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def _oc_not_found(exc):
+    combined = (exc.stderr or "") + (exc.stdout or "")
+    return "(NotFound)" in combined
+
+
+def _oc_json(args):
+    result = _oc_run(args)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            [_oc_bin(), *args],
+            result.stdout,
+            result.stderr,
+        )
+    return json.loads(result.stdout)
 
 
 TENANT_NAME = "default-tenant"
-# Tenant CR is reconciled in the subscription namespace (see maas-controller --maas-subscription-namespace).
 TENANT_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
-# BBR / payload-processing deploys into the gateway namespace by default (see maas-api params.env).
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 TENANT_CRD = "tenants.maas.opendatahub.io"
 
@@ -28,7 +57,7 @@ _KIND_PLURAL = {
 
 
 def _tenant_doc():
-    return oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
+    return _oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
 
 
 def _tenant_status():
@@ -36,14 +65,14 @@ def _tenant_status():
         doc = _tenant_doc()
         return doc.get("status") or {}
     except subprocess.CalledProcessError as exc:
-        if oc_not_found(exc):
+        if _oc_not_found(exc):
             return None
         raise
 
 
 @pytest.fixture(scope="module", autouse=True)
 def require_tenant_crd():
-    r = oc_run(["get", "crd", TENANT_CRD])
+    r = _oc_run(["get", "crd", TENANT_CRD])
     if r.returncode != 0:
         pytest.skip(
             f"Missing CRD {TENANT_CRD} (transitional skip: install maas-controller manifests "
@@ -53,7 +82,6 @@ def require_tenant_crd():
 
 @pytest.fixture(scope="module", autouse=True)
 def require_tenant_singleton():
-    """Skip if singleton missing (transitional: controller should create it once running)."""
     if _tenant_status() is None:
         pytest.skip(
             f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found (transitional skip: "
@@ -94,7 +122,7 @@ class TestTenantLifecycle:
         if phase != "Active":
             pytest.skip("Tenant not Active (e.g. Degraded); payload-processing not asserted")
 
-        result = oc_run(
+        result = _oc_run(
             [
                 "get",
                 "deployment",
@@ -145,7 +173,7 @@ class TestTenantNoFalseOwnership:
         ]
         for cr_type, namespace in checks:
             plural = _KIND_PLURAL[cr_type]
-            result = oc_run(["get", plural, "-n", namespace, "-o", "json"])
+            result = _oc_run(["get", plural, "-n", namespace, "-o", "json"])
             if result.returncode != 0:
                 continue
             for item in json.loads(result.stdout).get("items") or []:
