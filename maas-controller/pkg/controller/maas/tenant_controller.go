@@ -29,7 +29,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -164,24 +163,6 @@ func configResourceDefault() predicate.Predicate {
 	})
 }
 
-// deletedConfigMapOnly mirrors ODH: unmanaged ConfigMaps are recreated when deleted.
-func deletedConfigMapOnly() predicate.Predicate {
-	return predicate.Funcs{
-		CreateFunc: func(event.CreateEvent) bool {
-			return false
-		},
-		UpdateFunc: func(event.UpdateEvent) bool {
-			return false
-		},
-		DeleteFunc: func(event.DeleteEvent) bool {
-			return true
-		},
-		GenericFunc: func(event.GenericEvent) bool {
-			return false
-		},
-	}
-}
-
 // SetupWithManager registers the Tenant controller.
 func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	authMeta := &metav1.PartialObjectMetadata{}
@@ -214,11 +195,6 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(crdInOptionalAPIGroup()),
-		).
-		Watches(
-			&corev1.ConfigMap{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(deletedConfigMapOnly(), r.inTenantWorkNamespaces()),
 		).
 		Watches(
 			&corev1.Secret{},
