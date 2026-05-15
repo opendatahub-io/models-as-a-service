@@ -62,6 +62,10 @@ Each branch produces and references a specific container image tag:
 
 The ODH operator consumes manifests from `deployment/overlays/odh/` on the `stable` branch.
 
+## RHOAI ↔ MaaS Version Mapping
+
+For the authoritative table correlating RHOAI product releases with MaaS component versions and image tags, see [RHOAI ↔ MaaS Versions](../reference/rhoai-maas-versions.md).
+
 ## Release Notes
 
 Release notes in `docs/content/release-notes/index.md` summarize user-visible changes for each MaaS version. Keep them concise and focused on **what changed** and **why it matters**—link to detailed docs for **how** to migrate or configure.
