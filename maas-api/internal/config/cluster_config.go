@@ -36,8 +36,14 @@ type ClusterConfig struct {
 	// Results are cached with a TTL to reduce Kubernetes API server load.
 	AdminChecker *auth.CachedAdminChecker
 
+	restConfig      *rest.Config
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})
+}
+
+// RESTConfig returns the Kubernetes REST config used by this cluster config.
+func (c *ClusterConfig) RESTConfig() *rest.Config {
+	return c.restConfig
 }
 
 // maasModelRefLister implements models.MaaSModelRefLister from a cache.GenericLister (informer-backed).
@@ -125,6 +131,7 @@ func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.
 		MaaSSubscriptionLister: maasSubscriptionListerVal,
 		AdminChecker:           adminCheckerVal,
 
+		restConfig: restConfig,
 		informersSynced: []cache.InformerSynced{
 			maasInformer.Informer().HasSynced,
 			subscriptionInformer.Informer().HasSynced,

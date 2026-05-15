@@ -52,6 +52,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/tlsprofile"
 )
 
 var (
@@ -68,6 +69,7 @@ func init() {
 }
 
 //+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create
+//+kubebuilder:rbac:groups=config.openshift.io,resources=apiservers,verbs=get;list;watch
 
 // ensureSubscriptionNamespaceWithClient checks whether the subscription namespace exists
 // and creates it if missing. It checks for existence first so that the controller can
@@ -466,6 +468,25 @@ func main() {
 		},
 	}
 
+	// Fetch the cluster TLS security profile from the APIServer resource.
+	// On non-OpenShift clusters (e.g. Kind), the fetch will fail gracefully
+	// and the Intermediate profile (TLS 1.2 + modern ciphers) is used.
+	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "unable to create pre-manager Kubernetes client for TLS profile fetch")
+		os.Exit(1)
+	}
+	tlsProfile, tlsFetchErr := tlsprofile.FetchAPIServerTLSProfile(context.Background(), k8sClient)
+	tlsProfileAvailable := tlsFetchErr == nil
+	if tlsFetchErr != nil {
+		setupLog.Info("could not fetch cluster TLS profile, using default Intermediate profile "+
+			"(expected on non-OpenShift clusters)", "error", tlsFetchErr)
+	} else {
+		setupLog.Info("fetched cluster TLS security profile",
+			"type", tlsProfile.Type, "minTLSVersion", tlsProfile.MinTLSVersion)
+	}
+	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Cache:                  cacheOpts,
@@ -586,6 +607,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Only register the TLS profile watcher on OpenShift clusters where the
+	// config.openshift.io/v1 APIServer resource exists. On Kind/vanilla clusters
+	// the GVK is missing and an informer would fail to sync, blocking startup.
+	if tlsProfileAvailable {
+		if err := (&tlsprofile.SecurityProfileWatcher{
+			Client:         mgr.GetClient(),
+			Log:            ctrl.Log.WithName("controllers").WithName("TLSProfileWatcher"),
+			InitialProfile: tlsProfile,
+			OnProfileChange: func(oldProfile, newProfile tlsprofile.ProfileSpec) {
+				setupLog.Info("TLS security profile changed, initiating graceful shutdown to reload",
+					"oldType", oldProfile.Type, "newType", newProfile.Type,
+					"oldMinTLS", oldProfile.MinTLSVersion, "newMinTLS", newProfile.MinTLSVersion,
+				)
+				cancel()
+			},
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "TLSProfileWatcher")
+			os.Exit(1)
+		}
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -597,7 +639,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

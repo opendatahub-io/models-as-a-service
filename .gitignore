@@ -21,6 +21,8 @@ coverage.html
 
 # Go binaries
 bin/
+maas-controller/manager
+maas-api/maas-api
 
 # Python
 __pycache__/

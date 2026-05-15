@@ -26,6 +26,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
@@ -125,7 +126,41 @@ func serve() error {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
 
-	srv, err := newServer(cfg, router)
+	// Fetch the cluster TLS security profile (OpenShift only).
+	// On non-OpenShift clusters the fetch fails gracefully and flag-based defaults apply.
+	var profileMinVersion uint16
+	var profileCipherSuites []uint16
+	restConfig := cluster.RESTConfig()
+	if restConfig != nil {
+		profile, fetchErr := tlsprofile.FetchTLSProfile(ctx, restConfig)
+		if fetchErr != nil {
+			log.Info("Could not fetch cluster TLS profile, using flag-based defaults", "error", fetchErr)
+		} else {
+			log.Info("Fetched cluster TLS security profile",
+				"type", string(profile.Type), "minTLSVersion", profile.MinTLSVersion)
+			var unsupported []string
+			profileMinVersion, profileCipherSuites, unsupported = tlsprofile.TLSConfigFromProfile(profile)
+			if len(unsupported) > 0 {
+				log.Info("TLS profile contains unsupported ciphers (ignored)", "ciphers", unsupported)
+			}
+
+			// Watch for profile changes and trigger graceful shutdown on change.
+			watcher, watchErr := tlsprofile.NewWatcher(restConfig, profile, func(oldProfile, newProfile tlsprofile.ProfileSpec) {
+				log.Info("TLS security profile changed, initiating graceful shutdown to reload",
+					"oldType", string(oldProfile.Type), "newType", string(newProfile.Type))
+				cancel()
+			})
+			if watchErr != nil {
+				log.Info("Could not start TLS profile watcher", "error", watchErr)
+			} else {
+				stopWatcher := make(chan struct{})
+				defer close(stopWatcher)
+				go watcher.Start(stopWatcher)
+			}
+		}
+	}
+
+	srv, err := newServer(cfg, router, profileMinVersion, profileCipherSuites)
 	if err != nil {
 		return fmt.Errorf("failed to create server: %w", err)
 	}
@@ -150,6 +185,8 @@ func serve() error {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("metrics server failed: %w", err)
 		}
+	case <-ctx.Done():
+		log.Info("Context cancelled (TLS profile change or shutdown), shutting down server...")
 	case <-quit:
 		log.Info("Shutdown signal received, shutting down server...")
 	}
