@@ -468,6 +468,8 @@ func main() {
 		},
 	}
 
+	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
+
 	// Fetch the cluster TLS security profile from the APIServer resource.
 	// On non-OpenShift clusters (e.g. Kind), the fetch will fail gracefully
 	// and the Intermediate profile (TLS 1.2 + modern ciphers) is used.
@@ -476,7 +478,9 @@ func main() {
 		setupLog.Error(err, "unable to create pre-manager Kubernetes client for TLS profile fetch")
 		os.Exit(1)
 	}
-	tlsProfile, tlsFetchErr := tlsprofile.FetchAPIServerTLSProfile(context.Background(), k8sClient)
+	tlsFetchCtx, tlsFetchCancel := context.WithTimeout(ctx, 10*time.Second)
+	tlsProfile, tlsFetchErr := tlsprofile.FetchAPIServerTLSProfile(tlsFetchCtx, k8sClient)
+	tlsFetchCancel()
 	tlsProfileAvailable := tlsFetchErr == nil
 	if tlsFetchErr != nil {
 		setupLog.Info("could not fetch cluster TLS profile, using default Intermediate profile "+
@@ -485,7 +489,6 @@ func main() {
 		setupLog.Info("fetched cluster TLS security profile",
 			"type", tlsProfile.Type, "minTLSVersion", tlsProfile.MinTLSVersion)
 	}
-	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,

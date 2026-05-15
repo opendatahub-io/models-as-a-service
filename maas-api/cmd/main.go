@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -126,39 +127,7 @@ func serve() error {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
 
-	// Fetch the cluster TLS security profile (OpenShift only).
-	// On non-OpenShift clusters the fetch fails gracefully and flag-based defaults apply.
-	var profileMinVersion uint16
-	var profileCipherSuites []uint16
-	restConfig := cluster.RESTConfig()
-	if restConfig != nil {
-		profile, fetchErr := tlsprofile.FetchTLSProfile(ctx, restConfig)
-		if fetchErr != nil {
-			log.Info("Could not fetch cluster TLS profile, using flag-based defaults", "error", fetchErr)
-		} else {
-			log.Info("Fetched cluster TLS security profile",
-				"type", string(profile.Type), "minTLSVersion", profile.MinTLSVersion)
-			var unsupported []string
-			profileMinVersion, profileCipherSuites, unsupported = tlsprofile.TLSConfigFromProfile(profile)
-			if len(unsupported) > 0 {
-				log.Info("TLS profile contains unsupported ciphers (ignored)", "ciphers", unsupported)
-			}
-
-			// Watch for profile changes and trigger graceful shutdown on change.
-			watcher, watchErr := tlsprofile.NewWatcher(restConfig, profile, func(oldProfile, newProfile tlsprofile.ProfileSpec) {
-				log.Info("TLS security profile changed, initiating graceful shutdown to reload",
-					"oldType", string(oldProfile.Type), "newType", string(newProfile.Type))
-				cancel()
-			})
-			if watchErr != nil {
-				log.Info("Could not start TLS profile watcher", "error", watchErr)
-			} else {
-				stopWatcher := make(chan struct{})
-				defer close(stopWatcher)
-				go watcher.Start(stopWatcher)
-			}
-		}
-	}
+	profileMinVersion, profileCipherSuites := setupTLSProfile(ctx, log, cfg, cluster, cancel)
 
 	srv, err := newServer(cfg, router, profileMinVersion, profileCipherSuites)
 	if err != nil {
@@ -293,4 +262,50 @@ func debugCORSConfig() cors.Config {
 		AllowOriginFunc: isLocalhostOrigin,
 		MaxAge:          12 * time.Hour,
 	}
+}
+
+// setupTLSProfile fetches the OpenShift cluster TLS security profile and starts
+// a watcher that cancels the context on profile changes. Returns the profile's
+// minVersion and cipherSuites for use in buildTLSConfig. On non-OpenShift clusters
+// or when HTTPS is disabled, returns zero values (flag-based defaults apply).
+func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config, cluster *config.ClusterConfig, cancel context.CancelFunc) (uint16, []uint16) {
+	restConfig := cluster.RESTConfig()
+	if !cfg.Secure || restConfig == nil {
+		return 0, nil
+	}
+
+	profile, fetchErr := tlsprofile.FetchTLSProfile(ctx, restConfig)
+	if fetchErr != nil {
+		log.Info("Could not fetch cluster TLS profile, using flag-based defaults", "error", fetchErr)
+		return 0, nil
+	}
+
+	log.Info("Fetched cluster TLS security profile",
+		"type", string(profile.Type), "minTLSVersion", profile.MinTLSVersion)
+
+	profileMinVersion, profileCipherSuites, unsupported := tlsprofile.TLSConfigFromProfile(profile)
+	if len(unsupported) > 0 {
+		log.Warn("TLS profile contains ciphers not supported by this Go version (ignored)",
+			"unsupportedCiphers", unsupported)
+	}
+	if len(profileCipherSuites) == 0 && profileMinVersion < tls.VersionTLS13 {
+		log.Warn("TLS profile produced no TLS 1.2 cipher suites; Go defaults will be used for TLS 1.2 negotiation")
+	}
+
+	watcher, watchErr := tlsprofile.NewWatcher(restConfig, profile, func(oldProfile, newProfile tlsprofile.ProfileSpec) {
+		log.Info("TLS security profile changed, initiating graceful shutdown to reload",
+			"oldType", string(oldProfile.Type), "newType", string(newProfile.Type))
+		cancel()
+	})
+	if watchErr != nil {
+		log.Info("Could not start TLS profile watcher", "error", watchErr)
+	} else {
+		go func() {
+			if err := watcher.Start(ctx.Done()); err != nil {
+				log.Error("TLS profile watcher failed", "error", err)
+			}
+		}()
+	}
+
+	return profileMinVersion, profileCipherSuites
 }

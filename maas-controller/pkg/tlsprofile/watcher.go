@@ -26,8 +26,8 @@ type SecurityProfileWatcher struct {
 func (w *SecurityProfileWatcher) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
 	current, err := FetchAPIServerTLSProfile(ctx, w.Client)
 	if err != nil {
-		w.Log.Error(err, "failed to fetch TLS profile during watch reconcile")
-		return reconcile.Result{}, nil
+		w.Log.Error(err, "failed to fetch TLS profile during watch reconcile, will retry")
+		return reconcile.Result{}, err
 	}
 
 	if !profileEqual(w.InitialProfile, current) {

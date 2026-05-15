@@ -12,8 +12,8 @@ const (
 	ProfileCustom       ProfileType = "Custom"
 )
 
-// ProtocolVersion maps OpenShift TLS version strings to Go crypto/tls constants.
-var ProtocolVersion = map[string]uint16{
+// protocolVersion maps OpenShift TLS version strings to Go crypto/tls constants.
+var protocolVersion = map[string]uint16{
 	"VersionTLS10": tls.VersionTLS10,
 	"VersionTLS11": tls.VersionTLS11,
 	"VersionTLS12": tls.VersionTLS12,

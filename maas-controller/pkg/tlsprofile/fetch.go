@@ -64,14 +64,23 @@ func parseCustomProfile(profileObj map[string]any) (ProfileSpec, error) {
 		return DefaultProfile, errors.New("custom profile type set but spec.tlsSecurityProfile.custom is missing")
 	}
 
-	ciphersRaw, _, _ := unstructured.NestedStringSlice(customObj, "ciphers")
-	minVersion, _, _ := unstructured.NestedString(customObj, "minTLSVersion")
+	ciphersRaw, ciphersFound, ciphersErr := unstructured.NestedStringSlice(customObj, "ciphers")
+	if ciphersErr != nil {
+		return DefaultProfile, fmt.Errorf("parsing custom profile ciphers: %w", ciphersErr)
+	}
+	minVersion, _, minVerErr := unstructured.NestedString(customObj, "minTLSVersion")
+	if minVerErr != nil {
+		return DefaultProfile, fmt.Errorf("parsing custom profile minTLSVersion: %w", minVerErr)
+	}
 
-	if len(ciphersRaw) == 0 {
+	if !ciphersFound || len(ciphersRaw) == 0 {
 		return DefaultProfile, errors.New("custom profile has empty cipher list")
 	}
 	if minVersion == "" {
 		minVersion = "VersionTLS12"
+	}
+	if _, ok := protocolVersion[minVersion]; !ok {
+		return DefaultProfile, fmt.Errorf("custom profile has unrecognized minTLSVersion %q", minVersion)
 	}
 
 	return ProfileSpec{

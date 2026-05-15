@@ -39,7 +39,7 @@ var tls13Ciphers = map[string]bool{
 // to a tls.Config, and a list of cipher names that could not be mapped.
 // The returned function is safe to use as a controller-runtime TLSOpts entry.
 func NewTLSConfigFunc(spec ProfileSpec) (func(*tls.Config), []string) {
-	minVersion, ok := ProtocolVersion[spec.MinTLSVersion]
+	minVersion, ok := protocolVersion[spec.MinTLSVersion]
 	if !ok {
 		minVersion = tls.VersionTLS12
 	}

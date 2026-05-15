@@ -30,7 +30,7 @@ When TLS is enabled:
 
 - External API traffic is encrypted from client to backend
 - Internal authentication traffic (Authorino → `maas-api`) is encrypted and certificate-verified via the service-CA bundle
-- Gateway → `maas-api` traffic is encrypted but uses `insecureSkipVerify` (see [DestinationRule](#gateway-maas-api-tls-destinationrule) below)
+- Gateway → `maas-api` traffic is encrypted but uses `insecureSkipVerify` (see the DestinationRule section below)
 
 ## Prerequisites
 
@@ -116,11 +116,15 @@ the admin's choice of TLS version and cipher suites.
 
 ### How it works
 
-At startup, each component fetches `spec.tlsSecurityProfile` from the `APIServer` CR
-and applies the profile's `minTLSVersion` and `ciphers` to its server endpoints:
+At startup, each component fetches `spec.tlsSecurityProfile` from the `APIServer` CR:
 
-- **maas-controller**: secure metrics endpoint (HTTPS with delegated authentication)
-- **maas-api**: API server on port 8443
+- **maas-api**: Applies the profile's `minTLSVersion` and `ciphers` to the API server
+  on port 8443. The profile overrides the `--tls-min-version` flag and sets explicit
+  cipher suites instead of relying on Go defaults.
+- **maas-controller**: Fetches and watches the profile for change detection. The
+  controller currently has no HTTPS server endpoints (metrics is HTTP, no admission
+  webhooks), so the profile is not applied to a listener. When secure metrics or
+  webhooks are added, the profile will be applied to those endpoints.
 
 Both components watch the `APIServer` resource for changes. When the TLS profile is
 updated, the component performs a graceful shutdown so the Pod restarts with the new
@@ -149,7 +153,7 @@ not exist. In this case:
 ### Known limitations
 
 The `DestinationRule` for gateway → maas-api TLS origination uses `insecureSkipVerify: true`
-(see [Gateway → maas-api TLS](#gateway-maas-api-tls-destinationrule) above). This is a
+(see the Gateway → maas-api TLS DestinationRule section above). This is a
 deliberate trade-off: the gateway pod does not mount the OpenShift service-CA bundle, so
 it cannot verify the backend certificate. Traffic is still encrypted. This will be resolved
 when `BackendTLSPolicy` (Gateway API v1.4+) replaces the `DestinationRule`.

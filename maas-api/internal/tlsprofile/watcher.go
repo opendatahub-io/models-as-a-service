@@ -1,6 +1,7 @@
 package tlsprofile
 
 import (
+	"fmt"
 	"reflect"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -28,7 +29,7 @@ func NewWatcher(restConfig *rest.Config, initialProfile ProfileSpec, onChange fu
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, 0)
 	informer := factory.ForResource(apiServerGVR).Informer()
 
-	_, _ = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: func(_, newObj any) {
 			u, ok := newObj.(*unstructured.Unstructured)
 			if !ok {
@@ -42,15 +43,25 @@ func NewWatcher(restConfig *rest.Config, initialProfile ProfileSpec, onChange fu
 				onChange(initialProfile, current)
 			}
 		},
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("adding event handler: %w", err)
+	}
 
 	return &Watcher{initial: initialProfile, factory: factory}, nil
 }
 
-// Start begins watching. The informer stops when stopCh is closed.
-func (w *Watcher) Start(stopCh <-chan struct{}) {
+// Start begins watching and blocks until stopCh is closed.
+// Returns an error if the informer cache fails to sync.
+func (w *Watcher) Start(stopCh <-chan struct{}) error {
 	w.factory.Start(stopCh)
-	w.factory.WaitForCacheSync(stopCh)
+	synced := w.factory.WaitForCacheSync(stopCh)
+	for gvr, ok := range synced {
+		if !ok {
+			return fmt.Errorf("informer cache sync failed for %s", gvr.String())
+		}
+	}
+	<-stopCh
+	return nil
 }
 
 func profileEqual(a, b ProfileSpec) bool {
