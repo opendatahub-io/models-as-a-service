@@ -21,7 +21,6 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
-	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 const (
@@ -30,9 +29,6 @@ const (
 
 	// annotationTLS controls TLS origination (default "true").
 	annotationTLS = "maas.opendatahub.io/tls"
-
-	defaultGatewayName      = tenantreconcile.DefaultGatewayName
-	defaultGatewayNamespace = tenantreconcile.DefaultGatewayNamespace
 )
 
 // Reconciler watches ExternalModel CRs and creates the Istio resources
@@ -50,17 +46,11 @@ type Reconciler struct {
 }
 
 func (r *Reconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return defaultGatewayName
+	return r.GatewayName
 }
 
 func (r *Reconciler) gatewayNamespace() string {
-	if r.GatewayNamespace != "" {
-		return r.GatewayNamespace
-	}
-	return defaultGatewayNamespace
+	return r.GatewayNamespace
 }
 
 // commonLabels returns labels applied to all managed resources.
