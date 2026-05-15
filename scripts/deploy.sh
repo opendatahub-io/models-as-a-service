@@ -510,55 +510,66 @@ main() {
     return 1
   fi
 
-  # Ensure maas-parameters ConfigMap exists with image defaults.
-  # maas-controller reads these via configMapKeyRef (RELATED_IMAGE_* env vars).
-  # Custom images from CLI flags override the defaults; other images keep defaults.
-  local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
-  local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
-  local cm_payload_processing_image="quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
-  local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
-
-  log_info "  Ensuring maas-parameters ConfigMap..."
-  kubectl create configmap maas-parameters -n "$NAMESPACE" \
-    --from-literal="maas-api-image=${cm_maas_api_image}" \
-    --from-literal="maas-controller-image=${cm_maas_controller_image}" \
-    --from-literal="payload-processing-image=${cm_payload_processing_image}" \
-    --from-literal="maas-api-key-cleanup-image=${cm_cleanup_image}" \
-    --dry-run=client -o yaml | kubectl apply -f - || {
-    log_error "Failed to create/update maas-parameters ConfigMap"
-    return 1
-  }
-
   if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
-    if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
-      log_info "  Custom MaaS controller image: $MAAS_CONTROLLER_IMAGE"
-      kubectl set image deployment/maas-controller manager="${MAAS_CONTROLLER_IMAGE}" -n "$NAMESPACE" || {
-        log_error "Failed to set maas-controller container image"
-        return 1
-      }
-    fi
   else
+    # Direct-install path used when maas-controller is absent, or when
+    # FORCE_OVERWRITE=true requests a full local re-apply and restart.
+    # Ensure maas-parameters ConfigMap exists with image defaults before the
+    # controller starts; maas-controller reads these via configMapKeyRef
+    # (RELATED_IMAGE_* env vars).
+    local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
+    local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
+    local cm_payload_processing_image="quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+    local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
+
+    log_info "  Ensuring maas-parameters ConfigMap..."
+    kubectl create configmap maas-parameters -n "$NAMESPACE" \
+      --from-literal="maas-api-image=${cm_maas_api_image}" \
+      --from-literal="maas-controller-image=${cm_maas_controller_image}" \
+      --from-literal="payload-processing-image=${cm_payload_processing_image}" \
+      --from-literal="maas-api-key-cleanup-image=${cm_cleanup_image}" \
+      --dry-run=client -o yaml | kubectl apply -f - || {
+      log_error "Failed to create/update maas-parameters ConfigMap"
+      return 1
+    }
+
     log_info "  Phase 1: Applying MaaS CRDs and waiting until Established (controller creates Config after CRD is ready)..."
     if ! install_maas_controller_crds_and_wait "${project_root}/deployment/base/maas-controller/crd"; then
       log_error "MaaS CRD install or Established wait failed"
       return 1
     fi
     log_info "  Phase 2: Applying full controller kustomize (same as operator: deployment/base/maas-controller/default)..."
-    if [[ "$NAMESPACE" != "opendatahub" ]]; then
-      (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
-        sed -e "s/namespace: opendatahub/namespace: $NAMESPACE/g" \
-            -e "s|image: quay.io/opendatahub/maas-controller:latest|image: $cm_maas_controller_image|g") | kubectl apply -f - || {
-        log_error "Failed to apply maas-controller manifests"
-        return 1
-      }
-    else
-      (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
-        sed -e "s|image: quay.io/opendatahub/maas-controller:latest|image: $cm_maas_controller_image|g") | kubectl apply -f - || {
-        log_error "Failed to apply maas-controller manifests"
-        return 1
-      }
-    fi
+    local controller_overlay_dir
+    controller_overlay_dir="$(mktemp -d "${project_root}/.deploy-controller-overlay.XXXXXX")" || {
+      log_error "Failed to create temporary maas-controller overlay directory"
+      return 1
+    }
+    cat > "${controller_overlay_dir}/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${NAMESPACE}
+resources:
+  - ../deployment/base/maas-controller/default
+EOF
+    (
+      cd "${controller_overlay_dir}" && \
+      kustomize edit set image "quay.io/opendatahub/maas-controller=${cm_maas_controller_image}" && \
+      kustomize build .
+    ) | kubectl apply -f - || {
+      rm -rf "${controller_overlay_dir}"
+      log_error "Failed to apply maas-controller manifests"
+      return 1
+    }
+    rm -rf "${controller_overlay_dir}"
+
+    # Force pod recreation so imagePullPolicy=Always can pick up newly published
+    # image content even when the maas-controller image tag itself is unchanged.
+    log_info "  Restarting maas-controller to pick up manifest and ConfigMap changes"
+    kubectl rollout restart deployment/maas-controller -n "$NAMESPACE" || {
+      log_error "Failed to restart maas-controller deployment"
+      return 1
+    }
   fi
 
   log_info "  Waiting for maas-controller to be ready..."

@@ -34,14 +34,26 @@ const (
 
 	DefaultGatewayNamespace = "openshift-ingress"
 	DefaultGatewayName      = "maas-default-gateway"
+	DefaultAppNamespace     = "opendatahub"
+	DefaultClusterAudience  = "https://kubernetes.default.svc"
 
-	GatewayDefaultAuthPolicyName               = "gateway-default-auth"
-	GatewayTokenRateLimitDefaultDenyPolicyName = "gateway-default-deny"
-	MaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
-	GatewayDestinationRuleName                 = "maas-api-backend-tls"
-	TelemetryPolicyName                        = "maas-telemetry"
-	IstioTelemetryName                         = "latency-per-subscription"
-	MaaSAPIDeploymentName                      = "maas-api"
+	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
+	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
+	DefaultAPIKeyMaxExpirationDays = "90"
+
+	GatewayDefaultAuthPolicyName                  = "gateway-default-auth"
+	GatewayTokenRateLimitDefaultDenyPolicyName    = "gateway-default-deny"
+	MaaSAPIAuthPolicyName                         = "maas-api-auth-policy"
+	MaaSAPIRouteName                              = "maas-api-route"
+	MaaSAPIKeyCleanupCronJobName                  = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
+	GatewayDestinationRuleName                    = "maas-api-backend-tls"
+	TelemetryPolicyName                           = "maas-telemetry"
+	IstioTelemetryName                            = "latency-per-subscription"
+	MaaSAPIDeploymentName                         = "maas-api"
+	PayloadProcessingName                         = "payload-processing"
+	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
+	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
 	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
 	MaaSControllerDeploymentName = "maas-controller"
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
@@ -71,6 +83,10 @@ var (
 	GVKIstioTelemetry       = schema.GroupVersionKind{Group: "telemetry.istio.io", Version: "v1", Kind: "Telemetry"}
 	GVKAuthConfig           = schema.GroupVersionKind{Group: "authorino.kuadrant.io", Version: "v1beta3", Kind: "AuthConfig"}
 	GVKAuthorino            = schema.GroupVersionKind{Group: "operator.authorino.kuadrant.io", Version: "v1beta1", Kind: "Authorino"}
+	GVKService              = schema.GroupVersionKind{Version: "v1", Kind: "Service"}
+	GVKServiceAccount       = schema.GroupVersionKind{Version: "v1", Kind: "ServiceAccount"}
+	GVKConfigMap            = schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+	GVKClusterRoleBinding   = schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding"}
 	GVKPersesDashboard      = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard"}
 	GVKPersesDatasource     = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDatasource"}
 )

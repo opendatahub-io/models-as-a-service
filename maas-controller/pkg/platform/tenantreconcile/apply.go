@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -78,12 +79,6 @@ type configOwnerRefSkip func(u *unstructured.Unstructured, appNs string) bool
 // configOwnerRefSkips is evaluated in order; add new predicates here for additional exceptions.
 var configOwnerRefSkips = []configOwnerRefSkip{
 	isMaaSControllerDeployment,
-	func(u *unstructured.Unstructured, appNs string) bool {
-		if appNs == "" || u.GetNamespace() != appNs {
-			return false
-		}
-		return strings.EqualFold(u.GetKind(), "ConfigMap") && u.GetName() == MaaSParametersConfigMapName
-	},
 }
 
 func skipConfigControllerOwnerRef(u *unstructured.Unstructured, appNs string) bool {

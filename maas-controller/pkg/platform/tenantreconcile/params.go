@@ -30,29 +30,32 @@ type PlatformParams struct {
 // BuildPlatformParams resolves all runtime parameters from the Tenant CR,
 // cluster state, and RELATED_IMAGE_* env vars. No disk I/O.
 func BuildPlatformParams(tenant *maasv1alpha1.Tenant, appNamespace, clusterAudience string) PlatformParams {
-	p := PlatformParams{
-		AppNamespace:     appNamespace,
-		GatewayNamespace: tenant.Spec.GatewayRef.Namespace,
-		GatewayName:      tenant.Spec.GatewayRef.Name,
-		ClusterAudience:  clusterAudience,
+	return PlatformParams{
+		AppNamespace:            firstNonEmpty(appNamespace, DefaultAppNamespace),
+		GatewayNamespace:        firstNonEmpty(tenant.Spec.GatewayRef.Namespace, DefaultGatewayNamespace),
+		GatewayName:             firstNonEmpty(tenant.Spec.GatewayRef.Name, DefaultGatewayName),
+		ClusterAudience:         firstNonEmpty(clusterAudience, DefaultClusterAudience),
+		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
+		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
+		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
+		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
 	}
+}
 
-	if v := os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"); v != "" {
-		p.MaaSAPIImage = v
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
 	}
-	if v := os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"); v != "" {
-		p.PayloadProcessingImage = v
-	}
-	if v := os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"); v != "" {
-		p.MaaSAPIKeyCleanupImage = v
-	}
+	return ""
+}
 
-	p.APIKeyMaxExpirationDays = "90"
+func resolveAPIKeyMaxExpirationDays(tenant *maasv1alpha1.Tenant) string {
 	if tenant.Spec.APIKeys != nil && tenant.Spec.APIKeys.MaxExpirationDays != nil {
-		p.APIKeyMaxExpirationDays = strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
+		return strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
 	}
-
-	return p
+	return DefaultAPIKeyMaxExpirationDays
 }
 
 // applyPlatformParams patches all dynamic values into rendered resources.
@@ -67,15 +70,15 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 			if err := patchMaaSAPIDeployment(log, r, params); err != nil {
 				return err
 			}
-		case gvk == GVKDeployment && name == "payload-processing":
+		case gvk == GVKDeployment && name == PayloadProcessingName:
 			if err := patchPayloadProcessingDeployment(log, r, params); err != nil {
 				return err
 			}
-		case gvk == GVKCronJob && name == "maas-api-key-cleanup":
+		case gvk == GVKCronJob && name == MaaSAPIKeyCleanupCronJobName:
 			if err := patchCleanupCronJobImage(log, r, params); err != nil {
 				return err
 			}
-		case gvk == GVKHTTPRoute && name == "maas-api-route":
+		case gvk == GVKHTTPRoute && name == MaaSAPIRouteName:
 			if err := patchHTTPRoute(log, r, params); err != nil {
 				return err
 			}
@@ -83,25 +86,23 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 			if err := patchMaaSAPIAuthPolicy(log, r, params); err != nil {
 				return err
 			}
-		case gvk == GVKDestinationRule && name == "maas-api-backend-tls":
+		case gvk == GVKDestinationRule && name == GatewayDestinationRuleName:
 			if err := patchMaaSAPIDestinationRule(log, r, params); err != nil {
 				return err
 			}
-		case gvk == GVKDestinationRule && name == "payload-processing":
-			if err := patchPayloadProcessingDestinationRule(log, r, params); err != nil {
-				return err
-			}
-		case gvk == GVKEnvoyFilter && name == "payload-processing":
+		case gvk == GVKDestinationRule && name == PayloadProcessingName:
+			r.SetNamespace(params.GatewayNamespace)
+		case gvk == GVKEnvoyFilter && name == PayloadProcessingName:
 			if err := patchPayloadProcessingEnvoyFilter(log, r, params); err != nil {
 				return err
 			}
-		case gvk.Kind == "Service" && name == "payload-processing":
+		case gvk == GVKService && name == PayloadProcessingName:
 			r.SetNamespace(params.GatewayNamespace)
-		case gvk.Kind == "ServiceAccount" && name == "payload-processing":
+		case gvk == GVKServiceAccount && name == PayloadProcessingName:
 			r.SetNamespace(params.GatewayNamespace)
-		case gvk.Kind == "ConfigMap" && name == "payload-processing-plugins":
+		case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
 			r.SetNamespace(params.GatewayNamespace)
-		case gvk.Kind == "ClusterRoleBinding" && name == "payload-processing-reader":
+		case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
 			if err := patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace); err != nil {
 				return err
 			}
@@ -111,11 +112,9 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 }
 
 func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
-	if params.MaaSAPIImage != "" {
-		log.V(4).Info("Patching maas-api image", "image", params.MaaSAPIImage)
-		if err := setContainerImage(r, "maas-api", params.MaaSAPIImage); err != nil {
-			return fmt.Errorf("patch maas-api image: %w", err)
-		}
+	log.V(4).Info("Patching maas-api image", "image", params.MaaSAPIImage)
+	if err := setContainerImage(r, "maas-api", params.MaaSAPIImage); err != nil {
+		return fmt.Errorf("patch maas-api image: %w", err)
 	}
 	if err := setOrAddEnvVar(r, "maas-api", "GATEWAY_NAMESPACE", params.GatewayNamespace); err != nil {
 		return fmt.Errorf("patch GATEWAY_NAMESPACE: %w", err)
@@ -131,21 +130,17 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 
 func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
-	if params.PayloadProcessingImage != "" {
-		log.V(4).Info("Patching payload-processing image", "image", params.PayloadProcessingImage)
-		if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
-			return fmt.Errorf("patch payload-processing image: %w", err)
-		}
+	log.V(4).Info("Patching payload-processing image", "image", params.PayloadProcessingImage)
+	if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
+		return fmt.Errorf("patch payload-processing image: %w", err)
 	}
 	return nil
 }
 
 func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
-	if params.MaaSAPIKeyCleanupImage != "" {
-		log.V(4).Info("Patching cleanup CronJob image", "image", params.MaaSAPIKeyCleanupImage)
-		if err := setCronJobContainerImage(r, "cleanup", params.MaaSAPIKeyCleanupImage); err != nil {
-			return fmt.Errorf("patch cleanup CronJob image: %w", err)
-		}
+	log.V(4).Info("Patching cleanup CronJob image", "image", params.MaaSAPIKeyCleanupImage)
+	if err := setCronJobContainerImage(r, "cleanup", params.MaaSAPIKeyCleanupImage); err != nil {
+		return fmt.Errorf("patch cleanup CronJob image: %w", err)
 	}
 	return nil
 }
@@ -173,21 +168,19 @@ func patchHTTPRoute(log logr.Logger, r *unstructured.Unstructured, params Platfo
 }
 
 func patchMaaSAPIAuthPolicy(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
-	if params.ClusterAudience != "" {
-		log.V(4).Info("Patching AuthPolicy cluster-audience", "audience", params.ClusterAudience)
-		audiences, found, err := unstructured.NestedSlice(r.Object,
-			"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences")
-		if err != nil {
-			return fmt.Errorf("read AuthPolicy audiences: %w", err)
-		}
-		if !found || len(audiences) == 0 {
-			return errors.New("AuthPolicy audiences not found")
-		}
-		audiences[0] = params.ClusterAudience
-		if err := unstructured.SetNestedSlice(r.Object, audiences,
-			"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences"); err != nil {
-			return fmt.Errorf("write AuthPolicy audiences: %w", err)
-		}
+	log.V(4).Info("Patching AuthPolicy cluster-audience", "audience", params.ClusterAudience)
+	audiences, found, err := unstructured.NestedSlice(r.Object,
+		"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences")
+	if err != nil {
+		return fmt.Errorf("read AuthPolicy audiences: %w", err)
+	}
+	if !found || len(audiences) == 0 {
+		return errors.New("AuthPolicy audiences not found")
+	}
+	audiences[0] = params.ClusterAudience
+	if err := unstructured.SetNestedSlice(r.Object, audiences,
+		"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences"); err != nil {
+		return fmt.Errorf("write AuthPolicy audiences: %w", err)
 	}
 
 	url, found, err := unstructured.NestedString(r.Object,
@@ -228,25 +221,6 @@ func patchMaaSAPIDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 	return nil
 }
 
-func patchPayloadProcessingDestinationRule(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
-	r.SetNamespace(params.GatewayNamespace)
-	host, found, err := unstructured.NestedString(r.Object, "spec", "host")
-	if err != nil {
-		return fmt.Errorf("read payload-processing DestinationRule host: %w", err)
-	}
-	if !found {
-		return errors.New("payload-processing DestinationRule host not found")
-	}
-	if host != "" {
-		newHost := replaceHostNamespace(host, params.GatewayNamespace)
-		log.V(4).Info("Patching payload-processing DestinationRule host", "old", host, "new", newHost)
-		if err := unstructured.SetNestedField(r.Object, newHost, "spec", "host"); err != nil {
-			return fmt.Errorf("write payload-processing DestinationRule host: %w", err)
-		}
-	}
-	return nil
-}
-
 func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
 
@@ -265,18 +239,6 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	targetRefs[0] = ref
 	if err := unstructured.SetNestedSlice(r.Object, targetRefs, "spec", "targetRefs"); err != nil {
 		return fmt.Errorf("write EnvoyFilter targetRefs: %w", err)
-	}
-
-	clusterName, err := getEnvoyFilterClusterName(r)
-	if err != nil {
-		return err
-	}
-	if clusterName != "" {
-		newCluster := replaceHostNamespace(clusterName, params.GatewayNamespace)
-		log.V(4).Info("Patching EnvoyFilter cluster_name", "old", clusterName, "new", newCluster)
-		if err := setEnvoyFilterClusterName(r, newCluster); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -369,50 +331,4 @@ func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image
 		}
 	}
 	return fmt.Errorf("container %q not found", containerName)
-}
-
-func getEnvoyFilterClusterName(r *unstructured.Unstructured) (string, error) {
-	configPatches, found, err := unstructured.NestedSlice(r.Object, "spec", "configPatches")
-	if err != nil {
-		return "", fmt.Errorf("read EnvoyFilter configPatches: %w", err)
-	}
-	if !found || len(configPatches) == 0 {
-		return "", errors.New("EnvoyFilter configPatches not found")
-	}
-	firstPatch, ok := configPatches[0].(map[string]any)
-	if !ok {
-		return "", errors.New("EnvoyFilter configPatches[0] is not an object")
-	}
-	clusterName, found, err := unstructured.NestedString(firstPatch,
-		"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
-	if err != nil {
-		return "", fmt.Errorf("read EnvoyFilter cluster_name: %w", err)
-	}
-	if !found {
-		return "", errors.New("EnvoyFilter cluster_name not found")
-	}
-	return clusterName, nil
-}
-
-func setEnvoyFilterClusterName(r *unstructured.Unstructured, clusterName string) error {
-	configPatches, found, err := unstructured.NestedSlice(r.Object, "spec", "configPatches")
-	if err != nil {
-		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
-	}
-	if !found || len(configPatches) == 0 {
-		return errors.New("EnvoyFilter configPatches not found")
-	}
-	firstPatch, ok := configPatches[0].(map[string]any)
-	if !ok {
-		return errors.New("EnvoyFilter configPatches[0] is not an object")
-	}
-	if err := unstructured.SetNestedField(firstPatch, clusterName,
-		"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"); err != nil {
-		return fmt.Errorf("write EnvoyFilter cluster_name: %w", err)
-	}
-	configPatches[0] = firstPatch
-	if err := unstructured.SetNestedSlice(r.Object, configPatches, "spec", "configPatches"); err != nil {
-		return fmt.Errorf("write EnvoyFilter configPatches: %w", err)
-	}
-	return nil
 }
