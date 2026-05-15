@@ -131,7 +131,12 @@ func newTestReconciler(objects ...client.Object) (*MaaSModelRefReconciler, clien
 		WithIndex(&maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer).
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, modelRefIndexKey, subscriptionModelRefIndexer).
 		Build()
-	return &MaaSModelRefReconciler{Client: c, Scheme: scheme}, c
+	return &MaaSModelRefReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "openshift-ingress",
+	}, c
 }
 
 // assertReadyCondition checks that the conditions slice contains a Ready condition

@@ -93,7 +93,7 @@ func modelRefNameIndexer(obj client.Object) []string {
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if r.GatewayName == "" || r.GatewayNamespace == "" {
-		return ctrl.Result{}, fmt.Errorf("gatewayName and gatewayNamespace must be configured")
+		return ctrl.Result{}, errors.New("gatewayName and gatewayNamespace must be configured")
 	}
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSModelRef", req.NamespacedName)
 

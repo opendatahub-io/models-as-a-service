@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	stderrors "errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -444,7 +445,7 @@ func main() {
 	flag.Parse()
 
 	if gatewayName == "" || gatewayNamespace == "" {
-		setupLog.Error(fmt.Errorf("invalid gateway configuration"),
+		setupLog.Error(stderrors.New("invalid gateway configuration"),
 			"both --gateway-name and --gateway-namespace must be non-empty",
 			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
 		os.Exit(1)
