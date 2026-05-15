@@ -47,6 +47,10 @@ Both promotion workflows support `workflow_dispatch`, so they can be triggered o
 
 This is useful when a fix needs to be fast-tracked without waiting for the next scheduled run.
 
+## RHOAI ↔ MaaS Version Mapping
+
+For the authoritative table correlating RHOAI product releases with MaaS component versions and image tags, see [RHOAI ↔ MaaS Versions](../reference/rhoai-maas-versions.md).
+
 ## Release Notes
 
 Release notes in `docs/content/release-notes/index.md` summarize user-visible changes for each MaaS version. Keep them concise and focused on **what changed** and **why it matters**—link to detailed docs for **how** to migrate or configure.
