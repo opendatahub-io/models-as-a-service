@@ -33,6 +33,7 @@ from test_helper import (
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
     TLS_VERIFY,
+    _apply_cr,
     _create_api_key,
     _create_sa_token,
     _create_test_auth_policy,
