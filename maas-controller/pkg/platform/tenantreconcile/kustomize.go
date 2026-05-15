@@ -182,4 +182,3 @@ func DefaultManifestPath() string {
 	}
 	return "../maas-api/deploy/overlays/odh"
 }
-

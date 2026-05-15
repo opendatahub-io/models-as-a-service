@@ -46,7 +46,6 @@ import (
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
-
 // MaaSModelRefReconciler reconciles a MaaSModelRef object
 type MaaSModelRefReconciler struct {
 	client.Client
