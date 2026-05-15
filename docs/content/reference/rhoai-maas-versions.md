@@ -8,10 +8,10 @@ ticket triage, CI reproduction, compatibility checks, and upgrade planning.
 
 | RHOAI Version | MaaS Version | RHOAI Image Tag | Status | Notes |
 |---------------|--------------|-----------------|--------|-------|
-| 3.4           | v0.1.1       | `v3.4`          | GA     | Tenant CR, observability dashboards, OIDC for `/v1/models`. See [release notes](../release-notes/index.md#v011). |
-| 3.4           | v0.1.0       | `v3.4`          | GA     | Subscription-driven access model; tier system removed. See [upgrade guide](../migration/upgrade-3.2-to-3.4.md). |
+| 3.4.1         | v0.1.1       | `v3.4`          | GA     | Tenant CR, observability dashboards, OIDC for `/v1/models`. See [release notes](../release-notes/index.md#v011). |
+| 3.4.0         | v0.1.0       | `v3.4`          | GA     | Subscription-driven access model; tier system removed. See [upgrade guide](../migration/upgrade-3.2-to-3.4.md). |
 | 3.2           | v0.0.2       | `v3.2`          | TP     | TLS, deploy-script updates. MaaS deployed manually (RHOAI 3.2 DSC does not support `modelsAsService`). |
-| 3.0           | 0.0.1        | —               | TP     | Initial MaaS release; tier-based access model, manual deployment only. |
+| 3.0           | v0.0.1       | —               | TP     | Initial MaaS release; tier-based access model, manual deployment only. |
 
 **Status key:** GA = Generally Available, TP = Tech Preview.
 
