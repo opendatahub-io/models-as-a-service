@@ -85,5 +85,13 @@ var profiles = map[ProfileType]ProfileSpec{
 	},
 }
 
-// DefaultProfile is used when the cluster has no explicit TLS profile configured.
-var DefaultProfile = profiles[ProfileIntermediate]
+// DefaultProfile returns a copy of the Intermediate profile, used when the
+// cluster has no explicit TLS profile configured.
+func DefaultProfile() ProfileSpec {
+	return cloneProfile(profiles[ProfileIntermediate])
+}
+
+func cloneProfile(p ProfileSpec) ProfileSpec {
+	p.Ciphers = append([]string(nil), p.Ciphers...)
+	return p
+}

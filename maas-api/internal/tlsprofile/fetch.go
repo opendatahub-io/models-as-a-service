@@ -24,12 +24,12 @@ var apiServerGVR = schema.GroupVersionResource{
 func FetchTLSProfile(ctx context.Context, restConfig *rest.Config) (ProfileSpec, error) {
 	dynClient, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
-		return DefaultProfile, fmt.Errorf("creating dynamic client: %w", err)
+		return DefaultProfile(), fmt.Errorf("creating dynamic client: %w", err)
 	}
 
 	obj, err := dynClient.Resource(apiServerGVR).Get(ctx, "cluster", metav1.GetOptions{})
 	if err != nil {
-		return DefaultProfile, fmt.Errorf("fetching APIServer/cluster: %w", err)
+		return DefaultProfile(), fmt.Errorf("fetching APIServer/cluster: %w", err)
 	}
 
 	return parseProfileFromAPIServer(obj)
@@ -38,15 +38,18 @@ func FetchTLSProfile(ctx context.Context, restConfig *rest.Config) (ProfileSpec,
 func parseProfileFromAPIServer(obj *unstructured.Unstructured) (ProfileSpec, error) {
 	profileObj, found, err := unstructured.NestedMap(obj.Object, "spec", "tlsSecurityProfile")
 	if err != nil {
-		return DefaultProfile, fmt.Errorf("reading spec.tlsSecurityProfile: %w", err)
+		return DefaultProfile(), fmt.Errorf("reading spec.tlsSecurityProfile: %w", err)
 	}
 	if !found || profileObj == nil {
-		return DefaultProfile, nil
+		return DefaultProfile(), nil
 	}
 
-	profileType, _, _ := unstructured.NestedString(profileObj, "type")
+	profileType, _, typeErr := unstructured.NestedString(profileObj, "type")
+	if typeErr != nil {
+		return DefaultProfile(), fmt.Errorf("parsing spec.tlsSecurityProfile.type: %w", typeErr)
+	}
 	if profileType == "" {
-		return DefaultProfile, nil
+		return DefaultProfile(), nil
 	}
 
 	pt := ProfileType(profileType)
@@ -55,7 +58,7 @@ func parseProfileFromAPIServer(obj *unstructured.Unstructured) (ProfileSpec, err
 		if spec, ok := profiles[pt]; ok {
 			return spec, nil
 		}
-		return DefaultProfile, nil
+		return DefaultProfile(), fmt.Errorf("unrecognized TLS profile type %q", profileType)
 	}
 
 	return parseCustomProfile(profileObj)
@@ -64,26 +67,26 @@ func parseProfileFromAPIServer(obj *unstructured.Unstructured) (ProfileSpec, err
 func parseCustomProfile(profileObj map[string]any) (ProfileSpec, error) {
 	customObj, found, err := unstructured.NestedMap(profileObj, "custom")
 	if err != nil || !found {
-		return DefaultProfile, errors.New("custom profile type set but spec.tlsSecurityProfile.custom is missing")
+		return DefaultProfile(), errors.New("custom profile type set but spec.tlsSecurityProfile.custom is missing")
 	}
 
 	ciphersRaw, ciphersFound, ciphersErr := unstructured.NestedStringSlice(customObj, "ciphers")
 	if ciphersErr != nil {
-		return DefaultProfile, fmt.Errorf("parsing custom profile ciphers: %w", ciphersErr)
+		return DefaultProfile(), fmt.Errorf("parsing custom profile ciphers: %w", ciphersErr)
 	}
 	minVersion, _, minVerErr := unstructured.NestedString(customObj, "minTLSVersion")
 	if minVerErr != nil {
-		return DefaultProfile, fmt.Errorf("parsing custom profile minTLSVersion: %w", minVerErr)
+		return DefaultProfile(), fmt.Errorf("parsing custom profile minTLSVersion: %w", minVerErr)
 	}
 
 	if !ciphersFound || len(ciphersRaw) == 0 {
-		return DefaultProfile, errors.New("custom profile has empty cipher list")
+		return DefaultProfile(), errors.New("custom profile has empty cipher list")
 	}
 	if minVersion == "" {
 		minVersion = "VersionTLS12"
 	}
 	if _, ok := protocolVersion[minVersion]; !ok {
-		return DefaultProfile, fmt.Errorf("custom profile has unrecognized minTLSVersion %q", minVersion)
+		return DefaultProfile(), fmt.Errorf("custom profile has unrecognized minTLSVersion %q", minVersion)
 	}
 
 	return ProfileSpec{
