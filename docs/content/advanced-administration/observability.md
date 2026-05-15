@@ -8,10 +8,14 @@ Before deploying the observability stack, ensure the following platform prerequi
 
 ### User Workload Monitoring
 
-[User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled for Prometheus to scrape metrics from MaaS components.
+[User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled for Prometheus to scrape metrics from MaaS components and to process PrometheusRules for alerting.
 
-!!! warning "Required for metrics collection"
-    Without User Workload Monitoring enabled, ServiceMonitors deployed by MaaS will not be processed and no metrics will be collected.
+!!! warning "Required for metrics and alerting"
+    Without User Workload Monitoring enabled:
+    
+    - ServiceMonitors deployed by MaaS will not be processed and no metrics will be collected
+    - PrometheusRules will not be evaluated and no alerts will fire
+    - Operators will not be notified of OIDC authentication failures or maas-api metadata issues
 
 **Step 1: Create or update the cluster-monitoring-config ConfigMap**
 

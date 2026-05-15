@@ -21,9 +21,11 @@ done
 # Parse arguments
 # For RHOAI use --namespace redhat-ods-applications.
 NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"
+# For RHOAI use --authorino-namespace rh-connectivity-link.
+AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-kuadrant-system}"
 
 show_help() {
-    echo "Usage: $0 [--namespace NAMESPACE]"
+    echo "Usage: $0 [--namespace NAMESPACE] [--authorino-namespace NAMESPACE]"
     echo ""
     echo "Installs monitoring components only (no dashboards):"
     echo "  - Enables user-workload-monitoring"
@@ -31,14 +33,17 @@ show_help() {
     echo "  - Configures Istio Gateway and LLM model metrics"
     echo ""
     echo "Options:"
-    echo "  -n, --namespace   Target namespace for observability (default: opendatahub)"
+    echo "  -n, --namespace              MaaS application namespace (default: opendatahub)"
+    echo "  -a, --authorino-namespace    Authorino/Kuadrant namespace (default: kuadrant-system)"
+    echo "                               Use 'rh-connectivity-link' for RHOAI deployments"
     echo ""
     echo "To install MaaS Grafana dashboards (separate step), run:"
     echo "  $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Install monitoring only"
-    echo "  $0 --namespace my-ns"
+    echo "  $0                                              # ODH defaults"
+    echo "  $0 --namespace redhat-ods-applications \\       # RHOAI"
+    echo "     --authorino-namespace rh-connectivity-link"
     echo ""
     exit 0
 }
@@ -51,6 +56,14 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             NAMESPACE="$2"
+            shift 2
+            ;;
+        --authorino-namespace|-a)
+            if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "Error: --authorino-namespace requires a non-empty value"
+                exit 1
+            fi
+            AUTHORINO_NAMESPACE="$2"
             shift 2
             ;;
         --help|-h)
@@ -104,7 +117,8 @@ echo "========================================="
 echo "📊 MaaS Observability Stack Installation"
 echo "========================================="
 echo ""
-echo "Target namespace: $NAMESPACE"
+echo "MaaS namespace:      $NAMESPACE"
+echo "Authorino namespace: $AUTHORINO_NAMESPACE"
 echo ""
 
 # ==========================================
@@ -146,7 +160,7 @@ echo "2️⃣ Configuring namespaces for user-workload-monitoring..."
 # IMPORTANT: Do NOT add openshift.io/cluster-monitoring=true label!
 # That label is for cluster-monitoring (infrastructure) and BLOCKS user-workload-monitoring.
 # User-workload-monitoring (which we need) scrapes namespaces that DON'T have this label.
-for ns in kuadrant-system "$NAMESPACE" llm; do
+for ns in "$AUTHORINO_NAMESPACE" "$NAMESPACE" llm; do
     if kubectl get namespace "$ns" &>/dev/null; then
         # Remove the cluster-monitoring label if present (it blocks user-workload-monitoring)
         kubectl label namespace "$ns" openshift.io/cluster-monitoring- 2>/dev/null || true
@@ -170,11 +184,13 @@ if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     # Deploy Limitador ServiceMonitor only if Kuadrant doesn't already scrape /metrics from Limitador.
     # When Kuadrant CR has spec.observability.enable=true, it creates kuadrant-limitador-monitor
     # which scrapes the same Limitador pod. Deploying both causes duplicate metrics.
-    if kuadrant_already_scrapes "/metrics" kuadrant-system \
-       || kubectl get podmonitor kuadrant-limitador-monitor -n kuadrant-system &>/dev/null; then
+    if kuadrant_already_scrapes "/metrics" "$AUTHORINO_NAMESPACE" \
+       || kubectl get podmonitor kuadrant-limitador-monitor -n "$AUTHORINO_NAMESPACE" &>/dev/null; then
         echo "   ℹ️  Kuadrant already scrapes Limitador /metrics - skipping MaaS ServiceMonitor (no duplicates)"
     else
-        kubectl apply -f "$BASE_OBSERVABILITY_DIR/limitador-servicemonitor.yaml"
+        # Apply ServiceMonitor with namespace substitution
+        yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" \
+            "$BASE_OBSERVABILITY_DIR/limitador-servicemonitor.yaml" | kubectl apply -f -
         echo "   ✅ Limitador ServiceMonitor deployed (Kuadrant PodMonitor not found)"
     fi
 
@@ -182,16 +198,28 @@ if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     # The Kuadrant operator's authorino-operator-monitor only scrapes /metrics (controller-runtime).
     # This additional ServiceMonitor scrapes /server-metrics for auth evaluation metrics
     # (auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, etc.)
-    if ! kubectl get service -n kuadrant-system -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
-        echo "   ⚠️  Authorino service not found - skipping Authorino server-metrics"
-    elif kuadrant_already_scrapes "/server-metrics"; then
+    # Verify Authorino service exists in the configured namespace
+    if [ "$(kubectl get service -n "$AUTHORINO_NAMESPACE" -l authorino-resource=authorino,control-plane=controller-manager --no-headers 2>/dev/null | wc -l)" -eq 0 ]; then
+        echo "   ⚠️  Authorino service not found in $AUTHORINO_NAMESPACE - skipping Authorino server-metrics"
+    elif kuadrant_already_scrapes "/server-metrics" "$AUTHORINO_NAMESPACE"; then
         echo "   ℹ️  Kuadrant already scrapes Authorino /server-metrics - skipping MaaS ServiceMonitor (no duplicates)"
     else
-        kubectl apply -f "$BASE_OBSERVABILITY_DIR/authorino-server-metrics-servicemonitor.yaml"
+        # Apply ServiceMonitor with namespace substitution
+        yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" \
+            "$BASE_OBSERVABILITY_DIR/authorino-server-metrics-servicemonitor.yaml" | kubectl apply -f -
         echo "   ✅ Authorino /server-metrics ServiceMonitor deployed"
     fi
 else
     echo "   ⚠️  Base observability directory not found - TelemetryPolicy may be missing!"
+fi
+
+# Deploy OIDC PrometheusRule (for JWKS/authentication failure alerting)
+# This must be deployed to the namespace where Authorino runs
+OIDC_RULE_FILE="$BASE_OBSERVABILITY_DIR/authorino-maas-oidc-prometheusrule.yaml"
+if [ -f "$OIDC_RULE_FILE" ]; then
+    # Use yq to update the namespace in the PrometheusRule and apply
+    yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" "$OIDC_RULE_FILE" | kubectl apply -f -
+    echo "   ✅ OIDC PrometheusRule deployed (namespace: $AUTHORINO_NAMESPACE)"
 fi
 
 # Deploy Istio Gateway metrics (if gateway exists)
@@ -226,6 +254,11 @@ echo "   Limitador: authorized_hits, authorized_calls, limited_calls, limitador_
 echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status"
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:kv_cache_usage_perc"
+echo ""
+
+echo "🚨 Alerting configured:"
+echo "   MaaSAuthorinoOIDCAuthenticationHighFailureRate - OIDC authentication denial rate > 10%"
+echo "   MaaSAuthorinoOIDCAuthenticationHighLatency - OIDC authentication P95 latency > 2s"
 echo ""
 
 echo "💡 To install MaaS Grafana dashboards (discovers Grafana cluster-wide, warn-only):"

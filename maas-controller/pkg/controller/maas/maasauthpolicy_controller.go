@@ -83,6 +83,7 @@ type MaaSAuthPolicyReconciler struct {
 type oidcConfig struct {
 	IssuerURL string
 	ClientID  string
+	TTL       int
 }
 
 func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
@@ -181,13 +182,25 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 		return nil
 	}
 
+	// Extract TTL (optional, defaults to 300 seconds per CRD default)
+	ttl, found, err := unstructured.NestedInt64(oidcSpec, "ttl")
+	if err != nil {
+		log.Info("Tenant externalOIDC.ttl has invalid type, using default",
+			"error", err, "default", 300)
+		ttl = 300
+	} else if !found || ttl <= 0 {
+		ttl = 300 // Default TTL per CRD kubebuilder default
+	}
+
 	log.Info("OIDC configuration loaded from Tenant CR",
 		"issuerUrl", issuerURL,
-		"clientId", clientID)
+		"clientId", clientID,
+		"ttl", ttl)
 
 	return &oidcConfig{
 		IssuerURL: issuerURL,
 		ClientID:  clientID,
+		TTL:       int(ttl),
 	}
 }
 
@@ -604,11 +617,13 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 				return nil, errors.New("failed to convert authentication rules to map[string]any")
 			}
 
-			// Build JWT config with issuer URL and audience (both required)
-			// The JWT's aud claim must match the OIDC client ID for security
+			// Build JWT config with issuer URL, audiences, and JWKS cache TTL
+			// - audiences: validates the JWT aud claim matches the configured clientId
+			// - ttl: configures how long Authorino caches JWKS keys (supports IdP outages)
 			jwtConfig := map[string]any{
 				"issuerUrl": oidcConfig.IssuerURL,
 				"audiences": []any{oidcConfig.ClientID},
+				"ttl":       oidcConfig.TTL,
 			}
 
 			authenticationRules["oidc-identities"] = map[string]any{
