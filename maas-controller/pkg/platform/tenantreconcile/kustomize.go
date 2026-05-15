@@ -185,10 +185,12 @@ func DefaultManifestPath() string {
 	return "../maas-api/deploy/overlays/odh"
 }
 
-// EnsureTenantGatewayDefaults applies the same default gateway ref as ODH when unset.
-func EnsureTenantGatewayDefaults(t *maasv1alpha1.Tenant) {
+// EnsureTenantGatewayDefaults populates the Tenant's gatewayRef from the
+// resolved flag values when neither field is set. The caller (main.go bootstrap)
+// supplies the gateway name and namespace so there is a single source of truth.
+func EnsureTenantGatewayDefaults(t *maasv1alpha1.Tenant, gatewayName, gatewayNamespace string) {
 	if t.Spec.GatewayRef.Namespace == "" && t.Spec.GatewayRef.Name == "" {
-		t.Spec.GatewayRef.Namespace = DefaultGatewayNamespace
-		t.Spec.GatewayRef.Name = DefaultGatewayName
+		t.Spec.GatewayRef.Namespace = gatewayNamespace
+		t.Spec.GatewayRef.Name = gatewayName
 	}
 }

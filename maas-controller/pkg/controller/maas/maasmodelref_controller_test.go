@@ -97,7 +97,7 @@ func newLLMISvc(name, ns string, readyStatus ...corev1.ConditionStatus) *kservev
 
 // newLLMISvcRoute is a helper function to create a HTTPRoute resource.
 func newLLMISvcRoute(llmisvcName, ns string) *gatewayapiv1.HTTPRoute {
-	gwNS := gatewayapiv1.Namespace(defaultGatewayNamespace)
+	gwNS := gatewayapiv1.Namespace("openshift-ingress")
 	return &gatewayapiv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      llmisvcName + "-route",
@@ -112,7 +112,7 @@ func newLLMISvcRoute(llmisvcName, ns string) *gatewayapiv1.HTTPRoute {
 			Hostnames: []gatewayapiv1.Hostname{"model.example.com"},
 			CommonRouteSpec: gatewayapiv1.CommonRouteSpec{
 				ParentRefs: []gatewayapiv1.ParentReference{{
-					Name:      gatewayapiv1.ObjectName(defaultGatewayName),
+					Name:      gatewayapiv1.ObjectName("maas-default-gateway"),
 					Namespace: &gwNS,
 				}},
 			},
@@ -164,8 +164,8 @@ func assertCondition(t *testing.T, conditions []metav1.Condition, condType strin
 func TestMaaSModelRefReconciler_gatewayName(t *testing.T) {
 	t.Run("default_when_empty", func(t *testing.T) {
 		r := &MaaSModelRefReconciler{}
-		if got := r.gatewayName(); got != defaultGatewayName {
-			t.Errorf("gatewayName() = %q, want %q", got, defaultGatewayName)
+		if got := r.gatewayName(); got != "maas-default-gateway" {
+			t.Errorf("gatewayName() = %q, want %q", got, "maas-default-gateway")
 		}
 	})
 	t.Run("custom_when_set", func(t *testing.T) {
@@ -250,8 +250,8 @@ func TestReconcile_EndpointOverride(t *testing.T) {
 func TestMaaSModelRefReconciler_gatewayNamespace(t *testing.T) {
 	t.Run("default_when_empty", func(t *testing.T) {
 		r := &MaaSModelRefReconciler{}
-		if got := r.gatewayNamespace(); got != defaultGatewayNamespace {
-			t.Errorf("gatewayNamespace() = %q, want %q", got, defaultGatewayNamespace)
+		if got := r.gatewayNamespace(); got != "openshift-ingress" {
+			t.Errorf("gatewayNamespace() = %q, want %q", got, "openshift-ingress")
 		}
 	})
 	t.Run("custom_when_set", func(t *testing.T) {

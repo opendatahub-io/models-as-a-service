@@ -32,9 +32,6 @@ const (
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
 
-	DefaultGatewayNamespace = "openshift-ingress"
-	DefaultGatewayName      = "maas-default-gateway"
-
 	GatewayDefaultAuthPolicyName               = "gateway-default-auth"
 	GatewayTokenRateLimitDefaultDenyPolicyName = "gateway-default-deny"
 	MaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
