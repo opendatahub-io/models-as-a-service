@@ -389,7 +389,10 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, controlle
 						Namespace: tenantNamespace,
 					},
 				}
-				tenantreconcile.EnsureTenantGatewayDefaults(t, gatewayName, gatewayNamespace)
+				if t.Spec.GatewayRef.Namespace == "" && t.Spec.GatewayRef.Name == "" {
+					t.Spec.GatewayRef.Namespace = gatewayNamespace
+					t.Spec.GatewayRef.Name = gatewayName
+				}
 				if err := c.Create(ctx, t); err != nil && !errors.IsAlreadyExists(err) {
 					log.Error(err, "failed to create default-tenant", "namespace", tenantNamespace)
 					return

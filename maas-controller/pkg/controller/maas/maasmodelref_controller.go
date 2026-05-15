@@ -46,7 +46,6 @@ import (
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
-const defaultClusterAudience = "https://kubernetes.default.svc"
 
 // MaaSModelRefReconciler reconciles a MaaSModelRef object
 type MaaSModelRefReconciler struct {
@@ -92,9 +91,6 @@ func modelRefNameIndexer(obj client.Object) []string {
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	if r.GatewayName == "" || r.GatewayNamespace == "" {
-		return ctrl.Result{}, errors.New("gatewayName and gatewayNamespace must be configured")
-	}
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSModelRef", req.NamespacedName)
 
 	model := &maasv1alpha1.MaaSModelRef{}

@@ -2,7 +2,6 @@ package externalmodel
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 
@@ -104,9 +103,6 @@ func getTLSInfo(extModel *maasv1alpha1.ExternalModel) (tls bool, port int32, err
 
 // Reconcile handles create/update/delete of ExternalModel CRs.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	if r.GatewayName == "" || r.GatewayNamespace == "" {
-		return ctrl.Result{}, errors.New("gatewayName and gatewayNamespace must be configured")
-	}
 	log.FromContext(ctx).Info("Reconciling ExternalModel", "namespace", req.Namespace, "name", req.Name)
 
 	extModel := &maasv1alpha1.ExternalModel{}

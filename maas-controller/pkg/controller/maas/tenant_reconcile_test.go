@@ -22,6 +22,11 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var (
+	testTenantGatewayName      = "maas-default-gateway"
+	testTenantGatewayNamespace = "openshift-ingress"
+)
+
 func tenantTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -56,8 +61,8 @@ func TestTenantReconcile_DeletionIsNoOp(t *testing.T) {
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: tenant.Name, Namespace: testNS}}
@@ -92,8 +97,8 @@ func TestTenantReconcile_NonSingletonNameIsNoOp(t *testing.T) {
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -129,8 +134,8 @@ func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -175,8 +180,8 @@ func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -231,8 +236,8 @@ func TestTenantReconcile_ManagementStateRemoved_ConfigTerminatingPatchesStatus(t
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -273,8 +278,8 @@ func TestTenantReconcile_ManagementStateUnmanagedSetsIdle(t *testing.T) {
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -315,8 +320,8 @@ func TestTenantReconcile_UnexpectedManagementStateSetsFailedPhase(t *testing.T) 
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -355,8 +360,8 @@ func TestTenantReconcile_ConfigMissingSkipsPlatform(t *testing.T) {
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -400,8 +405,8 @@ func TestTenantReconcile_ConfigEmptyUIDPatchesWaitingForConfigUID(t *testing.T) 
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -448,8 +453,8 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     testNS,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -477,8 +482,8 @@ func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {
 		Client:           cl,
 		Scheme:           s,
 		AppNamespace:     "models-as-a-service",
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
