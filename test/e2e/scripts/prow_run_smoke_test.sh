@@ -908,7 +908,11 @@ validate_deployment
 # Deletes Config CR, DataScienceCluster, and DSCInitialization, then verifies
 # that all MaaS-owned resources are garbage-collected.
 # ═══════════════════════════════════════════════════════════════════════════════
-print_header "Running Uninstall E2E Test"
-run_uninstall_test
+if [[ "${SKIP_DEPLOYMENT}" == "true" && "${RUN_UNINSTALL_TEST:-false}" != "true" ]]; then
+    echo "⏭️  Skipping uninstall test (set RUN_UNINSTALL_TEST=true to force it with SKIP_DEPLOYMENT=true)"
+else
+    print_header "Running Uninstall E2E Test"
+    run_uninstall_test
+fi
 
 echo "🎉 Deployment and uninstall tests completed successfully!"

@@ -34,12 +34,17 @@ Prerequisites:
 import json
 import logging
 import os
+import shutil
 import subprocess
 import time
 
 import pytest
 
 log = logging.getLogger(__name__)
+
+OC_BIN = shutil.which("oc")
+if not OC_BIN:
+    raise RuntimeError("Required binary 'oc' not found in PATH")
 
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 MAAS_SUBSCRIPTION_NAMESPACE = os.environ.get(
@@ -66,7 +71,7 @@ MAAS_WORKLOAD_LABELS = [
 
 def _oc(*args, timeout=60, check=False):
     result = subprocess.run(
-        ["oc", *args],
+        [OC_BIN, *args],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -96,16 +101,17 @@ def _list_resources(kind, namespace=None, label=None):
         cmd += ["-l", label]
     result = _oc(*cmd)
     if result.returncode != 0:
-        if "the server doesn't have a resource type" in result.stderr.lower():
+        stderr = result.stderr.lower()
+        if "the server doesn't have a resource type" in stderr or "not found" in stderr:
             return []
-        if "not found" in result.stderr.lower():
-            return []
-        return []
+        raise RuntimeError(
+            f"oc {' '.join(cmd)} failed (rc={result.returncode}): {result.stderr.strip()}"
+        )
     try:
         data = json.loads(result.stdout)
         return data.get("items", [])
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid JSON from oc {' '.join(cmd)}") from exc
 
 
 def _delete_resource(kind, name, namespace=None, timeout_sec=120):
