@@ -1,0 +1,328 @@
+# PoC: Gateway-level AuthPolicy for MaaS inference
+#
+# Replaces N per-model HTTPRoute-scoped AuthPolicies with one Gateway-scoped policy.
+# Model identity is derived from the request path: /<namespace>/<model-name>/...
+#
+# Two-block strategy:
+#   overrides: tenant hostname isolation — cannot be bypassed by per-route policies
+#   defaults:  full auth rules (API key, subscription, OPA) — per-route policies can specialize
+#
+# Prerequisites:
+#   - Substitute MAAS_API_NAMESPACE with actual maas-api namespace (e.g. maas-api)
+#   - Substitute CLUSTER_AUDIENCE with your cluster OIDC audience
+#   - Substitute METADATA_CACHE_TTL / AUTHZ_CACHE_TTL (seconds, e.g. 300 / 300)
+#   - Apply AFTER removing per-model maas-auth-<model> AuthPolicies for tested models
+#
+# To apply:
+#   kubectl apply -f 01-gateway-authpolicy.yaml
+#
+# To revert:
+#   kubectl delete -f 01-gateway-authpolicy.yaml
+#   kubectl apply -f <original per-model AuthPolicy>
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: maas-gateway-auth-poc
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/managed-by: maas-controller
+    app.kubernetes.io/part-of: maas-gateway-auth-poc
+    app.kubernetes.io/component: gateway-auth
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # OVERRIDES — enforced on ALL routes, cannot be bypassed by per-route policies.
+  # Used for tenant isolation: validate that the request hostname belongs to the
+  # expected tenant for this gateway. Solves the "Coke key on Pepsi gateway" problem.
+  # ─────────────────────────────────────────────────────────────────────────────
+  overrides:
+    when:
+      # Only enforce tenant check on inference paths, not /maas-api or /v1/models
+      - predicate: '!request.path.startsWith("/maas-api") && !request.path.startsWith("/v1/models")'
+    rules:
+      authorization:
+        tenant-gateway-isolation:
+          priority: 0
+          metrics: false
+          opa:
+            rego: |
+              # Tenant hostname isolation.
+              # Each Gateway listener is bound to a specific tenant hostname
+              # (e.g. coke.best.com, pepsi.worst.com). A valid API key from
+              # tenant A must be rejected if it arrives on tenant B's gateway.
+              #
+              # PoC Phase 1: validate that the API key's tenant matches the
+              # gateway hostname by calling maas-api tenant lookup.
+              #
+              # PoC stub: always allow (replace with real lookup below).
+              # Real implementation: call /internal/v1/tenants/validate with
+              # { "hostname": request.host, "apiKey": ... } and check response.
+              allow {
+                # STUB — replace with:
+                # input.auth.metadata.tenantValidation.allowed == true
+                true
+              }
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DEFAULTS — apply to all routes unless a more specific per-route policy exists.
+  # Contains full MaaS auth: API key validation, subscription check, OPA rules.
+  # Model identity is derived from path: /<namespace>/<model-name>/...
+  # ─────────────────────────────────────────────────────────────────────────────
+  defaults:
+    rules:
+
+      # ── Authentication ───────────────────────────────────────────────────────
+      authentication:
+        api-keys:
+          priority: 0
+          metrics: false
+          when:
+            - selector: request.headers.authorization
+              operator: matches
+              value: "^Bearer sk-oai-.*"
+          plain:
+            selector: request.headers.authorization
+
+        kubernetes-tokens:
+          priority: 1
+          metrics: false
+          # K8s token auth — only for /v1/models (read-only model listing)
+          when:
+            - predicate: 'request.path.matches(".*/v1/models$")'
+            - selector: request.headers.authorization
+              operator: neq
+              value: ""
+          kubernetesTokenReview:
+            audiences:
+              - CLUSTER_AUDIENCE  # e.g. https://kubernetes.default.svc
+
+      # ── External metadata ────────────────────────────────────────────────────
+      metadata:
+        apiKeyValidation:
+          priority: 0
+          metrics: false
+          when:
+            - selector: request.headers.authorization
+              operator: matches
+              value: "^Bearer sk-oai-.*"
+          http:
+            url: https://maas-api.MAAS_API_NAMESPACE.svc.cluster.local:8443/internal/v1/api-keys/validate
+            contentType: application/json
+            method: POST
+            body:
+              expression: '{"key": request.headers.authorization.replace("Bearer ", "")}'
+          cache:
+            key:
+              selector: 'request.headers.authorization.replace("Bearer ", "")'
+            ttl: METADATA_CACHE_TTL
+
+        subscription-info:
+          priority: 1
+          metrics: false
+          http:
+            url: https://maas-api.MAAS_API_NAMESPACE.svc.cluster.local:8443/internal/v1/subscriptions/select
+            contentType: application/json
+            method: POST
+            body:
+              # CEL extracts namespace/model-name from path /<namespace>/<model-name>/...
+              # For body-based routes (/v1/chat/completions), model comes from
+              # X-Gateway-Model-Name header (set by Kuadrant WASM body-peek / Approach C).
+              # Until Approach C lands, body routes fall back to path extraction which
+              # will produce an incorrect model — this is the expected PoC limitation.
+              expression: |
+                {
+                  "groups": (has(auth.metadata) && has(auth.metadata.apiKeyValidation))
+                    ? auth.metadata.apiKeyValidation.groups
+                    : (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups),
+                  "username": (has(auth.metadata) && has(auth.metadata.apiKeyValidation))
+                    ? auth.metadata.apiKeyValidation.username
+                    : (has(auth.identity.preferred_username)
+                      ? auth.identity.preferred_username
+                      : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)),
+                  "requestedSubscription": (has(auth.metadata) && has(auth.metadata.apiKeyValidation))
+                    ? auth.metadata.apiKeyValidation.subscription
+                    : ("x-maas-subscription" in request.headers
+                      ? request.headers["x-maas-subscription"] : ""),
+                  "requestedModel": "x-gateway-model-name" in request.headers
+                    ? request.headers["x-gateway-model-name"]
+                    : request.path.split("/").filter(x, x != "")[0] + "/" + request.path.split("/").filter(x, x != "")[1]
+                }
+          cache:
+            key:
+              # Cache key: userId|groups|subscription|model
+              # Model derived from path or X-Gateway-Model-Name header
+              selector: >-
+                ((has(auth.metadata) && has(auth.metadata.apiKeyValidation))
+                  ? auth.metadata.apiKeyValidation.userId
+                  : (has(auth.identity.preferred_username) ? auth.identity.preferred_username
+                    : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)))
+                + "|" +
+                ((has(auth.metadata) && has(auth.metadata.apiKeyValidation))
+                  ? auth.metadata.apiKeyValidation.groups.join(",")
+                  : (has(auth.identity.groups) ? auth.identity.groups.join(",") : auth.identity.user.groups.join(",")))
+                + "|" +
+                ((has(auth.metadata) && has(auth.metadata.apiKeyValidation))
+                  ? auth.metadata.apiKeyValidation.subscription
+                  : ("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : ""))
+                + "|" +
+                ("x-gateway-model-name" in request.headers
+                  ? request.headers["x-gateway-model-name"]
+                  : request.path.split("/").filter(x, x != "")[0] + "/" + request.path.split("/").filter(x, x != "")[1])
+            ttl: METADATA_CACHE_TTL
+
+      # ── Authorization ────────────────────────────────────────────────────────
+      authorization:
+        auth-valid:
+          priority: 0
+          metrics: false
+          opa:
+            rego: |
+              # API key authentication: validate the key
+              allow {
+                object.get(input.auth.metadata, "apiKeyValidation", {})
+                input.auth.metadata.apiKeyValidation.valid == true
+              }
+              # Kubernetes token authentication: check identity exists
+              allow {
+                object.get(input.auth.identity, "user", {}).username != ""
+              }
+              # OIDC token authentication: check JWT subject exists
+              allow {
+                object.get(input.auth.identity, "sub", "") != ""
+              }
+          cache:
+            key:
+              selector: >-
+                (has(auth.metadata.apiKeyValidation)
+                  ? "api-key|" + request.headers.authorization.replace("Bearer ", "")
+                  : (has(auth.identity.sub) ? "oidc|" + auth.identity.sub
+                    : "k8s-token|" + auth.identity.user.username))
+                + "|" +
+                ("x-gateway-model-name" in request.headers
+                  ? request.headers["x-gateway-model-name"]
+                  : request.path.split("/").filter(x, x != "")[0] + "/" + request.path.split("/").filter(x, x != "")[1])
+            ttl: AUTHZ_CACHE_TTL
+
+        subscription-valid:
+          priority: 0
+          metrics: false
+          opa:
+            rego: |
+              allow {
+                # Subscription name must be present (selector succeeded)
+                object.get(input.auth.metadata["subscription-info"], "name", "") != ""
+                # Error field must be empty
+                object.get(input.auth.metadata["subscription-info"], "error", "") == ""
+                # Allowlist: phase must be Active or Degraded
+                phase := object.get(input.auth.metadata["subscription-info"], "phase", "")
+                any([phase == "Active", phase == "Degraded"])
+                # Subscription must not be deleting
+                object.get(input.auth.metadata["subscription-info"], "deletionTimestamp", "") == ""
+              }
+          cache:
+            key:
+              selector: >-
+                ((has(auth.metadata) && has(auth.metadata.apiKeyValidation))
+                  ? auth.metadata.apiKeyValidation.userId
+                  : (has(auth.identity.preferred_username) ? auth.identity.preferred_username
+                    : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)))
+                + "|" +
+                ((has(auth.metadata) && has(auth.metadata.apiKeyValidation))
+                  ? auth.metadata.apiKeyValidation.groups.join(",")
+                  : (has(auth.identity.groups) ? auth.identity.groups.join(",") : auth.identity.user.groups.join(",")))
+                + "|" +
+                ("x-gateway-model-name" in request.headers
+                  ? request.headers["x-gateway-model-name"]
+                  : request.path.split("/").filter(x, x != "")[0] + "/" + request.path.split("/").filter(x, x != "")[1])
+            ttl: AUTHZ_CACHE_TTL
+
+        # NOTE: require-group-membership is intentionally omitted from the Gateway policy.
+        # Per-model group/user allowlists are enforced via a lightweight per-route AuthPolicy
+        # (see 02-per-model-group-policy.yaml). This separation keeps the Gateway policy
+        # model-agnostic while preserving per-model authorization granularity.
+
+      # ── Response ─────────────────────────────────────────────────────────────
+      response:
+        unauthenticated:
+          code: 401
+          message:
+            value: "Authentication required"
+        unauthorized:
+          code: 403
+          body:
+            expression: >-
+              has(auth.metadata["subscription-info"].message)
+                ? auth.metadata["subscription-info"].message
+                : "Access denied"
+          headers:
+            x-ext-auth-reason:
+              expression: >-
+                has(auth.metadata["subscription-info"].error)
+                  ? auth.metadata["subscription-info"].error
+                  : "unauthorized"
+            content-type:
+              value: "text/plain"
+        success:
+          headers:
+            # Strip Authorization header — prevent credential exfiltration to model backends
+            Authorization:
+              key: authorization
+              priority: 0
+              metrics: false
+              plain:
+                value: ""
+            # Inject subscription bound to API key (for TRLP and telemetry)
+            X-MaaS-Subscription:
+              priority: 0
+              metrics: false
+              plain:
+                expression: >-
+                  (has(auth.metadata) && has(auth.metadata.apiKeyValidation))
+                    ? auth.metadata.apiKeyValidation.subscription : ""
+          filters:
+            identity:
+              priority: 0
+              metrics: true
+              json:
+                properties:
+                  groups:
+                    expression: "auth.metadata.apiKeyValidation.groups"
+                  groups_str:
+                    expression: 'auth.metadata.apiKeyValidation.groups.join(",")'
+                  userid:
+                    selector: "auth.metadata.apiKeyValidation.username"
+                  keyId:
+                    selector: "auth.metadata.apiKeyValidation.keyId"
+                  selected_subscription:
+                    expression: >-
+                      has(auth.metadata["subscription-info"].name)
+                        ? auth.metadata["subscription-info"].name : ""
+                  # Model-scoped subscription key: namespace/name@modelNamespace/modelName
+                  # Used by TRLP for per-model-per-subscription rate limit isolation
+                  selected_subscription_key:
+                    expression: >-
+                      has(auth.metadata["subscription-info"].namespace) &&
+                      has(auth.metadata["subscription-info"].name)
+                        ? auth.metadata["subscription-info"].namespace + "/" +
+                          auth.metadata["subscription-info"].name + "@" +
+                          ("x-gateway-model-name" in request.headers
+                            ? request.headers["x-gateway-model-name"]
+                            : request.path.split("/").filter(x, x != "")[0] + "/" +
+                              request.path.split("/").filter(x, x != "")[1])
+                        : ""
+                  subscription_info:
+                    expression: >-
+                      has(auth.metadata["subscription-info"].name)
+                        ? auth.metadata["subscription-info"] : {}
+                  subscription_error:
+                    expression: >-
+                      has(auth.metadata["subscription-info"].error)
+                        ? auth.metadata["subscription-info"].error : ""
+                  subscription_error_message:
+                    expression: >-
+                      has(auth.metadata["subscription-info"].message)
+                        ? auth.metadata["subscription-info"].message : ""

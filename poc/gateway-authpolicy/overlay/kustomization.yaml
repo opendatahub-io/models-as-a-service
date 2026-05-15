@@ -1,0 +1,120 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+resources:
+  - ../01-gateway-authpolicy.yaml
+
+# ─── ConfigMap from params.env ────────────────────────────────────────────────
+configMapGenerator:
+  - name: poc-parameters
+    envs:
+      - params.env
+    options:
+      disableNameSuffixHash: true
+
+# ─── Replacements ─────────────────────────────────────────────────────────────
+# Replaces placeholder strings in 01-gateway-authpolicy.yaml with values from
+# the poc-parameters ConfigMap. Mirrors the pattern used in shared-patches.
+
+replacements:
+
+  # ── Gateway namespace: where the AuthPolicy is created ──────────────────────
+  - source:
+      kind: ConfigMap
+      name: poc-parameters
+      fieldPath: data.gateway-namespace
+    targets:
+      - select:
+          kind: AuthPolicy
+          name: maas-gateway-auth-poc
+        fieldPaths:
+          - metadata.namespace
+
+  # ── Gateway name: targetRef ─────────────────────────────────────────────────
+  - source:
+      kind: ConfigMap
+      name: poc-parameters
+      fieldPath: data.gateway-name
+    targets:
+      - select:
+          kind: AuthPolicy
+          name: maas-gateway-auth-poc
+        fieldPaths:
+          - spec.targetRef.name
+
+  # ── maas-api namespace: API key validation URL ───────────────────────────────
+  # Replaces segment [1] in:
+  #   https://maas-api.MAAS_API_NAMESPACE.svc.cluster.local:8443/.../api-keys/validate
+  - source:
+      kind: ConfigMap
+      name: poc-parameters
+      fieldPath: data.app-namespace
+    targets:
+      - select:
+          kind: AuthPolicy
+          name: maas-gateway-auth-poc
+        fieldPaths:
+          - spec.defaults.rules.metadata.apiKeyValidation.http.url
+        options:
+          delimiter: "."
+          index: 1
+
+  # ── maas-api namespace: subscription selector URL ────────────────────────────
+  # Replaces segment [1] in:
+  #   https://maas-api.MAAS_API_NAMESPACE.svc.cluster.local:8443/.../subscriptions/select
+  - source:
+      kind: ConfigMap
+      name: poc-parameters
+      fieldPath: data.app-namespace
+    targets:
+      - select:
+          kind: AuthPolicy
+          name: maas-gateway-auth-poc
+        fieldPaths:
+          - spec.defaults.rules.metadata.subscription-info.http.url
+        options:
+          delimiter: "."
+          index: 1
+
+  # ── Cluster audience: kubernetesTokenReview ──────────────────────────────────
+  - source:
+      kind: ConfigMap
+      name: poc-parameters
+      fieldPath: data.cluster-audience
+    targets:
+      - select:
+          kind: AuthPolicy
+          name: maas-gateway-auth-poc
+        fieldPaths:
+          - spec.defaults.rules.authentication.kubernetes-tokens.kubernetesTokenReview.audiences.0
+
+# ─── Patches (integer fields — TTLs) ──────────────────────────────────────────
+# Kustomize replacements inject strings; TTL fields are integers in the Kuadrant
+# API. Use strategic merge patches to set them as typed integers instead.
+# Update the values below to match metadata-cache-ttl / authz-cache-ttl in params.env.
+
+patches:
+  - patch: |-
+      apiVersion: kuadrant.io/v1
+      kind: AuthPolicy
+      metadata:
+        name: maas-gateway-auth-poc
+        namespace: openshift-ingress
+      spec:
+        defaults:
+          rules:
+            metadata:
+              apiKeyValidation:
+                cache:
+                  ttl: 300          # ← set to metadata-cache-ttl from params.env
+              subscription-info:
+                cache:
+                  ttl: 300          # ← set to metadata-cache-ttl from params.env
+            authorization:
+              auth-valid:
+                cache:
+                  ttl: 300          # ← set to authz-cache-ttl from params.env
+              subscription-valid:
+                cache:
+                  ttl: 300          # ← set to authz-cache-ttl from params.env
