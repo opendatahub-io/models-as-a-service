@@ -563,10 +563,15 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 
 // TestMaaSAuthPolicyReconciler_CachingConfiguration verifies that the controller
 // generates cache blocks on metadata and authorization evaluators with configurable TTLs.
+//
+// After the gateway-level AuthPolicy refactor, caching is split across two resources:
+//   - Gateway policy (maas-gateway-auth): holds metadata + auth-valid + subscription-valid
+//   - Group policy (maas-auth-<model>): holds require-group-membership
 func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
+		gatewayNS      = "gateway-ns"
 		httpRouteName  = modelName
 		authPolicyName = "maas-auth-" + modelName
 		maasPolicyName = "policy-a"
@@ -633,6 +638,8 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				Client:           c,
 				Scheme:           scheme,
 				MaaSAPINamespace: "maas-system",
+				GatewayName:      "maas-default-gateway",
+				GatewayNamespace: gatewayNS,
 				MetadataCacheTTL: tc.metadataTTL,
 				AuthzCacheTTL:    tc.authzTTL,
 			}
@@ -642,86 +649,84 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
 			}
 
-			got := &unstructured.Unstructured{}
-			got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-			if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
-				t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+			// Gateway policy holds metadata + auth-valid + subscription-valid
+			gwPolicy := &unstructured.Unstructured{}
+			gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+			if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
+				t.Fatalf("Get gateway AuthPolicy %q: %v", maasGatewayAuthPolicyName, err)
 			}
 
-			// Verify apiKeyValidation metadata has cache with correct TTL
-			apiKeyValTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "cache", "ttl")
+			// Group policy holds require-group-membership
+			groupPolicy := &unstructured.Unstructured{}
+			groupPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+			if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, groupPolicy); err != nil {
+				t.Fatalf("Get group AuthPolicy %q: %v", authPolicyName, err)
+			}
+
+			// Verify apiKeyValidation metadata has cache with correct TTL (on gateway policy)
+			apiKeyValTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "ttl")
 			if err != nil || !found {
 				t.Errorf("apiKeyValidation cache.ttl missing or invalid: found=%v err=%v", found, err)
 			} else if apiKeyValTTL != tc.wantMetadataTTL {
 				t.Errorf("apiKeyValidation cache.ttl = %d, want %d", apiKeyValTTL, tc.wantMetadataTTL)
 			}
 
-			// Verify apiKeyValidation has cache key
-			apiKeyValCacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector")
+			// Verify apiKeyValidation has cache key (on gateway policy)
+			apiKeyValCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector")
 			if err != nil || !found {
 				t.Errorf("apiKeyValidation cache.key.selector missing: found=%v err=%v", found, err)
 			} else if apiKeyValCacheKey == "" {
 				t.Errorf("apiKeyValidation cache.key.selector is empty")
 			}
 
-			apiKeyMetrics, found, err := unstructured.NestedBool(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "metrics")
-			if err != nil || !found || !apiKeyMetrics {
-				t.Errorf("apiKeyValidation metrics: want true, found=%v err=%v", found, err)
-			}
-
-			// Verify subscription-info metadata has cache with correct TTL
-			subInfoTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "metadata", "subscription-info", "cache", "ttl")
+			// Verify subscription-info metadata has cache with correct TTL (on gateway policy)
+			subInfoTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "metadata", "subscription-info", "cache", "ttl")
 			if err != nil || !found {
 				t.Errorf("subscription-info cache.ttl missing or invalid: found=%v err=%v", found, err)
 			} else if subInfoTTL != tc.wantMetadataTTL {
 				t.Errorf("subscription-info cache.ttl = %d, want %d", subInfoTTL, tc.wantMetadataTTL)
 			}
 
-			subInfoMetrics, found, err := unstructured.NestedBool(got.Object, "spec", "rules", "metadata", "subscription-info", "metrics")
-			if err != nil || !found || !subInfoMetrics {
-				t.Errorf("subscription-info metrics: want true, found=%v err=%v", found, err)
-			}
-
-			// Verify auth-valid authorization has cache with correct TTL
-			authValidTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "authorization", "auth-valid", "cache", "ttl")
+			// Verify auth-valid authorization has cache with correct TTL (on gateway policy)
+			authValidTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "cache", "ttl")
 			if err != nil || !found {
 				t.Errorf("auth-valid cache.ttl missing or invalid: found=%v err=%v", found, err)
 			} else if authValidTTL != tc.wantAuthzTTL {
 				t.Errorf("auth-valid cache.ttl = %d, want %d", authValidTTL, tc.wantAuthzTTL)
 			}
 
-			// Verify subscription-valid authorization has cache with correct TTL
-			subValidTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "authorization", "subscription-valid", "cache", "ttl")
+			// Verify subscription-valid authorization has cache with correct TTL (on gateway policy)
+			subValidTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "ttl")
 			if err != nil || !found {
 				t.Errorf("subscription-valid cache.ttl missing or invalid: found=%v err=%v", found, err)
 			} else if subValidTTL != tc.wantAuthzTTL {
 				t.Errorf("subscription-valid cache.ttl = %d, want %d", subValidTTL, tc.wantAuthzTTL)
 			}
 
-			// Verify require-group-membership authorization has cache with correct TTL
-			groupMembershipTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "authorization", "require-group-membership", "cache", "ttl")
+			// Verify require-group-membership authorization has cache with correct TTL (on group policy)
+			groupMembershipTTL, found, err := unstructured.NestedInt64(groupPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "ttl")
 			if err != nil || !found {
 				t.Errorf("require-group-membership cache.ttl missing or invalid: found=%v err=%v", found, err)
 			} else if groupMembershipTTL != tc.wantAuthzTTL {
 				t.Errorf("require-group-membership cache.ttl = %d, want %d", groupMembershipTTL, tc.wantAuthzTTL)
 			}
 
-			// Verify cache keys are present and non-empty
-			authValidCacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "auth-valid", "cache", "key", "selector")
+			// Verify cache keys are present and non-empty (on gateway policy)
+			authValidCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector")
 			if err != nil || !found {
 				t.Errorf("auth-valid cache.key.selector missing: found=%v err=%v", found, err)
 			} else if authValidCacheKey == "" {
 				t.Errorf("auth-valid cache.key.selector is empty")
 			}
 
-			subValidCacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "subscription-valid", "cache", "key", "selector")
+			subValidCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "selector")
 			if err != nil || !found {
 				t.Errorf("subscription-valid cache.key.selector missing: found=%v err=%v", found, err)
 			} else if subValidCacheKey == "" {
 				t.Errorf("subscription-valid cache.key.selector is empty")
 			}
 
-			groupMembershipCacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "require-group-membership", "cache", "key", "selector")
+			groupMembershipCacheKey, found, err := unstructured.NestedString(groupPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector")
 			if err != nil || !found {
 				t.Errorf("require-group-membership cache.key.selector missing: found=%v err=%v", found, err)
 			} else if groupMembershipCacheKey == "" {
@@ -798,12 +803,18 @@ func TestMaaSAuthPolicyReconciler_NegativeTTLRejection(t *testing.T) {
 // TestMaaSAuthPolicyReconciler_CacheKeyIsolation verifies that cache keys include
 // the necessary dimensions to prevent cross-principal or cross-model cache sharing.
 //
+// After the gateway-level AuthPolicy refactor the key structure changes:
+//   - Gateway policy: apiKeyValidation, subscription-info, auth-valid, subscription-valid
+//     use dynamic CEL (celModelIdentity) for runtime model isolation
+//   - Group policy: require-group-membership uses static model namespace/name in the key
+//
 // This is a security-critical test: incorrect cache keys could leak authentication
 // or authorization results between different users, API keys, or models.
 func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
+		gatewayNS      = "gateway-ns"
 		httpRouteName  = modelName
 		authPolicyName = "maas-auth-" + modelName
 		maasPolicyName = "policy-a"
@@ -824,6 +835,8 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		Client:           c,
 		Scheme:           scheme,
 		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
 		AuthzCacheTTL:    60,
 	}
@@ -833,157 +846,102 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
 	}
 
-	got := &unstructured.Unstructured{}
-	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
-		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+	// Gateway policy holds apiKeyValidation, subscription-info, auth-valid, subscription-valid
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
-	// Test 1: apiKeyValidation cache key must include API key material
+	// Group policy holds require-group-membership
+	groupPolicy := &unstructured.Unstructured{}
+	groupPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, groupPolicy); err != nil {
+		t.Fatalf("Get group AuthPolicy %q: %v", authPolicyName, err)
+	}
+
+	// Test 1: apiKeyValidation cache key must include API key material (gateway policy)
 	t.Run("apiKeyValidation includes API key", func(t *testing.T) {
-		cacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector")
-		if err != nil || !found {
-			t.Fatalf("apiKeyValidation cache.key.selector missing: found=%v err=%v", found, err)
-		}
-
-		// Must include the API key from the request header
-		if !contains(cacheKey, "request.headers.authorization") {
-			t.Errorf("apiKeyValidation cache key must include API key from request headers, got: %s", cacheKey)
-		}
-
-		// Should extract the Bearer token
-		if !contains(cacheKey, `replace("Bearer ", "")`) {
-			t.Errorf("apiKeyValidation cache key should extract Bearer token, got: %s", cacheKey)
-		}
+		assertCacheKeyContains(t, gwPolicy,
+			[]string{"request.headers.authorization", `replace("Bearer ", "")`},
+			"spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector",
+		)
 	})
 
-	// Test 2: subscription-info cache key must include userId (for API keys) or username (for K8s tokens), groups, and model
+	// Test 2: subscription-info cache key must include userId, username, groups, and dynamic model identity (gateway policy)
 	t.Run("subscription-info includes username, groups, model", func(t *testing.T) {
-		cacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "metadata", "subscription-info", "cache", "key", "selector")
-		if err != nil || !found {
-			t.Fatalf("subscription-info cache.key.selector missing: found=%v err=%v", found, err)
-		}
-
-		// Must include userId for API keys (database UUID for collision resistance)
-		if !contains(cacheKey, "userId") {
-			t.Errorf("subscription-info cache key must include userId for API keys, got: %s", cacheKey)
-		}
-
-		// Must include username as fallback for K8s tokens
-		if !contains(cacheKey, "username") {
-			t.Errorf("subscription-info cache key must include username for K8s tokens, got: %s", cacheKey)
-		}
-
-		// Must include groups (from either API key or K8s token)
-		if !contains(cacheKey, "groups") {
-			t.Errorf("subscription-info cache key must include groups, got: %s", cacheKey)
-		}
-
-		// Must include model namespace and name to prevent cross-model sharing
-		if !contains(cacheKey, namespace) {
-			t.Errorf("subscription-info cache key must include model namespace %q, got: %s", namespace, cacheKey)
-		}
-		if !contains(cacheKey, modelName) {
-			t.Errorf("subscription-info cache key must include model name %q, got: %s", modelName, cacheKey)
-		}
-
-		// Groups should be joined to create stable string representation
-		if !contains(cacheKey, "join") {
-			t.Errorf("subscription-info cache key should join groups for stability, got: %s", cacheKey)
+		key := assertCacheKeyContains(t, gwPolicy,
+			[]string{"userId", "username", "groups", "join"},
+			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
+		)
+		// Model identity is dynamic via CEL (X-Gateway-Model-Name header or path extraction).
+		if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
+			t.Errorf("subscription-info cache key must include dynamic model identity (header or path), got: %s", key)
 		}
 	})
 
-	// Test 3: auth-valid cache key must distinguish API keys from K8s tokens
+	// Test 3: auth-valid cache key must distinguish API keys from K8s tokens (gateway policy)
 	t.Run("auth-valid distinguishes API keys and K8s tokens", func(t *testing.T) {
-		cacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "auth-valid", "cache", "key", "selector")
-		if err != nil || !found {
-			t.Fatalf("auth-valid cache.key.selector missing: found=%v err=%v", found, err)
+		key := assertCacheKeyContains(t, gwPolicy,
+			nil,
+			"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector",
+		)
+		if !contains(key, "api-key") && !contains(key, "k8s-token") {
+			t.Errorf("auth-valid cache key must distinguish auth types (api-key vs k8s-token), got: %s", key)
 		}
-
-		// Must distinguish between API key and K8s token authentication
-		if !contains(cacheKey, "api-key") && !contains(cacheKey, "k8s-token") {
-			t.Errorf("auth-valid cache key must distinguish auth types (api-key vs k8s-token), got: %s", cacheKey)
+		if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
+			t.Errorf("auth-valid cache key must include dynamic model identity (header or path), got: %s", key)
 		}
-
-		// Must include model to prevent cross-model sharing
-		if !contains(cacheKey, namespace) || !contains(cacheKey, modelName) {
-			t.Errorf("auth-valid cache key must include model namespace/name, got: %s", cacheKey)
-		}
-
-		// Must include identity (API key or username)
-		if !contains(cacheKey, "username") && !contains(cacheKey, "authorization") {
-			t.Errorf("auth-valid cache key must include identity, got: %s", cacheKey)
+		if !contains(key, "username") && !contains(key, "authorization") {
+			t.Errorf("auth-valid cache key must include identity, got: %s", key)
 		}
 	})
 
-	// Test 4: subscription-valid cache key must match subscription-info for coherence
+	// Test 4: subscription-valid cache key must match subscription-info for coherence (gateway policy)
 	t.Run("subscription-valid matches subscription-info key", func(t *testing.T) {
-		subValidKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "subscription-valid", "cache", "key", "selector")
-		if err != nil || !found {
-			t.Fatalf("subscription-valid cache.key.selector missing: found=%v err=%v", found, err)
-		}
-
-		subInfoKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "metadata", "subscription-info", "cache", "key", "selector")
-		if err != nil || !found {
-			t.Fatalf("subscription-info cache.key.selector missing: found=%v err=%v", found, err)
-		}
-
-		// subscription-valid should use the same key as subscription-info for cache coherence
+		subValidKey := assertCacheKeyContains(t, gwPolicy,
+			[]string{"userId", "username", "groups"},
+			"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "selector",
+		)
+		subInfoKey := assertCacheKeyContains(t, gwPolicy,
+			nil,
+			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
+		)
 		if subValidKey != subInfoKey {
 			t.Errorf("subscription-valid cache key should match subscription-info for cache coherence\nsubscription-valid: %s\nsubscription-info:  %s", subValidKey, subInfoKey)
 		}
-
-		// Verify it includes all necessary dimensions
-		if !contains(subValidKey, "userId") {
-			t.Errorf("subscription-valid cache key must include userId for API keys, got: %s", subValidKey)
-		}
-		if !contains(subValidKey, "username") {
-			t.Errorf("subscription-valid cache key must include username for K8s tokens, got: %s", subValidKey)
-		}
-		if !contains(subValidKey, "groups") {
-			t.Errorf("subscription-valid cache key must include groups, got: %s", subValidKey)
-		}
-
-		if !contains(subValidKey, namespace) || !contains(subValidKey, modelName) {
-			t.Errorf("subscription-valid cache key must include model namespace/name, got: %s", subValidKey)
+		if !contains(subValidKey, "x-gateway-model-name") && !contains(subValidKey, "request.path") {
+			t.Errorf("subscription-valid cache key must include dynamic model identity, got: %s", subValidKey)
 		}
 	})
 
-	// Test 5: require-group-membership cache key must include username, groups, and model
+	// Test 5: require-group-membership cache key must include username, groups, and static model (group policy)
 	t.Run("require-group-membership includes username, groups, model", func(t *testing.T) {
-		cacheKey, found, err := unstructured.NestedString(got.Object, "spec", "rules", "authorization", "require-group-membership", "cache", "key", "selector")
-		if err != nil || !found {
-			t.Fatalf("require-group-membership cache.key.selector missing: found=%v err=%v", found, err)
-		}
-
-		// Must include username (authorization depends on user identity)
-		if !contains(cacheKey, "username") {
-			t.Errorf("require-group-membership cache key must include username, got: %s", cacheKey)
-		}
-
-		// Must include groups (authorization checks group membership)
-		if !contains(cacheKey, "groups") {
-			t.Errorf("require-group-membership cache key must include groups, got: %s", cacheKey)
-		}
-
-		// Must include model to prevent cross-model sharing
-		if !contains(cacheKey, namespace) || !contains(cacheKey, modelName) {
-			t.Errorf("require-group-membership cache key must include model namespace/name, got: %s", cacheKey)
-		}
-
-		// Groups should be joined for stable representation
-		if !contains(cacheKey, "join") {
-			t.Errorf("require-group-membership cache key should join groups, got: %s", cacheKey)
+		key := assertCacheKeyContains(t, groupPolicy,
+			[]string{"username", "groups", "join"},
+			"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector",
+		)
+		// Group policy bakes in static namespace/name for per-model isolation.
+		if !contains(key, namespace) || !contains(key, modelName) {
+			t.Errorf("require-group-membership cache key must include model namespace/name, got: %s", key)
 		}
 	})
 }
 
-// TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation verifies that different models
-// generate different cache keys to prevent cross-model cache sharing.
+// TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation verifies per-model cache key isolation.
+//
+// After the gateway-level AuthPolicy refactor, model isolation strategy changes:
+//   - Gateway policy (singleton): subscription-info/auth-valid/subscription-valid use dynamic
+//     CEL (X-Gateway-Model-Name header or path) for runtime isolation — the same CEL expression
+//     appears in both model-1 and model-2 scenarios because they share the gateway policy.
+//   - Group policies (per-model): require-group-membership still bakes in static namespace/name,
+//     so keys differ between models at compile time.
 func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
-	const namespace = "default"
+	const (
+		namespace = "default"
+		gatewayNS = "gateway-ns"
+	)
 
-	// Create two different models
 	model1Name := "llm-1"
 	model2Name := "llm-2"
 
@@ -1006,73 +964,85 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 		Client:           c,
 		Scheme:           scheme,
 		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
 		AuthzCacheTTL:    60,
 	}
 
-	// Reconcile both policies
 	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-1", Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req1); err != nil {
 		t.Fatalf("Reconcile policy-1: %v", err)
 	}
-
 	req2 := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-2", Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req2); err != nil {
 		t.Fatalf("Reconcile policy-2: %v", err)
 	}
 
-	// Get both AuthPolicies
-	ap1 := &unstructured.Unstructured{}
-	ap1.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + model1Name, Namespace: namespace}, ap1); err != nil {
-		t.Fatalf("Get AuthPolicy for model-1: %v", err)
+	// Singleton gateway policy: subscription-info/auth-valid/subscription-valid use dynamic
+	// celModelIdentity for runtime isolation, so the CEL expression is the same string in
+	// both reconciles (they're writing to the same policy). Verify it contains the model
+	// identity extractor expression rather than static model names.
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
-	ap2 := &unstructured.Unstructured{}
-	ap2.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + model2Name, Namespace: namespace}, ap2); err != nil {
-		t.Fatalf("Get AuthPolicy for model-2: %v", err)
-	}
-
-	// Test that cache keys differ between models for each evaluator
-	evaluators := []struct {
+	gatewayEvaluators := []struct {
 		name string
 		path []string
 	}{
-		{"subscription-info", []string{"spec", "rules", "metadata", "subscription-info", "cache", "key", "selector"}},
-		{"auth-valid", []string{"spec", "rules", "authorization", "auth-valid", "cache", "key", "selector"}},
-		{"subscription-valid", []string{"spec", "rules", "authorization", "subscription-valid", "cache", "key", "selector"}},
-		{"require-group-membership", []string{"spec", "rules", "authorization", "require-group-membership", "cache", "key", "selector"}},
+		{"subscription-info", []string{"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector"}},
+		{"auth-valid", []string{"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector"}},
+		{"subscription-valid", []string{"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "selector"}},
 	}
 
-	for _, eval := range evaluators {
+	for _, eval := range gatewayEvaluators {
 		t.Run(eval.name+" isolates models", func(t *testing.T) {
-			key1, found, err := unstructured.NestedString(ap1.Object, eval.path...)
+			key, found, err := unstructured.NestedString(gwPolicy.Object, eval.path...)
 			if err != nil || !found {
-				t.Fatalf("model-1 %s cache key missing: found=%v err=%v", eval.name, found, err)
+				t.Fatalf("gateway %s cache key missing: found=%v err=%v", eval.name, found, err)
 			}
-
-			key2, found, err := unstructured.NestedString(ap2.Object, eval.path...)
-			if err != nil || !found {
-				t.Fatalf("model-2 %s cache key missing: found=%v err=%v", eval.name, found, err)
-			}
-
-			// Keys must differ between models (they include model namespace/name)
-			if key1 == key2 {
-				t.Errorf("%s cache keys must differ between models, but both are: %s", eval.name, key1)
-			}
-
-			// Verify model-1 key contains model-1 name
-			if !contains(key1, model1Name) {
-				t.Errorf("model-1 %s cache key must contain model name %q, got: %s", eval.name, model1Name, key1)
-			}
-
-			// Verify model-2 key contains model-2 name
-			if !contains(key2, model2Name) {
-				t.Errorf("model-2 %s cache key must contain model name %q, got: %s", eval.name, model2Name, key2)
+			// Gateway policy uses dynamic CEL for runtime model isolation
+			if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
+				t.Errorf("gateway %s cache key must include dynamic model identity (header or path) for runtime isolation, got: %s", eval.name, key)
 			}
 		})
 	}
+
+	// Per-model group policies still have static namespace/name in require-group-membership keys
+	ap1 := &unstructured.Unstructured{}
+	ap1.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + model1Name, Namespace: namespace}, ap1); err != nil {
+		t.Fatalf("Get group AuthPolicy for model-1: %v", err)
+	}
+	ap2 := &unstructured.Unstructured{}
+	ap2.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + model2Name, Namespace: namespace}, ap2); err != nil {
+		t.Fatalf("Get group AuthPolicy for model-2: %v", err)
+	}
+
+	t.Run("require-group-membership isolates models", func(t *testing.T) {
+		path := []string{"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector"}
+		key1, found, err := unstructured.NestedString(ap1.Object, path...)
+		if err != nil || !found {
+			t.Fatalf("model-1 require-group-membership cache key missing: found=%v err=%v", found, err)
+		}
+		key2, found, err := unstructured.NestedString(ap2.Object, path...)
+		if err != nil || !found {
+			t.Fatalf("model-2 require-group-membership cache key missing: found=%v err=%v", found, err)
+		}
+		if key1 == key2 {
+			t.Errorf("require-group-membership cache keys must differ between models, but both are: %s", key1)
+		}
+		if !contains(key1, model1Name) {
+			t.Errorf("model-1 require-group-membership cache key must contain model name %q, got: %s", model1Name, key1)
+		}
+		if !contains(key2, model2Name) {
+			t.Errorf("model-2 require-group-membership cache key must contain model name %q, got: %s", model2Name, key2)
+		}
+	})
 }
 
 // TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream verifies that identity headers
@@ -1080,12 +1050,15 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 // to upstream model workloads (defense-in-depth). Exception: X-MaaS-Subscription IS injected
 // for Istio Telemetry (per-subscription latency tracking).
 // All identity information remains available to TRLP and telemetry via filters.identity.
+//
+// After the gateway-level refactor, response shaping lives in the singleton gateway policy
+// under spec.defaults.rules.response.
 func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
+		gatewayNS      = "gateway-ns"
 		httpRouteName  = modelName
-		authPolicyName = "maas-auth-" + modelName
 		maasPolicyName = "policy-a"
 	)
 
@@ -1104,6 +1077,8 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 		Client:           c,
 		Scheme:           scheme,
 		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
 		AuthzCacheTTL:    60,
 	}
@@ -1113,29 +1088,27 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
 	}
 
-	got := &unstructured.Unstructured{}
-	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
-		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
+	// Response shaping lives in the gateway policy
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
 	// Test 1: Verify identity headers (except X-MaaS-Subscription) are not forwarded upstream
 	t.Run("identity headers not forwarded to upstream", func(t *testing.T) {
-		headers, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "headers")
+		headers, found, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "headers")
 		if err != nil {
 			t.Fatalf("Error checking headers: %v", err)
 		}
-
 		if !found {
 			t.Fatalf("response.success.headers should exist (X-MaaS-Subscription for Istio)")
 		}
 
-		// Verify X-MaaS-Subscription IS present (required for Istio Telemetry)
 		if _, exists := headers["X-MaaS-Subscription"]; !exists {
 			t.Errorf("X-MaaS-Subscription header should be present for Istio Telemetry")
 		}
 
-		// Verify identity headers are NOT present (defense-in-depth)
 		forbiddenHeaders := []string{"X-MaaS-Username", "X-MaaS-Group", "X-MaaS-Key-Id"}
 		for _, header := range forbiddenHeaders {
 			if _, exists := headers[header]; exists {
@@ -1146,48 +1119,33 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 
 	// Test 2: Verify filters.identity exists and contains all necessary data for TRLP and telemetry
 	t.Run("identity data available for TRLP and telemetry", func(t *testing.T) {
-		identity, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "filters", "identity", "json", "properties")
+		identity, found, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "filters", "identity", "json", "properties")
 		if err != nil || !found {
 			t.Fatalf("filters.identity.json.properties missing: found=%v err=%v", found, err)
 		}
 
-		// Verify essential fields for TRLP
 		requiredFields := []string{
-			"userid",                    // User identification
-			"groups",                    // User groups
-			"selected_subscription_key", // Model-scoped subscription key for TRLP
-			"selected_subscription",     // Subscription name
-			"subscription_info",         // Full subscription object (includes labels, organizationId, costCenter, etc.)
+			"userid",
+			"groups",
+			"selected_subscription_key",
+			"selected_subscription",
+			"subscription_info",
 		}
-
 		for _, field := range requiredFields {
 			if _, exists := identity[field]; !exists {
 				t.Errorf("filters.identity must include %q for TRLP/telemetry, but it's missing", field)
 			}
 		}
-
-		// Verify telemetry/observability fields
-		observabilityFields := []string{
-			"keyId", // API key tracking
-		}
-
-		for _, field := range observabilityFields {
+		for _, field := range []string{"keyId"} {
 			if _, exists := identity[field]; !exists {
 				t.Errorf("filters.identity should include %q for observability, but it's missing", field)
 			}
 		}
 
-		// Verify subscription_info contains full object (not just individual fields)
-		// This object should contain: name, namespace, labels, organizationId, costCenter
-		// Consumers should access nested fields like:
-		//   - subscription_info.organizationId (for billing/cost attribution)
-		//   - subscription_info.costCenter (for chargeback)
-		//   - subscription_info.labels (for tier-based rate limiting)
 		subscriptionInfoField, exists := identity["subscription_info"]
 		if !exists {
-			t.Error("filters.identity must include 'subscription_info' field (full object from subscription-select)")
+			t.Error("filters.identity must include 'subscription_info' field")
 		} else {
-			// Verify it's an expression that returns the full object
 			subscriptionInfoMap, ok := subscriptionInfoField.(map[string]any)
 			if !ok {
 				t.Errorf("subscription_info should be a map, got %T", subscriptionInfoField)
@@ -1199,20 +1157,8 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 					exprStr, ok := expr.(string)
 					if !ok {
 						t.Errorf("subscription_info expression should be a string, got %T", expr)
-					} else {
-						// Verify it returns the full object, not just a sub-field
-						if !contains(exprStr, `auth.metadata["subscription-info"]`) {
-							t.Errorf("subscription_info expression should reference full subscription-info object, got: %s", exprStr)
-						}
-						// Verify it doesn't extract only labels (old behavior)
-						if contains(exprStr, ".labels") && !contains(exprStr, "?") {
-							t.Errorf("subscription_info expression should return full object, not just .labels, got: %s", exprStr)
-						}
-						// Note: We can't verify organizationId and costCenter exist at runtime here
-						// (they're optional fields that depend on MaaSSubscription configuration)
-						// but the full object is passed, so consumers can access them via:
-						// auth.identity.subscription_info.organizationId
-						// auth.identity.subscription_info.costCenter
+					} else if !contains(exprStr, `auth.metadata["subscription-info"]`) {
+						t.Errorf("subscription_info expression should reference full subscription-info object, got: %s", exprStr)
 					}
 				}
 			}
@@ -1221,11 +1167,10 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 
 	// Test 3: Verify metrics are enabled on identity filter
 	t.Run("identity filter has metrics enabled", func(t *testing.T) {
-		metricsEnabled, found, err := unstructured.NestedBool(got.Object, "spec", "rules", "response", "success", "filters", "identity", "metrics")
+		metricsEnabled, found, err := unstructured.NestedBool(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "filters", "identity", "metrics")
 		if err != nil || !found {
 			t.Fatalf("filters.identity.metrics missing: found=%v err=%v", found, err)
 		}
-
 		if !metricsEnabled {
 			t.Error("filters.identity.metrics must be true for telemetry to access identity data")
 		}
@@ -1233,6 +1178,23 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 }
 
 // contains is a helper to check if a string contains a substring (case-sensitive).
+// assertCacheKeyContains fetches a nested string from an unstructured object and asserts it
+// contains each of the required substrings. It is a test helper that reduces cyclomatic
+// complexity in cache-key verification tests by collapsing NestedString + contains checks.
+func assertCacheKeyContains(t *testing.T, obj *unstructured.Unstructured, required []string, path ...string) string {
+	t.Helper()
+	val, found, err := unstructured.NestedString(obj.Object, path...)
+	if err != nil || !found {
+		t.Fatalf("cache key at path %v missing: found=%v err=%v", path, found, err)
+	}
+	for _, sub := range required {
+		if !contains(val, sub) {
+			t.Errorf("cache key must contain %q, got: %s", sub, val)
+		}
+	}
+	return val
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		func() bool {

@@ -536,6 +536,7 @@ func main() {
 		MaaSAPINamespace: maasAPINamespace,
 		TenantNamespace:  maasSubscriptionNamespace,
 		GatewayName:      gatewayName,
+		GatewayNamespace: gatewayNamespace,
 		ClusterAudience:  clusterAudience,
 		MetadataCacheTTL: metadataCacheTTL,
 		AuthzCacheTTL:    authzCacheTTL,
