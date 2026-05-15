@@ -340,7 +340,7 @@ func TestListingModels(t *testing.T) {
 	defer cleanup()
 
 	// Create a mock subscription selector that auto-selects for single subscription users
-	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{})
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil)
 
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
 
@@ -458,7 +458,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		"premium": []string{"premium-users"},
 		"free":    []string{"free-users"},
 	}
-	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister)
+	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister, nil)
 
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -678,7 +678,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -731,7 +731,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 			},
 		}
 
-		subscriptionSelector := subscription.NewSelector(testLogger, emptySubscriptionLister)
+		subscriptionSelector := subscription.NewSelector(testLogger, emptySubscriptionLister, nil)
 		emptyHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 		config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -867,7 +867,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -985,7 +985,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -1092,7 +1092,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -1198,7 +1198,7 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
