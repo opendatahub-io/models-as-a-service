@@ -59,17 +59,11 @@ type MaaSModelRefReconciler struct {
 }
 
 func (r *MaaSModelRefReconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return "maas-default-gateway"
+	return r.GatewayName
 }
 
 func (r *MaaSModelRefReconciler) gatewayNamespace() string {
-	if r.GatewayNamespace != "" {
-		return r.GatewayNamespace
-	}
-	return "openshift-ingress"
+	return r.GatewayNamespace
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch;create;update;patch;delete
@@ -98,6 +92,9 @@ func modelRefNameIndexer(obj client.Object) []string {
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if r.GatewayName == "" || r.GatewayNamespace == "" {
+		return ctrl.Result{}, fmt.Errorf("gatewayName and gatewayNamespace must be configured")
+	}
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSModelRef", req.NamespacedName)
 
 	model := &maasv1alpha1.MaaSModelRef{}

@@ -443,6 +443,13 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
+	if gatewayName == "" || gatewayNamespace == "" {
+		setupLog.Error(fmt.Errorf("invalid gateway configuration"),
+			"both --gateway-name and --gateway-namespace must be non-empty",
+			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
+		os.Exit(1)
+	}
+
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	cfg := ctrl.GetConfigOrDie()

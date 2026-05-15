@@ -162,10 +162,10 @@ func assertCondition(t *testing.T, conditions []metav1.Condition, condType strin
 // --- Tests ---
 
 func TestMaaSModelRefReconciler_gatewayName(t *testing.T) {
-	t.Run("default_when_empty", func(t *testing.T) {
+	t.Run("empty_when_unset", func(t *testing.T) {
 		r := &MaaSModelRefReconciler{}
-		if got := r.gatewayName(); got != "maas-default-gateway" {
-			t.Errorf("gatewayName() = %q, want %q", got, "maas-default-gateway")
+		if got := r.gatewayName(); got != "" {
+			t.Errorf("gatewayName() = %q, want %q", got, "")
 		}
 	})
 	t.Run("custom_when_set", func(t *testing.T) {
@@ -225,7 +225,7 @@ func TestReconcile_EndpointOverride(t *testing.T) {
 				WithIndex(&maasv1alpha1.MaaSSubscription{}, modelRefIndexKey, subscriptionModelRefIndexer).
 				Build()
 
-			r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+			r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, GatewayName: "maas-default-gateway", GatewayNamespace: "openshift-ingress"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-model", Namespace: "default"}}
 
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -248,10 +248,10 @@ func TestReconcile_EndpointOverride(t *testing.T) {
 }
 
 func TestMaaSModelRefReconciler_gatewayNamespace(t *testing.T) {
-	t.Run("default_when_empty", func(t *testing.T) {
+	t.Run("empty_when_unset", func(t *testing.T) {
 		r := &MaaSModelRefReconciler{}
-		if got := r.gatewayNamespace(); got != "openshift-ingress" {
-			t.Errorf("gatewayNamespace() = %q, want %q", got, "openshift-ingress")
+		if got := r.gatewayNamespace(); got != "" {
+			t.Errorf("gatewayNamespace() = %q, want %q", got, "")
 		}
 	})
 	t.Run("custom_when_set", func(t *testing.T) {
@@ -625,7 +625,7 @@ func TestMaaSModelRefReconciler_DuplicateReconciliation(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, modelRefIndexKey, subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, GatewayName: "maas-default-gateway", GatewayNamespace: "openshift-ingress"}
 	ctx := context.Background()
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "dup-model", Namespace: "default"}}
 
@@ -730,7 +730,7 @@ func TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation(t *testin
 						WithObjects(existing).
 						Build()
 
-					r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+					r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, GatewayName: "maas-default-gateway", GatewayNamespace: "openshift-ingress"}
 					if err := r.deleteGeneratedPoliciesByLabel(context.Background(), logr.Discard(), namespace, modelName, res.kind, res.group, res.version); err != nil {
 						t.Fatalf("deleteGeneratedPoliciesByLabel: unexpected error: %v", err)
 					}
@@ -853,7 +853,7 @@ func TestMapHTTPRouteToMaaSModelRefs_ListError(t *testing.T) {
 		}).
 		Build()
 
-	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, GatewayName: "maas-default-gateway", GatewayNamespace: "openshift-ingress"}
 	requests := r.mapHTTPRouteToMaaSModelRefs(ctx, route)
 	if len(requests) != 0 {
 		t.Errorf("mapHTTPRouteToMaaSModelRefs() with List error returned %d requests, want 0", len(requests))

@@ -279,6 +279,9 @@ func (r *TenantReconciler) operatorNamespace() string {
 func (r *TenantReconciler) applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {
 	ref := &tenant.Spec.GatewayRef
 	if ref.Namespace == "" && ref.Name == "" {
+		if r.GatewayNamespace == "" || r.GatewayName == "" {
+			return errors.New("controller misconfigured: both GatewayNamespace and GatewayName must be set")
+		}
 		ref.Namespace = r.GatewayNamespace
 		ref.Name = r.GatewayName
 		return nil
