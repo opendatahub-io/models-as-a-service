@@ -79,12 +79,10 @@ func serve() error {
 	// Use gin.New() instead of gin.Default() to control middleware order
 	router := gin.New()
 
-	// Add request ID middleware first so it's available to logger
-	router.Use(middleware.RequestID())
-
-	// Add Logger and Recovery middleware after RequestID
-	router.Use(gin.Logger())
+	// Recovery must be first to catch panics from subsequent middleware
 	router.Use(gin.Recovery())
+	router.Use(middleware.RequestID())
+	router.Use(middleware.AccessLogger())
 
 	// Add metrics middleware
 	metricsRecorder, err := metrics.NewPrometheusRecorder(metricsRegistry)
