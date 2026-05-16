@@ -1478,6 +1478,44 @@ EOF
   ok "Subscriptions and auth policies deployed"
 fi
 
+# ── Gateway default-deny AuthPolicy ──
+# Blocks all model inference routes that don't have a per-route AuthPolicy.
+# Routes with MaaSAuthPolicy (via MaaS controller) override this default.
+# Without this, models deployed via new inference.opendatahub.io CRDs
+# are completely unprotected. See: ai-gateway-payload-processing#235
+echo "  Applying gateway default-deny AuthPolicy..."
+kubectl apply -f - <<EOF
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: gateway-default-auth
+  namespace: ${GATEWAY_NAMESPACE}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+  defaults:
+    rules:
+      authentication: {}
+      authorization:
+        deny-unconfigured-models:
+          metrics: false
+          priority: 0
+          patternMatching:
+            patterns:
+            - operator: eq
+              selector: "context.request.http.method"
+              value: "__deny_unconfigured_models__"
+EOF
+ok "Gateway default-deny AuthPolicy applied"
+
+# Wait for Kuadrant to accept and enforce the policy
+kubectl wait --for=condition=Accepted authpolicy/gateway-default-auth \
+  -n "$GATEWAY_NAMESPACE" --timeout=60s 2>/dev/null && \
+  ok "Gateway default-deny AuthPolicy accepted" || \
+  warn "gateway-default-auth not Accepted within 60s"
+
 # Wait for reconciliation
 echo "  Waiting for controller to reconcile fixtures..."
 sleep 20
@@ -1506,12 +1544,12 @@ else
   warn "MaaS API health check returned: ${HEALTH:-no response}"
 fi
 
-# Test gateway routing (should get 401 — auth is working)
+# Test gateway routing (should get 401/403 — default-deny is working)
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:19090/v1/models 2>/dev/null || echo "000")
-if [[ "$HTTP_CODE" == "401" ]]; then
-  ok "Gateway routing + auth working (401 Unauthorized — expected without API key)"
+if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "403" ]]; then
+  ok "Gateway default-deny enforced (HTTP ${HTTP_CODE} without API key)"
 elif [[ "$HTTP_CODE" == "200" ]]; then
-  ok "Gateway routing working (200 OK)"
+  warn "Gateway returned 200 without auth — default-deny may not be enforced yet"
 else
   warn "Gateway returned HTTP ${HTTP_CODE} (may need a moment to stabilize)"
 fi
