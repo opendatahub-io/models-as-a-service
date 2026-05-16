@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -31,6 +32,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -1395,5 +1398,205 @@ func TestMaaSSubscriptionReconciler_NoSpec(t *testing.T) {
 	}
 	if !strings.Contains(ready.Message, "spec is required") {
 		t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
+	}
+}
+
+// permanentUpdateError returns an apierrors.StatusError that isPermanentError classifies
+// as non-recoverable (admission webhook rejection).
+func permanentUpdateError() error {
+	return &apierrors.StatusError{ErrStatus: metav1.Status{
+		Status:  metav1.StatusFailure,
+		Code:    422,
+		Reason:  metav1.StatusReasonInvalid,
+		Message: "admission webhook denied the request: invalid window format",
+	}}
+}
+
+// TestHandleDeletion_PermanentError_FallsBackToDeleteTRLP verifies that when
+// reconcileTRLPForModel fails with a permanent error (e.g. admission webhook rejects
+// the TRLP update), the handler falls back to force-deleting the TRLP and removes
+// the finalizer so the subscription deletion is not permanently blocked.
+func TestHandleDeletion_PermanentError_FallsBackToDeleteTRLP(t *testing.T) {
+	const (
+		modelName = "shared-model"
+		namespace = "default"
+		trlpName  = "maas-trlp-" + modelName
+	)
+
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
+		Spec:       maasv1alpha1.MaaSModelSpec{ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName}},
+	}
+	route := &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
+	}
+	existingTRLP := newPreexistingTRLP(trlpName, namespace, modelName, map[string]string{})
+	subA := newMaaSSubscription("sub-a", namespace, "team-a", modelName, 100)
+	subA.Finalizers = []string{maasSubscriptionFinalizer}
+	subB := newMaaSSubscription("sub-b", namespace, "team-b", modelName, 200)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, subA, subB, existingTRLP).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == "TokenRateLimitPolicy" {
+					return permanentUpdateError()
+				}
+				return cl.Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	if err := c.Delete(context.Background(), subA); err != nil {
+		t.Fatalf("Delete sub-a: %v", err)
+	}
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	// TRLP should be deleted via the fallback deleteModelTRLP path
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: namespace}, got); !apierrors.IsNotFound(err) {
+		t.Errorf("expected TRLP to be deleted via fallback, but got err: %v", err)
+	}
+
+	// Finalizer should be removed
+	var sub maasv1alpha1.MaaSSubscription
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "sub-a", Namespace: namespace}, &sub); !apierrors.IsNotFound(err) {
+		t.Errorf("expected sub-a to be fully deleted (finalizer removed), got err: %v", err)
+	}
+}
+
+// TestHandleDeletion_TransientError_RequeuesForRetry verifies that transient errors
+// (timeouts, network flakes) during deletion are returned for requeue rather than
+// triggering force-delete, which could collaterally damage shared TRLPs.
+func TestHandleDeletion_TransientError_RequeuesForRetry(t *testing.T) {
+	const (
+		modelName = "shared-model"
+		namespace = "default"
+		trlpName  = "maas-trlp-" + modelName
+	)
+
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
+		Spec:       maasv1alpha1.MaaSModelSpec{ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName}},
+	}
+	route := &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
+	}
+	existingTRLP := newPreexistingTRLP(trlpName, namespace, modelName, map[string]string{})
+	subA := newMaaSSubscription("sub-a", namespace, "team-a", modelName, 100)
+	subA.Finalizers = []string{maasSubscriptionFinalizer}
+	subB := newMaaSSubscription("sub-b", namespace, "team-b", modelName, 200)
+
+	// Transient error: generic timeout, not an admission rejection
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, subA, subB, existingTRLP).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == "TokenRateLimitPolicy" {
+					return errors.New("simulated transient API server timeout")
+				}
+				return cl.Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	if err := c.Delete(context.Background(), subA); err != nil {
+		t.Fatalf("Delete sub-a: %v", err)
+	}
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}
+	_, err := r.Reconcile(context.Background(), req)
+	if err == nil {
+		t.Fatal("Reconcile should return error on transient failure for requeue")
+	}
+
+	// TRLP should NOT be deleted — transient errors don't trigger force-delete
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if getErr := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: namespace}, got); getErr != nil {
+		t.Errorf("TRLP should still exist after transient error, but got: %v", getErr)
+	}
+
+	// Finalizer should NOT be removed — requeue will retry
+	var sub maasv1alpha1.MaaSSubscription
+	if getErr := c.Get(context.Background(), types.NamespacedName{Name: "sub-a", Namespace: namespace}, &sub); getErr != nil {
+		t.Fatalf("sub-a should still exist with finalizer, got: %v", getErr)
+	}
+	if !controllerutil.ContainsFinalizer(&sub, maasSubscriptionFinalizer) {
+		t.Error("sub-a finalizer should still be present after transient error")
+	}
+}
+
+// TestHandleDeletion_PermanentError_BothFail_StillRemovesFinalizer verifies that
+// when both TRLP reconciliation and force-delete fail with permanent errors, the
+// finalizer is still removed so the subscription is not stuck forever.
+func TestHandleDeletion_PermanentError_BothFail_StillRemovesFinalizer(t *testing.T) {
+	const (
+		modelName = "shared-model"
+		namespace = "default"
+		trlpName  = "maas-trlp-" + modelName
+	)
+
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
+		Spec:       maasv1alpha1.MaaSModelSpec{ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName}},
+	}
+	route := &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
+	}
+	existingTRLP := newPreexistingTRLP(trlpName, namespace, modelName, map[string]string{})
+	subA := newMaaSSubscription("sub-a", namespace, "team-a", modelName, 100)
+	subA.Finalizers = []string{maasSubscriptionFinalizer}
+	subB := newMaaSSubscription("sub-b", namespace, "team-b", modelName, 200)
+
+	// Permanent error on Update + fail List so deleteModelTRLP also fails
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, subA, subB, existingTRLP).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == "TokenRateLimitPolicy" {
+					return permanentUpdateError()
+				}
+				return cl.Update(ctx, obj, opts...)
+			},
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if ul, ok := list.(*unstructured.UnstructuredList); ok && ul.GetKind() == "TokenRateLimitPolicyList" {
+					return permanentUpdateError()
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+
+	if err := c.Delete(context.Background(), subA); err != nil {
+		t.Fatalf("Delete sub-a: %v", err)
+	}
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile should not return error on permanent failure (finalizer must be removed), got: %v", err)
+	}
+
+	// Finalizer should be removed despite all cleanup failures
+	var sub maasv1alpha1.MaaSSubscription
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "sub-a", Namespace: namespace}, &sub); !apierrors.IsNotFound(err) {
+		t.Errorf("expected sub-a to be fully deleted (finalizer removed despite permanent failures), got err: %v", err)
 	}
 }
