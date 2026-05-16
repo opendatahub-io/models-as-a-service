@@ -664,12 +664,22 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				t.Errorf("apiKeyValidation cache.key.selector is empty")
 			}
 
+			apiKeyMetrics, found, err := unstructured.NestedBool(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "metrics")
+			if err != nil || !found || !apiKeyMetrics {
+				t.Errorf("apiKeyValidation metrics: want true, found=%v err=%v", found, err)
+			}
+
 			// Verify subscription-info metadata has cache with correct TTL
 			subInfoTTL, found, err := unstructured.NestedInt64(got.Object, "spec", "rules", "metadata", "subscription-info", "cache", "ttl")
 			if err != nil || !found {
 				t.Errorf("subscription-info cache.ttl missing or invalid: found=%v err=%v", found, err)
 			} else if subInfoTTL != tc.wantMetadataTTL {
 				t.Errorf("subscription-info cache.ttl = %d, want %d", subInfoTTL, tc.wantMetadataTTL)
+			}
+
+			subInfoMetrics, found, err := unstructured.NestedBool(got.Object, "spec", "rules", "metadata", "subscription-info", "metrics")
+			if err != nil || !found || !subInfoMetrics {
+				t.Errorf("subscription-info metrics: want true, found=%v err=%v", found, err)
 			}
 
 			// Verify auth-valid authorization has cache with correct TTL

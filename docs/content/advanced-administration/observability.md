@@ -415,12 +415,16 @@ Authorino exposes metrics on two separate endpoints:
 | `grpc_server_msg_received_total` | Counter | `grpc_method` | gRPC messages received |
 | `grpc_server_msg_sent_total` | Counter | `grpc_method` | gRPC messages sent |
 | `grpc_server_started_total` | Counter | `grpc_method` | gRPC requests started |
+| `auth_server_evaluator_total` | Counter | `namespace`, `authconfig`, `evaluator_type`, `evaluator_name` | Per-evaluator runs ([upstream opt-in](https://github.com/Kuadrant/authorino/blob/main/docs/user-guides/observability.md); MaaS enables `metrics` on **`apiKeyValidation`** and **`subscription-info`**) |
+| `auth_server_evaluator_cancelled` | Counter | `namespace`, `authconfig`, `evaluator_type`, `evaluator_name` | Failures/cancellations (use with `*_total` for the metadata alert) |
 
 !!! note "MaaS ServiceMonitor"
     The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime stats). MaaS deploys an additional `authorino-server-metrics` ServiceMonitor to scrape `/server-metrics` for auth evaluation metrics. This is deployed automatically by `install-observability.sh`.
 
-!!! note "Lazily registered metrics"
-    Authorino upstream [documents](https://github.com/Kuadrant/authorino/blob/main/docs/user-guides/observability.md) additional per-evaluator metrics (`auth_server_evaluator_total`, `auth_server_evaluator_duration_seconds`, `auth_server_evaluator_cancelled`, `auth_server_evaluator_denied`). These are **lazily registered** and only appear when specific evaluator types (e.g. OPA, HTTP authorization) are triggered. The MaaS AuthPolicy uses `kubernetesTokenReview`, which does not emit these metrics. They are not listed in the table above because they are not present in a standard MaaS deployment.
+!!! note "Metadata evaluator metrics"
+    Query with `evaluator_type="METADATA_GENERIC_HTTP"` and `evaluator_name=~"apiKeyValidation|subscription-info"`. Series register after traffic hits each evaluator.
+
+**Alert:** `authorino-maas-metadata-evaluator-prometheusrule.yaml` defines **`MaaSAuthorinoMetadataEvaluatorHighFailureRate`** (`cancelled`/`total` > 10% over 5m, minimum traffic guard, **`for: 5m`**). **Remediate:** maas-api health and logs; Authorino → maas-api reachability, TLS/CA, NetworkPolicy; confirm **`/server-metrics`** is scraped.
 
 ### vLLM / Model Server Metrics
 
@@ -517,6 +521,7 @@ ServiceMonitors are deployed by `install-observability.sh` to configure OpenShif
 
 **Automatically Deployed:**
 
+- **Base observability bundle** (`deployment/base/observability/`): TelemetryPolicy, Istio Telemetry, PrometheusRule for **`MaaSAuthorinoMetadataEvaluatorHighFailureRate`** (`kuadrant-system`). Requires User Workload Monitoring.
 - **Istio Gateway**: Scrapes Envoy metrics from the MaaS gateway in `openshift-ingress` (deployed if the gateway exists)
 - **KServe LLM Models**: Scrapes vLLM metrics from model pods in the `llm` namespace (deployed if the `llm` namespace exists)
 
