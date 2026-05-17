@@ -180,6 +180,7 @@ class TestListSubscriptions:
             assert len(test_sub["model_refs"]) >= 1, "Expected at least 1 model_ref"
             ref = test_sub["model_refs"][0]
             assert ref["name"] == MODEL_REF, f"Expected model_ref name '{MODEL_REF}', got '{ref['name']}'"
+            assert "namespace" not in ref, f"model_ref should not expose namespace: {ref}"
 
             # Validate token_rate_limits if present
             if "token_rate_limits" in ref and ref["token_rate_limits"]:
