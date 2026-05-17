@@ -566,6 +566,47 @@ run_e2e_tests() {
     echo " - HTML      : ${html}"
 }
 
+run_uninstall_test() {
+    echo "-- Uninstall E2E Test (MaaS infrastructure teardown) --"
+
+    local test_dir="$PROJECT_ROOT/test/e2e"
+    mkdir -p "$ARTIFACTS_DIR"
+
+    if [[ ! -d "$test_dir/.venv" ]]; then
+        echo "Creating Python venv for e2e tests..."
+        python3 -m venv "$test_dir/.venv" --upgrade-deps
+    fi
+    source "$test_dir/.venv/bin/activate"
+    python -m pip install --upgrade pip --quiet
+    python -m pip install -r "$test_dir/requirements.txt" --quiet
+
+    local html="$ARTIFACTS_DIR/e2e-uninstall.html"
+    local xml="$ARTIFACTS_DIR/e2e-uninstall.xml"
+
+    echo "Running uninstall test with:"
+    echo "  - DEPLOYMENT_NAMESPACE: ${DEPLOYMENT_NAMESPACE}"
+    echo "  - MAAS_SUBSCRIPTION_NAMESPACE: ${MAAS_SUBSCRIPTION_NAMESPACE}"
+    echo "  - E2E_MODEL_NAMESPACE: ${MODEL_NAMESPACE}"
+
+    export DEPLOYMENT_NAMESPACE
+    export MAAS_SUBSCRIPTION_NAMESPACE
+    export E2E_MODEL_NAMESPACE="$MODEL_NAMESPACE"
+
+    if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
+        -v --disable-warnings \
+        --junitxml="$xml" \
+        --html="$html" --self-contained-html \
+        --capture=tee-sys --show-capture=all --log-level=INFO \
+        "$test_dir/tests/test_uninstall.py" ; then
+        echo "❌ ERROR: Uninstall E2E test failed"
+        exit 1
+    fi
+
+    echo "✅ Uninstall test completed"
+    echo " - JUnit XML : ${xml}"
+    echo " - HTML      : ${html}"
+}
+
 
 # Namespace for admin SA in SA fallback (avoids both admin+regular in default → both would be admin)
 E2E_ADMIN_SA_NAMESPACE="${E2E_ADMIN_SA_NAMESPACE:-maas-admin}"
@@ -862,4 +903,16 @@ run_e2e_tests
 print_header "Validating Deployment"
 validate_deployment
 
-echo "🎉 Deployment completed successfully!"
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 4: Uninstall Test (DESTRUCTIVE — must run last)
+# Deletes Config CR, DataScienceCluster, and DSCInitialization, then verifies
+# that all MaaS-owned resources are garbage-collected.
+# ═══════════════════════════════════════════════════════════════════════════════
+if [[ "${SKIP_DEPLOYMENT}" == "true" && "${RUN_UNINSTALL_TEST:-false}" != "true" ]]; then
+    echo "⏭️  Skipping uninstall test (set RUN_UNINSTALL_TEST=true to force it with SKIP_DEPLOYMENT=true)"
+    echo "🎉 Deployment tests completed; uninstall skipped."
+else
+    print_header "Running Uninstall E2E Test"
+    run_uninstall_test
+    echo "🎉 Deployment and uninstall tests completed successfully!"
+fi
