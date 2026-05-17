@@ -14,6 +14,10 @@
 #
 # Token consumption: Perses ``stack: all`` + ``areaOpacity: 1`` when the console honors it.
 # **Filled-line mock (Grafana):** ``docs/samples/dashboards/grafana-usage-loki-token-mock.json``.
+# **View by** (``view_by``): ``model`` | ``subscription`` drives the chart via ``sum by (${view_by:raw})``.
+# Table uses hardcoded ``sum by (model, subscription)`` — both columns always filled.
+# Perses ``columnSettings`` renders headers for labels absent from data (Limitation E in plan doc),
+# so driving the table with ``${view_by:raw}`` leaves an empty Model or Subscription column.
 #
 # user_id!="-" filters out health-check / probe traffic (user_id="-").
 apiVersion: perses.dev/v1alpha1
@@ -24,14 +28,13 @@ metadata:
     app: perses
     app.kubernetes.io/part-of: maas-observability
   annotations:
-    maas.observability/visual-revision: "2026-05-14-stack-area-grafana-mock-doc"
+    maas.observability/visual-revision: "2026-05-17-table-both-cols-filled"
 spec:
   display:
     name: "Usage Dashboard"
     description: >-
-      Token consumption overview and per-user usage breakdown.
-      Filled chart mock (Grafana): import docs/samples/dashboards/grafana-usage-loki-token-mock.json
-      and select Loki — Perses console often omits Loki area fill.
+      Token consumption overview (RHOAI mock): chart + usage breakdown table. Filled chart reference:
+      docs/samples/dashboards/grafana-usage-loki-token-mock.json.
   duration: 1h
 
   variables:
@@ -75,9 +78,9 @@ spec:
               - "meta-llama/Llama-3.2-1B-Instruct"
     - kind: ListVariable
       spec:
-        name: token_split
+        name: view_by
         display:
-          name: "Token chart"
+          name: "View by"
         allowMultiple: false
         allowAllValue: false
         defaultValue: "model"
@@ -85,9 +88,9 @@ spec:
           kind: StaticListVariable
           spec:
             values:
-              - value: model
+              - value: "model"
                 label: By model
-              - value: subscription
+              - value: "subscription"
                 label: By subscription
 
   panels:
@@ -245,9 +248,8 @@ spec:
           description: >-
             Grafana filled mock: docs/samples/dashboards/grafana-usage-loki-token-mock.json (import + Loki).
             Tokens from successful requests (2xx) over time by model or subscription
-            (**Token chart** uses ``${token_split:raw}`` in LogQL `by (...)` —
-            [Perses Variable interpolation](https://perses.dev/perses/docs/concepts/variable/)).
-            LogQL ``[30m]`` matches Perses ``step: "30m"``.
+            **View by** drives chart ``sum by (${view_by:raw})``. Table uses hardcoded ``sum by (model, subscription)``.
+            LogQL ``[30m]`` is the range window for ``sum_over_time`` (Perses time-series step).
             Visual: OpenShift Perses pattern — ``line`` + ``areaOpacity: 1`` + ``stack: all``.
         plugin:
           kind: TimeSeriesChart
@@ -263,7 +265,7 @@ spec:
               connectNulls: true
               stack: all
               showPoints: always
-              pointRadius: 8
+              pointRadius: 6
             yAxis:
               min: 0
               format:
@@ -277,18 +279,18 @@ spec:
                   datasource:
                     kind: LokiDatasource
                     name: loki
-                  step: "30m"
                   query: >-
-                    sum by (${token_split:raw}) (sum_over_time({service_name="maas-gateway", response_code=~"2..",
+                    sum by (${view_by:raw}) (sum_over_time({service_name="maas-gateway", response_code=~"2..",
                     subscription=~"$subscription", model=~"$model"}
                     | user_id=~"$user" | user_id!="-" | unwrap tokens_total [30m]))
 
-    tokenConsumptionByUser:
+    tokenConsumptionTable:
       kind: Panel
       spec:
         display:
-          name: "Token Consumption by User"
-          description: "Per-user totals over the selected time window."
+          name: "Usage breakdown"
+          description: >-
+            All model/subscription pairs. **View by** changes the chart; table always shows full detail.
         plugin:
           kind: Table
           spec:
@@ -300,8 +302,8 @@ spec:
             columnSettings:
               - name: "timestamp"
                 hide: true
-              - name: "user_id"
-                header: "User"
+              - name: "model"
+                header: "Model"
                 align: "left"
                 enableSorting: true
               - name: "subscription"
@@ -309,7 +311,7 @@ spec:
                 align: "left"
                 enableSorting: true
               - name: "value #1"
-                header: "Tokens"
+                header: "Tokens used"
                 align: "right"
                 enableSorting: true
                 sort: "desc"
@@ -318,13 +320,6 @@ spec:
                   shortValues: true
               - name: "value #2"
                 header: "Requests"
-                align: "right"
-                enableSorting: true
-                format:
-                  unit: decimal
-                  decimalPlaces: 0
-              - name: "value #3"
-                header: "Rate Limited"
                 align: "right"
                 enableSorting: true
                 format:
@@ -340,11 +335,10 @@ spec:
                     kind: LokiDatasource
                     name: loki
                   query: >-
-                    sum by (user_id, subscription) (sum_over_time(
+                    sum by (model, subscription) (sum_over_time(
                     {service_name="maas-gateway", response_code=~"2..",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="" | user_id!="-"
-                    | unwrap tokens_total [$__range]))
+                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -354,29 +348,10 @@ spec:
                     kind: LokiDatasource
                     name: loki
                   query: >-
-                    sum by (user_id, subscription) (count_over_time(
+                    sum by (model, subscription) (count_over_time(
                     {service_name="maas-gateway", response_code=~"2..",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="" | user_id!="-" [$__range]))
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: LokiTimeSeriesQuery
-                spec:
-                  datasource:
-                    kind: LokiDatasource
-                    name: loki
-                  query: >-
-                    sum by (user_id, subscription) (count_over_time(
-                    {service_name="maas-gateway", response_code="429",
-                    subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="" | user_id!="-" [$__range]))
-                    or
-                    sum by (user_id, subscription) (sum_over_time(
-                    {service_name="maas-gateway", response_code=~"2..",
-                    subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="" | user_id!="-"
-                    | unwrap tokens_total [$__range])) * 0
+                    | user_id=~"$user" | user_id!="-" [$__range]))
 
   layouts:
     - kind: Grid
@@ -430,17 +405,9 @@ spec:
             height: 10
             content:
               "$ref": "#/spec/panels/tokenConsumptionOverTime"
-
-    - kind: Grid
-      spec:
-        display:
-          title: "Token consumption by user"
-          collapse:
-            open: true
-        items:
           - x: 0
-            "y": 0
+            "y": 10
             width: 24
-            height: 12
+            height: 8
             content:
-              "$ref": "#/spec/panels/tokenConsumptionByUser"
+              "$ref": "#/spec/panels/tokenConsumptionTable"

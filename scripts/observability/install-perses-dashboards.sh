@@ -180,6 +180,79 @@ else
     # Usage Dashboard only (not platform-admin or ai-engineer)
     kubectl apply --server-side=true --force-conflicts -f "$OBSERVABILITY_DIR/perses/dashboards/dashboard-usage.yaml" -n "$TENANT_NAMESPACE"
 
+    # --- Inline validation of deployed Usage Dashboard ---
+    echo ""
+    echo "🔎 Validating Usage dashboard on cluster..."
+    VALIDATION_FAILED=0
+    _check() { if [ "$1" = "ok" ]; then echo "   ✅ $2"; else echo "   ❌ $2"; VALIDATION_FAILED=1; fi; }
+
+    DASH_YAML="$(kubectl get persesdashboard usage-dashboard -n "$TENANT_NAMESPACE" -o yaml 2>/dev/null || true)"
+    if [ -z "$DASH_YAML" ]; then
+        echo "   ❌ Could not fetch persesdashboard/usage-dashboard from ${TENANT_NAMESPACE}"
+        exit 1
+    fi
+
+    EXPECTED_REVISION="2026-05-17-table-both-cols-filled"
+    ACTUAL_REV="$(printf '%s' "$DASH_YAML" | grep 'maas.observability/visual-revision' | head -1 | sed 's/.*: *//' | tr -d '"')"
+    if [ "$ACTUAL_REV" = "$EXPECTED_REVISION" ]; then
+        _check ok "visual-revision: $ACTUAL_REV"
+    else
+        _check fail "visual-revision: expected $EXPECTED_REVISION, got '$ACTUAL_REV'"
+    fi
+
+    if printf '%s' "$DASH_YAML" | grep -q 'name: view_by'; then
+        _check ok "view_by variable present"
+    else
+        _check fail "view_by variable missing"
+    fi
+
+    if printf '%s' "$DASH_YAML" | grep -q 'tokenConsumptionOverTime'; then
+        _check ok "tokenConsumptionOverTime panel present"
+    else
+        _check fail "tokenConsumptionOverTime panel missing"
+    fi
+
+    if printf '%s' "$DASH_YAML" | grep -q 'tokenConsumptionTable'; then
+        _check ok "tokenConsumptionTable panel present"
+    else
+        _check fail "tokenConsumptionTable panel missing"
+    fi
+
+    if printf '%s' "$DASH_YAML" | grep -q 'tokenConsumptionByUser'; then
+        _check fail "deprecated tokenConsumptionByUser panel still present"
+    else
+        _check ok "deprecated tokenConsumptionByUser panel removed"
+    fi
+
+    if printf '%s' "$DASH_YAML" | grep -q 'sum by (${view_by:raw}) (sum_over_time'; then
+        _check ok "chart query uses sum by (\${view_by:raw})"
+    else
+        _check fail "chart query missing sum by (\${view_by:raw})"
+    fi
+
+    TABLE_YAML="$(printf '%s' "$DASH_YAML" | sed -n '/tokenConsumptionTable/,/layouts:/p')"
+    if printf '%s' "$TABLE_YAML" | grep -q 'sum by (model, subscription) (sum_over_time'; then
+        _check ok "table tokens query uses sum by (model, subscription)"
+    else
+        _check fail "table tokens query missing sum by (model, subscription)"
+    fi
+    if printf '%s' "$TABLE_YAML" | grep -q 'sum by (model, subscription) (count_over_time'; then
+        _check ok "table requests query uses sum by (model, subscription)"
+    else
+        _check fail "table requests query missing sum by (model, subscription)"
+    fi
+    if printf '%s' "$TABLE_YAML" | grep -q 'name: model' && printf '%s' "$TABLE_YAML" | grep -q 'name: subscription'; then
+        _check ok "table columnSettings has model and subscription"
+    else
+        _check fail "table columnSettings missing model/subscription"
+    fi
+
+    if [ "$VALIDATION_FAILED" -ne 0 ]; then
+        echo "   ❌ Usage dashboard validation failed"
+        exit 1
+    fi
+    echo "   ✅ All Usage dashboard checks passed"
+
     echo "   ✅ Tenant Usage Dashboard deployed to ${TENANT_NAMESPACE}"
     echo "   ✅ Tenant datasources configured (Prometheus port 9092 + Loki)"
     echo "   ✅ Tenant metrics RBAC configured (metrics.k8s.io/pods create)"
