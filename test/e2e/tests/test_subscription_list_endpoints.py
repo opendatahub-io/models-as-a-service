@@ -279,3 +279,68 @@ class TestListSubscriptionsForModel:
         r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
         assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
         log.info(f"GET /v1/model/{MODEL_REF}/subscriptions (no auth) -> {r.status_code}")
+
+
+class TestSubscriptionModelAccessFiltering:
+    """E2E tests for model access filtering in GET /v1/subscriptions."""
+
+    def test_filters_unauthorized_models(self):
+        """Subscription response only includes models the user is authorized to access."""
+        sa_name = "e2e-partial-access-sa"
+        sa_ns = "default"
+        maas_ns = _ns()
+        subscription_name = "e2e-partial-access-sub"
+        auth_policy_name = "e2e-partial-access-auth"
+
+        try:
+            sa_token = _create_sa_token(sa_name, namespace=sa_ns)
+            sa_user = _sa_to_user(sa_name, namespace=sa_ns)
+
+            _create_test_subscription(
+                subscription_name,
+                [MODEL_REF, DISTINCT_MODEL_REF],
+                users=[sa_user],
+                namespace=maas_ns,
+            )
+
+            _create_test_auth_policy(
+                auth_policy_name,
+                MODEL_REF,
+                users=[sa_user],
+                namespace=maas_ns,
+            )
+
+            _wait_reconcile()
+
+            api_key = _create_api_key(sa_token, subscription=subscription_name)
+
+            url = f"{_maas_api_url()}/v1/subscriptions"
+            r = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            assert r.status_code == 200
+            data = r.json()
+
+            test_sub = next(
+                (s for s in data if s["subscription_id_header"] == subscription_name),
+                None,
+            )
+            assert test_sub is not None, \
+                f"Test subscription '{subscription_name}' not found in {[s['subscription_id_header'] for s in data]}"
+
+            model_names = [ref["name"] for ref in test_sub["model_refs"]]
+            assert MODEL_REF in model_names, \
+                f"Authorized model '{MODEL_REF}' should be in model_refs: {model_names}"
+            assert DISTINCT_MODEL_REF not in model_names, \
+                f"Unauthorized model '{DISTINCT_MODEL_REF}' should NOT be in model_refs: {model_names}"
+
+            log.info(f"Partial access filtering works: {model_names}")
+
+        finally:
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
+            _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
+            _delete_sa(sa_name, namespace=sa_ns)
