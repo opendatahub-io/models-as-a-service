@@ -910,9 +910,9 @@ validate_deployment
 # ═══════════════════════════════════════════════════════════════════════════════
 if [[ "${SKIP_DEPLOYMENT}" == "true" && "${RUN_UNINSTALL_TEST:-false}" != "true" ]]; then
     echo "⏭️  Skipping uninstall test (set RUN_UNINSTALL_TEST=true to force it with SKIP_DEPLOYMENT=true)"
+    echo "🎉 Deployment tests completed; uninstall skipped."
 else
     print_header "Running Uninstall E2E Test"
     run_uninstall_test
+    echo "🎉 Deployment and uninstall tests completed successfully!"
 fi
-
-echo "🎉 Smoke test phases completed successfully!"
