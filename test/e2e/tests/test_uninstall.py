@@ -6,11 +6,14 @@ Validates that deleting the MaaS Config CR and the parent operator's top-level c
 do not retain stray resources that complicate upgrades, reuse, or compliance reviews.
 
 Ordered delete sequence (documented for CI reproducibility):
-  1. Delete MaaS Config CR  (configs.maas.opendatahub.io/default)
+  1. Delete user-created MaaS CRs with finalizers (MaaSSubscription, MaaSAuthPolicy,
+     MaaSModelRef) while the controller is still running so it can process their
+     finalizers (maas.opendatahub.io/*-cleanup).
+  2. Delete MaaS Config CR  (configs.maas.opendatahub.io/default)
      — Kubernetes GC cascades to all operands whose ownerReferences point to Config.
-  2. Delete DataScienceCluster  (default-dsc)
+  3. Delete DataScienceCluster  (default-dsc)
      — Removes the KServe / ModelsAsService component enablement.
-  3. Delete DSCInitialization  (default-dsci)
+  4. Delete DSCInitialization  (default-dsci)
      — Removes the ODH platform initialization resource.
 
 After a bounded wait the test asserts:
@@ -182,6 +185,54 @@ def _format_remaining(remaining):
     return "\n".join(lines)
 
 
+FINALIZER_BEARING_KINDS = [
+    "maassubscriptions.maas.opendatahub.io",
+    "maasauthpolicies.maas.opendatahub.io",
+    "maasmodelrefs.maas.opendatahub.io",
+]
+
+
+def _delete_finalizer_bearing_crs():
+    """Delete MaaS CRs that carry controller-managed finalizers.
+
+    Must run while the controller is still alive so it can process
+    the finalizers and release the resources cleanly.
+    """
+    log.info("Step 1/4: Deleting user-created MaaS CRs (finalizer-bearing)")
+    deleted_any = False
+    for kind in FINALIZER_BEARING_KINDS:
+        items = _list_resources(kind)
+        for item in items:
+            deleted_any = True
+            name = item["metadata"]["name"]
+            ns = item["metadata"].get("namespace")
+            _delete_resource(kind, name, namespace=ns)
+
+    if not deleted_any:
+        log.info("No finalizer-bearing CRs found; nothing to wait for")
+        return
+
+    log.info("Waiting for controller to process finalizers (up to %ds)...", UNINSTALL_TIMEOUT)
+    deadline = time.time() + UNINSTALL_TIMEOUT
+    while time.time() < deadline:
+        still_present = []
+        for kind in FINALIZER_BEARING_KINDS:
+            still_present.extend(_list_resources(kind))
+        if not still_present:
+            log.info("All finalizer-bearing CRs removed")
+            return
+        log.debug(
+            "%d finalizer-bearing CRs still present, waiting %ds...",
+            len(still_present),
+            POLL_INTERVAL,
+        )
+        time.sleep(POLL_INTERVAL)
+    log.warning(
+        "Timed out waiting for finalizer-bearing CRs; %d remain",
+        len(still_present),
+    )
+
+
 # ---------------------------------------------------------------------------
 # The test runs last via pytest ordering (file sorts after other test_ files).
 # It is destructive: it tears down MaaS infrastructure, so it must be the
@@ -198,27 +249,35 @@ class TestUninstallMaaSInfrastructure:
         Execute the ordered uninstall sequence before assertions run.
 
         Delete sequence:
-          1. MaaS Config CR (configs.maas.opendatahub.io/default)
-          2. DataScienceCluster (default-dsc)
-          3. DSCInitialization (default-dsci)
+          1. User-created MaaS CRs with finalizers (while controller is running)
+          2. MaaS Config CR (configs.maas.opendatahub.io/default)
+          3. DataScienceCluster (default-dsc)
+          4. DSCInitialization (default-dsci)
         """
         log.info(
             "=== Starting MaaS uninstall sequence (timeout=%ds) ===", UNINSTALL_TIMEOUT
         )
 
-        # Step 1: Delete the MaaS Config CR.
+        # Step 1: Delete user-created MaaS CRs that carry finalizers.
+        # The controller must still be running to process these finalizers
+        # (maas.opendatahub.io/subscription-cleanup, authpolicy-cleanup,
+        # model-cleanup). Deleting Config first would GC the controller,
+        # leaving these CRs stuck in Terminating.
+        _delete_finalizer_bearing_crs()
+
+        # Step 2: Delete the MaaS Config CR.
         # All operands whose ownerReferences point to Config will be garbage-collected.
-        log.info("Step 1/3: Deleting MaaS Config CR (configs.maas.opendatahub.io/default)")
+        log.info("Step 2/4: Deleting MaaS Config CR (configs.maas.opendatahub.io/default)")
         _delete_resource("configs.maas.opendatahub.io", "default")
 
-        # Step 2: Delete the DataScienceCluster.
-        log.info("Step 2/3: Deleting DataScienceCluster (default-dsc)")
+        # Step 3: Delete the DataScienceCluster.
+        log.info("Step 3/4: Deleting DataScienceCluster (default-dsc)")
         _delete_resource(
             "datasciencecluster", "default-dsc", namespace=DEPLOYMENT_NAMESPACE
         )
 
-        # Step 3: Delete DSCInitialization.
-        log.info("Step 3/3: Deleting DSCInitialization (default-dsci)")
+        # Step 4: Delete DSCInitialization.
+        log.info("Step 4/4: Deleting DSCInitialization (default-dsci)")
         _delete_resource(
             "dscinitializations", "default-dsci", namespace=DEPLOYMENT_NAMESPACE
         )
