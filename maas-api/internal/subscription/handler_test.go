@@ -81,7 +81,7 @@ func setupTestRouter(lister subscription.Lister) *gin.Engine {
 	router := gin.New()
 
 	log := logger.New(false)
-	selector := subscription.NewSelector(log, lister, nil)
+	selector := subscription.NewSelector(log, lister, nil, nil)
 	handler := subscription.NewHandler(log, selector)
 
 	router.POST("/subscriptions/select", handler.SelectSubscription)
@@ -1010,7 +1010,7 @@ func setupListTestRouterWithModels(lister subscription.Lister, modelLister model
 	router := gin.New()
 
 	log := logger.New(false)
-	selector := subscription.NewSelector(log, lister, modelLister)
+	selector := subscription.NewSelector(log, lister, modelLister, nil)
 	handler := subscription.NewHandler(log, selector)
 
 	setUser := func(c *gin.Context) {
