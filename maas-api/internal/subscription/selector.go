@@ -28,23 +28,30 @@ type Lister interface {
 	List() ([]*unstructured.Unstructured, error)
 }
 
+// ModelAccessChecker determines whether a user has access to a specific model.
+type ModelAccessChecker interface {
+	IsModelAccessible(groups []string, username string, modelName, modelNamespace string) bool
+}
+
 // Selector handles subscription selection logic.
 type Selector struct {
-	lister      Lister
-	modelLister models.MaaSModelRefLister
-	logger      *logger.Logger
+	lister        Lister
+	modelLister   models.MaaSModelRefLister
+	accessChecker ModelAccessChecker
+	logger        *logger.Logger
 }
 
 // NewSelector creates a new subscription selector.
 // modelLister is optional; when provided, model refs in list responses are enriched with displayName and description.
-func NewSelector(log *logger.Logger, lister Lister, modelLister models.MaaSModelRefLister) *Selector {
+func NewSelector(log *logger.Logger, lister Lister, modelLister models.MaaSModelRefLister, accessChecker ModelAccessChecker) *Selector {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Selector{
-		lister:      lister,
-		modelLister: modelLister,
-		logger:      log,
+		lister:        lister,
+		modelLister:   modelLister,
+		accessChecker: accessChecker,
+		logger:        log,
 	}
 }
 
@@ -120,12 +127,33 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 		accessible = append(accessible, toResponse(&sub))
 	}
 
+	if s.accessChecker != nil {
+		filtered := accessible[:0]
+		for _, sub := range accessible {
+			sub.ModelRefs = filterAuthorizedModels(sub.ModelRefs, groups, username, s.accessChecker)
+			if len(sub.ModelRefs) > 0 {
+				filtered = append(filtered, sub)
+			}
+		}
+		accessible = filtered
+	}
+
 	// Sort for deterministic ordering
 	sort.Slice(accessible, func(i, j int) bool {
 		return accessible[i].Name < accessible[j].Name
 	})
 
 	return accessible, nil
+}
+
+func filterAuthorizedModels(refs []ModelRefInfo, groups []string, username string, checker ModelAccessChecker) []ModelRefInfo {
+	out := make([]ModelRefInfo, 0, len(refs))
+	for _, ref := range refs {
+		if checker.IsModelAccessible(groups, username, ref.Name, ref.Namespace) {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 // Select implements the subscription selection logic.
