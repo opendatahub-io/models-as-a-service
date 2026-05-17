@@ -334,6 +334,18 @@ func (m *MockStore) Search(
 	now := time.Now().UTC()
 	allKeys := m.filterKeys(username, filters.Status, includeEphemeral, now)
 
+	// Filter by subscription
+	if filters.Subscription != nil && *filters.Subscription != "" {
+		sub := strings.TrimSpace(*filters.Subscription)
+		filtered := allKeys[:0]
+		for _, k := range allKeys {
+			if k.Subscription == sub {
+				filtered = append(filtered, k)
+			}
+		}
+		allKeys = filtered
+	}
+
 	// Sort keys
 	sort.Slice(allKeys, func(i, j int) bool {
 		return compareKeys(allKeys[i], allKeys[j], sortParams.By, sortParams.Order)
