@@ -13,7 +13,12 @@ Ordered delete sequence (documented for CI reproducibility):
      — Removes the KServe / ModelsAsService component enablement.
   3. Delete DSCInitialization  (default-dsci)
      — Removes the ODH platform initialization resource.
-  4. Delete MaaS Config CR  (configs.maas.opendatahub.io/default)
+  4. Ensure maas-controller Deployment is gone.
+     — In operator-managed mode DSC deletion removes the controller.
+       In kustomize deployment mode (CI) the controller is deployed
+       directly and DSC deletion does not touch it, so the test
+       explicitly deletes the Deployment as a fallback.
+  5. Delete MaaS Config CR  (configs.maas.opendatahub.io/default)
      — Must happen AFTER the controller Deployment is gone because the
        LifecycleReconciler recreates Config while the controller is running.
        Once the controller is terminated, Kubernetes GC cascades to all
@@ -203,7 +208,7 @@ def _delete_finalizer_bearing_crs():
     Must run while the controller is still alive so it can process
     the finalizers and release the resources cleanly.
     """
-    log.info("Step 1/4: Deleting user-created MaaS CRs (finalizer-bearing)")
+    log.info("Step 1/5: Deleting user-created MaaS CRs (finalizer-bearing)")
     deleted_any = False
     for kind in FINALIZER_BEARING_KINDS:
         items = _list_resources(kind)
@@ -257,7 +262,8 @@ class TestUninstallMaaSInfrastructure:
           1. User-created MaaS CRs with finalizers (while controller is running)
           2. DataScienceCluster (default-dsc)
           3. DSCInitialization (default-dsci)
-          4. MaaS Config CR (after controller is gone)
+          4. Ensure maas-controller Deployment is gone (explicit delete fallback)
+          5. MaaS Config CR (after controller is gone)
         """
         log.info(
             "=== Starting MaaS uninstall sequence (timeout=%ds) ===", UNINSTALL_TIMEOUT
@@ -271,41 +277,70 @@ class TestUninstallMaaSInfrastructure:
         _delete_finalizer_bearing_crs()
 
         # Step 2: Delete the DataScienceCluster.
-        log.info("Step 2/4: Deleting DataScienceCluster (default-dsc)")
+        log.info("Step 2/5: Deleting DataScienceCluster (default-dsc)")
         _delete_resource(
             "datasciencecluster", "default-dsc", namespace=DEPLOYMENT_NAMESPACE
         )
 
         # Step 3: Delete DSCInitialization.
-        log.info("Step 3/4: Deleting DSCInitialization (default-dsci)")
+        log.info("Step 3/5: Deleting DSCInitialization (default-dsci)")
         _delete_resource(
             "dscinitializations", "default-dsci", namespace=DEPLOYMENT_NAMESPACE
         )
 
-        # Wait for the maas-controller Deployment to be removed before
-        # deleting Config. The LifecycleReconciler recreates Config while
-        # the controller is running, so Config must be deleted only after
-        # the controller is gone.
+        # Step 4: Ensure the maas-controller Deployment is gone.
+        # In operator-managed mode, DSC deletion cascades to the controller
+        # Deployment. In kustomize deployment mode (used by CI), the
+        # controller is applied directly via kustomize and is NOT owned by
+        # DSC, so DSC deletion leaves it running. The LifecycleReconciler
+        # inside the controller recreates Config whenever Config is missing,
+        # so Config cannot be deleted while the controller is alive.
+        # Strategy: wait briefly for operator-driven removal, then fall
+        # back to an explicit Deployment delete.
+        controller_wait = min(60, UNINSTALL_TIMEOUT)
         log.info(
-            "Waiting for maas-controller Deployment to be removed (up to %ds)...",
-            UNINSTALL_TIMEOUT,
+            "Step 4/5: Waiting for maas-controller Deployment to be removed (up to %ds)...",
+            controller_wait,
         )
-        deadline = time.time() + UNINSTALL_TIMEOUT
+        controller_gone = False
+        deadline = time.time() + controller_wait
         while time.time() < deadline:
             if not _resource_exists(
                 "deployment", "maas-controller", namespace=DEPLOYMENT_NAMESPACE
             ):
-                log.info("maas-controller Deployment is gone")
+                log.info("maas-controller Deployment is gone (removed by operator)")
+                controller_gone = True
                 break
             time.sleep(POLL_INTERVAL)
-        else:
-            log.warning("Timed out waiting for maas-controller Deployment removal")
 
-        # Step 4: Delete the MaaS Config CR.
+        if not controller_gone:
+            log.info(
+                "maas-controller Deployment still present after DSC/DSCI deletion; "
+                "deleting it explicitly (kustomize deployment mode fallback)"
+            )
+            _delete_resource(
+                "deployment", "maas-controller", namespace=DEPLOYMENT_NAMESPACE,
+                timeout_sec=120,
+            )
+            wait_deadline = time.time() + 60
+            while time.time() < wait_deadline:
+                if not _resource_exists(
+                    "deployment", "maas-controller", namespace=DEPLOYMENT_NAMESPACE
+                ):
+                    log.info("maas-controller Deployment deleted successfully")
+                    controller_gone = True
+                    break
+                time.sleep(POLL_INTERVAL)
+            if not controller_gone:
+                log.warning(
+                    "maas-controller Deployment still present after explicit delete"
+                )
+
+        # Step 5: Delete the MaaS Config CR.
         # Now that the controller is gone it cannot recreate Config.
         # Kubernetes GC cascades to any remaining operands whose
         # ownerReferences point to Config.
-        log.info("Step 4/4: Deleting MaaS Config CR (configs.maas.opendatahub.io/default)")
+        log.info("Step 5/5: Deleting MaaS Config CR (configs.maas.opendatahub.io/default)")
         _delete_resource("configs.maas.opendatahub.io", "default")
 
         # Wait for garbage collection to propagate.
