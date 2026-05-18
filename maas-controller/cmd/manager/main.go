@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -415,6 +416,44 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, controlle
 	}
 }
 
+// fetchTLSProfileWithRetry attempts to fetch the OpenShift TLS security profile.
+// If the config.openshift.io API doesn't exist (non-OpenShift), it returns the
+// default Intermediate profile immediately with available=false. For transient
+// errors on OpenShift, it retries a few times before falling back.
+func fetchTLSProfileWithRetry(ctx context.Context, c client.Reader) (tlsprofile.ProfileSpec, bool) {
+	const maxRetries = 3
+
+	for attempt := range maxRetries {
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
+		profile, err := tlsprofile.FetchAPIServerTLSProfile(fetchCtx, c)
+		fetchCancel()
+
+		if err == nil {
+			return profile, true
+		}
+
+		if apimeta.IsNoMatchError(err) {
+			setupLog.Info("config.openshift.io API not available, using default Intermediate TLS profile " +
+				"(expected on non-OpenShift clusters)")
+			return tlsprofile.DefaultProfile(), false
+		}
+
+		if attempt < maxRetries-1 {
+			setupLog.Info("transient error fetching cluster TLS profile, retrying",
+				"error", err, "attempt", attempt+1, "maxRetries", maxRetries)
+			select {
+			case <-ctx.Done():
+				return tlsprofile.DefaultProfile(), false
+			case <-time.After(2 * time.Second):
+			}
+		} else {
+			setupLog.Error(err, "failed to fetch cluster TLS profile after retries, using default Intermediate profile")
+		}
+	}
+
+	return tlsprofile.DefaultProfile(), false
+}
+
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -471,21 +510,16 @@ func main() {
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 
 	// Fetch the cluster TLS security profile from the APIServer resource.
-	// On non-OpenShift clusters (e.g. Kind), the fetch will fail gracefully
-	// and the Intermediate profile (TLS 1.2 + modern ciphers) is used.
+	// On non-OpenShift clusters the GVK doesn't exist → fall back gracefully.
+	// On OpenShift, transient errors are retried to avoid running with a weaker
+	// default profile when the admin has configured something stricter.
 	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		setupLog.Error(err, "unable to create pre-manager Kubernetes client for TLS profile fetch")
 		os.Exit(1)
 	}
-	tlsFetchCtx, tlsFetchCancel := context.WithTimeout(ctx, 10*time.Second)
-	tlsProfile, tlsFetchErr := tlsprofile.FetchAPIServerTLSProfile(tlsFetchCtx, k8sClient)
-	tlsFetchCancel()
-	tlsProfileAvailable := tlsFetchErr == nil
-	if tlsFetchErr != nil {
-		setupLog.Info("could not fetch cluster TLS profile, using default Intermediate profile "+
-			"(expected on non-OpenShift clusters)", "error", tlsFetchErr)
-	} else {
+	tlsProfile, tlsProfileAvailable := fetchTLSProfileWithRetry(ctx, k8sClient)
+	if tlsProfileAvailable {
 		setupLog.Info("fetched cluster TLS security profile",
 			"type", tlsProfile.Type, "minTLSVersion", tlsProfile.MinTLSVersion)
 	}
