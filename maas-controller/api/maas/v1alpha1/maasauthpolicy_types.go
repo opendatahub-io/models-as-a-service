@@ -30,6 +30,15 @@ type MaaSAuthPolicySpec struct {
 	// +kubebuilder:validation:XValidation:rule="size(self.groups) > 0 || size(self.users) > 0",message="at least one group or user must be specified in subjects"
 	Subjects SubjectSpec `json:"subjects"`
 
+	// PublicPaths is a list of well-known documentation endpoints that should be
+	// accessible without authentication. Values are restricted to a curated allowlist
+	// of safe, read-only paths. The generated AuthPolicy will include an anonymous
+	// authentication rule using exact-path matching against the model's route prefix.
+	// Inference and other endpoints remain fully authenticated.
+	// +optional
+	// +kubebuilder:validation:MaxItems=10
+	PublicPaths []PublicPath `json:"publicPaths,omitempty"`
+
 	// MeteringMetadata contains billing and tracking information
 	// +optional
 	MeteringMetadata *MeteringMetadata `json:"meteringMetadata,omitempty"`
@@ -64,6 +73,15 @@ type GroupReference struct {
 	// Name is the name of the group
 	Name string `json:"name"`
 }
+
+// PublicPath is a well-known documentation endpoint that can be exposed without authentication.
+// +kubebuilder:validation:Enum="/docs";"/openapi.json"
+type PublicPath string
+
+const (
+	PublicPathDocs    PublicPath = "/docs"
+	PublicPathOpenAPI PublicPath = "/openapi.json"
+)
 
 // MeteringMetadata contains billing and tracking information
 type MeteringMetadata struct {

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -226,6 +227,42 @@ const (
 		`? auth.metadata.apiKeyValidation.subscription : ` +
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
 )
+
+// buildPublicPathsRegex constructs a regex pattern that matches exact paths
+// by combining the model's route prefix with each public path suffix.
+// Example: routePrefix="/default/llm", paths=["/docs", "/openapi.json"]
+//
+//	-> "^/default/llm/docs$|^/default/llm/openapi\.json$"
+func buildPublicPathsRegex(routePrefix string, paths []string) string {
+	var parts []string
+	for _, p := range paths {
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		full := routePrefix + p
+		parts = append(parts, fmt.Sprintf("^%s$", regexp.QuoteMeta(full)))
+	}
+	return strings.Join(parts, "|")
+}
+
+// buildPublicPathsCELPredicate constructs a CEL predicate that excludes exact public paths
+// from evaluation, using the model's route prefix for precise matching.
+// Example: routePrefix="/default/llm", paths=["/docs", "/openapi.json"]
+//
+//	-> 'request.path != "/default/llm/docs" && request.path != "/default/llm/openapi.json"'
+func buildPublicPathsCELPredicate(routePrefix string, paths []string) string {
+	var parts []string
+	for _, p := range paths {
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		full := routePrefix + p
+		escaped := strings.ReplaceAll(full, `\`, `\\`)
+		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+		parts = append(parts, fmt.Sprintf(`request.path != "%s"`, escaped))
+	}
+	return strings.Join(parts, " && ")
+}
 
 // subscriptionCacheKeySelector builds the CEL cache-key expression for subscription-info
 // and subscription-valid evaluators: "userId|groups|subscription|namespace/name".
@@ -477,11 +514,20 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			}
 		}
 
+		// Aggregate publicPaths from ALL auth policies for this model
+		var publicPaths []string
+		for _, ap := range allPolicies {
+			for _, p := range ap.Spec.PublicPaths {
+				publicPaths = append(publicPaths, string(p))
+			}
+		}
+
 		// Deduplicate and sort to ensure stable output across reconciles
 		// (Kubernetes List order is not guaranteed to be deterministic)
 		policyNames = deduplicateAndSort(policyNames)
 		allowedGroups = deduplicateAndSort(allowedGroups)
 		allowedUsers = deduplicateAndSort(allowedUsers)
+		publicPaths = deduplicateAndSort(publicPaths)
 
 		// Construct API URLs using configured namespace
 		apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
@@ -630,6 +676,41 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			}
 		}
 
+		// If publicPaths are configured, precompute the regex and CEL predicates once.
+		// Route prefix is /{namespace}/{name} per the HTTPRoute convention.
+		var publicPathsRegex, publicPathsCEL string
+		if len(publicPaths) > 0 {
+			routePrefix := "/" + ref.Namespace + "/" + ref.Name
+			publicPathsRegex = buildPublicPathsRegex(routePrefix, publicPaths)
+			publicPathsCEL = buildPublicPathsCELPredicate(routePrefix, publicPaths)
+
+			// Add anonymous authentication scoped to public paths
+			authMap := rule["authentication"].(map[string]any)
+			authMap["anonymous-public-paths"] = map[string]any{
+				"anonymous": map[string]any{},
+				"when": []any{
+					map[string]any{
+						"selector": "request.url_path",
+						"operator": "matches",
+						"value":    publicPathsRegex,
+					},
+				},
+				"metrics":  false,
+				"priority": int64(0),
+			}
+
+			// Add when predicates to skip metadata evaluators for public paths
+			metadataMap := rule["metadata"].(map[string]any)
+			for name, evaluator := range metadataMap {
+				eval := evaluator.(map[string]any)
+				when, _ := eval["when"].([]any)
+				eval["when"] = append(when, map[string]any{
+					"predicate": publicPathsCEL,
+				})
+				metadataMap[name] = eval
+			}
+		}
+
 		// Build authorization rules
 		authRules := make(map[string]any)
 
@@ -770,6 +851,18 @@ allow {
 					},
 					"ttl": r.authzCacheTTL(),
 				},
+			}
+		}
+
+		// Add when predicates to authorization rules to skip them for public paths
+		if len(publicPaths) > 0 {
+			for name, evaluator := range authRules {
+				eval := evaluator.(map[string]any)
+				when, _ := eval["when"].([]any)
+				eval["when"] = append(when, map[string]any{
+					"predicate": publicPathsCEL,
+				})
+				authRules[name] = eval
 			}
 		}
 

@@ -89,6 +89,22 @@ spec:
                   type: object
                 minItems: 1
                 type: array
+              publicPaths:
+                description: |-
+                  PublicPaths is a list of well-known documentation endpoints that should be
+                  accessible without authentication. Values are restricted to a curated allowlist
+                  of safe, read-only paths. The generated AuthPolicy will include an anonymous
+                  authentication rule using exact-path matching against the model's route prefix.
+                  Inference and other endpoints remain fully authenticated.
+                items:
+                  description: PublicPath is a well-known documentation endpoint that
+                    can be exposed without authentication.
+                  enum:
+                  - /docs
+                  - /openapi.json
+                  type: string
+                maxItems: 10
+                type: array
               subjects:
                 description: Subjects defines who has access (OR logic - any match
                   grants access)

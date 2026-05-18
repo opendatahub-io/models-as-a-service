@@ -837,12 +837,12 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		}
 
 		// Must include the API key from the request header
-		if !contains(cacheKey, "request.headers.authorization") {
+		if !strings.Contains(cacheKey, "request.headers.authorization") {
 			t.Errorf("apiKeyValidation cache key must include API key from request headers, got: %s", cacheKey)
 		}
 
 		// Should extract the Bearer token
-		if !contains(cacheKey, `replace("Bearer ", "")`) {
+		if !strings.Contains(cacheKey, `replace("Bearer ", "")`) {
 			t.Errorf("apiKeyValidation cache key should extract Bearer token, got: %s", cacheKey)
 		}
 	})
@@ -855,30 +855,30 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		}
 
 		// Must include userId for API keys (database UUID for collision resistance)
-		if !contains(cacheKey, "userId") {
+		if !strings.Contains(cacheKey, "userId") {
 			t.Errorf("subscription-info cache key must include userId for API keys, got: %s", cacheKey)
 		}
 
 		// Must include username as fallback for K8s tokens
-		if !contains(cacheKey, "username") {
+		if !strings.Contains(cacheKey, "username") {
 			t.Errorf("subscription-info cache key must include username for K8s tokens, got: %s", cacheKey)
 		}
 
 		// Must include groups (from either API key or K8s token)
-		if !contains(cacheKey, "groups") {
+		if !strings.Contains(cacheKey, "groups") {
 			t.Errorf("subscription-info cache key must include groups, got: %s", cacheKey)
 		}
 
 		// Must include model namespace and name to prevent cross-model sharing
-		if !contains(cacheKey, namespace) {
+		if !strings.Contains(cacheKey, namespace) {
 			t.Errorf("subscription-info cache key must include model namespace %q, got: %s", namespace, cacheKey)
 		}
-		if !contains(cacheKey, modelName) {
+		if !strings.Contains(cacheKey, modelName) {
 			t.Errorf("subscription-info cache key must include model name %q, got: %s", modelName, cacheKey)
 		}
 
 		// Groups should be joined to create stable string representation
-		if !contains(cacheKey, "join") {
+		if !strings.Contains(cacheKey, "join") {
 			t.Errorf("subscription-info cache key should join groups for stability, got: %s", cacheKey)
 		}
 	})
@@ -891,17 +891,17 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		}
 
 		// Must distinguish between API key and K8s token authentication
-		if !contains(cacheKey, "api-key") && !contains(cacheKey, "k8s-token") {
+		if !strings.Contains(cacheKey, "api-key") && !strings.Contains(cacheKey, "k8s-token") {
 			t.Errorf("auth-valid cache key must distinguish auth types (api-key vs k8s-token), got: %s", cacheKey)
 		}
 
 		// Must include model to prevent cross-model sharing
-		if !contains(cacheKey, namespace) || !contains(cacheKey, modelName) {
+		if !strings.Contains(cacheKey, namespace) || !strings.Contains(cacheKey, modelName) {
 			t.Errorf("auth-valid cache key must include model namespace/name, got: %s", cacheKey)
 		}
 
 		// Must include identity (API key or username)
-		if !contains(cacheKey, "username") && !contains(cacheKey, "authorization") {
+		if !strings.Contains(cacheKey, "username") && !strings.Contains(cacheKey, "authorization") {
 			t.Errorf("auth-valid cache key must include identity, got: %s", cacheKey)
 		}
 	})
@@ -924,17 +924,17 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		}
 
 		// Verify it includes all necessary dimensions
-		if !contains(subValidKey, "userId") {
+		if !strings.Contains(subValidKey, "userId") {
 			t.Errorf("subscription-valid cache key must include userId for API keys, got: %s", subValidKey)
 		}
-		if !contains(subValidKey, "username") {
+		if !strings.Contains(subValidKey, "username") {
 			t.Errorf("subscription-valid cache key must include username for K8s tokens, got: %s", subValidKey)
 		}
-		if !contains(subValidKey, "groups") {
+		if !strings.Contains(subValidKey, "groups") {
 			t.Errorf("subscription-valid cache key must include groups, got: %s", subValidKey)
 		}
 
-		if !contains(subValidKey, namespace) || !contains(subValidKey, modelName) {
+		if !strings.Contains(subValidKey, namespace) || !strings.Contains(subValidKey, modelName) {
 			t.Errorf("subscription-valid cache key must include model namespace/name, got: %s", subValidKey)
 		}
 	})
@@ -947,22 +947,22 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		}
 
 		// Must include username (authorization depends on user identity)
-		if !contains(cacheKey, "username") {
+		if !strings.Contains(cacheKey, "username") {
 			t.Errorf("require-group-membership cache key must include username, got: %s", cacheKey)
 		}
 
 		// Must include groups (authorization checks group membership)
-		if !contains(cacheKey, "groups") {
+		if !strings.Contains(cacheKey, "groups") {
 			t.Errorf("require-group-membership cache key must include groups, got: %s", cacheKey)
 		}
 
 		// Must include model to prevent cross-model sharing
-		if !contains(cacheKey, namespace) || !contains(cacheKey, modelName) {
+		if !strings.Contains(cacheKey, namespace) || !strings.Contains(cacheKey, modelName) {
 			t.Errorf("require-group-membership cache key must include model namespace/name, got: %s", cacheKey)
 		}
 
 		// Groups should be joined for stable representation
-		if !contains(cacheKey, "join") {
+		if !strings.Contains(cacheKey, "join") {
 			t.Errorf("require-group-membership cache key should join groups, got: %s", cacheKey)
 		}
 	})
@@ -1053,12 +1053,12 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 			}
 
 			// Verify model-1 key contains model-1 name
-			if !contains(key1, model1Name) {
+			if !strings.Contains(key1, model1Name) {
 				t.Errorf("model-1 %s cache key must contain model name %q, got: %s", eval.name, model1Name, key1)
 			}
 
 			// Verify model-2 key contains model-2 name
-			if !contains(key2, model2Name) {
+			if !strings.Contains(key2, model2Name) {
 				t.Errorf("model-2 %s cache key must contain model name %q, got: %s", eval.name, model2Name, key2)
 			}
 		})
@@ -1191,11 +1191,11 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 						t.Errorf("subscription_info expression should be a string, got %T", expr)
 					} else {
 						// Verify it returns the full object, not just a sub-field
-						if !contains(exprStr, `auth.metadata["subscription-info"]`) {
+						if !strings.Contains(exprStr, `auth.metadata["subscription-info"]`) {
 							t.Errorf("subscription_info expression should reference full subscription-info object, got: %s", exprStr)
 						}
 						// Verify it doesn't extract only labels (old behavior)
-						if contains(exprStr, ".labels") && !contains(exprStr, "?") {
+						if strings.Contains(exprStr, ".labels") && !strings.Contains(exprStr, "?") {
 							t.Errorf("subscription_info expression should return full object, not just .labels, got: %s", exprStr)
 						}
 						// Note: We can't verify organizationId and costCenter exist at runtime here
@@ -1222,17 +1222,276 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 	})
 }
 
-// contains is a helper to check if a string contains a substring (case-sensitive).
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
+
+func TestBuildPublicPathsRegex(t *testing.T) {
+	tests := []struct {
+		name        string
+		routePrefix string
+		paths       []string
+		expect      string
+	}{
+		{
+			name:        "single path",
+			routePrefix: "/default/llm",
+			paths:       []string{"/docs"},
+			expect:      `^/default/llm/docs$`,
+		},
+		{
+			name:        "multiple paths",
+			routePrefix: "/default/llm",
+			paths:       []string{"/docs", "/openapi.json"},
+			expect:      `^/default/llm/docs$|^/default/llm/openapi\.json$`,
+		},
+		{
+			name:        "path without leading slash",
+			routePrefix: "/default/llm",
+			paths:       []string{"docs"},
+			expect:      `^/default/llm/docs$`,
+		},
+		{
+			name:        "empty paths",
+			routePrefix: "/default/llm",
+			paths:       []string{},
+			expect:      "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildPublicPathsRegex(tc.routePrefix, tc.paths)
+			if got != tc.expect {
+				t.Errorf("buildPublicPathsRegex(%q, %v) = %q, want %q", tc.routePrefix, tc.paths, got, tc.expect)
 			}
-			return false
-		}())
+		})
+	}
+}
+
+func TestBuildPublicPathsCELPredicate(t *testing.T) {
+	tests := []struct {
+		name        string
+		routePrefix string
+		paths       []string
+		expect      string
+	}{
+		{
+			name:        "single path",
+			routePrefix: "/default/llm",
+			paths:       []string{"/docs"},
+			expect:      `request.path != "/default/llm/docs"`,
+		},
+		{
+			name:        "multiple paths",
+			routePrefix: "/default/llm",
+			paths:       []string{"/docs", "/openapi.json"},
+			expect:      `request.path != "/default/llm/docs" && request.path != "/default/llm/openapi.json"`,
+		},
+		{
+			name:        "path without leading slash",
+			routePrefix: "/default/llm",
+			paths:       []string{"docs"},
+			expect:      `request.path != "/default/llm/docs"`,
+		},
+		{
+			name:        "empty paths",
+			routePrefix: "/default/llm",
+			paths:       []string{},
+			expect:      "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildPublicPathsCELPredicate(tc.routePrefix, tc.paths)
+			if got != tc.expect {
+				t.Errorf("buildPublicPathsCELPredicate(%q, %v) = %q, want %q", tc.routePrefix, tc.paths, got, tc.expect)
+			}
+		})
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_PublicPaths verifies that when publicPaths is configured
+// on a MaaSAuthPolicy, the generated AuthPolicy includes an anonymous authentication
+// rule scoped to those paths and adds when predicates to skip metadata and authorization
+// for public paths.
+func TestMaaSAuthPolicyReconciler_PublicPaths(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+
+	maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: maasPolicyName, Namespace: namespace},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: namespace}},
+			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
+			PublicPaths: []maasv1alpha1.PublicPath{maasv1alpha1.PublicPathDocs, maasv1alpha1.PublicPathOpenAPI},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy: %v", err)
+	}
+
+	// Verify anonymous-public-paths authentication rule exists
+	t.Run("anonymous authentication rule exists", func(t *testing.T) {
+		anonRule, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "authentication", "anonymous-public-paths")
+		if err != nil || !found {
+			t.Fatalf("spec.rules.authentication.anonymous-public-paths missing: found=%v err=%v", found, err)
+		}
+		// Verify it has anonymous config
+		_, hasAnon, _ := unstructured.NestedMap(anonRule, "anonymous")
+		if !hasAnon {
+			t.Error("anonymous-public-paths should have 'anonymous' field")
+		}
+		// Verify it has when conditions
+		whenList, hasWhen, _ := unstructured.NestedSlice(anonRule, "when")
+		if !hasWhen || len(whenList) == 0 {
+			t.Fatal("anonymous-public-paths should have 'when' conditions")
+		}
+		// Verify the when condition uses url_path matching
+		firstWhen, ok := whenList[0].(map[string]any)
+		if !ok {
+			t.Fatal("first when condition should be a map")
+		}
+		selector, _ := firstWhen["selector"].(string)
+		if selector != "request.url_path" {
+			t.Errorf("when selector = %q, want %q", selector, "request.url_path")
+		}
+		value, _ := firstWhen["value"].(string)
+		expectedPrefix := "/" + namespace + "/" + modelName
+		if !strings.Contains(value, expectedPrefix+"/docs") || !strings.Contains(value, expectedPrefix+"/openapi") {
+			t.Errorf("when value should contain exact paths with route prefix %q, got: %s", expectedPrefix, value)
+		}
+		if !strings.HasPrefix(value, "^") {
+			t.Errorf("regex should use exact-path anchoring (^), got: %s", value)
+		}
+	})
+
+	// Verify metadata rules have when predicates excluding public paths
+	t.Run("metadata rules exclude public paths", func(t *testing.T) {
+		apiKeyWhen, found, err := unstructured.NestedSlice(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "when")
+		if err != nil || !found {
+			t.Fatalf("apiKeyValidation.when missing: found=%v err=%v", found, err)
+		}
+		// Should have the original sk-oai- when condition PLUS the public paths exclusion
+		if len(apiKeyWhen) < 2 {
+			t.Fatalf("apiKeyValidation.when should have at least 2 conditions, got %d", len(apiKeyWhen))
+		}
+		// Check that one of the when conditions is a CEL predicate for public paths
+		expectedCELFragment := "/" + namespace + "/" + modelName + "/docs"
+		foundPredicate := false
+		for _, w := range apiKeyWhen {
+			wMap, ok := w.(map[string]any)
+			if !ok {
+				continue
+			}
+			if pred, ok := wMap["predicate"].(string); ok && strings.Contains(pred, "request.path !=") && strings.Contains(pred, expectedCELFragment) {
+				foundPredicate = true
+				break
+			}
+		}
+		if !foundPredicate {
+			t.Errorf("apiKeyValidation.when should contain exact-path CEL predicate with %q", expectedCELFragment)
+		}
+	})
+
+	// Verify authorization rules have when predicates excluding public paths
+	t.Run("authorization rules exclude public paths", func(t *testing.T) {
+		authValidWhen, found, err := unstructured.NestedSlice(got.Object, "spec", "rules", "authorization", "auth-valid", "when")
+		if err != nil || !found {
+			t.Fatalf("authorization.auth-valid.when missing: found=%v err=%v", found, err)
+		}
+		expectedCELFragment := "/" + namespace + "/" + modelName + "/docs"
+		foundPredicate := false
+		for _, w := range authValidWhen {
+			wMap, ok := w.(map[string]any)
+			if !ok {
+				continue
+			}
+			if pred, ok := wMap["predicate"].(string); ok && strings.Contains(pred, "request.path !=") && strings.Contains(pred, expectedCELFragment) {
+				foundPredicate = true
+				break
+			}
+		}
+		if !foundPredicate {
+			t.Errorf("authorization.auth-valid.when should contain exact-path CEL predicate with %q", expectedCELFragment)
+		}
+	})
+}
+
+// TestMaaSAuthPolicyReconciler_NoPublicPaths verifies that when publicPaths is empty,
+// no anonymous authentication rule is added and no extra when predicates are injected.
+func TestMaaSAuthPolicyReconciler_NoPublicPaths(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = modelName
+		authPolicyName = "maas-auth-" + modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get AuthPolicy: %v", err)
+	}
+
+	// Verify no anonymous-public-paths rule exists
+	_, found, _ := unstructured.NestedMap(got.Object, "spec", "rules", "authentication", "anonymous-public-paths")
+	if found {
+		t.Error("anonymous-public-paths should NOT exist when publicPaths is empty")
+	}
+
+	// Verify apiKeyValidation has only the original when condition (no public paths predicate)
+	apiKeyWhen, found, err := unstructured.NestedSlice(got.Object, "spec", "rules", "metadata", "apiKeyValidation", "when")
+	if err != nil || !found {
+		t.Fatalf("apiKeyValidation.when missing: found=%v err=%v", found, err)
+	}
+	if len(apiKeyWhen) != 1 {
+		t.Errorf("apiKeyValidation.when should have exactly 1 condition (no public paths), got %d", len(apiKeyWhen))
+	}
 }
 
 // TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase verifies that an auth policy
