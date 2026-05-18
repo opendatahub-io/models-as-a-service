@@ -1,6 +1,7 @@
 package tlsprofile_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -169,4 +170,16 @@ func TestIsAPIUnavailable(t *testing.T) {
 			assert.Equal(t, tt.want, tlsprofile.IsAPIUnavailable(tt.err))
 		})
 	}
+}
+
+func TestFetchTLSProfile_NilRestConfig(t *testing.T) {
+	_, err := tlsprofile.FetchTLSProfile(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be nil")
+}
+
+func TestNewWatcher_NilRestConfig(t *testing.T) {
+	_, err := tlsprofile.NewWatcher(nil, tlsprofile.DefaultProfile(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be nil")
 }

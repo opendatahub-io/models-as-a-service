@@ -128,7 +128,10 @@ func serve() error {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
 
-	profileMinVersion, profileCipherSuites := setupTLSProfile(ctx, log, cfg, cluster, cancel)
+	profileMinVersion, profileCipherSuites, tlsErr := setupTLSProfile(ctx, log, cfg, cluster, cancel)
+	if tlsErr != nil {
+		return fmt.Errorf("refusing to start with weakened TLS policy: %w", tlsErr)
+	}
 
 	srv, err := newServer(cfg, router, profileMinVersion, profileCipherSuites)
 	if err != nil {
@@ -270,17 +273,21 @@ func debugCORSConfig() cors.Config {
 // minVersion and cipherSuites for use in buildTLSConfig. On non-OpenShift clusters
 // or when HTTPS is disabled, returns zero values (flag-based defaults apply).
 //
-// On OpenShift, transient fetch errors are retried to avoid silently running with
-// a weaker default profile when the admin has configured something stricter.
-func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config, cluster *config.ClusterConfig, cancel context.CancelFunc) (uint16, []uint16) {
+// On OpenShift, transient fetch errors are retried. If the profile cannot be
+// obtained after retries, the function returns an error to prevent starting with
+// a weaker default profile (fail-closed).
+func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config, cluster *config.ClusterConfig, cancel context.CancelFunc) (uint16, []uint16, error) {
 	restConfig := cluster.RESTConfig()
 	if !cfg.Secure || restConfig == nil {
-		return 0, nil
+		return 0, nil, nil
 	}
 
-	profile, available := fetchTLSProfileWithRetry(ctx, log, restConfig)
+	profile, available, fetchErr := fetchTLSProfileWithRetry(ctx, log, restConfig)
+	if fetchErr != nil {
+		return 0, nil, fmt.Errorf("cluster TLS profile fetch failed after retries: %w", fetchErr)
+	}
 	if !available {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	log.Info("Fetched cluster TLS security profile",
@@ -310,44 +317,43 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 		}()
 	}
 
-	return profileMinVersion, profileCipherSuites
+	return profileMinVersion, profileCipherSuites, nil
 }
 
 // fetchTLSProfileWithRetry attempts to fetch the OpenShift TLS security profile.
-// If the config.openshift.io API doesn't exist (non-OpenShift), it returns
-// immediately with available=false. For transient errors on OpenShift, it retries
-// a few times before falling back to flag-based defaults.
-func fetchTLSProfileWithRetry(ctx context.Context, log *logger.Logger, restConfig *rest.Config) (tlsprofile.ProfileSpec, bool) {
+// If the config.openshift.io API doesn't exist (non-OpenShift), returns
+// available=false with nil error. For transient errors on OpenShift, retries a
+// few times and returns a non-nil error if all attempts fail (fail-closed).
+func fetchTLSProfileWithRetry(ctx context.Context, log *logger.Logger, restConfig *rest.Config) (tlsprofile.ProfileSpec, bool, error) {
 	const maxRetries = 3
 
+	var lastErr error
 	for attempt := range maxRetries {
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
 		profile, err := tlsprofile.FetchTLSProfile(fetchCtx, restConfig)
 		fetchCancel()
 
 		if err == nil {
-			return profile, true
+			return profile, true, nil
 		}
 
 		if tlsprofile.IsAPIUnavailable(err) {
 			log.Info("config.openshift.io API not available, using flag-based TLS defaults "+
 				"(expected on non-OpenShift clusters)", "error", err)
-			return tlsprofile.DefaultProfile(), false
+			return tlsprofile.DefaultProfile(), false, nil
 		}
 
+		lastErr = err
 		if attempt < maxRetries-1 {
 			log.Info("Transient error fetching cluster TLS profile, retrying",
 				"error", err, "attempt", attempt+1, "maxRetries", maxRetries)
 			select {
 			case <-ctx.Done():
-				return tlsprofile.DefaultProfile(), false
+				return tlsprofile.DefaultProfile(), false, ctx.Err()
 			case <-time.After(2 * time.Second):
 			}
-		} else {
-			log.Error("Failed to fetch cluster TLS profile after retries, using flag-based defaults",
-				"error", err)
 		}
 	}
 
-	return tlsprofile.DefaultProfile(), false
+	return tlsprofile.DefaultProfile(), false, lastErr
 }

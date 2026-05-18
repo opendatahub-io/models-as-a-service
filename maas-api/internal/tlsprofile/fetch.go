@@ -23,6 +23,10 @@ var apiServerGVR = schema.GroupVersionResource{
 // security profile. Returns the default (Intermediate) profile when no profile
 // is configured or the resource cannot be read.
 func FetchTLSProfile(ctx context.Context, restConfig *rest.Config) (ProfileSpec, error) {
+	if restConfig == nil {
+		return DefaultProfile(), errors.New("restConfig must not be nil")
+	}
+
 	dynClient, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
 		return DefaultProfile(), fmt.Errorf("creating dynamic client: %w", err)

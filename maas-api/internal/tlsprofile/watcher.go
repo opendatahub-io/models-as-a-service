@@ -1,6 +1,7 @@
 package tlsprofile
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -21,6 +22,10 @@ type Watcher struct {
 // NewWatcher creates a Watcher that will invoke onChange when the cluster TLS
 // profile diverges from initialProfile. Call Start to begin watching.
 func NewWatcher(restConfig *rest.Config, initialProfile ProfileSpec, onChange func(oldProfile, newProfile ProfileSpec)) (*Watcher, error) {
+	if restConfig == nil {
+		return nil, errors.New("restConfig must not be nil")
+	}
+
 	dynClient, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
 		return nil, err
