@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/client-go/rest"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
@@ -26,6 +28,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
@@ -125,7 +128,12 @@ func serve() error {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
 
-	srv, err := newServer(cfg, router)
+	profileMinVersion, profileCipherSuites, tlsErr := setupTLSProfile(ctx, log, cfg, cluster, cancel)
+	if tlsErr != nil {
+		return fmt.Errorf("refusing to start with weakened TLS policy: %w", tlsErr)
+	}
+
+	srv, err := newServer(cfg, router, profileMinVersion, profileCipherSuites)
 	if err != nil {
 		return fmt.Errorf("failed to create server: %w", err)
 	}
@@ -150,6 +158,8 @@ func serve() error {
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("metrics server failed: %w", err)
 		}
+	case <-ctx.Done():
+		log.Info("Context cancelled (TLS profile change or shutdown), shutting down server...")
 	case <-quit:
 		log.Info("Shutdown signal received, shutting down server...")
 	}
@@ -170,7 +180,7 @@ func serve() error {
 
 // initStore creates the PostgreSQL store for API key management.
 // DBConnectionURL is validated in cfg.Validate() before this is called.
-func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
+func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (*api_keys.PostgresStore, error) {
 	log.Info("Connecting to PostgreSQL database...")
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL)
 }
@@ -256,4 +266,94 @@ func debugCORSConfig() cors.Config {
 		AllowOriginFunc: isLocalhostOrigin,
 		MaxAge:          12 * time.Hour,
 	}
+}
+
+// setupTLSProfile fetches the OpenShift cluster TLS security profile and starts
+// a watcher that cancels the context on profile changes. Returns the profile's
+// minVersion and cipherSuites for use in buildTLSConfig. On non-OpenShift clusters
+// or when HTTPS is disabled, returns zero values (flag-based defaults apply).
+//
+// On OpenShift, transient fetch errors are retried. If the profile cannot be
+// obtained after retries, the function returns an error to prevent starting with
+// a weaker default profile (fail-closed).
+func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config, cluster *config.ClusterConfig, cancel context.CancelFunc) (uint16, []uint16, error) {
+	restConfig := cluster.RESTConfig()
+	if !cfg.Secure || restConfig == nil {
+		return 0, nil, nil
+	}
+
+	profile, available, fetchErr := fetchTLSProfileWithRetry(ctx, log, restConfig)
+	if fetchErr != nil {
+		return 0, nil, fmt.Errorf("cluster TLS profile fetch failed after retries: %w", fetchErr)
+	}
+	if !available {
+		return 0, nil, nil
+	}
+
+	log.Info("Fetched cluster TLS security profile",
+		"type", string(profile.Type), "minTLSVersion", profile.MinTLSVersion)
+
+	profileMinVersion, profileCipherSuites, unsupported := tlsprofile.TLSConfigFromProfile(profile)
+	if len(unsupported) > 0 {
+		log.Warn("TLS profile contains ciphers not supported by this Go version (ignored)",
+			"unsupportedCiphers", unsupported)
+	}
+	if len(profileCipherSuites) == 0 && profileMinVersion < tls.VersionTLS13 {
+		log.Warn("TLS profile produced no TLS 1.2 cipher suites; Go defaults will be used for TLS 1.2 negotiation")
+	}
+
+	watcher, watchErr := tlsprofile.NewWatcher(restConfig, profile, func(oldProfile, newProfile tlsprofile.ProfileSpec) {
+		log.Info("TLS security profile changed, initiating graceful shutdown to reload",
+			"oldType", string(oldProfile.Type), "newType", string(newProfile.Type))
+		cancel()
+	})
+	if watchErr != nil {
+		log.Info("Could not start TLS profile watcher", "error", watchErr)
+	} else {
+		go func() {
+			if err := watcher.Start(ctx.Done()); err != nil {
+				log.Error("TLS profile watcher failed", "error", err)
+			}
+		}()
+	}
+
+	return profileMinVersion, profileCipherSuites, nil
+}
+
+// fetchTLSProfileWithRetry attempts to fetch the OpenShift TLS security profile.
+// If the config.openshift.io API doesn't exist (non-OpenShift), returns
+// available=false with nil error. For transient errors on OpenShift, retries a
+// few times and returns a non-nil error if all attempts fail (fail-closed).
+func fetchTLSProfileWithRetry(ctx context.Context, log *logger.Logger, restConfig *rest.Config) (tlsprofile.ProfileSpec, bool, error) {
+	const maxRetries = 3
+
+	var lastErr error
+	for attempt := range maxRetries {
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
+		profile, err := tlsprofile.FetchTLSProfile(fetchCtx, restConfig)
+		fetchCancel()
+
+		if err == nil {
+			return profile, true, nil
+		}
+
+		if tlsprofile.IsAPIUnavailable(err) {
+			log.Info("config.openshift.io API not available, using flag-based TLS defaults "+
+				"(expected on non-OpenShift clusters)", "error", err)
+			return tlsprofile.DefaultProfile(), false, nil
+		}
+
+		lastErr = err
+		if attempt < maxRetries-1 {
+			log.Info("Transient error fetching cluster TLS profile, retrying",
+				"error", err, "attempt", attempt+1, "maxRetries", maxRetries)
+			select {
+			case <-ctx.Done():
+				return tlsprofile.DefaultProfile(), false, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+
+	return tlsprofile.DefaultProfile(), false, lastErr
 }
