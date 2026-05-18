@@ -17,6 +17,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/client-go/rest"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
@@ -268,15 +269,17 @@ func debugCORSConfig() cors.Config {
 // a watcher that cancels the context on profile changes. Returns the profile's
 // minVersion and cipherSuites for use in buildTLSConfig. On non-OpenShift clusters
 // or when HTTPS is disabled, returns zero values (flag-based defaults apply).
+//
+// On OpenShift, transient fetch errors are retried to avoid silently running with
+// a weaker default profile when the admin has configured something stricter.
 func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config, cluster *config.ClusterConfig, cancel context.CancelFunc) (uint16, []uint16) {
 	restConfig := cluster.RESTConfig()
 	if !cfg.Secure || restConfig == nil {
 		return 0, nil
 	}
 
-	profile, fetchErr := tlsprofile.FetchTLSProfile(ctx, restConfig)
-	if fetchErr != nil {
-		log.Info("Could not fetch cluster TLS profile, using flag-based defaults", "error", fetchErr)
+	profile, available := fetchTLSProfileWithRetry(ctx, log, restConfig)
+	if !available {
 		return 0, nil
 	}
 
@@ -308,4 +311,43 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 	}
 
 	return profileMinVersion, profileCipherSuites
+}
+
+// fetchTLSProfileWithRetry attempts to fetch the OpenShift TLS security profile.
+// If the config.openshift.io API doesn't exist (non-OpenShift), it returns
+// immediately with available=false. For transient errors on OpenShift, it retries
+// a few times before falling back to flag-based defaults.
+func fetchTLSProfileWithRetry(ctx context.Context, log *logger.Logger, restConfig *rest.Config) (tlsprofile.ProfileSpec, bool) {
+	const maxRetries = 3
+
+	for attempt := range maxRetries {
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
+		profile, err := tlsprofile.FetchTLSProfile(fetchCtx, restConfig)
+		fetchCancel()
+
+		if err == nil {
+			return profile, true
+		}
+
+		if tlsprofile.IsAPIUnavailable(err) {
+			log.Info("config.openshift.io API not available, using flag-based TLS defaults "+
+				"(expected on non-OpenShift clusters)", "error", err)
+			return tlsprofile.DefaultProfile(), false
+		}
+
+		if attempt < maxRetries-1 {
+			log.Info("Transient error fetching cluster TLS profile, retrying",
+				"error", err, "attempt", attempt+1, "maxRetries", maxRetries)
+			select {
+			case <-ctx.Done():
+				return tlsprofile.DefaultProfile(), false
+			case <-time.After(2 * time.Second):
+			}
+		} else {
+			log.Error("Failed to fetch cluster TLS profile after retries, using flag-based defaults",
+				"error", err)
+		}
+	}
+
+	return tlsprofile.DefaultProfile(), false
 }

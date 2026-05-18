@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -56,7 +57,7 @@ func parseProfileFromAPIServer(obj *unstructured.Unstructured) (ProfileSpec, err
 
 	if pt != ProfileCustom {
 		if spec, ok := profiles[pt]; ok {
-			return spec, nil
+			return cloneProfile(spec), nil
 		}
 		return DefaultProfile(), fmt.Errorf("unrecognized TLS profile type %q", profileType)
 	}
@@ -94,4 +95,14 @@ func parseCustomProfile(profileObj map[string]any) (ProfileSpec, error) {
 		Ciphers:       ciphersRaw,
 		MinTLSVersion: minVersion,
 	}, nil
+}
+
+// IsAPIUnavailable returns true when the error indicates the config.openshift.io
+// API group or APIServer resource is not present (non-OpenShift cluster), as
+// opposed to a transient failure that should be retried.
+func IsAPIUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	return apierrors.IsNotFound(err)
 }
