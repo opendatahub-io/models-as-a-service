@@ -503,7 +503,7 @@ should_install_operator() {
 #   operator_name - Name of the operator (e.g., "rhods-operator")
 #   namespace - Target namespace for the operator
 #   catalog_source - CatalogSource name (e.g., "redhat-operators")
-#   channel - Subscription channel (e.g., "fast-3")
+#   channel - Subscription channel (e.g., "stable-3.x")
 #   starting_csv - Starting CSV (optional, can be empty)
 #   operatorgroup_target - Target namespace for OperatorGroup (optional, uses namespace if empty)
 #   source_namespace - Catalog source namespace (optional, defaults to openshift-marketplace)
