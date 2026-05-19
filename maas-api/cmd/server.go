@@ -52,6 +52,7 @@ func buildTLSConfig(cfg *config.Config) (*tls.Config, error) {
 	return &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		MinVersion:   cfg.TLS.MinVersion.Value(),
+		NextProtos:   []string{"h2", "http/1.1"},
 	}, nil
 }
 
