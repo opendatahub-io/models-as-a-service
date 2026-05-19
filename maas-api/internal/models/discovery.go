@@ -140,7 +140,7 @@ func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string) (*tls.Conf
 		if os.IsNotExist(err) {
 			log.Debug("Kubernetes service account CA not found, using system root CAs only",
 				"path", caPath)
-			return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: caCertPool}, nil
+			return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: caCertPool, NextProtos: []string{"h2", "http/1.1"}}, nil
 		}
 		return nil, fmt.Errorf("failed to read CA certificate: %w", err)
 	}
@@ -155,6 +155,7 @@ func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string) (*tls.Conf
 	return &tls.Config{
 		RootCAs:    caCertPool,
 		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"h2", "http/1.1"},
 	}, nil
 }
 
