@@ -56,8 +56,8 @@ type TenantReconciler struct {
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;patch;delete
@@ -158,6 +158,12 @@ func authenticationClusterSingleton() predicate.Predicate {
 	})
 }
 
+func configResourceDefault() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(o client.Object) bool {
+		return o.GetName() == maasv1alpha1.ConfigInstanceName
+	})
+}
+
 // deletedConfigMapOnly mirrors ODH: unmanaged ConfigMaps are recreated when deleted.
 func deletedConfigMapOnly() predicate.Predicate {
 	return predicate.Funcs{
@@ -187,6 +193,16 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.Tenant{}).
+		Watches(
+			&maasv1alpha1.Config{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.TenantNamespace,
+					Name:      maasv1alpha1.TenantInstanceName,
+				}}}
+			}),
+			builder.WithPredicates(configResourceDefault()),
+		).
 		Watches(
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),

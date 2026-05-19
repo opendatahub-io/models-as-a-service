@@ -101,7 +101,7 @@ For detailed instructions, see the [Installation Guide](docs/content/quickstart.
 |------|-------------|---------|
 | `--operator-catalog` | Custom operator catalog/index image | `quay.io/opendatahub/catalog:pr-456` |
 | `--operator-image` | Custom operator image (patches CSV) | `quay.io/opendatahub/operator:pr-456` |
-| `--channel` | Operator channel override | `fast`, `fast-3` |
+| `--channel` | Operator channel override | `fast-3`, `stable-3.x` |
 
 ### Environment Variables
 
