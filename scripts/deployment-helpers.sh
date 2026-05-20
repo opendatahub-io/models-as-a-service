@@ -503,7 +503,7 @@ should_install_operator() {
 #   operator_name - Name of the operator (e.g., "rhods-operator")
 #   namespace - Target namespace for the operator
 #   catalog_source - CatalogSource name (e.g., "redhat-operators")
-#   channel - Subscription channel (e.g., "fast-3")
+#   channel - Subscription channel (e.g., "stable-3.x")
 #   starting_csv - Starting CSV (optional, can be empty)
 #   operatorgroup_target - Target namespace for OperatorGroup (optional, uses namespace if empty)
 #   source_namespace - Catalog source namespace (optional, defaults to openshift-marketplace)
@@ -1068,6 +1068,35 @@ wait_for_crd() {
 
   echo "❌ Timed out after ${timeout}s waiting for CRD $crd to appear." >&2
   return 1
+}
+
+# Apply MaaS maas.opendatahub.io CRDs from deployment/base/maas-controller/crd and wait until
+# each is Established. Ensures the API server accepts CR writes before maas-controller starts
+# (the manager creates Config/default from code once the Deployment is running).
+install_maas_controller_crds_and_wait() {
+  local crd_bundle_dir="$1"
+  if [[ ! -d "$crd_bundle_dir" ]]; then
+    echo "ERROR: MaaS CRD bundle directory not found: $crd_bundle_dir" >&2
+    return 1
+  fi
+  local bases_dir="${crd_bundle_dir}/bases"
+  if [[ ! -d "$bases_dir" ]]; then
+    echo "ERROR: MaaS CRD bases directory not found: $bases_dir" >&2
+    return 1
+  fi
+  echo "⏳ Applying MaaS Controller CRDs from ${crd_bundle_dir}..."
+  kubectl apply -k "$crd_bundle_dir" || return 1
+  local f crd_name
+  for f in "${bases_dir}"/*.yaml; do
+    [[ -e "$f" ]] || continue
+    crd_name=$(awk '/^kind: CustomResourceDefinition$/ {crd=1} crd && /^  name: / {print $2; exit}' "$f" || true)
+    [[ -n "${crd_name:-}" ]] || continue
+    if ! wait_for_crd "$crd_name" "${CRD_TIMEOUT:-180}"; then
+      return 1
+    fi
+  done
+  echo "✅ MaaS Controller CRDs are Established"
+  return 0
 }
 
 # Helper function to extract version from CSV name (e.g., "operator.v1.2.3" -> "1.2.3")

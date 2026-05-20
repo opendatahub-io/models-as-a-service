@@ -69,7 +69,9 @@ echo "API Key: ${API_KEY}"
   "key": "sk-oai-...",
   "name": "my-api-key",
   "subscription": "premium-subscription",
-  "expiresAt": "2026-07-27T12:00:00Z"
+  "createdAt": "2026-04-28T12:00:00Z",
+  "expiresAt": "2026-07-27T12:00:00Z",
+  "ephemeral": false
 }
 ```
 
@@ -91,27 +93,38 @@ The response includes the bound `subscription` name.
 
 ### Listing Your Keys
 
-Search for your API keys with optional filters:
+Search for your API keys with options payload:
 
 ```bash
 curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -d '{
-    "status": "active",
-    "limit": 10,
-    "offset": 0
+    "filters": {
+      "status": ["active"]
+    },
+    "sort": {
+      "by": "created_at",
+      "order": "desc"
+    },
+    "pagination": {
+      "limit": 10,
+      "offset": 0
+    }
   }' | jq .
 ```
 
-**Filter options:**
+**Request options:**
 
 | Field | Description |
 |-------|-------------|
-| `status` | Filter by status: `active`, `revoked`, `expired` |
-| `limit` | Number of results per page (default: 10) |
-| `offset` | Offset for pagination (default: 0) |
-| `includeEphemeral` | Include ephemeral keys (default: false) |
+| `filters.username` | Filter by username. Admin-only; non-admin users can search only their own keys. |
+| `filters.status` | Filter by one or more statuses: `active`, `revoked`, `expired` |
+| `filters.includeEphemeral` | Include ephemeral keys (default: false) |
+| `sort.by` | Sort field: `created_at` (default), `expires_at`, `last_used_at`, or `name` |
+| `sort.order` | Sort order: `desc` (default) or `asc` |
+| `pagination.limit` | Number of results per page (default: 50, max: 100) |
+| `pagination.offset` | Offset for pagination (default: 0) |
 
 ### Get Key Details
 
@@ -130,11 +143,13 @@ curl -sS "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "name": "my-api-key",
   "description": "Key for model access",
+  "username": "alice",
   "status": "active",
   "subscription": "premium-subscription",
-  "createdAt": "2026-04-28T12:00:00Z",
-  "expiresAt": "2026-07-27T12:00:00Z",
-  "lastUsedAt": "2026-04-29T10:30:00Z"
+  "creationDate": "2026-04-28T12:00:00Z",
+  "expirationDate": "2026-07-27T12:00:00Z",
+  "lastUsedAt": "2026-04-29T10:30:00Z",
+  "ephemeral": false
 }
 ```
 
@@ -167,7 +182,10 @@ Revoke all active keys for your user:
 ```bash
 curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
   -H "Authorization: Bearer $(oc whoami -t)" \
-  -H "Content-Type: application/json" | jq .
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "'"$(oc whoami)"'"
+  }' | jq .
 ```
 
 **Response:**
@@ -175,7 +193,7 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
 ```json
 {
   "revokedCount": 5,
-  "message": "Successfully revoked 5 API key(s)"
+  "message": "Successfully revoked 5 active API key(s) for user alice"
 }
 ```
 

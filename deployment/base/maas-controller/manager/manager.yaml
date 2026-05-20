@@ -100,4 +100,4 @@ spec:
             cpu: 10m
             memory: 64Mi
       serviceAccountName: maas-controller
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: 30
