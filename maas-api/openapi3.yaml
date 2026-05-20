@@ -839,6 +839,14 @@ components:
                     type: string
                     description: Namespace where the MaaSModelRef lives
                     example: llm
+                display_name:
+                    type: string
+                    description: Human-readable display name from the openshift.io/display-name annotation on the MaaSModelRef
+                    example: Free Model
+                description:
+                    type: string
+                    description: Description from the openshift.io/description annotation on the MaaSModelRef
+                    example: A free-tier model for general use
                 token_rate_limits:
                     type: array
                     items:

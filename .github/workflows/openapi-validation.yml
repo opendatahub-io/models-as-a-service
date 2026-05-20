@@ -115,8 +115,11 @@ jobs:
           # Run breaking change detection
           oasdiff breaking base-spec.yaml maas-api/openapi3.yaml > breaking-changes.txt || true
 
-          # Check if actual breaking changes were detected (not just "No changes detected" message)
-          if [ -s breaking-changes.txt ] && ! grep -q "^No changes detected$" breaking-changes.txt; then
+          # Check if actual breaking changes were detected.
+          # oasdiff outputs "No changes detected" when specs are identical, and
+          # "No breaking changes to report, but the specs are different" when only
+          # non-breaking changes (e.g. new optional fields) are present. Both are safe.
+          if [ -s breaking-changes.txt ] && ! grep -qE "^No changes detected$|^No breaking changes" breaking-changes.txt; then
             echo "has_breaking_changes=true" >> $GITHUB_OUTPUT
             echo "## ⚠️  Breaking Changes Detected" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY

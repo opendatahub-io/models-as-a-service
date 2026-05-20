@@ -45,7 +45,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--dry-run` - Show what would be done without applying changes
 - `--operator-catalog <image>` - Custom operator catalog image for PR testing
 - `--operator-image <image>` - Custom operator image for PR testing
-- `--channel <channel>` - Operator channel override (default: fast-3 for ODH, fast-3.x for RHOAI)
+- `--channel <channel>` - Operator channel override (default: fast-3 for ODH, stable-3.x for RHOAI)
 
 **Requirements:**
 - OpenShift cluster (4.19.9+)
