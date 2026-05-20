@@ -37,6 +37,11 @@ def _oc_not_found(exc):
     return "(NotFound)" in combined
 
 
+def _oc_output_not_found(result):
+    combined = (result.stderr or "") + (result.stdout or "")
+    return "(NotFound)" in combined or "not found" in combined.lower()
+
+
 def _oc_json(args):
     result = _oc_run(args)
     if result.returncode != 0:
@@ -94,10 +99,13 @@ def _ref_to_config(refs):
 def require_config_crd():
     r = _oc_run(["get", "crd", CONFIG_CRD])
     if r.returncode != 0:
-        pytest.skip(
-            f"Missing CRD {CONFIG_CRD} (transitional skip: install maas-controller bundle from "
-            "a release that includes the Config anchor API, e.g. post-#894)."
-        )
+        if _oc_output_not_found(r):
+            pytest.skip(
+                f"Missing CRD {CONFIG_CRD} (transitional skip: install maas-controller bundle from "
+                "a release that includes the Config anchor API, e.g. post-#894)."
+            )
+        combined = (r.stderr or "") + (r.stdout or "")
+        pytest.fail(f"`oc get crd {CONFIG_CRD}` failed: {combined.strip()}")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -155,9 +163,15 @@ class TestConfigTenantOwnership:
             ]
         )
         if result.returncode != 0:
-            pytest.skip(
-                f"deployment/{CONTROLLER_DEPLOYMENT} not found in {CONTROLLER_DEPLOY_NS!r}; "
-                "skipping Config→Deployment owner check."
+            if _oc_output_not_found(result):
+                pytest.skip(
+                    f"deployment/{CONTROLLER_DEPLOYMENT} not found in {CONTROLLER_DEPLOY_NS!r}; "
+                    "skipping Config→Deployment owner check."
+                )
+            combined = (result.stderr or "") + (result.stdout or "")
+            pytest.fail(
+                f"`oc get deployment {CONTROLLER_DEPLOYMENT} -n {CONTROLLER_DEPLOY_NS}` failed: "
+                f"{combined.strip()}"
             )
         doc = json.loads(result.stdout)
         ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))

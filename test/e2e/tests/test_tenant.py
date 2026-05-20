@@ -32,6 +32,11 @@ def _oc_not_found(exc):
     return "(NotFound)" in combined
 
 
+def _oc_output_not_found(result):
+    combined = (result.stderr or "") + (result.stdout or "")
+    return "(NotFound)" in combined or "not found" in combined.lower()
+
+
 def _oc_json(args):
     result = _oc_run(args)
     if result.returncode != 0:
@@ -74,10 +79,13 @@ def _tenant_status():
 def require_tenant_crd():
     r = _oc_run(["get", "crd", TENANT_CRD])
     if r.returncode != 0:
-        pytest.skip(
-            f"Missing CRD {TENANT_CRD} (transitional skip: install maas-controller manifests "
-            f"so CRDs exist; then controller creates {TENANT_NAME})."
-        )
+        if _oc_output_not_found(r):
+            pytest.skip(
+                f"Missing CRD {TENANT_CRD} (transitional skip: install maas-controller manifests "
+                f"so CRDs exist; then controller creates {TENANT_NAME})."
+            )
+        combined = (r.stderr or "") + (r.stdout or "")
+        pytest.fail(f"`oc get crd {TENANT_CRD}` failed: {combined.strip()}")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -134,9 +142,15 @@ class TestTenantLifecycle:
             ]
         )
         if result.returncode != 0:
-            pytest.skip(
-                f"payload-processing deployment not found in namespace {GATEWAY_NAMESPACE!r}; "
-                "skipping (optional workload in some CI or partial installs)."
+            if _oc_output_not_found(result):
+                pytest.skip(
+                    f"payload-processing deployment not found in namespace {GATEWAY_NAMESPACE!r}; "
+                    "skipping (optional workload in some CI or partial installs)."
+                )
+            combined = (result.stderr or "") + (result.stdout or "")
+            pytest.fail(
+                f"`oc get deployment payload-processing -n {GATEWAY_NAMESPACE}` failed: "
+                f"{combined.strip()}"
             )
         assert result.stdout.strip(), "payload-processing deployment get succeeded but returned no name"
 
@@ -175,7 +189,10 @@ class TestTenantNoFalseOwnership:
             plural = _KIND_PLURAL[cr_type]
             result = _oc_run(["get", plural, "-n", namespace, "-o", "json"])
             if result.returncode != 0:
-                continue
+                if _oc_output_not_found(result):
+                    continue
+                combined = (result.stderr or "") + (result.stdout or "")
+                pytest.fail(f"`oc get {plural} -n {namespace}` failed: {combined.strip()}")
             for item in json.loads(result.stdout).get("items") or []:
                 owners = item.get("metadata", {}).get("ownerReferences") or []
                 bad = [r for r in owners if r.get("kind") == "Tenant"]
