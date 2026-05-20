@@ -36,7 +36,17 @@ func CheckDependencies(ctx context.Context, c client.Client) error {
 
 // RunPlatform runs kustomize render, apply, and deployment readiness after dependencies and prerequisites
 // have succeeded and gateway ref is valid (caller validates gateway existence).
-func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, manifestPath string, appNs string, clusterAudience string, mcfg *maasv1alpha1.Config) (*RunResult, error) {
+func RunPlatform(
+	ctx context.Context,
+	log logr.Logger,
+	c client.Client,
+	scheme *runtime.Scheme,
+	tenant *maasv1alpha1.Tenant,
+	manifestPath string,
+	appNs string,
+	clusterAudience string,
+	mcfg *maasv1alpha1.Config,
+) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("manifest path: %w", err)
