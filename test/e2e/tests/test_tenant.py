@@ -97,36 +97,32 @@ def require_tenant_singleton():
         )
 
 
-def _wait_ready_true(timeout=180, interval=5):
+def _wait_tenant_ready(timeout=180, interval=5):
     deadline = time.time() + timeout
     while time.time() < deadline:
         st = _tenant_status()
         if st:
             for cond in st.get("conditions") or []:
                 if cond.get("type") == "Ready" and cond.get("status") == "True":
-                    return True
+                    return st
         time.sleep(interval)
-    return False
+    return None
 
 
 class TestTenantLifecycle:
-    def test_tenant_singleton_exists(self):
-        assert _tenant_status() is not None, (
-            f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} missing "
-            "(maas-controller should create default-tenant on startup)."
-        )
-
     def test_tenant_ready_and_phase_healthy(self):
-        assert _wait_ready_true(), "Tenant Ready did not become True in time."
+        st = _wait_tenant_ready()
+        assert st is not None, "Tenant Ready did not become True in time."
 
-        phase = (_tenant_status() or {}).get("phase")
+        phase = st.get("phase")
         assert phase in ("Active", "Degraded"), (
             f"Expected phase Active or Degraded when reconciled, got {phase!r}"
         )
 
     def test_payload_processing_deployed_with_active_tenant(self):
-        assert _wait_ready_true(), "Tenant not Ready; skip workload checks."
-        phase = (_tenant_status() or {}).get("phase")
+        st = _wait_tenant_ready()
+        assert st is not None, "Tenant not Ready; skip workload checks."
+        phase = st.get("phase")
         if phase != "Active":
             pytest.skip("Tenant not Active (e.g. Degraded); payload-processing not asserted")
 
