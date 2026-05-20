@@ -205,7 +205,7 @@ Follow the standard RHOAI operator upgrade procedure. The operator upgrade will:
 
 - Install MaaS CRDs (`maas.opendatahub.io/v1alpha1`): Tenant, MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, ExternalModel
 - Deploy maas-controller when `modelsAsService: Managed` is set in the DSC
-- Replace the old cluster-scoped `ModelsAsService` CR (`components.platform.opendatahub.io/v1alpha1`) with a namespace-scoped `Tenant` CR (`maas.opendatahub.io/v1alpha1`) -- see [Phase 3.5](#35-modelsasservice-to-tenant-cr-transition) for details
+- Replace the old cluster-scoped `ModelsAsService` CR (`components.platform.opendatahub.io/v1alpha1`) with a namespace-scoped `Tenant` CR (`maas.opendatahub.io/v1alpha1`) -- see [Phase 3.5](#phase-35-modelsasservice-to-tenant-cr-transition) for details
 - Create gateway-level default policies: `gateway-default-auth` and `gateway-default-deny`
 
 **Important:** The `modelsAsService` field defaults to `Removed` if not specified in the DSC. The operator will not deploy maas-controller until you explicitly set `modelsAsService: Managed`. This means the upgrade itself is safe -- MaaS is opt-in.
