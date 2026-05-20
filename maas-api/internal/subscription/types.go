@@ -55,6 +55,8 @@ type SubscriptionInfo struct {
 type ModelRefInfo struct {
 	Name            string           `json:"name"`
 	Namespace       string           `json:"namespace,omitempty"`
+	DisplayName     string           `json:"display_name,omitempty"`
+	Description     string           `json:"description,omitempty"`
 	TokenRateLimits []TokenRateLimit `json:"token_rate_limits,omitempty"`
 	BillingRate     *BillingRate     `json:"billing_rate,omitempty"`
 }

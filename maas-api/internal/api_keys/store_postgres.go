@@ -234,6 +234,13 @@ func (s *PostgresStore) Search(
 		whereClauses = append(whereClauses, fmt.Sprintf("(%s) IN (%s)", effectiveStatusExpr, strings.Join(placeholders, ",")))
 	}
 
+	// Filter by subscription name
+	if filters.Subscription != nil && *filters.Subscription != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("subscription = $%d", argPos))
+		args = append(args, strings.TrimSpace(*filters.Subscription))
+		argPos++
+	}
+
 	// Build final WHERE clause
 	whereClause := ""
 	if len(whereClauses) > 0 {

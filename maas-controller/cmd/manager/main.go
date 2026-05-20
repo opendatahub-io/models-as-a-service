@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	stderrors "errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -331,7 +332,7 @@ func getClusterServiceAccountIssuer(c client.Reader) (string, error) {
 // LifecycleReconciler patches Config→Tenant the same way it patches Config→Deployment. ODH may
 // create the Tenant first; this runnable converges the Tenant shell for standalone installs. It
 // does not create or patch the Tenant while the maas-controller Deployment is terminating.
-func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, controllerDeploymentNS, controllerDeploymentName string) manager.RunnableFunc {
+func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, controllerDeploymentNS, controllerDeploymentName, gatewayName, gatewayNamespace string) manager.RunnableFunc {
 	return func(ctx context.Context) error {
 		log := ctrl.Log.WithName("setup").WithName("ensureClusterBootstrap")
 		c := mgr.GetClient()
@@ -388,7 +389,10 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, controlle
 						Namespace: tenantNamespace,
 					},
 				}
-				tenantreconcile.EnsureTenantGatewayDefaults(t)
+				if t.Spec.GatewayRef.Namespace == "" && t.Spec.GatewayRef.Name == "" {
+					t.Spec.GatewayRef.Namespace = gatewayNamespace
+					t.Spec.GatewayRef.Name = gatewayName
+				}
 				if err := c.Create(ctx, t); err != nil && !errors.IsAlreadyExists(err) {
 					log.Error(err, "failed to create default-tenant", "namespace", tenantNamespace)
 					return
@@ -442,6 +446,13 @@ func main() {
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	if gatewayName == "" || gatewayNamespace == "" {
+		setupLog.Error(stderrors.New("invalid gateway configuration"),
+			"both --gateway-name and --gateway-namespace must be non-empty",
+			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
+		os.Exit(1)
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -557,11 +568,13 @@ func main() {
 	setupLog.Info("Tenant platform kustomize path", "path", manifestPath)
 
 	if err := (&maas.TenantReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		ManifestPath:    manifestPath,
-		AppNamespace:    maasAPINamespace,
-		TenantNamespace: maasSubscriptionNamespace,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		ManifestPath:     manifestPath,
+		AppNamespace:     maasAPINamespace,
+		TenantNamespace:  maasSubscriptionNamespace,
+		GatewayName:      gatewayName,
+		GatewayNamespace: gatewayNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
 		os.Exit(1)
@@ -581,7 +594,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, maasAPINamespace, "maas-controller")); err != nil {
+	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, maasAPINamespace, "maas-controller", gatewayName, gatewayNamespace)); err != nil {
 		setupLog.Error(err, "unable to register ensureClusterBootstrap runnable")
 		os.Exit(1)
 	}
