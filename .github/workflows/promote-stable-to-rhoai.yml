@@ -80,11 +80,12 @@ jobs:
             exit 1
           fi
 
-          git merge --abort
+          git merge --abort || true
 
       - name: Merge stable into rhoai
         if: steps.check.outputs.skip != 'true'
         run: |
+          set -euo pipefail
           git checkout rhoai
           git reset --hard origin/rhoai
 
