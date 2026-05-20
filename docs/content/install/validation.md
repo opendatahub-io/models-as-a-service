@@ -51,7 +51,8 @@ API_KEY_RESPONSE=$(curl -sS \
 API_KEY=$(echo "$API_KEY_RESPONSE" | jq -r '.key')
 if [ -z "$API_KEY" ] || [ "$API_KEY" = "null" ]; then
   echo "Failed to obtain API key. Raw response:"
-  echo "$API_KEY_RESPONSE"
+  echo "$API_KEY_RESPONSE" | sed -E 's/("key"[[:space:]]*:[[:space:]]*")[^"]+/\1***REDACTED***/g'
+  exit 1
 else
   echo "API key obtained successfully."
 fi
@@ -232,7 +233,7 @@ The exact number of 200s before rate limiting depends on your TokenRateLimitPoli
 
 **If this fails:**
 
-- **No 429s after 16 requests**: the TokenRateLimitPolicy is missing or not enforced. Check: `kubectl get tokenratelimitpolicy -A`. If multiple TokenRateLimitPolicies target the same HTTPRoute, see [Subscription limitations](../configuration-and-management/subscription-known-issues.md#token-rate-limits-when-multiple-model-references-share-one-httproute).
+- **No 429s after 16 requests**: the TokenRateLimitPolicy is missing or not enforced. Check: `kubectl get tokenratelimitpolicy -A`. If multiple TokenRateLimitPolicies target the same HTTPRoute, see [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md).
 
 For more troubleshooting, see [Troubleshooting](troubleshooting.md).
 
