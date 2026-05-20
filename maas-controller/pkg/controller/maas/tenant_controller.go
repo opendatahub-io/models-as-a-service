@@ -55,6 +55,8 @@ type TenantReconciler struct {
 	GatewayName string
 	// GatewayNamespace is the namespace of the Gateway resource resolved from cmd/manager flags.
 	GatewayNamespace string
+	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
+	ClusterAudience string
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.

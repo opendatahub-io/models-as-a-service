@@ -38,11 +38,6 @@ const (
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
 
-	DefaultGatewayNamespace = "openshift-ingress"
-	DefaultGatewayName      = "maas-default-gateway"
-	DefaultAppNamespace     = "opendatahub"
-	DefaultClusterAudience  = "https://kubernetes.default.svc"
-
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"

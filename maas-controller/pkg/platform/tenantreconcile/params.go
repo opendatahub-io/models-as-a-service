@@ -31,10 +31,10 @@ type PlatformParams struct {
 // cluster state, and RELATED_IMAGE_* env vars. No disk I/O.
 func BuildPlatformParams(tenant *maasv1alpha1.Tenant, appNamespace, clusterAudience string) PlatformParams {
 	return PlatformParams{
-		AppNamespace:            firstNonEmpty(appNamespace, DefaultAppNamespace),
-		GatewayNamespace:        firstNonEmpty(tenant.Spec.GatewayRef.Namespace, DefaultGatewayNamespace),
-		GatewayName:             firstNonEmpty(tenant.Spec.GatewayRef.Name, DefaultGatewayName),
-		ClusterAudience:         firstNonEmpty(clusterAudience, DefaultClusterAudience),
+		AppNamespace:            appNamespace,
+		GatewayNamespace:        tenant.Spec.GatewayRef.Namespace,
+		GatewayName:             tenant.Spec.GatewayRef.Name,
+		ClusterAudience:         clusterAudience,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
 		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
 		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),

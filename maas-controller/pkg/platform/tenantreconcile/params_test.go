@@ -15,26 +15,33 @@ import (
 )
 
 func TestBuildPlatformParams(t *testing.T) {
-	t.Run("uses centralized defaults when inputs are unset", func(t *testing.T) {
+	t.Run("if values are not set for optional fields, fall back to defaults", func(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
 		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
 		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
 
-		tenant := &maasv1alpha1.Tenant{}
+		tenant := &maasv1alpha1.Tenant{
+			Spec: maasv1alpha1.TenantSpec{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{
+					Namespace: "openshift-ingress",
+					Name:      "maas-default-gateway",
+				},
+			},
+		}
 
-		got := BuildPlatformParams(tenant, "", "")
+		got := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc")
 
-		assert.Equal(t, DefaultAppNamespace, got.AppNamespace)
-		assert.Equal(t, DefaultGatewayNamespace, got.GatewayNamespace)
-		assert.Equal(t, DefaultGatewayName, got.GatewayName)
-		assert.Equal(t, DefaultClusterAudience, got.ClusterAudience)
+		assert.Equal(t, "opendatahub", got.AppNamespace)
+		assert.Equal(t, "openshift-ingress", got.GatewayNamespace)
+		assert.Equal(t, "maas-default-gateway", got.GatewayName)
+		assert.Equal(t, "https://kubernetes.default.svc", got.ClusterAudience)
 		assert.Equal(t, DefaultMaaSAPIImage, got.MaaSAPIImage)
 		assert.Equal(t, DefaultPayloadProcessingImage, got.PayloadProcessingImage)
 		assert.Equal(t, DefaultMaaSAPIKeyCleanupImage, got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, DefaultAPIKeyMaxExpirationDays, got.APIKeyMaxExpirationDays)
 	})
 
-	t.Run("prefers explicit values and env overrides", func(t *testing.T) {
+	t.Run("if values are set for optional fields, they should prevail", func(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "quay.io/example/maas-api:test")
 		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "quay.io/example/payload:test")
 		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "quay.io/example/cleanup:test")
