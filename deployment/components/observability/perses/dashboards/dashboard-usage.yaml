@@ -4,9 +4,10 @@
 # $__range is a Perses built-in variable (since v0.40.0) that binds to the native
 # time picker, so all LogQL windows track the dashboard time range automatically.
 #
-# user_id, tokens_total, etc. are Loki structured metadata — accessible via
-# pipeline filters (| user_id=~"..." | unwrap tokens_total) without | json.
-# Stream labels (from groupbyattrs): subscription, model, response_code, method.
+# user_id, tokens_total, response_code, method, etc. are Loki structured metadata —
+# accessible via pipeline filters (| user_id=~"..." | unwrap tokens_total) without | json.
+# Stream labels (verified 2026-05-19 via /api/v1/series): kubernetes_namespace_name,
+# log_type, service_name, subscription, model. response_code is NOT a stream label.
 #
 # Subscription and Model dropdowns use StaticListVariable because Perses has no
 # LokiLabelValuesVariable plugin yet. To add new values, update the YAML;
@@ -28,7 +29,7 @@ metadata:
     app: perses
     app.kubernetes.io/part-of: maas-observability
   annotations:
-    maas.observability/visual-revision: "2026-05-17-table-both-cols-filled"
+    maas.observability/visual-revision: "2026-05-19-simplify-token-queries"
 spec:
   display:
     name: "Usage Dashboard"
@@ -118,9 +119,10 @@ spec:
                     kind: LokiDatasource
                     name: loki
                   query: >-
-                    sum(sum_over_time({service_name="maas-gateway", response_code=~"2..",
+                    sum(sum_over_time({service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [$__range]))
+                    | user_id=~"$user" | user_id!="-"
+                    | unwrap tokens_total [$__range]))
                     or vector(0)
 
     totalRequests:
@@ -176,9 +178,9 @@ spec:
                     kind: LokiDatasource
                     name: loki
                   query: >-
-                    sum(count_over_time({service_name="maas-gateway", response_code="429",
+                    sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="-" [$__range]))
+                    | response_code="429" | user_id=~"$user" | user_id!="-" [$__range]))
                     or vector(0)
 
     successRate:
@@ -204,9 +206,9 @@ spec:
                     kind: LokiDatasource
                     name: loki
                   query: >-
-                    (sum(count_over_time({service_name="maas-gateway", response_code=~"2..",
+                    (sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="-" [$__range]))
+                    | response_code=~"2.." | user_id=~"$user" | user_id!="-" [$__range]))
                     /
                     sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
@@ -280,9 +282,10 @@ spec:
                     kind: LokiDatasource
                     name: loki
                   query: >-
-                    sum by (${view_by:raw}) (sum_over_time({service_name="maas-gateway", response_code=~"2..",
+                    sum by (${view_by:raw}) (sum_over_time({service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [30m]))
+                    | user_id=~"$user" | user_id!="-"
+                    | unwrap tokens_total [30m]))
 
     tokenConsumptionTable:
       kind: Panel
@@ -336,9 +339,10 @@ spec:
                     name: loki
                   query: >-
                     sum by (model, subscription) (sum_over_time(
-                    {service_name="maas-gateway", response_code=~"2..",
+                    {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="-" | unwrap tokens_total [$__range]))
+                    | user_id=~"$user" | user_id!="-"
+                    | unwrap tokens_total [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -349,9 +353,9 @@ spec:
                     name: loki
                   query: >-
                     sum by (model, subscription) (count_over_time(
-                    {service_name="maas-gateway", response_code=~"2..",
+                    {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="-" [$__range]))
+                    | response_code=~"2.." | user_id=~"$user" | user_id!="-" [$__range]))
 
   layouts:
     - kind: Grid

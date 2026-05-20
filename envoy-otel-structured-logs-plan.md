@@ -86,10 +86,10 @@ status: completed
 content: "DONE: Added service.instance.id via POD_NAME downward API env var in deployment + config. Also added service.namespace."
 status: completed
 - id: groupbyattrs-processor
-content: "DONE: Added groupbyattrs processor to promote subscription/model/response_code/method to Loki stream labels."
+content: "DONE: Added groupbyattrs processor to promote subscription/model to Loki stream labels. Note: response_code and method are NOT promoted — they remain structured metadata (verified on cluster 2026-05-19 via /api/v1/series)."
 status: completed
 - id: lokistack-stream-labels
-content: "DONE: Patched LokiStack CR to index subscription, model, response_code, method as stream labels."
+content: "DONE: Patched LokiStack CR to index subscription, model as stream labels. response_code and method are structured metadata, not stream labels (verified 2026-05-19)."
 status: completed
 - id: loki-datasource-rbac
 content: "DONE: Created maas-grafana-loki-reader ClusterRole + ClusterRoleBinding + GrafanaDatasource/loki for Grafana -> Loki access."
@@ -521,7 +521,7 @@ flowchart LR
     envoyALS["Envoy OTel ALS\n(gRPC log records)"] -->|"1: Log-level\nattributes only"| otlpRecv["OTLP Receiver\n(:4317)"]
     otlpRecv -->|"2"| resourceProc["resource processor\n+service.name: maas-gateway\n+service.namespace: openshift-ingress\n+service.instance.id: POD_NAME"]
     resourceProc -->|"3"| transformProc["transform processor\nstrip JSON quotes from\nuser_id, subscription"]
-    transformProc -->|"4"| groupbyProc["groupbyattrs processor\npromotes to resource attrs:\nsubscription, model,\nresponse_code, method"]
+    transformProc -->|"4"| groupbyProc["groupbyattrs processor\npromotes to resource attrs:\nsubscription, model\n(response_code, method listed\nbut NOT promoted on cluster)"]
     groupbyProc -->|"5"| batchProc["batch processor\ntimeout: 5s\nsend_batch_size: 1000"]
     batchProc -->|"6: OTLP/HTTP + TLS\nbearertokenauth"| lokiGw["LokiStack Gateway\n/api/logs/v1/application/otlp"]
 ```
@@ -618,7 +618,7 @@ flowchart LR
     subgraph lokiPath ["Loki Path\n(per-request logs, with user)"]
         otelNode["OTel Collector"]
         lokiNode["Loki"]
-        lokiFields["Stream labels:\nservice_name, subscription,\nmodel, response_code, method\nStructured metadata:\nuser_id, tokens_*, path,\nrequest_id, duration_ms, ..."]
+        lokiFields["Stream labels:\nkubernetes_namespace_name, log_type,\nservice_name, subscription, model\nStructured metadata:\nresponse_code, method, user_id,\ntokens_*, path, request_id,\nduration_ms, ..."]
     end
 
     wasmFilter -->|"1: hits_addend\n(rate limit descriptors)"| limNode
@@ -702,17 +702,20 @@ We chose `sed` for portability. The `install-observability.sh` script pipes `kus
 
 | OTel Attribute                            | Loki Placement                                        | Rationale                                              |
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------ |
-| `service.name`                            | **Stream label** (via LokiStack default)              | Low cardinality, identifies the service                |
+| `kubernetes_namespace_name`               | **Stream label** (OpenShift default)                  | Low cardinality, tenant isolation                      |
+| `log_type`                                | **Stream label** (OpenShift default)                  | Low cardinality (`application`)                        |
+| `service_name`                            | **Stream label** (via LokiStack default)              | Low cardinality, identifies the service                |
 | `subscription`                            | **Stream label** (via groupbyattrs + LokiStack patch) | Low cardinality, primary query dimension               |
-| `model`                                   | **Stream label**                                      | Bounded cardinality (~200 models max), frequent filter |
-| `response_code`                           | **Stream label**                                      | Very low cardinality (200, 429, 401, 403, 500)         |
-| `method`                                  | **Stream label**                                      | Very low cardinality (GET, POST)                       |
+| `model`                                   | **Stream label** (via groupbyattrs + LokiStack patch) | Bounded cardinality (~200 models max), frequent filter |
+| `response_code`                           | **Structured metadata**                               | Despite being in `groupbyattrs` config, NOT promoted to stream label on this cluster (verified 2026-05-19 via `/api/v1/series`). Must use pipeline filter `\| response_code=~"2.."` |
+| `method`                                  | **Structured metadata**                               | Same as `response_code` — not promoted despite `groupbyattrs` config |
 | `user_id`                                 | **Structured metadata**                               | High cardinality -- one value per user                 |
 | `tokens_total/prompt/completion`          | **Structured metadata**                               | Numeric, high cardinality                              |
 | `request_id`, `path`, `duration_ms`, etc. | **Structured metadata**                               | High cardinality, per-request values                   |
 
+> **Cluster validation (2026-05-19):** Querying `/api/v1/series` confirmed only **5 true stream labels**: `kubernetes_namespace_name`, `log_type`, `service_name`, `model`, `subscription`. All other fields (`response_code`, `method`, `user_id`, `tokens_*`, `duration_ms`, etc.) are **structured metadata** — Loki merges them into the `"stream"` object at query time, making them indistinguishable in `query_range` JSON responses. The only way to tell them apart is `/api/v1/series` (returns indexed labels only) or checking the OTel collector `groupbyattrs` config.
 
-The `groupbyattrs` processor in the OTel Collector promotes `subscription`, `model`, `response_code`, and `method` from log-level attributes to resource-level attributes, enabling LokiStack to use them as stream labels.
+The `groupbyattrs` processor in the OTel Collector config lists `subscription`, `model`, `response_code`, and `method` as keys to promote. However, on the current cluster only `subscription` and `model` are actually indexed as stream labels. `response_code` and `method` remain structured metadata — dashboard queries must use pipeline filters (e.g., `| response_code=~"2.."`) rather than stream selectors (e.g., `{response_code=~"2.."}`) for these fields.
 
 ---
 
@@ -1055,7 +1058,7 @@ On the **REQUEST path**: WASM [1] handles auth + header injection first, then re
 | **OTel gRPC call**          | Asynchronous fire-and-forget from Envoy. No added latency on request path.                                                     | Collector co-located in same namespace                  |
 | **OTel Collector**          | 2 replicas, batch processor (5s/1000). If collector is down, logs are dropped -- requests still succeed.                       | Health check extension, pod disruption budget           |
 | **Log volume**              | One record per request. At 1000 req/s = ~86M records/day.                                                                      | Batch processor + Loki retention policies               |
-| **Loki storage**            | Structured metadata (not labels) for user_id -- no index cardinality issue. Stream labels limited to 5 low-cardinality fields. | Schema v13 with structured metadata support             |
+| **Loki storage**            | Structured metadata (not labels) for user_id, response_code, method, tokens_* -- no index cardinality issue. True stream labels limited to 5: `kubernetes_namespace_name`, `log_type`, `service_name`, `subscription`, `model`. | Schema v13 with structured metadata support             |
 
 
 ---
@@ -1147,7 +1150,7 @@ registry.redhat.io/rhosdt/opentelemetry-collector-rhel9@sha256:f970e31da49e636dc
 
 ### Context
 
-The structured logs pipeline (Envoy -> OTel Collector -> Loki) produces per-request log records with 18 attributes including `user_id`, `subscription`, `model`, `tokens_total`, `tokens_prompt`, `tokens_completion`, `duration_ms`. These are indexed in Loki as stream labels (`service.name`, `subscription`, `model`, `response_code`, `method`, `kubernetes_namespace_name`) plus structured metadata attributes.
+The structured logs pipeline (Envoy -> OTel Collector -> Loki) produces per-request log records with 25+ attributes including `user_id`, `subscription`, `model`, `tokens_total`, `tokens_prompt`, `tokens_completion`, `duration_ms`. Only 5 are true Loki stream labels (`kubernetes_namespace_name`, `log_type`, `service_name`, `subscription`, `model`); all others (`response_code`, `method`, `user_id`, `tokens_*`, `path`, `request_id`, `duration_ms`, etc.) are structured metadata — accessible via pipeline filters without a parser but requiring a full scan when filtered.
 
 Existing Perses dashboards query per-user data from Prometheus using the `user` label on Limitador metrics (`authorized_hits`, `authorized_calls`, `limited_calls`). This is a **high-cardinality** problem: every unique user creates new time series, which degrades Prometheus storage and query performance at scale.
 
@@ -1322,10 +1325,14 @@ sum by (user_id, subscription, model) (sum_over_time({kubernetes_namespace_name=
 ## Remaining / Deferred Work
 
 1. ~~**Perses dashboards**: Create Perses dashboard equivalents~~ → **DONE**: All per-user panels migrated from PromQL to LogQL (LokiTimeSeriesQuery). AI Engineer: 11/12 panels. Platform Admin: 6 panels. Usage: stat row + token-consumption time series + table. User variables changed from PrometheusLabelValuesVariable to TextVariable. `| json` removed from all queries (log body is plain text; `user_id`, `tokens_total` etc. are Loki structured metadata accessible via pipeline filters without a parser).
-  **Usage Dashboard — token consumption time series (updated 2026-05-17):**
+  **Usage Dashboard — token consumption time series (updated 2026-05-19):**
   A `TimeSeriesChart` sits **above** the usage table. LogQL: ``sum by (${view_by:raw}) (sum_over_time(... | unwrap tokens_total [30m]))``. The **View by** variable (`view_by`) is a `StaticListVariable` with values `model` | `subscription` (labels "By model" / "By subscription"). When the user selects **By model**, the chart shows one series per model (~3 lines); **By subscription** shows one series per subscription (~2–4 lines). The `${view_by:raw}` interpolation avoids list-variable `(a|b)` syntax inside LogQL `by (...)` ([Variable concepts](https://perses.dev/perses/docs/concepts/variable/)).
-  **Usage Dashboard — usage breakdown table (updated 2026-05-17):**
+  **Usage Dashboard — usage breakdown table (updated 2026-05-19):**
   The table uses ``sum by (model, subscription)`` (hardcoded, **not** driven by `view_by`) so that **both** Model and Subscription columns are always populated. Perses `columnSettings` renders column headers even when no data exists for a label — using `sum by (${view_by:raw})` in the table left one column empty (see Limitation E below). The table therefore always shows all model×subscription pairs regardless of the **View by** selector. The chart is the panel that changes by **View by**.
+  **Usage Dashboard — `response_code` as structured metadata (2026-05-19):**
+  On the current cluster, `response_code` is **structured metadata**, not a stream label (verified via `/api/v1/series`). Queries that previously used `response_code` in the stream selector (e.g., `{response_code=~"2.."}`) returned empty results. Fix: moved `response_code` filters to pipeline filters (`| response_code=~"2.."`). This applies to: Total Errors (`| response_code="429"`), Success Rate numerator (`| response_code=~"2.."`), and Table Requests (`| response_code=~"2.."`).
+  **Usage Dashboard — token query simplification (2026-05-19):**
+  Removed `| response_code=~"2.."` from the 3 token-sum queries (Total Tokens, Chart, Table Tokens). Rationale: the rate limiting uses a "check-then-report" pattern — `responseBodyJSON("/usage/total_tokens")` returns 0 when there is no valid response body (non-2xx), so non-successful responses contribute 0 tokens via `unwrap tokens_total`. The `response_code` filter was redundant for token sums and added unnecessary structured metadata scanning. It is retained only for `count_over_time` queries (Success Rate, Table Requests) where the distinction between 2xx and non-2xx is essential.
   **Usage Dashboard — time window for stat panels and table (`$__range`, 2026-05-14):**
   Stat panels, Success Rate, Active Users, and the usage table use **``[$__range]``** with **`calculation: last`**. `$__range` is a Perses built-in that tracks the dashboard time selection (see dashboard YAML header in `deployment/components/observability/perses/dashboards/dashboard-usage.yaml`). Variable expansion in queries is described in [Perses Variable concepts](https://perses.dev/perses/docs/concepts/variable/).
   **Why `calculation: last` with `query_range`:** Loki stores one log line per request. Perses Loki queries go through `query_range` with multiple evaluation steps. Using a short sliding window (for example `[5m]`) **without** explicit `step` control and then **`calculation: sum`** across steps can over-count because windows overlap (validated: 21 requests displayed as ~444). **``[$__range]`` + `calculation: last`** makes each step aggregate over the full selected window; taking the last step counts each log line once for totals (see item 6 — Limitation C and [Loki plugin model](https://perses.dev/plugins/docs/loki/model/)).
@@ -1398,6 +1405,12 @@ sum by (user_id, subscription, model) (sum_over_time({kubernetes_namespace_name=
 
   **Decision:** The table uses hardcoded `sum by (model, subscription)` so both columns are always filled. **View by** drives the chart only. This is documented in `dashboard-usage.yaml` header comments.
   **Upstream fix needed:** A dynamic `hide` field in `columnSettings` (e.g., `hide: "${view_by:raw} != 'model'"`) or a `FilterColumns` transform that references variables would allow the table to follow the selector without empty columns.
+  ### Limitation F: `response_code` is structured metadata, not a stream label (2026-05-19)
+  **Root cause:** The OTel Collector `groupbyattrs` processor config lists `response_code` and `method` as keys to promote, but on the current cluster they are **not** promoted to Loki stream labels. Only `subscription` and `model` are actually indexed (plus OpenShift defaults: `kubernetes_namespace_name`, `log_type`, `service_name`). Verified via Loki `/api/v1/series` endpoint which returns only true stream labels.
+  **Impact on dashboard queries:** Any LogQL query using `response_code` in the stream selector (e.g., `{response_code=~"2.."}`) matches zero streams — the dashboard panels (Total Tokens, Total Errors, Success Rate, Chart, Table) returned empty.
+  **Fix applied:** Moved `response_code` from stream selectors to pipeline filters (`| response_code=~"2.."`). Additionally, removed `response_code` filters entirely from token-sum queries (Total Tokens, Chart, Table Tokens) because non-2xx responses have `tokens_total=0` anyway (check-then-report rate limiting pattern). Retained for `count_over_time` queries only (Success Rate, Table Requests).
+  **Why stream labels and structured metadata look identical in query results:** Loki merges structured metadata fields into the `"stream"` JSON object at query time. A `query_range` response shows `response_code` alongside true stream labels like `model` with no visual distinction. The only way to differentiate is `/api/v1/series` (returns indexed labels only) or checking the collector config.
+  **Performance note:** Filtering on structured metadata (`| response_code=~"2.."`) requires Loki to scan all log entries matching the stream selectors, unlike stream label filters which use the index. At current traffic levels this is negligible. For high-traffic production clusters, promoting `response_code` to a true stream label (by fixing the ODH collector `groupbyattrs` config or LokiStack CR) would improve query performance.
     # Alternatives evaluated
 
     | Approach                                        | Result                                                                                                                      |
