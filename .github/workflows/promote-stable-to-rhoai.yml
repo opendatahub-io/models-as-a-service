@@ -1,6 +1,6 @@
 # Promote Stable to RHOAI Workflow
 #
-# Merges the stable branch into rhoai directly with a merge commit.
+# Creates a promotional PR to merge stable into rhoai.
 # Triggered on-demand only via workflow_dispatch.
 #
 # To enable scheduled promotions in the future, uncomment the schedule block below.
@@ -8,7 +8,7 @@
 # This workflow:
 #   1. Checks if rhoai is behind stable
 #   2. Verifies there are no merge conflicts (strict — fails on any conflict)
-#   3. Merges stable into rhoai with a merge commit and pushes
+#   3. Creates/updates a PR from stable → rhoai only if merge is clean
 
 name: Promote Stable to RHOAI
 
@@ -18,7 +18,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pull-requests: write
 
 env:
   GH_USER_NAME: github-actions[bot]
@@ -26,14 +27,13 @@ env:
 
 jobs:
   promote:
-    name: Merge stable into rhoai
+    name: Promote stable to rhoai
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
-          ref: rhoai
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -71,9 +71,9 @@ jobs:
             echo "### Merge conflicts detected" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "The following files have conflicts:" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo '````' >> "$GITHUB_STEP_SUMMARY"
             git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo '````' >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "Please resolve conflicts manually before re-running this workflow." >> "$GITHUB_STEP_SUMMARY"
             git merge --abort
@@ -82,26 +82,55 @@ jobs:
 
           git merge --abort || true
 
-      - name: Merge stable into rhoai
+      - name: Create or update promotion PR
         if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIFF_COUNT: ${{ steps.check.outputs.diff_count }}
         run: |
           set -euo pipefail
-          git checkout rhoai
-          git reset --hard origin/rhoai
 
-          DIFF_COUNT="${{ steps.check.outputs.diff_count }}"
-          COMMIT_LOG=$(git log --oneline origin/rhoai..origin/stable --no-merges | head -30)
+          COMMIT_LOG=$(git log --oneline origin/rhoai..origin/stable --no-merges | head -50)
 
-          git merge --no-ff origin/stable \
-            -m "chore: promote stable to rhoai ($DIFF_COUNT commits)"
+          BODY="## Promotion: stable → rhoai"
+          BODY="${BODY}"$'\n\n'"Automated promotion of **${DIFF_COUNT} commit(s)** from \`stable\` to \`rhoai\`."
+          BODY="${BODY}"$'\n\n'"| Detail | Value |"
+          BODY="${BODY}"$'\n'"| --- | --- |"
+          BODY="${BODY}"$'\n'"| Promotion | \`stable\` → \`rhoai\` |"
+          BODY="${BODY}"$'\n'"| Commits to merge | **${DIFF_COUNT}** |"
+          BODY="${BODY}"$'\n'"| Conflict check | ✅ Passed |"
+          BODY="${BODY}"$'\n\n'"### Commits included"
+          BODY="${BODY}"$'\n\n'"\`\`\`\`"$'\n'"${COMMIT_LOG}"$'\n'"\`\`\`\`"
+          BODY="${BODY}"$'\n\n'"---"
+          BODY="${BODY}"$'\n'"⚠️ **Merge this PR with a merge commit** (do not squash or rebase)."
 
-          git push origin rhoai
+          EXISTING_PR=$(gh pr list --base rhoai --head stable --state open --json number,url --jq '.[0] // empty')
 
-          echo "## Promote Stable to RHOAI — SUCCESS" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$EXISTING_PR" ]; then
+            PR_NUMBER=$(echo "$EXISTING_PR" | jq -r '.number')
+            PR_URL=$(echo "$EXISTING_PR" | jq -r '.url')
+            echo "$BODY" | gh pr edit "$PR_NUMBER" --body-file -
+            echo "Updated existing promotion PR #${PR_NUMBER}"
+          else
+            PR_URL=$(echo "$BODY" | gh pr create --base rhoai --head stable \
+              --title "chore: promote stable to rhoai" \
+              --body-file - | tail -n1)
+            PR_NUMBER="${PR_URL##*/}"
+            [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::Failed to parse PR number from: $PR_URL"; exit 1; }
+            echo "Created new promotion PR #${PR_NUMBER}"
+          fi
+
+          echo "## Promote Stable to RHOAI — PR Created" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Merged **$DIFF_COUNT commit(s)** from \`stable\` into \`rhoai\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "**PR:** [#${PR_NUMBER}](${PR_URL})" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Detail | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Promotion | \`stable\` → \`rhoai\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commits to merge | **${DIFF_COUNT}** |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Conflict check | ✅ Passed |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Commits included" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '````' >> "$GITHUB_STEP_SUMMARY"
           echo "$COMMIT_LOG" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo '````' >> "$GITHUB_STEP_SUMMARY"
