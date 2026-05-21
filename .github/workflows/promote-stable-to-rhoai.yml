@@ -1,14 +1,14 @@
 # Promote Stable to RHOAI Workflow
 #
-# Creates a promotional PR to sync the rhoai branch with stable.
+# Merges the stable branch into rhoai directly with a merge commit.
 # Triggered on-demand only via workflow_dispatch.
 #
 # To enable scheduled promotions in the future, uncomment the schedule block below.
 #
 # This workflow:
 #   1. Checks if rhoai is behind stable
-#   2. Creates a PR from stable -> rhoai if there are new changes
-#   3. Reuses an existing open PR if one already exists
+#   2. Verifies there are no merge conflicts (strict — fails on any conflict)
+#   3. Merges stable into rhoai with a merge commit and pushes
 
 name: Promote Stable to RHOAI
 
@@ -18,8 +18,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pull-requests: write
+  contents: write
 
 env:
   GH_USER_NAME: github-actions[bot]
@@ -27,13 +26,14 @@ env:
 
 jobs:
   promote:
-    name: Create Promotion PR
+    name: Merge stable into rhoai
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
+          ref: rhoai
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -42,9 +42,8 @@ jobs:
           git config user.name "${{ env.GH_USER_NAME }}"
           git config user.email "${{ env.GH_USER_EMAIL }}"
 
-      - name: Promote stable to rhoai
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check for new commits
+        id: check
         run: |
           git fetch origin stable rhoai
 
@@ -52,30 +51,57 @@ jobs:
           if [ "$DIFF_COUNT" -eq 0 ]; then
             echo "rhoai is already up to date with stable. Nothing to promote."
             echo "## Promote Stable to RHOAI" >> "$GITHUB_STEP_SUMMARY"
-            echo "rhoai is already up to date with stable. No PR needed." >> "$GITHUB_STEP_SUMMARY"
+            echo "rhoai is already up to date with stable. No changes to merge." >> "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "Found $DIFF_COUNT commit(s) to promote from stable to rhoai."
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "diff_count=$DIFF_COUNT" >> "$GITHUB_OUTPUT"
 
-          COMMIT_LOG=$(git log --oneline origin/rhoai..origin/stable --no-merges | head -30)
-          BODY="Automated promotion of **${DIFF_COUNT} commit(s)** from \`stable\` to \`rhoai\`."
-          BODY="${BODY}"$'\n\n'"\`\`\`"$'\n'"${COMMIT_LOG}"$'\n'"\`\`\`"
+      - name: Check for merge conflicts
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          git checkout origin/rhoai
 
-          EXISTING_PR=$(gh pr list --base rhoai --head stable --state open --json number --jq '.[0].number // empty')
-
-          if [ -n "$EXISTING_PR" ]; then
-            if ! echo "$BODY" | gh pr edit "$EXISTING_PR" --body-file -; then
-              echo "::error::Failed to update existing promotion PR #${EXISTING_PR}"
-              exit 1
-            fi
-            echo "Updated existing promotion PR #${EXISTING_PR}"
-          else
-            if ! echo "$BODY" | gh pr create --base rhoai --head stable \
-              --title "chore: promote stable to rhoai" \
-              --body-file -; then
-              echo "::error::Failed to create promotion PR"
-              exit 1
-            fi
-            echo "Created new promotion PR"
+          if ! git merge --no-commit --no-ff origin/stable; then
+            echo "::error::Merge conflicts detected between stable and rhoai."
+            echo "## Promote Stable to RHOAI — FAILED" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Merge conflicts detected" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The following files have conflicts:" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Please resolve conflicts manually before re-running this workflow." >> "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            exit 1
           fi
+
+          git merge --abort || true
+
+      - name: Merge stable into rhoai
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          git checkout rhoai
+          git reset --hard origin/rhoai
+
+          DIFF_COUNT="${{ steps.check.outputs.diff_count }}"
+          COMMIT_LOG=$(git log --oneline origin/rhoai..origin/stable --no-merges | head -30)
+
+          git merge --no-ff origin/stable \
+            -m "chore: promote stable to rhoai ($DIFF_COUNT commits)"
+
+          git push origin rhoai
+
+          echo "## Promote Stable to RHOAI — SUCCESS" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Merged **$DIFF_COUNT commit(s)** from \`stable\` into \`rhoai\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Commits included" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "$COMMIT_LOG" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
