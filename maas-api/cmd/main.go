@@ -119,6 +119,24 @@ func serve() error {
 		}
 	}()
 
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				count, err := store.DeleteExpiredEphemeral(ctx)
+				if err != nil {
+					log.Error("Failed to cleanup expired ephemeral keys", "error", err)
+				} else if count > 0 {
+					log.Info("Ephemeral key cleanup completed", "deletedCount", count)
+				}
+			case <-ctx.Done(): // just to not wait gracefully
+				return
+			}
+		}
+	}()
+
 	if err = registerHandlers(ctx, log, router, cfg, cluster, store); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
@@ -221,7 +239,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	// Internal routes (no auth required - called by Authorino / CronJob)
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
-	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)
+	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)  // TODO: consider remove endpoint if not public access
 	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil
