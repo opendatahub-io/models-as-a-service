@@ -314,6 +314,7 @@ func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string, tenant
 	return s.store.InvalidateAll(ctx, username, tenant)
 }
 
+// TODO: cleanup unless we wanna keep /cleanup endpoint
 // CleanupExpiredEphemeral deletes expired ephemeral keys from storage.
 // Called by the internal cleanup endpoint (CronJob).
 func (s *Service) CleanupExpiredEphemeral(ctx context.Context) (int64, error) {
