@@ -75,9 +75,11 @@ Konflux builds multi-arch container images (x86_64, arm64, ppc64le, s390x) for b
 | Pipeline | Trigger | Output image |
 |----------|---------|--------------|
 | `odh-maas-api-on-pull-request` | PR to `main` | `quay.io/opendatahub/maas-api:odh-pr` |
-| `odh-maas-api-on-push` | Push to `main` | `quay.io/opendatahub/maas-api:odh-stable` |
+| `odh-maas-api-on-push` | Push to `main` | `quay.io/opendatahub/maas-api:latest` |
+| `odh-maas-api-on-push-stable` | Push to `stable` | `quay.io/opendatahub/maas-api:odh-stable` |
 | `odh-maas-controller-on-pull-request` | PR to `main` | `quay.io/opendatahub/maas-controller:odh-pr` |
-| `odh-maas-controller-on-push` | Push to `main` | `quay.io/opendatahub/maas-controller:odh-stable` |
+| `odh-maas-controller-on-push` | Push to `main` | `quay.io/opendatahub/maas-controller:latest` |
+| `odh-maas-controller-on-push-stable` | Push to `stable` | `quay.io/opendatahub/maas-controller:odh-stable` |
 
 **Integration tests (e2e):** When a PR build completes, Konflux runs an integration test that provisions an ephemeral OpenShift cluster (HyperShift on AWS), deploys the ODH stack with the newly built images, and runs `test/e2e/scripts/prow_run_smoke_test.sh`. This is defined in `odh-konflux-central` under `integration-tests/models-as-a-service/`.
 

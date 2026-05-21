@@ -503,7 +503,7 @@ should_install_operator() {
 #   operator_name - Name of the operator (e.g., "rhods-operator")
 #   namespace - Target namespace for the operator
 #   catalog_source - CatalogSource name (e.g., "redhat-operators")
-#   channel - Subscription channel (e.g., "fast-3")
+#   channel - Subscription channel (e.g., "stable-3.x")
 #   starting_csv - Starting CSV (optional, can be empty)
 #   operatorgroup_target - Target namespace for OperatorGroup (optional, uses namespace if empty)
 #   source_namespace - Catalog source namespace (optional, defaults to openshift-marketplace)
@@ -874,7 +874,9 @@ find_project_root() {
 #   Patches a key=value line in params.env. Creates a backup on first call.
 _patch_params_env() {
   local key="$1" value="$2" project_root="$3"
-  export _MAAS_PARAMS_ENV="$project_root/deployment/overlays/odh/params.env"
+  local overlay="odh"
+  [[ "${DEV_MODE:-false}" == "true" ]] && overlay="dev"
+  export _MAAS_PARAMS_ENV="$project_root/deployment/overlays/$overlay/params.env"
   [ -f "$_MAAS_PARAMS_ENV" ] || return 0
   export _MAAS_PARAMS_ENV_BACKUP="${_MAAS_PARAMS_ENV}.backup"
   if [ ! -f "$_MAAS_PARAMS_ENV_BACKUP" ]; then

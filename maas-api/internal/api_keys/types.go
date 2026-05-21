@@ -88,6 +88,9 @@ type SearchFilters struct {
 	HasExpiration *bool `json:"hasExpiration,omitempty"` // true = expiring, false = permanent
 	HasBeenUsed   *bool `json:"hasBeenUsed,omitempty"`   // true = used, false = never used
 
+	// Subscription filter
+	Subscription *string `json:"subscription,omitempty"` // Filter by bound subscription name
+
 	// Ephemeral key filter
 	IncludeEphemeral *bool `json:"includeEphemeral,omitempty"` // Include ephemeral keys in results (default: false)
 }
