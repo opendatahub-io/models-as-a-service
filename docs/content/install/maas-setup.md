@@ -274,8 +274,10 @@ After creating the database Secret and Gateways, create or update your DataScien
     Deploy the MaaS controller (run from the project root; ensure the `maas-db-config` Secret exists per [Database Setup](#database-setup)):
 
     ```bash
-    kustomize build deployment/base/maas-controller/default | kubectl apply -f -
+    kubectl apply -k deployment/base/maas-controller/default
     ```
+
+    On a fresh cluster, use **`./scripts/deploy.sh`** (or run `install_maas_controller_crds_and_wait` from `scripts/deployment-helpers.sh` before applying) so CRDs are **Established** before `Config` and other CRs in the same bundle.
 
 !!! tip "Troubleshooting"
     If components do not become ready, run `kubectl describe datasciencecluster default-dsc` to inspect conditions and events.

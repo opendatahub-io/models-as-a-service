@@ -9,6 +9,7 @@
 # - ODH operator namespace (odh-operator)
 # - OpenDataHub application namespace (opendatahub)
 # - MaaS resources from RHOAI namespace (redhat-ods-applications)
+# - Cluster-scoped MaaS anchor CR (Config/default; legacy ClusterTenant/default if present)
 # - MaaS subscription namespace (models-as-a-service)
 # - Policy engine artifacts (Kuadrant/RHCL OLM resources, AuthConfig CRs)
 # - Keycloak identity provider (if deployed)
@@ -162,9 +163,31 @@ force_delete_namespace() {
     kubectl wait --for=delete namespace/"$ns" --timeout=30s 2>/dev/null || true
 }
 
+# Clear finalizers on cluster-scoped anchor CRs so delete is not stuck after operator removal.
+patch_clear_cluster_anchor_finalizers() {
+    local resource=$1
+    local name=$2
+    if kubectl get "$resource" "$name" &>/dev/null; then
+        kubectl patch "$resource" "$name" --type=json \
+            -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+    fi
+}
+
+# 8c. Delete cluster-scoped MaaS anchor CRs (Config; legacy ClusterTenant before rename)
+echo "8c. Deleting MaaS cluster-scoped anchor CRs..."
+patch_clear_cluster_anchor_finalizers configs.maas.opendatahub.io default
+patch_clear_cluster_anchor_finalizers config default
+patch_clear_cluster_anchor_finalizers clustertenants.maas.opendatahub.io default
+patch_clear_cluster_anchor_finalizers clustertenant default
+kubectl delete configs.maas.opendatahub.io default --ignore-not-found --timeout=120s 2>/dev/null || true
+kubectl delete config default --ignore-not-found --timeout=120s 2>/dev/null || true
+kubectl delete clustertenants.maas.opendatahub.io default --ignore-not-found --timeout=120s 2>/dev/null || true
+kubectl delete clustertenant default --ignore-not-found --timeout=120s 2>/dev/null || true
+
 # 9. Delete models-as-a-service namespace (contains MaaS CRs)
 echo "9. Deleting models-as-a-service namespace..."
 force_delete_namespace "models-as-a-service" \
+    "tenants.maas.opendatahub.io" \
     "maasauthpolicies.maas.opendatahub.io" "maassubscriptions.maas.opendatahub.io"
 
 # 10. Delete policy engine workload CRs (before operator cleanup)
@@ -271,9 +294,15 @@ kubectl delete gatewayclass openshift-default --ignore-not-found 2>/dev/null || 
 echo "16. Deleting MaaS RBAC..."
 kubectl delete clusterrolebinding maas-api maas-controller-rolebinding --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-api maas-controller-role --ignore-not-found 2>/dev/null || true
+# Extra operator-safe binding for Config API (and legacy ClusterTenant binding/role if present)
+kubectl delete clusterrolebinding maas-controller-cluster-config-rolebinding --ignore-not-found 2>/dev/null || true
+kubectl delete clusterrole maas-controller-cluster-config-role --ignore-not-found 2>/dev/null || true
+kubectl delete clusterrolebinding maas-controller-cluster-tenant-rolebinding --ignore-not-found 2>/dev/null || true
+kubectl delete clusterrole maas-controller-cluster-tenant-role --ignore-not-found 2>/dev/null || true
 
 # 17. Delete CRDs
 # Always delete KServe/MaaS CRDs to prevent storedVersions schema conflicts on reinstall.
+# This removes all maas.opendatahub.io CRDs (configs, tenants, subscriptions, legacy clustertenants, …).
 # ODH-internal CRDs are only deleted with --include-crds.
 echo "17. Deleting KServe/MaaS CRDs (always removed to prevent version conflicts)..."
 for crd in $(kubectl get crd -o name 2>/dev/null | grep -E 'serving\.kserve\.io|maas\.opendatahub\.io'); do

@@ -437,7 +437,7 @@ Install the platform operator (ODH or RHOAI) and initialize the platform with DS
       name: rhoai3-operator
       namespace: redhat-ods-operator
     spec:
-      channel: fast-3.x
+      channel: stable-3.x
       installPlanApproval: Automatic
       name: rhods-operator
       source: redhat-operators

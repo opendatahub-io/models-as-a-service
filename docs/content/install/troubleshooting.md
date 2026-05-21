@@ -53,8 +53,8 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Check HTTPRoute configuration and status
 
 7. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
-      - [ ] Verify User Workload Monitoring is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#user-workload-monitoring)
-      - [ ] Verify Kuadrant observability is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#kuadrant-observability)
+      - [ ] Verify User Workload Monitoring is enabled — see [Observability Setup](../observability/setup.md#user-workload-monitoring)
+      - [ ] Verify Kuadrant observability is enabled — see [Observability Setup](../observability/setup.md#kuadrant-observability)
       - [ ] Check prometheus-user-workload pods are running:
 
       ```bash
@@ -88,13 +88,60 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       is not deployed or Perses is not running. The most common causes are missing operators (COO,
       OpenTelemetry) or DSCI `monitoring.metrics` not being configured.
 
-      See [RHOAI Dashboard Observability Tab](../advanced-administration/observability.md#rhoai-dashboard-observability-tab) for the full prerequisites and verification checklist.
+      See [RHOAI Dashboard Observability Tab](../observability/setup.md#rhoai-dashboard-observability-tab-optional) for the full prerequisites and verification checklist.
 
 10. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
 11. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+
+## Conflicting AuthPolicy Detection
+
+MaaS automatically detects non-MaaS AuthPolicies (e.g., from KServe or other controllers) that target the same HTTPRoutes used by MaaS-governed models. When a conflict is detected, MaaS sets a `ConflictingAuthPolicy` condition on the affected MaaSAuthPolicy resource and emits a Kubernetes warning event.
+
+### Symptoms
+
+- MaaSAuthPolicy has condition `ConflictingAuthPolicy=True`
+- Warning events on MaaSAuthPolicy resources referencing non-MaaS AuthPolicies
+- Unexpected authentication behavior (wrong policy may win when multiple AuthPolicies target the same HTTPRoute)
+
+### Diagnosis
+
+Check for conflicting AuthPolicy conditions:
+
+```bash
+# Check MaaSAuthPolicy conditions
+kubectl get maasauthpolicy -n models-as-a-service -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.conditions[?(@.type=="ConflictingAuthPolicy")]}{.status}{"\t"}{.message}{end}{"\n"}{end}'
+
+# List all AuthPolicies targeting a specific model's HTTPRoute
+MODEL_NS="<model-namespace>"
+MODEL_NAME="<model-name>"
+kubectl get authpolicy -n "$MODEL_NS" -o json | \
+  jq -r ".items[] | select(.spec.targetRef.name == \"$MODEL_NAME\" and .spec.targetRef.kind == \"HTTPRoute\") | .metadata.name + \" (managed-by: \" + (.metadata.labels[\"app.kubernetes.io/managed-by\"] // \"unknown\") + \")\""
+
+# Check for warning events
+kubectl get events -n models-as-a-service --field-selector reason=ConflictingAuthPolicy
+```
+
+### Remediation
+
+1. **KServe anonymous auth policies** (`*-kserve-route-authn`): These are typically created when `security.opendatahub.io/enable-auth` is misconfigured on the InferenceService. Set the annotation to `"true"` on MaaS-governed InferenceServices to prevent KServe from creating conflicting anonymous AuthPolicies:
+
+    ```bash
+    kubectl annotate inferenceservice <name> -n <namespace> \
+      security.opendatahub.io/enable-auth="true" --overwrite
+    ```
+
+2. **Custom AuthPolicies**: If another team deployed a custom AuthPolicy targeting the same HTTPRoute, coordinate to determine which controller should own authentication for that route. Either:
+      - Remove the conflicting AuthPolicy if MaaS is the intended auth authority
+      - Or remove the model from the MaaSAuthPolicy if MaaS should not govern that route
+
+3. **Verify resolution**: After applying the fix, the `ConflictingAuthPolicy` condition should transition to `False` on the next reconciliation:
+
+    ```bash
+    kubectl get maasauthpolicy -n models-as-a-service -o jsonpath='{range .items[*]}{.metadata.name}{": "}{range .status.conditions[?(@.type=="ConflictingAuthPolicy")]}{.status}{end}{"\n"}{end}'
+    ```
 
 ## TLS Certificate Validation
 
@@ -164,5 +211,5 @@ For detailed TLS configuration options, see [TLS Configuration](../configuration
 ## Additional Resources
 
 - [Validation Guide](validation.md) — Manual validation steps
-- [Observability Guide](../advanced-administration/observability.md) — Metrics, monitoring, and dashboards
+- [Observability Guide](../observability/index.md) — Metrics, monitoring, and dashboards
 - [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md) — Deployment scripts documentation

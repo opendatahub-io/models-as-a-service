@@ -44,14 +44,6 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
-	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
-)
-
-// Default gateway name and namespace when not set via flags.
-const (
-	defaultGatewayName      = tenantreconcile.DefaultGatewayName
-	defaultGatewayNamespace = tenantreconcile.DefaultGatewayNamespace
-	defaultClusterAudience  = "https://kubernetes.default.svc"
 )
 
 // MaaSModelRefReconciler reconciles a MaaSModelRef object
@@ -65,17 +57,11 @@ type MaaSModelRefReconciler struct {
 }
 
 func (r *MaaSModelRefReconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return defaultGatewayName
+	return r.GatewayName
 }
 
 func (r *MaaSModelRefReconciler) gatewayNamespace() string {
-	if r.GatewayNamespace != "" {
-		return r.GatewayNamespace
-	}
-	return defaultGatewayNamespace
+	return r.GatewayNamespace
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch;create;update;patch;delete

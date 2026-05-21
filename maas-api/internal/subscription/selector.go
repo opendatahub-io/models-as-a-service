@@ -11,6 +11,7 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 )
 
 // Phase constants for MaaSSubscription status.
@@ -29,19 +30,42 @@ type Lister interface {
 
 // Selector handles subscription selection logic.
 type Selector struct {
-	lister Lister
-	logger *logger.Logger
+	lister      Lister
+	modelLister models.MaaSModelRefLister
+	logger      *logger.Logger
 }
 
 // NewSelector creates a new subscription selector.
-func NewSelector(log *logger.Logger, lister Lister) *Selector {
+// modelLister is optional; when provided, model refs in list responses are enriched with displayName and description.
+func NewSelector(log *logger.Logger, lister Lister, modelLister models.MaaSModelRefLister) *Selector {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Selector{
-		lister: lister,
-		logger: log,
+		lister:      lister,
+		modelLister: modelLister,
+		logger:      log,
 	}
+}
+
+// buildModelIndex builds a lookup map keyed by "namespace/name" from the MaaSModelRef cache.
+// Called once per loadSubscriptions to avoid repeated List() calls for every model ref.
+// Returns nil when the lister is nil or the List() call fails.
+func (s *Selector) buildModelIndex() map[string]*unstructured.Unstructured {
+	if s.modelLister == nil {
+		return nil
+	}
+	items, err := s.modelLister.List()
+	if err != nil {
+		s.logger.Error("failed to list MaaSModelRefs for model ref enrichment", "error", err)
+		return nil
+	}
+	index := make(map[string]*unstructured.Unstructured, len(items))
+	for _, u := range items {
+		key := u.GetNamespace() + "/" + u.GetName()
+		index[key] = u
+	}
+	return index
 }
 
 // subscription represents a parsed MaaSSubscription for selection.
@@ -240,6 +264,8 @@ func (s *Selector) loadSubscriptions() ([]subscription, error) {
 		return nil, err
 	}
 
+	modelIndex := s.buildModelIndex()
+
 	subscriptions := make([]subscription, 0, len(objects))
 	for _, obj := range objects {
 		sub, err := parseSubscription(obj)
@@ -251,10 +277,28 @@ func (s *Selector) loadSubscriptions() ([]subscription, error) {
 			)
 			continue
 		}
+		s.enrichModelRefs(sub.ModelRefs, modelIndex)
 		subscriptions = append(subscriptions, sub)
 	}
 
 	return subscriptions, nil
+}
+
+// enrichModelRefs populates DisplayName and Description on each ModelRefInfo by looking up
+// the corresponding MaaSModelRef in the pre-built index.
+func (s *Selector) enrichModelRefs(refs []ModelRefInfo, index map[string]*unstructured.Unstructured) {
+	if index == nil {
+		return
+	}
+	for i := range refs {
+		key := refs[i].Namespace + "/" + refs[i].Name
+		if u, ok := index[key]; ok {
+			if annotations := u.GetAnnotations(); annotations != nil {
+				refs[i].DisplayName = annotations[constant.AnnotationDisplayName]
+				refs[i].Description = annotations[constant.AnnotationDescription]
+			}
+		}
+	}
 }
 
 // parseSubscription extracts subscription data from unstructured object.

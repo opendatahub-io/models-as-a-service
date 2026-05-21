@@ -18,6 +18,7 @@
 #   --namespace <namespace>       Target namespace
 #   --verbose                     Enable debug logging
 #   --dry-run                     Show what would be done
+#   --dev                         Use dev overlay with :latest images
 #   --help                        Show full help with all options
 #
 # ADVANCED OPTIONS (PR Testing):
@@ -102,6 +103,7 @@ ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 ENABLE_KEYCLOAK="${ENABLE_KEYCLOAK:-false}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
+DEV_MODE="${DEV_MODE:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
@@ -163,6 +165,10 @@ OPTIONS:
   --dry-run
       Show what would be done without applying changes
 
+  --dev
+      Use dev overlay with :latest images (for MaaS developers)
+      Default: uses odh overlay with :odh-stable images
+
   --help
       Display this help message
 
@@ -185,7 +191,7 @@ ADVANCED OPTIONS (PR Testing):
 
   --channel <channel>
       Operator channel override
-      Default: fast-3 (ODH), fast-3.x (RHOAI)
+      Default: fast-3 (ODH), stable-3.x (RHOAI)
 
   --external-oidc
       Enable external OIDC on the maas-api AuthPolicy.
@@ -334,6 +340,10 @@ parse_arguments() {
         ;;
       --external-oidc)
         EXTERNAL_OIDC="true"
+        shift
+        ;;
+      --dev)
+        DEV_MODE="true"
         shift
         ;;
       --help|-h)
@@ -530,7 +540,12 @@ main() {
   if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
-    log_info "  Installing controller (CRDs, RBAC, deployment)..."
+    log_info "  Phase 1: Applying MaaS CRDs and waiting until Established (controller creates Config after CRD is ready)..."
+    if ! install_maas_controller_crds_and_wait "${project_root}/deployment/base/maas-controller/crd"; then
+      log_error "MaaS CRD install or Established wait failed"
+      return 1
+    fi
+    log_info "  Phase 2: Applying full controller kustomize (same as operator: deployment/base/maas-controller/default)..."
     if [[ "$NAMESPACE" != "opendatahub" ]]; then
       (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
         sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
@@ -968,9 +983,9 @@ install_primary_operator() {
         channel="${OPERATOR_CHANNEL:-fast}"
       else
         catalog_source="redhat-operators"
-        # Use 'fast-3.x' channel for RHOAI v3 (with MaaS support)
+        # Use 'stable-3.x' channel for RHOAI v3 (with MaaS support)
         # RHOAI 2.x (fast channel) does not support modelsAsService
-        channel="${OPERATOR_CHANNEL:-fast-3.x}"
+        channel="${OPERATOR_CHANNEL:-stable-3.x}"
       fi
 
       log_info "Installing RHOAI v3 operator..."
@@ -1434,13 +1449,15 @@ patch_operator_csv() {
 #──────────────────────────────────────────────────────────────
 
 # get_odh_overlay_param
-#   Reads a value from deployment/overlays/odh/params.env.
+#   Reads a value from the active overlay's params.env.
 get_odh_overlay_param() {
   local key="$1"
   local project_root
   project_root="$(find_project_root)" || return 1
 
-  local params_file="$project_root/deployment/overlays/odh/params.env"
+  local overlay="odh"
+  [[ "${DEV_MODE:-false}" == "true" ]] && overlay="dev"
+  local params_file="$project_root/deployment/overlays/$overlay/params.env"
   [[ -f "$params_file" ]] || return 1
 
   awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$params_file"
