@@ -2387,6 +2387,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#image-tags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Image Tags
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Image Tags">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overlay-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overlay Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#release-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2867,6 +2895,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#image-tags" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Image Tags
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Image Tags">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overlay-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overlay Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#release-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2992,6 +3048,39 @@
 <li>Click <strong>Run workflow</strong></li>
 </ol>
 <p>This is useful when a fix needs to be fast-tracked without waiting for the next scheduled run.</p>
+<h2 id="image-tags">Image Tags</h2>
+<p>Each branch produces and references a specific container image tag:</p>
+<table>
+<thead>
+<tr>
+<th>Branch</th>
+<th>Image Tag</th>
+<th>Built By</th>
+<th>Manifests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>main</code></td>
+<td><code>latest</code></td>
+<td>Tekton push pipeline (<code>odh-maas-*-push.yaml</code>)</td>
+<td><code>deployment/overlays/dev/</code></td>
+</tr>
+<tr>
+<td><code>stable</code></td>
+<td><code>odh-stable</code></td>
+<td>Tekton push pipeline (<code>odh-maas-*-push-stable.yaml</code>)</td>
+<td><code>deployment/overlays/odh/</code></td>
+</tr>
+</tbody>
+</table>
+<p>The ODH operator consumes manifests from <code>deployment/overlays/odh/</code> on the <code>stable</code> branch.</p>
+<h3 id="overlay-layout">Overlay Layout</h3>
+<ul>
+<li><strong><code>deployment/overlays/odh/</code></strong> — Production overlay with <code>:odh-stable</code> tags. Consumed by the ODH operator.</li>
+<li><strong><code>deployment/overlays/dev/</code></strong> — Development overlay with <code>:latest</code> tags. Used by MaaS developers via <code>./scripts/deploy.sh --dev</code>.</li>
+</ul>
+<p>Both overlays exist identically on all branches. The <code>dev</code> overlay wraps <code>odh</code> and overrides only the image tags.</p>
 <h2 id="release-notes">Release Notes</h2>
 <p>Release notes in <code>docs/content/release-notes/index.md</code> summarize user-visible changes for each MaaS version. Keep them concise and focused on <strong>what changed</strong> and <strong>why it matters</strong>—link to detailed docs for <strong>how</strong> to migrate or configure.</p>
 <h3 id="what-to-capture">What to Capture</h3>
@@ -3052,7 +3141,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 20, 2026 18:28:54 UTC">May 20, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 21, 2026 15:42:41 UTC">May 21, 2026</span>
   </span>
 
     
