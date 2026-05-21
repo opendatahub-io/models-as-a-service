@@ -114,6 +114,17 @@ func TestAIGatewayReconcile_CreatesBootstrapResources(t *testing.T) {
 	g.Expect(tenant.Spec.ExternalOIDC.IssuerURL).To(Equal("https://issuer.example.com/realms/team-a"))
 	g.Expect(tenant.Spec.ExternalOIDC.ClientID).To(Equal("team-a-client"))
 
+	var tenantRole rbacv1.Role
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantAdminRoleName(aigw), Namespace: "team-a-maas"}, &tenantRole)).To(Succeed())
+	g.Expect(tenantRole.Rules).NotTo(BeEmpty())
+	for _, rule := range tenantRole.Rules {
+		g.Expect(rule.Verbs).NotTo(ContainElement("*"))
+		g.Expect(rule.Resources).NotTo(ContainElement("*"))
+		g.Expect(rule.Verbs).NotTo(ContainElement("escalate"))
+		g.Expect(rule.Verbs).NotTo(ContainElement("bind"))
+		g.Expect(rule.Verbs).NotTo(ContainElement("impersonate"))
+	}
+
 	var tenantBinding rbacv1.RoleBinding
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantAdminRoleName(aigw), Namespace: "team-a-maas"}, &tenantBinding)).To(Succeed())
 	g.Expect(tenantBinding.Subjects).To(ContainElement(rbacv1.Subject{
@@ -121,6 +132,17 @@ func TestAIGatewayReconcile_CreatesBootstrapResources(t *testing.T) {
 		APIGroup: rbacv1.GroupName,
 		Name:     "team-a-admins",
 	}))
+
+	var aigwRole rbacv1.Role
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: aigatewayAccessRoleName(aigw), Namespace: "ai-gateway-system"}, &aigwRole)).To(Succeed())
+	g.Expect(aigwRole.Rules).NotTo(BeEmpty())
+	for _, rule := range aigwRole.Rules {
+		g.Expect(rule.Verbs).NotTo(ContainElement("*"))
+		g.Expect(rule.Resources).NotTo(ContainElement("*"))
+		g.Expect(rule.Verbs).NotTo(ContainElement("escalate"))
+		g.Expect(rule.Verbs).NotTo(ContainElement("bind"))
+		g.Expect(rule.Verbs).NotTo(ContainElement("impersonate"))
+	}
 
 	var aigwBinding rbacv1.RoleBinding
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: aigatewayAccessRoleName(aigw), Namespace: "ai-gateway-system"}, &aigwBinding)).To(Succeed())
@@ -396,6 +418,7 @@ func TestAIGatewayReconcile_DeletionCleansUpChildren(t *testing.T) {
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "team-del-maas", Name: tenantAdminRoleName(aigw)}, &rbacv1.RoleBinding{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-gateway-system", Name: aigatewayAccessRoleName(aigw)}, &rbacv1.Role{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-gateway-system", Name: aigatewayAccessRoleName(aigw)}, &rbacv1.RoleBinding{}))).To(BeTrue())
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Name: "team-del-maas"}, &corev1.Namespace{}))).To(BeTrue())
 
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, key, &maasv1alpha1.AIGateway{}))).To(BeTrue())
 }

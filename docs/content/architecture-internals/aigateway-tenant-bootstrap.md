@@ -40,7 +40,7 @@ When an `AIGateway` is reconciled, `maas-controller` creates or updates:
 4. tenant-admin RBAC in the tenant namespace
 5. per-object RBAC for the specific `AIGateway` in the infra namespace
 
-`spec.tenantNamespace.name` and `spec.gateway.namespace` are immutable in the CRD schema. The controller also rejects `AIGateway` objects in the protected ODH application namespace and in the legacy tenant namespace so bootstrap objects stay in a separate infra namespace.
+`spec.tenantNamespace.name` is immutable in the CRD schema. `spec.gateway.namespace` is intended to be immutable; CRD-level enforcement is deferred to a validating webhook because nested listener arrays make CEL cost prohibitive. The controller also rejects `AIGateway` objects in the protected ODH application namespace and in the legacy tenant namespace so bootstrap objects stay in a separate infra namespace.
 
 ## Lifecycle
 
