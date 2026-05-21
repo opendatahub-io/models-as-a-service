@@ -705,6 +705,7 @@ run_e2e_tests() {
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         --capture=tee-sys --show-capture=all --log-level=INFO \
+        "$test_dir/tests/test_tenant_health.py" \
         "$test_dir/tests/test_api_keys.py" \
         "$test_dir/tests/test_namespace_scoping.py" \
         "$test_dir/tests/test_negative_security.py" \
