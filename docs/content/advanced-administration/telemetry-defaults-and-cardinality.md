@@ -184,4 +184,4 @@ These are rough reference points, not validated limits. Actual capacity depends 
 
 ## See Also
 
-- [Observability Guide](observability.md) — full metrics reference, dashboards, and installation
+- [Observability Guide](../observability/index.md) — full metrics reference, dashboards, and installation

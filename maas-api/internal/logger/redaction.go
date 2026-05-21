@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/textproto"
+	"strings"
 	"sync"
 )
 
@@ -88,10 +90,10 @@ func RedactHeaders(headers http.Header, hashPrefix bool) map[string]string {
 			if len(values) > 0 {
 				val = values[0]
 			}
-			result[name] = RedactHeader(val, hashPrefix)
+			result[canonical] = RedactHeader(val, hashPrefix)
 		} else if len(values) > 0 {
 			// Pass through non-sensitive headers
-			result[name] = values[0]
+			result[canonical] = values[0]
 		}
 	}
 
@@ -108,4 +110,15 @@ func IsSensitiveHeader(name string) bool {
 		}
 	}
 	return false
+}
+
+// SensitiveHeadersSummaryForAccessLog returns presence-only key=value pairs for each
+// entry in SensitiveHeaders (uses RedactHeader).
+func SensitiveHeadersSummaryForAccessLog(h http.Header) string {
+	parts := make([]string, 0, len(SensitiveHeaders))
+	for _, name := range SensitiveHeaders {
+		val := RedactHeader(h.Get(name), false)
+		parts = append(parts, fmt.Sprintf("%s=%s", name, val))
+	}
+	return strings.Join(parts, " ")
 }
