@@ -16,21 +16,25 @@ The release flow moves code through four stages, each mapped to a branch and env
 
 ## How Promotion Works
 
-Promotions between branches are automated via GitHub Actions workflows. The main → stable promotion creates a PR for review, while the stable → rhoai promotion merges directly (since stable is already validated).
+Promotions between branches are automated via GitHub Actions workflows that create PRs. Both workflows perform a strict merge conflict pre-check and will **not** create a PR if conflicts exist — conflicts must be resolved manually before re-running.
 
 ### Stream to Lake (`main` → `stable`)
 
 - **Schedule:** Every Sunday at midnight UTC (also available on-demand)
 - **Workflow:** `promote-main-to-stable.yml`
-- A PR is created from `main` to `stable` listing all new commits
+- Performs a dry-run merge to verify no conflicts exist
+- Creates a PR from `main` to `stable` listing all new commits
 - If an open promotion PR already exists, it is updated in place
+- **Must be merged with a merge commit** (no squash or rebase)
 
 ### Lake to RHOAI (`stable` → `rhoai`)
 
 - **Trigger:** On-demand only (via `workflow_dispatch`)
 - **Workflow:** `promote-stable-to-rhoai.yml`
-- Merges `stable` into `rhoai` directly with a merge commit (`--no-ff`)
-- **Strict conflict policy:** the workflow fails without making any changes if merge conflicts exist; conflicts must be resolved manually before re-running
+- Performs a dry-run merge to verify no conflicts exist
+- Creates a PR from `stable` to `rhoai` listing all new commits
+- If an open promotion PR already exists, it is updated in place
+- **Must be merged with a merge commit** (no squash or rebase)
 - A cron schedule can be enabled in the workflow once the release strategy matures
 
 ### RHOAI to Ocean (`rhoai` → downstream)
