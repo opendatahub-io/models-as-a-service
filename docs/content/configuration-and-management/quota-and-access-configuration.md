@@ -239,22 +239,6 @@ Create an API key as a user in `free-users` and another as a user in `premium-us
 2. List models and run inference with each API key
 3. Test with both groups to confirm access and different rate limits — free-users (100 tokens/min) vs premium-users (100,000 tokens/24h)
 
-## Adding Groups
-
-To grant a user access to a subscription, add them to the appropriate Kubernetes group:
-
-```bash
-# Create groups if they do not exist
-oc adm groups new free-users 2>/dev/null || true
-oc adm groups new premium-users 2>/dev/null || true
-
-# Add users (method depends on your IdP; OpenShift example)
-oc adm groups add-users free-users alice@example.com
-oc adm groups add-users premium-users bob@example.com
-```
-
-Users will get subscription access on their next request (after group membership propagates).
-
 ## Multiple Subscriptions per User
 
 When a user belongs to multiple groups that each have a subscription, the access depends on the API key used. A subscription is bound to each API key at minting (explicit or highest priority). See [API Key Management](../user-guide/api-key-management.md).

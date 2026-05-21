@@ -52,6 +52,10 @@ type TenantReconciler struct {
 	AppNamespace string
 	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
 	TenantNamespace string
+	// GatewayName is the name of the Gateway resource resolved from cmd/manager flags.
+	GatewayName string
+	// GatewayNamespace is the namespace of the Gateway resource resolved from cmd/manager flags.
+	GatewayNamespace string
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.

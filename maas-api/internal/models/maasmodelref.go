@@ -60,6 +60,18 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 	if kind == "" {
 		kind = "llmisvc"
 	}
+
+	modelRefName, _, _ := unstructured.NestedString(u.Object, "spec", "modelRef", "name")
+
+	// For ExternalModel refs, use the ExternalModel CR name as the model ID so that
+	// GET /v1/models returns the identifier that inference endpoints expect.
+	// ExternalModels skip the backend probe (no /v1/models discovery), so without
+	// this the catalog would expose the MaaSModelRef name which doesn't work for inference.
+	modelID := name
+	if kind == "ExternalModel" && modelRefName != "" {
+		modelID = modelRefName
+	}
+
 	annotations := u.GetAnnotations()
 	var details *Details
 	if annotations != nil {
@@ -92,7 +104,7 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 	ownedBy := namespace + "/" + name
 	return &Model{
 		Model: openai.Model{
-			ID:      name,
+			ID:      modelID,
 			Object:  "model",
 			Created: created,
 			OwnedBy: ownedBy,

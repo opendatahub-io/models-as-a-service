@@ -86,10 +86,7 @@ type oidcConfig struct {
 }
 
 func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
-	if r.ClusterAudience != "" {
-		return r.ClusterAudience
-	}
-	return defaultClusterAudience
+	return r.ClusterAudience
 }
 
 // authzCacheTTL returns the safe TTL for authorization caches that depend on metadata.
