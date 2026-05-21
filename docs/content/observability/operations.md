@@ -47,8 +47,11 @@ kubectl logs -n kuadrant-system deployment/limitador | grep -i redis
 Grafana datasource uses ServiceAccount tokens with cluster-configured expiration. Token lifetime varies by cluster (Kubernetes and OpenShift have different defaults). Check your cluster's token expiration:
 
 ```bash
-# Check ServiceAccount token lifetime (if using TokenRequest API)
-kubectl get serviceaccount -n <grafana-namespace> <sa-name> -o yaml | grep expirationSeconds
+# Check projected serviceAccountToken expiration in Grafana Pod
+kubectl get pod -n <grafana-namespace> <grafana-pod> -o jsonpath='{.spec.volumes[?(@.projected.sources[0].serviceAccountToken)].projected.sources[0].serviceAccountToken.expirationSeconds}'
+
+# Or check via TokenRequest API
+kubectl create token <sa-name> -n <grafana-namespace> --duration=0s | kubectl get --raw /api/v1/namespaces/<grafana-namespace>/serviceaccounts/<sa-name>/token -o jsonpath='{.status.expirationTimestamp}'
 
 # Re-deploy dashboards to rotate token
 ./scripts/observability/install-grafana-dashboards.sh
@@ -67,6 +70,7 @@ kubectl get servicemonitor -A
 # Look for maas-*, kserve-*, authorino-*, limitador-* targets (should be UP)
 
 # Query Prometheus directly
+# Replace <cluster> with your cluster's apps domain (e.g., apps.mycluster.example.com)
 curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
   "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/targets" | \
   jq '.data.activeTargets[] | select(.labels.job | contains("maas"))'
@@ -101,6 +105,7 @@ kubectl get pods -n openshift-user-workload-monitoring
 # 4. Check Prometheus targets (UI → Status → Targets)
 
 # 5. Query Prometheus directly
+# Replace <cluster> with your cluster's apps domain (e.g., apps.mycluster.example.com)
 curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
   "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/query?query=<metric_name>"
 ```
@@ -149,7 +154,7 @@ Watch: `authorized_hits{user}`, `authorized_calls{user}`, `istio_request_duratio
 
 | Task | Frequency | Action |
 |------|-----------|--------|
-| **Token Rotation** | Every 30 days | Rotate Grafana datasource token |
+| **Token Rotation** | Per cluster token TTL | Rotate Grafana datasource token before expiration (verify cluster-specific lifetime) |
 | **Storage Check** | Weekly | Monitor Prometheus storage usage |
 | **ServiceMonitor Health** | Daily | Check Prometheus targets |
 | **Cardinality Review** | Monthly | Review high-cardinality metrics |
