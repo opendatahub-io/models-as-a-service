@@ -191,9 +191,11 @@ func serve() error {
 
 // initStore creates the PostgreSQL store for API key management.
 // DBConnectionURL is validated in cfg.Validate() before this is called.
-func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
+//
+//nolint:ireturn // Returns MetadataStore interface by design.
+func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
 	log.Info("Connecting to PostgreSQL database...", "tenant", cfg.TenantName)
-	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
+	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL,  cfg.TenantName)
 }
 
 func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
