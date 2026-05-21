@@ -183,6 +183,12 @@ kubectl get llminferenceservice -n llm -o yaml \
   && echo "Backed up LLMInferenceService resources" \
   || echo "No LLMInferenceService found"
 
+# Backup ModelsAsService CR (if upgrading from 3.3 with custom config)
+kubectl get modelsasservice default-modelsasservice -o yaml \
+  > migration-backup/modelsasservice.yaml 2>/dev/null \
+  && echo "Backed up ModelsAsService CR" \
+  || echo "No ModelsAsService CR found (expected if upgrading from 3.2)"
+
 # Record current state
 echo "=== Pre-upgrade snapshot ===" > migration-backup/pre-upgrade-state.txt
 echo "Date: $(date -u)" >> migration-backup/pre-upgrade-state.txt
@@ -197,11 +203,14 @@ kubectl get configmap -n maas-api >> migration-backup/pre-upgrade-state.txt 2>/d
 
 Follow the standard RHOAI operator upgrade procedure. The operator upgrade will:
 
-- Install MaaS CRDs (`maas.opendatahub.io/v1alpha1`): MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, ExternalModel
+- Install MaaS CRDs (`maas.opendatahub.io/v1alpha1`): Tenant, MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, ExternalModel
 - Deploy maas-controller when `modelsAsService: Managed` is set in the DSC
+- Replace the old cluster-scoped `ModelsAsService` CR (`components.platform.opendatahub.io/v1alpha1`) with a namespace-scoped `Tenant` CR (`maas.opendatahub.io/v1alpha1`) -- see [Phase 3.5](#phase-35-modelsasservice-to-tenant-cr-transition) for details
 - Create gateway-level default policies: `gateway-default-auth` and `gateway-default-deny`
 
 **Important:** The `modelsAsService` field defaults to `Removed` if not specified in the DSC. The operator will not deploy maas-controller until you explicitly set `modelsAsService: Managed`. This means the upgrade itself is safe -- MaaS is opt-in.
+
+**Note:** The DSC spec field `kserve.modelsAsService.managementState` is unchanged between 3.3 and 3.4. No changes to the DSC are required for the CR transition.
 
 ### 3.2 Enable MaaS
 
@@ -251,6 +260,114 @@ kubectl get tokenratelimitpolicy -A
 ```
 
 Both old and new policies target the same `maas-default-gateway` from different namespaces. This creates conflicting policy behavior in Kuadrant and must be resolved by removing the old policies.
+
+## Phase 3.5: ModelsAsService to Tenant CR Transition
+
+Starting in 3.4, MaaS platform configuration is owned by `maas-controller` via a `Tenant` CR instead of the operator's `ModelsAsService` CR. This section covers what changes automatically and what manual steps may be required.
+
+### What Changed
+
+| Aspect | RHOAI 3.3 | RHOAI 3.4 |
+|--------|-----------|-----------|
+| CR kind | `ModelsAsService` | `Tenant` |
+| API group | `components.platform.opendatahub.io/v1alpha1` | `maas.opendatahub.io/v1alpha1` |
+| Scope | Cluster-scoped | Namespace-scoped (`models-as-a-service`) |
+| Instance name | `default-modelsasservice` | `default-tenant` |
+| Reconciled by | ODH operator (ModelsAsService controller) | maas-controller (TenantReconciler) |
+| DSC field | `kserve.modelsAsService.managementState` | Same (unchanged) |
+
+### What the Operator Handles Automatically
+
+The following happen without admin intervention during the upgrade:
+
+1. **Old CR cleanup**: The operator's garbage collection removes the old `ModelsAsService` CR (the operator no longer creates it).
+2. **maas-controller deployment**: The operator deploys `maas-controller` (CRDs, RBAC, Deployment) when `modelsAsService: Managed`.
+3. **Tenant creation**: `maas-controller` automatically creates the `default-tenant` Tenant CR with default values on startup.
+4. **Platform reconciliation**: `maas-controller` deploys maas-api, gateway policies, telemetry, and all other platform resources via the Tenant CR.
+
+### Manual Steps: Re-applying Custom Configuration
+
+If you had customized the `ModelsAsService` CR spec in 3.3 (e.g., custom gateway, external OIDC, telemetry settings), those values are **not** migrated automatically to the new Tenant CR. The Tenant is created with defaults.
+
+**If all fields were at defaults, no manual steps are needed.**
+
+The following table maps old `ModelsAsService` spec fields to new `Tenant` spec fields:
+
+| Old ModelsAsService field | New Tenant field | Default value |
+|---------------------------|------------------|---------------|
+| `spec.gatewayRef.namespace` | `spec.gatewayRef.namespace` | `openshift-ingress` |
+| `spec.gatewayRef.name` | `spec.gatewayRef.name` | `maas-default-gateway` |
+| `spec.externalOIDC.issuerUrl` | `spec.externalOIDC.issuerUrl` | (not set) |
+| `spec.externalOIDC.clientId` | `spec.externalOIDC.clientId` | (not set) |
+| `spec.externalOIDC.ttl` | `spec.externalOIDC.ttl` | `300` |
+| `spec.telemetry.enabled` | `spec.telemetry.enabled` | `true` |
+| `spec.telemetry.metrics.captureOrganization` | `spec.telemetry.metrics.captureOrganization` | `true` |
+| `spec.telemetry.metrics.captureUser` | `spec.telemetry.metrics.captureUser` | `false` |
+| `spec.telemetry.metrics.captureGroup` | `spec.telemetry.metrics.captureGroup` | `false` |
+| `spec.telemetry.metrics.captureModelUsage` | `spec.telemetry.metrics.captureModelUsage` | `true` |
+| `spec.apiKeys.maxExpirationDays` | `spec.apiKeys.maxExpirationDays` | (not set) |
+
+To re-apply custom values, patch the Tenant CR after the upgrade:
+
+```bash
+# Example: Re-apply external OIDC and API key configuration
+kubectl patch tenant default-tenant -n models-as-a-service --type merge \
+  -p '{
+    "spec": {
+      "externalOIDC": {
+        "issuerUrl": "https://keycloak.example.com/realms/maas",
+        "clientId": "maas-client"
+      },
+      "apiKeys": {
+        "maxExpirationDays": 90
+      }
+    }
+  }'
+```
+
+**Tip:** If you backed up the old `ModelsAsService` CR before the upgrade, you can extract the spec values from the backup:
+
+```bash
+# If you captured the old CR before upgrading:
+kubectl get modelsasservice default-modelsasservice -o yaml > migration-backup/modelsasservice.yaml
+
+# After upgrade, compare specs (field names are identical):
+diff <(yq '.spec' migration-backup/modelsasservice.yaml) \
+     <(kubectl get tenant default-tenant -n models-as-a-service -o yaml | yq '.spec')
+```
+
+### 3.5.1 Verify CR Transition
+
+```bash
+# Old ModelsAsService CR should be gone
+echo "Old ModelsAsService CR (should fail):"
+kubectl get modelsasservice default-modelsasservice 2>&1
+# Expected: error (not found or resource type not recognized)
+
+# New Tenant CR should exist and be Active/Ready
+echo ""
+echo "New Tenant CR:"
+kubectl get tenant default-tenant -n models-as-a-service
+# Expected: Ready=True
+
+# Tenant details
+echo ""
+echo "Tenant status:"
+kubectl get tenant default-tenant -n models-as-a-service -o jsonpath='{.status.phase}'
+echo ""
+# Expected: Active
+
+# DSC status should show ModelsAsService as Ready
+echo ""
+echo "DSC ModelsAsService status:"
+kubectl get datasciencecluster default-dsc -o jsonpath='{.status.conditions[?(@.type=="modelsasserviceReady")].status}'
+echo ""
+# Expected: True
+```
+
+### Migration Tooling
+
+The `migrate-tier-to-subscription.sh` script does **not** need extension for this transition. That script covers the tier ConfigMap to MaaS CRD migration (a separate concern). The ModelsAsService to Tenant CR transition is handled entirely by the operator and maas-controller at the platform level.
 
 ## Phase 4: Manual Cleanup of Old Tier Resources
 
