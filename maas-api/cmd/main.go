@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -114,13 +115,16 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize token store: %w", err)
 	}
+	var cleanupWg sync.WaitGroup
 	defer func() {
+		cancel()
+		cleanupWg.Wait()
 		if err := store.Close(); err != nil {
 			log.Error("Failed to close token store", "error", err)
 		}
 	}()
 
-	go func() {
+	cleanupWg.Go(func() {
 		ticker := time.NewTicker(15 * time.Minute)
 		defer ticker.Stop()
 		for {
@@ -132,11 +136,11 @@ func serve() error {
 				} else if count > 0 {
 					log.Info("Ephemeral key cleanup completed", "deletedCount", count)
 				}
-			case <-ctx.Done(): // just to not wait gracefully
+			case <-ctx.Done():
 				return
 			}
 		}
-	}()
+	})
 
 	if err = registerHandlers(ctx, log, router, cfg, cluster, store); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
