@@ -13,7 +13,7 @@
 #   3. Install OpenDataHub (ODH) operator with DataScienceCluster (KServe)
 #   4. Deploy MaaS system (free + premium + e2e test fixtures: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)
 #   5. Setup test tokens (admin + regular user) for comprehensive testing
-#   6. Run E2E tests (API keys + subscription + models endpoint tests)
+#   6. Run E2E tests (API keys + subscription + models + tenant + ...)
 #   7. Run deployment validation + token metadata verification
 # 
 # USAGE:
@@ -46,7 +46,8 @@
 #   OIDC_USERNAME - Required when EXTERNAL_OIDC=true; test user for OIDC token requests
 #   OIDC_PASSWORD - Required when EXTERNAL_OIDC=true; password for the OIDC test user
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
-#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
+#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and Tenant CR (default: models-as-a-service)
+#   GATEWAY_NAMESPACE - Namespace for payload-processing deployment checks (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
 #
 # TIMEOUT CONFIGURATION (all in seconds, sourced from deployment-helpers.sh):
@@ -285,35 +286,34 @@ deploy_models() {
     fi
     echo "✅ Simulator models ready"
 
-    # Wait for MaaSModelRefs to transition to Ready phase.
-    # The controller now properly handles the race condition where MaaSModelRef is created
-    # before KServe creates the HTTPRoute (sets Pending, then Ready when HTTPRoute watch triggers).
-    echo "Waiting for MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s)..."
+    # Wait for governed MaaSModelRefs to transition to Ready phase.
+    # Only models with MaaSSubscription + MaaSAuthPolicy pairings will reach Ready;
+    # ungoverned test fixtures (unconfigured, distinct, etc.) stay Pending by design.
+    local governed_models=("facebook-opt-125m-simulated" "premium-simulated-simulated-premium")
+    echo "Waiting for governed MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s)..."
     local deadline=$((SECONDS + MAASMODELREF_TIMEOUT))
     local all_ready=false
-    local found_any=false
 
     while [[ $SECONDS -lt $deadline ]]; do
         all_ready=true
-        found_any=false
-        while IFS= read -r phase; do
-            found_any=true
+        for model in "${governed_models[@]}"; do
+            phase=$(oc get maasmodelref "$model" -n "$MODEL_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
             if [[ "$phase" != "Ready" ]]; then
                 all_ready=false
                 break
             fi
-        done < <(oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null)
+        done
 
-        if $found_any && $all_ready; then
-            echo "✅ MaaSModelRefs ready"
+        if $all_ready; then
+            echo "✅ Governed MaaSModelRefs ready"
             break
         fi
 
         sleep 5
     done
 
-    if ! $found_any || ! $all_ready; then
-        echo "❌ ERROR: MaaSModelRefs did not reach Ready state within ${MAASMODELREF_TIMEOUT}s"
+    if ! $all_ready; then
+        echo "❌ ERROR: Governed MaaSModelRefs did not reach Ready state within ${MAASMODELREF_TIMEOUT}s"
         echo "Dumping MaaSModelRef status:"
         oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o yaml || true
         echo "Dumping controller logs:"
@@ -495,6 +495,7 @@ run_e2e_tests() {
     export GATEWAY_HOST="${HOST}"
     export DEPLOYMENT_NAMESPACE
     export MAAS_SUBSCRIPTION_NAMESPACE
+    export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
     # Skip TLS verification in CI (self-signed certs)
     export E2E_SKIP_TLS_VERIFY=true
     # Set MODEL_NAME explicitly - maas-api /v1/models currently only lists MaaSModelRefs
@@ -546,7 +547,7 @@ run_e2e_tests() {
         echo "⚠️  WARNING: Gateway not reachable after ${gw_timeout}s, proceeding anyway (tests may fail)"
     fi
 
-    # Run all e2e tests: API keys, namespace scoping, negative security, subscription, models endpoint
+    # Run all e2e tests: API keys, namespace scoping, negative security, subscription, models, tenant
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
@@ -557,7 +558,9 @@ run_e2e_tests() {
         "$test_dir/tests/test_negative_security.py" \
         "$test_dir/tests/test_subscription.py" \
         "$test_dir/tests/test_models_endpoint.py" \
-        "$test_dir/tests/test_external_models.py" ; then
+        "$test_dir/tests/test_external_models.py" \
+        "$test_dir/tests/test_tenant.py" \
+        "$test_dir/tests/test_config_tenant.py" ; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
     fi

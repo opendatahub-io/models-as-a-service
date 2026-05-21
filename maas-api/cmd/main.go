@@ -184,9 +184,17 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	v1Routes := router.Group("/v1")
 
-	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister)
+	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister)
 
-	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds)
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
+	gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
+	resolveCancel()
+	if err != nil {
+		return fmt.Errorf("failed to resolve gateway internal address: %w", err)
+	}
+	log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
+
+	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}

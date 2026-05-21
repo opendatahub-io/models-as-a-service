@@ -30,9 +30,6 @@ const (
 
 	// annotationTLS controls TLS origination (default "true").
 	annotationTLS = "maas.opendatahub.io/tls"
-
-	defaultGatewayName      = tenantreconcile.DefaultGatewayName
-	defaultGatewayNamespace = tenantreconcile.DefaultGatewayNamespace
 )
 
 // Reconciler watches ExternalModel CRs and creates the Istio resources
@@ -50,17 +47,11 @@ type Reconciler struct {
 }
 
 func (r *Reconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return defaultGatewayName
+	return r.GatewayName
 }
 
 func (r *Reconciler) gatewayNamespace() string {
-	if r.GatewayNamespace != "" {
-		return r.GatewayNamespace
-	}
-	return defaultGatewayNamespace
+	return r.GatewayNamespace
 }
 
 // commonLabels returns labels applied to all managed resources.
@@ -227,11 +218,26 @@ func (r *Reconciler) deleteIfExists(ctx context.Context, log logr.Logger, kind, 
 		}
 		return fmt.Errorf("failed to get %s %s/%s: %w", kind, namespace, name, err)
 	}
+	if !isManaged(obj) {
+		log.Info("Resource opted out of management, skipping deletion", "kind", kind, "name", name, "namespace", namespace)
+		return nil
+	}
 	log.Info("Deleting resource", "kind", kind, "name", name)
 	if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete %s %s/%s: %w", kind, namespace, name, err)
 	}
 	return nil
+}
+
+// isManaged reports whether obj has opted into maas/opendatahub controller management.
+// When the annotation is absent or any value other than "false", the resource is managed.
+// Only an explicit opendatahub.io/managed=false opts the resource out.
+func isManaged(obj metav1.Object) bool {
+	val, ok := obj.GetAnnotations()[tenantreconcile.AnnotationManaged]
+	if !ok {
+		return true
+	}
+	return val != "false"
 }
 
 // applyService creates or updates a Service.
@@ -244,6 +250,10 @@ func (r *Reconciler) applyService(ctx context.Context, log logr.Logger, desired 
 	}
 	if err != nil {
 		return err
+	}
+	if !isManaged(existing) {
+		log.Info("Service opted out of management, skipping update", "name", existing.Name, "namespace", existing.Namespace)
+		return nil
 	}
 	specChanged := !equality.Semantic.DeepEqual(existing.Spec, desired.Spec)
 	ownerChanged := !equality.Semantic.DeepEqual(existing.OwnerReferences, desired.OwnerReferences)
@@ -270,6 +280,10 @@ func (r *Reconciler) applyUnstructured(ctx context.Context, log logr.Logger, des
 	if err != nil {
 		return err
 	}
+	if !isManaged(existing) {
+		log.Info("Resource opted out of management, skipping update", "kind", existing.GetKind(), "name", existing.GetName(), "namespace", existing.GetNamespace())
+		return nil
+	}
 	desired.SetResourceVersion(existing.GetResourceVersion())
 	log.Info("Updating resource", "kind", desired.GetKind(), "name", desired.GetName())
 	return r.Update(ctx, desired)
@@ -285,6 +299,10 @@ func (r *Reconciler) applyHTTPRoute(ctx context.Context, log logr.Logger, desire
 	}
 	if err != nil {
 		return err
+	}
+	if !isManaged(existing) {
+		log.Info("HTTPRoute opted out of management, skipping update", "name", existing.Name, "namespace", existing.Namespace)
+		return nil
 	}
 	existing.Spec = desired.Spec
 	existing.Labels = desired.Labels

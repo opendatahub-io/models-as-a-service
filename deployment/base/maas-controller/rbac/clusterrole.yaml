@@ -29,6 +29,13 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
   - namespaces
   verbs:
   - create
@@ -58,7 +65,6 @@ rules:
   resources:
   - customresourcedefinitions
   verbs:
-  - delete
   - get
   - list
   - watch
@@ -175,6 +181,7 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
+  - configs
   - externalmodels
   verbs:
   - get
@@ -187,7 +194,6 @@ rules:
   - maasauthpolicies/finalizers
   - maasmodelrefs/finalizers
   - maassubscriptions/finalizers
-  - tenants/finalizers
   verbs:
   - update
 - apiGroups:

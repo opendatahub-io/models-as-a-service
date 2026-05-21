@@ -16,7 +16,7 @@ The release flow moves code through four stages, each mapped to a branch and env
 
 ## How Promotion Works
 
-Promotions between branches are automated via GitHub Actions workflows that create PRs. Each promotion is gated by a review before merge.
+Promotions between branches are automated via GitHub Actions workflows. The main → stable promotion creates a PR for review, while the stable → rhoai promotion merges directly (since stable is already validated).
 
 ### Stream to Lake (`main` → `stable`)
 
@@ -29,8 +29,8 @@ Promotions between branches are automated via GitHub Actions workflows that crea
 
 - **Trigger:** On-demand only (via `workflow_dispatch`)
 - **Workflow:** `promote-stable-to-rhoai.yml`
-- A PR is created from `stable` to `rhoai` listing all new commits
-- If an open promotion PR already exists, it is updated in place
+- Merges `stable` into `rhoai` directly with a merge commit (`--no-ff`)
+- **Strict conflict policy:** the workflow fails without making any changes if merge conflicts exist; conflicts must be resolved manually before re-running
 - A cron schedule can be enabled in the workflow once the release strategy matures
 
 ### RHOAI to Ocean (`rhoai` → downstream)
@@ -46,6 +46,24 @@ Both promotion workflows support `workflow_dispatch`, so they can be triggered o
 3. Click **Run workflow**
 
 This is useful when a fix needs to be fast-tracked without waiting for the next scheduled run.
+
+## Image Tags
+
+Each branch produces and references a specific container image tag:
+
+| Branch | Image Tag | Built By | Manifests |
+|--------|-----------|----------|-----------|
+| `main` | `latest` | Tekton push pipeline (`odh-maas-*-push.yaml`) | `deployment/overlays/dev/` |
+| `stable` | `odh-stable` | Tekton push pipeline (`odh-maas-*-push-stable.yaml`) | `deployment/overlays/odh/` |
+
+The ODH operator consumes manifests from `deployment/overlays/odh/` on the `stable` branch.
+
+### Overlay Layout
+
+- **`deployment/overlays/odh/`** — Production overlay with `:odh-stable` tags. Consumed by the ODH operator.
+- **`deployment/overlays/dev/`** — Development overlay with `:latest` tags. Used by MaaS developers via `./scripts/deploy.sh --dev`.
+
+Both overlays exist identically on all branches. The `dev` overlay wraps `odh` and overrides only the image tags.
 
 ## Release Notes
 

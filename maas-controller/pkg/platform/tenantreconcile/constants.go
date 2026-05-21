@@ -23,6 +23,12 @@ func isOptionalAPIGroup(group string) bool {
 }
 
 const (
+	// AnnotationManaged is the opt-out annotation key used by the ODH operator and MaaS
+	// controller. Resources annotated with this key set to "false" are skipped on both
+	// the write (create/update) and delete paths. This is the single source of truth;
+	// other packages that need the same key must reference this constant.
+	AnnotationManaged = "opendatahub.io/managed"
+
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
 	ComponentName = "modelsasservice"
@@ -32,9 +38,6 @@ const (
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
 
-	DefaultGatewayNamespace = "openshift-ingress"
-	DefaultGatewayName      = "maas-default-gateway"
-
 	GatewayDefaultAuthPolicyName               = "gateway-default-auth"
 	GatewayTokenRateLimitDefaultDenyPolicyName = "gateway-default-deny"
 	MaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
@@ -43,8 +46,10 @@ const (
 	IstioTelemetryName                         = "latency-per-subscription"
 	MaaSParametersConfigMapName                = "maas-parameters"
 	MaaSAPIDeploymentName                      = "maas-api"
-	MaaSDBSecretName                           = "maas-db-config" //nolint:gosec // secret name reference, not a credential
-	MaaSDBSecretKey                            = "DB_CONNECTION_URL"
+	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
+	MaaSControllerDeploymentName = "maas-controller"
+	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
+	MaaSDBSecretKey              = "DB_CONNECTION_URL"
 
 	MonitoringNamespace         = "openshift-monitoring"
 	ClusterMonitoringConfigName = "cluster-monitoring-config"

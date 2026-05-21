@@ -96,6 +96,53 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
 11. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
 
+## Conflicting AuthPolicy Detection
+
+MaaS automatically detects non-MaaS AuthPolicies (e.g., from KServe or other controllers) that target the same HTTPRoutes used by MaaS-governed models. When a conflict is detected, MaaS sets a `ConflictingAuthPolicy` condition on the affected MaaSAuthPolicy resource and emits a Kubernetes warning event.
+
+### Symptoms
+
+- MaaSAuthPolicy has condition `ConflictingAuthPolicy=True`
+- Warning events on MaaSAuthPolicy resources referencing non-MaaS AuthPolicies
+- Unexpected authentication behavior (wrong policy may win when multiple AuthPolicies target the same HTTPRoute)
+
+### Diagnosis
+
+Check for conflicting AuthPolicy conditions:
+
+```bash
+# Check MaaSAuthPolicy conditions
+kubectl get maasauthpolicy -n models-as-a-service -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.conditions[?(@.type=="ConflictingAuthPolicy")]}{.status}{"\t"}{.message}{end}{"\n"}{end}'
+
+# List all AuthPolicies targeting a specific model's HTTPRoute
+MODEL_NS="<model-namespace>"
+MODEL_NAME="<model-name>"
+kubectl get authpolicy -n "$MODEL_NS" -o json | \
+  jq -r ".items[] | select(.spec.targetRef.name == \"$MODEL_NAME\" and .spec.targetRef.kind == \"HTTPRoute\") | .metadata.name + \" (managed-by: \" + (.metadata.labels[\"app.kubernetes.io/managed-by\"] // \"unknown\") + \")\""
+
+# Check for warning events
+kubectl get events -n models-as-a-service --field-selector reason=ConflictingAuthPolicy
+```
+
+### Remediation
+
+1. **KServe anonymous auth policies** (`*-kserve-route-authn`): These are typically created when `security.opendatahub.io/enable-auth` is misconfigured on the InferenceService. Set the annotation to `"true"` on MaaS-governed InferenceServices to prevent KServe from creating conflicting anonymous AuthPolicies:
+
+    ```bash
+    kubectl annotate inferenceservice <name> -n <namespace> \
+      security.opendatahub.io/enable-auth="true" --overwrite
+    ```
+
+2. **Custom AuthPolicies**: If another team deployed a custom AuthPolicy targeting the same HTTPRoute, coordinate to determine which controller should own authentication for that route. Either:
+      - Remove the conflicting AuthPolicy if MaaS is the intended auth authority
+      - Or remove the model from the MaaSAuthPolicy if MaaS should not govern that route
+
+3. **Verify resolution**: After applying the fix, the `ConflictingAuthPolicy` condition should transition to `False` on the next reconciliation:
+
+    ```bash
+    kubectl get maasauthpolicy -n models-as-a-service -o jsonpath='{range .items[*]}{.metadata.name}{": "}{range .status.conditions[?(@.type=="ConflictingAuthPolicy")]}{.status}{end}{"\n"}{end}'
+    ```
+
 ## TLS Certificate Validation
 
 By default, `curl` validates TLS certificates against your system CA bundle. If you encounter certificate verification errors (e.g., `curl: (60) SSL certificate problem: self-signed certificate`), use one of the approaches below.
