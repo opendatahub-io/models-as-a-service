@@ -113,11 +113,11 @@ func TestRequestID_RejectsInvalidIDs(t *testing.T) {
 				"Should reject invalid ID: %s", tt.reason)
 			assert.NotEmpty(t, capturedID,
 				"Should generate new UUID for invalid ID")
-			assert.NotEqual(t, tt.clientID, w.Header().Get("X-Request-ID"),
-				"Response header must not reflect invalid/injected client ID: %s", tt.reason)
 			// Verify it looks like a UUID (contains hyphens, right length)
 			assert.Contains(t, capturedID, "-",
 				"Generated ID should be UUID format")
+			assert.Equal(t, capturedID, w.Header().Get("X-Request-ID"),
+				"Response header should carry the generated (not the rejected) ID")
 		})
 	}
 }
