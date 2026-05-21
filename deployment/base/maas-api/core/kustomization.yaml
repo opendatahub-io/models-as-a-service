@@ -10,4 +10,4 @@ resources:
 images:
   - name: maas-api
     newName: quay.io/opendatahub/maas-api
-    newTag: latest
+    newTag: odh-stable

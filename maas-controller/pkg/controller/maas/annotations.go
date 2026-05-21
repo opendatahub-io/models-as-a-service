@@ -16,10 +16,15 @@ limitations under the License.
 
 package maas
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
+)
 
 // ManagedByODHOperator is used to denote if a resource/component should be reconciled - when missing or true, reconcile.
-const ManagedByODHOperator = "opendatahub.io/managed"
+// This aliases tenantreconcile.AnnotationManaged so there is a single canonical definition.
+const ManagedByODHOperator = tenantreconcile.AnnotationManaged
 
 // isManaged reports whether obj has explicitly opted out of maas or opendatahub controller management.
 func isManaged(obj metav1.Object) bool {

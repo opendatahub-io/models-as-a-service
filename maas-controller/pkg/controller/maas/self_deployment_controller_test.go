@@ -2,164 +2,181 @@
 package maas
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 
 	. "github.com/onsi/gomega"
 )
 
-func selfDepScheme(t *testing.T) *runtime.Scheme {
+func lifecycleTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
-	s := tenantTestScheme(t)
-	utilruntime.Must(appsv1.AddToScheme(s))
-	utilruntime.Must(rbacv1.AddToScheme(s))
-	utilruntime.Must(apiextensionsv1.AddToScheme(s))
+	s := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
 }
 
-func TestLifecycleReconciler(t *testing.T) {
-	const (
-		depName  = "maas-controller"
-		depNS    = "redhat-ods-applications"
-		tenantNS = "models-as-a-service"
-	)
-	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: depName, Namespace: depNS}}
+func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
 
-	t.Run("adds cleanup finalizer when Deployment has none", func(t *testing.T) {
-		g := NewWithT(t)
-		dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: depNS}}
-		cli := fake.NewClientBuilder().WithScheme(selfDepScheme(t)).WithObjects(dep).Build()
+	const depNS = "opendatahub"
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
 
-		r := &LifecycleReconciler{Client: cli, DeploymentName: depName, DeploymentNS: depNS, TenantNamespace: tenantNS}
-		res, err := r.Reconcile(t.Context(), req)
-		g.Expect(err).ShouldNot(HaveOccurred())
-		g.Expect(res).To(Equal(ctrl.Result{}))
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: "",
+	}
 
-		var updated appsv1.Deployment
-		g.Expect(cli.Get(t.Context(), req.NamespacedName, &updated)).To(Succeed())
-		g.Expect(updated.Finalizers).To(ContainElement(CleanupFinalizer))
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
 	})
+	g.Expect(err).NotTo(HaveOccurred())
 
-	t.Run("no-op when finalizer already present and Deployment is running", func(t *testing.T) {
-		g := NewWithT(t)
-		dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-			Name: depName, Namespace: depNS,
-			Finalizers: []string{CleanupFinalizer},
-		}}
-		cli := fake.NewClientBuilder().WithScheme(selfDepScheme(t)).WithObjects(dep).Build()
+	var cfg maasv1alpha1.Config
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg)).To(Succeed())
+	if cfg.UID == "" {
+		base := cfg.DeepCopy()
+		cfg.UID = types.UID("test-uid")
+		g.Expect(cl.Patch(context.Background(), &cfg, client.MergeFrom(base))).To(Succeed())
+	}
 
-		r := &LifecycleReconciler{Client: cli, DeploymentName: depName, DeploymentNS: depNS, TenantNamespace: tenantNS}
-		res, err := r.Reconcile(t.Context(), req)
-		g.Expect(err).ShouldNot(HaveOccurred())
-		g.Expect(res).To(Equal(ctrl.Result{}))
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
 	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
-	t.Run("no-op when Deployment is terminating but CleanupFinalizer is absent", func(t *testing.T) {
-		// W4b contract: if the finalizer was never set (e.g. controller first deployed against
-		// a Deployment that is immediately deleted), Reconcile returns cleanly with no error
-		// and skips all teardown rather than panicking or re-queuing indefinitely.
-		//
-		// The fake client refuses to store objects with DeletionTimestamp but no finalizers, so we
-		// use a placeholder finalizer (not CleanupFinalizer) and Delete to trigger DeletionTimestamp.
-		g := NewWithT(t)
-		const placeholderFinalizer = "test/placeholder"
-		dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-			Name:       depName,
-			Namespace:  depNS,
-			Finalizers: []string{placeholderFinalizer},
-		}}
-		cli := fake.NewClientBuilder().WithScheme(selfDepScheme(t)).WithObjects(dep).Build()
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg)).To(Succeed())
+	g.Expect(cfg.Name).To(Equal(maasv1alpha1.ConfigInstanceName))
+}
 
-		g.Expect(cli.Delete(t.Context(), dep)).To(Succeed())
+func TestLifecycleReconciler_ConfigTerminatingRequeues(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
 
-		r := &LifecycleReconciler{Client: cli, DeploymentName: depName, DeploymentNS: depNS, TenantNamespace: tenantNS}
-		res, err := r.Reconcile(t.Context(), req)
-		g.Expect(err).ShouldNot(HaveOccurred())
-		g.Expect(res).To(Equal(ctrl.Result{}))
-	})
-
-	t.Run("removes finalizer cleanly when no labeled cluster resources exist", func(t *testing.T) {
-		// W4c contract: if no ClusterRoles/CRDs/ClusterRoleBindings match the component label
-		// (e.g. operator did not stamp the label), deleteClusterScopedResources still returns
-		// nil and the finalizer is released — no panic, no error, no requeue.
-		g := NewWithT(t)
-		now := metav1.NewTime(time.Now())
-		dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-			Name: depName, Namespace: depNS,
+	const depNS = "opendatahub"
+	now := metav1.NewTime(time.Now())
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.ConfigInstanceName,
+			UID:               types.UID("cfg-1"),
 			DeletionTimestamp: &now,
-			Finalizers:        []string{CleanupFinalizer},
-		}}
-		// No Tenant, no labeled ClusterRoles/CRDs/ClusterRoleBindings in the fake store.
-		cli := fake.NewClientBuilder().WithScheme(selfDepScheme(t)).WithObjects(dep).Build()
+			Finalizers:        []string{"test.finalizer"},
+		},
+	}
 
-		r := &LifecycleReconciler{Client: cli, DeploymentName: depName, DeploymentNS: depNS, TenantNamespace: tenantNS}
-		res, err := r.Reconcile(t.Context(), req)
-		g.Expect(err).ShouldNot(HaveOccurred())
-		g.Expect(res).To(Equal(ctrl.Result{}))
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: "",
+	}
 
-		// Finalizer removed → fake client GCs the Deployment.
-		var updated appsv1.Deployment
-		getErr := cli.Get(t.Context(), req.NamespacedName, &updated)
-		g.Expect(getErr).Should(HaveOccurred())
-		g.Expect(getErr.Error()).To(ContainSubstring("not found"))
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
 	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+}
 
-	t.Run("deletes Tenants then RBAC and CRDs when Deployment is terminating", func(t *testing.T) {
-		g := NewWithT(t)
-		now := metav1.NewTime(time.Now())
-		dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-			Name: depName, Namespace: depNS,
-			DeletionTimestamp: &now,
-			Finalizers:        []string{CleanupFinalizer},
-		}}
-		tenant := &maasv1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{
-			Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS,
-		}}
-		crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{
-			Name: "maas-controller-crb", Labels: map[string]string(componentLabel),
-		}}
-		cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
-			Name: "maas-controller-cr", Labels: map[string]string(componentLabel),
-		}}
-		cli := fake.NewClientBuilder().WithScheme(selfDepScheme(t)).WithObjects(dep, tenant, crb, cr).Build()
+func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
 
-		r := &LifecycleReconciler{Client: cli, DeploymentName: depName, DeploymentNS: depNS, TenantNamespace: tenantNS}
+	const depNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
 
-		// First reconcile: Tenant exists — deleted, requeue while pending.
-		res, err := r.Reconcile(t.Context(), req)
-		g.Expect(err).ShouldNot(HaveOccurred())
-		g.Expect(res.RequeueAfter).To(Equal(requeueInterval))
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-uid-tenant"),
+		},
+	}
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: tenantNS,
+		},
+	}
 
-		// Second reconcile: Tenant gone — RBAC cleaned, finalizer released, Deployment removed by GC.
-		res, err = r.Reconcile(t.Context(), req)
-		g.Expect(err).ShouldNot(HaveOccurred())
-		g.Expect(res).To(Equal(ctrl.Result{}))
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, tenant).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: tenantNS,
+	}
 
-		crbList := &rbacv1.ClusterRoleBindingList{}
-		g.Expect(cli.List(t.Context(), crbList, componentLabel)).To(Succeed())
-		g.Expect(crbList.Items).To(BeEmpty())
-
-		crList := &rbacv1.ClusterRoleList{}
-		g.Expect(cli.List(t.Context(), crList, componentLabel)).To(Succeed())
-		g.Expect(crList.Items).To(BeEmpty())
-
-		// Deployment is fully removed once the finalizer is released.
-		var updated appsv1.Deployment
-		err = cli.Get(t.Context(), req.NamespacedName, &updated)
-		g.Expect(err).Should(HaveOccurred())
-		g.Expect(err.Error()).To(ContainSubstring("not found"))
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
 	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS}, &updated)).To(Succeed())
+	g.Expect(updated.OwnerReferences).ToNot(BeEmpty())
+	ref := updated.OwnerReferences[0]
+	g.Expect(ref.UID).To(Equal(types.UID("cfg-uid-tenant")))
+	g.Expect(ref.Kind).To(Equal(maasv1alpha1.ConfigKind))
+	g.Expect(ref.Controller).To(BeNil())
 }
