@@ -250,7 +250,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	// Internal routes (no auth required - called by Authorino / CronJob)
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
-	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)  // TODO: consider remove endpoint if not public access
+	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys) // TODO: consider remove endpoint if not public access
 	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil
