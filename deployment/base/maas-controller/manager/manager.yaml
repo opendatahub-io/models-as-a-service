@@ -68,12 +68,6 @@ spec:
                 key: payload-processing-image
                 name: maas-parameters
                 optional: true
-          - name: RELATED_IMAGE_UBI_MINIMAL_IMAGE
-            valueFrom:
-              configMapKeyRef:
-                key: maas-api-key-cleanup-image
-                name: maas-parameters
-                optional: true
           - name: RELATED_IMAGE_ODH_PYTHON_312_IMAGE
             valueFrom:
               configMapKeyRef:
