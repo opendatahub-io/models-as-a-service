@@ -18,6 +18,7 @@
 #   --namespace <namespace>       Target namespace
 #   --verbose                     Enable debug logging
 #   --dry-run                     Show what would be done
+#   --dev                         Use dev overlay with :latest images
 #   --help                        Show full help with all options
 #
 # ADVANCED OPTIONS (PR Testing):
@@ -102,6 +103,7 @@ ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
 ENABLE_KEYCLOAK="${ENABLE_KEYCLOAK:-false}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
+DEV_MODE="${DEV_MODE:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
@@ -161,6 +163,10 @@ OPTIONS:
 
   --dry-run
       Show what would be done without applying changes
+
+  --dev
+      Use dev overlay with :latest images (for MaaS developers)
+      Default: uses odh overlay with :odh-stable images
 
   --help
       Display this help message

@@ -103,7 +103,7 @@ High cardinality in `authorized_hits`, `authorized_calls`, and `limited_calls` m
 - **Query performance** — queries like `sum by (user) (rate(authorized_hits[5m]))` become slow when thousands of user values exist.
 - **Dashboard responsiveness** — Grafana panels using high-cardinality metrics may time out.
 
-Gateway latency metrics (`istio_request_duration_milliseconds_bucket`) are labeled by **subscription only** (not by user) specifically to keep cardinality bounded. See [Observability Dashboard](observability.md#per-subscription-latency-tracking).
+Gateway latency metrics (`istio_request_duration_milliseconds_bucket`) are labeled by **subscription only** (not by user) specifically to keep cardinality bounded. See [Metrics & Dashboards](../observability/metrics-and-dashboards.md#per-subscription-latency-tracking).
 
 ## Monitoring Cardinality
 
@@ -197,6 +197,6 @@ kubectl get tokenratelimitpolicy -A -o json | \
 ## Related Documentation
 
 - [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md) — step-by-step subscription setup including the `users` field warning
-- [Observability Dashboard](observability.md) — metrics collection, TelemetryPolicy labels, and dashboard configuration
+- [Observability](../observability/index.md) — metrics collection, TelemetryPolicy labels, and dashboard configuration
 - [Limitador Persistence](limitador-persistence.md) — configuring Redis for persistent rate-limit counters
 - [MaaSSubscription CRD Reference](../reference/crds/maas-subscription.md) — full CRD field reference
