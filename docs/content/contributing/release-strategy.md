@@ -47,6 +47,24 @@ Both promotion workflows support `workflow_dispatch`, so they can be triggered o
 
 This is useful when a fix needs to be fast-tracked without waiting for the next scheduled run.
 
+## Image Tags
+
+Each branch produces and references a specific container image tag:
+
+| Branch | Image Tag | Built By | Manifests |
+|--------|-----------|----------|-----------|
+| `main` | `latest` | Tekton push pipeline (`odh-maas-*-push.yaml`) | `deployment/overlays/dev/` |
+| `stable` | `odh-stable` | Tekton push pipeline (`odh-maas-*-push-stable.yaml`) | `deployment/overlays/odh/` |
+
+The ODH operator consumes manifests from `deployment/overlays/odh/` on the `stable` branch.
+
+### Overlay Layout
+
+- **`deployment/overlays/odh/`** — Production overlay with `:odh-stable` tags. Consumed by the ODH operator.
+- **`deployment/overlays/dev/`** — Development overlay with `:latest` tags. Used by MaaS developers via `./scripts/deploy.sh --dev`.
+
+Both overlays exist identically on all branches. The `dev` overlay wraps `odh` and overrides only the image tags.
+
 ## Release Notes
 
 Release notes in `docs/content/release-notes/index.md` summarize user-visible changes for each MaaS version. Keep them concise and focused on **what changed** and **why it matters**—link to detailed docs for **how** to migrate or configure.
