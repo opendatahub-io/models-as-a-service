@@ -77,6 +77,10 @@ type Config struct {
 	// Set to 0 to disable debouncing (every validation writes to DB). Default: 60.
 	LastUsedDebounceSecs int
 
+	// CleanupIntervalMinutes controls how often the cleanup goroutine deletes expired API keys
+	// -1 disables cleanup logic, any positive value sets the interval in minutes. Default: 15 mins
+	CleanupIntervalMinutes int
+
 	MetricsPort int
 
 	// MetricsSecure serves /metrics over HTTPS with authn/authz when true.
@@ -126,6 +130,7 @@ func Load() *Config {
 			otelSampleRate = parsed
 		}
 	}
+	cleanupIntervalMinutes, _ := env.GetInt("CLEANUP_INTERVAL_MINUTES", constant.DefaultCleanupIntervalMinutes)
 
 	tenantName := strings.TrimSpace(env.GetString("TENANT_NAME", "models-as-a-service"))
 	if tenantName == "" {
@@ -153,6 +158,7 @@ func Load() *Config {
 		AccessCheckTimeoutSeconds: accessCheckTimeoutSeconds,
 		SARCacheMaxSize:           sarCacheMaxSize,
 		LastUsedDebounceSecs:      lastUsedDebounceSecs,
+		CleanupIntervalMinutes:    cleanupIntervalMinutes,
 		MetricsPort:               metricsPort,
 		MetricsSecure:             metricsSecure,
 		MetricsCertDir:            metricsCertDir,
@@ -184,6 +190,8 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	fs.StringVar(&c.deprecatedHTTPPort, "port", c.deprecatedHTTPPort, "DEPRECATED: use --address with --secure=false")
 
+	fs.IntVar(&c.CleanupIntervalMinutes, "cleanup-interval",
+		c.CleanupIntervalMinutes, "Cleanup API key interval (-1 to disable, default 15) in minutes")
 	fs.BoolVar(&c.DebugMode, "debug", c.DebugMode, "Enable debug mode")
 	fs.BoolVar(&c.MetricsSecure, "metrics-secure", c.MetricsSecure,
 		"Serve metrics via HTTPS with authentication and authorization (default: true)")
@@ -249,6 +257,10 @@ func (c *Config) Validate() error {
 
 	if c.LastUsedDebounceSecs < 0 {
 		return errors.New("LAST_USED_DEBOUNCE_SECS must be greater than or equal to 0")
+	}
+
+	if c.CleanupIntervalMinutes == 0 {
+		c.CleanupIntervalMinutes = constant.DefaultCleanupIntervalMinutes
 	}
 
 	if c.MetricsPort < 1 || c.MetricsPort > 65535 {
