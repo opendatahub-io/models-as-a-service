@@ -124,23 +124,29 @@ func serve() error {
 		}
 	}()
 
-	cleanupWg.Go(func() {
-		ticker := time.NewTicker(15 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				count, err := store.DeleteExpiredEphemeral(ctx)
-				if err != nil {
-					log.Error("Failed to cleanup expired ephemeral keys", "error", err)
-				} else if count > 0 {
-					log.Info("Ephemeral key cleanup completed", "deletedCount", count)
+	if cfg.CleanupIntervalMinutes > 0 {
+		interval := time.Duration(cfg.CleanupIntervalMinutes) * time.Minute
+		log.Info("Ephemeral key cleanup enabled", "interval", cfg.CleanupIntervalMinutes)
+		cleanupWg.Go(func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					count, err := store.DeleteExpiredEphemeral(ctx)
+					if err != nil {
+						log.Error("Failed to cleanup expired ephemeral keys", "error", err)
+					} else if count > 0 {
+						log.Info("Ephemeral key cleanup completed", "deletedCount", count)
+					}
+				case <-ctx.Done():
+					return
 				}
-			case <-ctx.Done():
-				return
 			}
-		}
-	})
+		})
+	} else {
+		log.Info("Ephemeral key cleanup disabled")
+	}
 
 	if err = registerHandlers(ctx, log, router, cfg, cluster, store); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)

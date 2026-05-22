@@ -27,6 +27,9 @@ const (
 	// DefaultSARCacheMaxSize is the maximum number of entries in the SAR admin-check cache.
 	DefaultSARCacheMaxSize = 8192
 
+	// DefaultCleanupIntervalMinutes is the default interval for the ephemeral key cleanup goroutine.
+	DefaultCleanupIntervalMinutes = 15
+
 	// LLMInferenceService annotation keys for model metadata.
 	AnnotationGenAIUseCase      = "opendatahub.io/genai-use-case"
 	AnnotationDescription       = "openshift.io/description"
