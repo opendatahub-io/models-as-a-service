@@ -57,7 +57,7 @@ If you change any file under `maas-controller/api/` or modify `//+kubebuilder:rb
 
 - `deployment/base/maas-controller/default` — operator bootstrap (CRDs, RBAC, Deployment, default CRs such as `Config`). `./scripts/deploy.sh` applies `deployment/base/maas-controller/crd` first and waits **Established**, then applies this bundle unchanged (avoids CRD/CR ordering issues on install).
 - `maas-api/deploy/overlays/odh` — tenant overlay rendered at runtime inside the controller container
-- `deployment/overlays/odh/params.env` — build-time defaults; runtime values come from Tenant CR via `CustomizeParams`
+- `deployment/overlays/odh/params.env` — build-time defaults; runtime values come from Tenant CR via `PostRender`
 - The controller image embeds `maas-api/deploy`, `deployment/base/maas-api`, components, and policies via Dockerfile COPY
 
 When editing Kustomize files, always run `./scripts/ci/validate-manifests.sh` before committing.
@@ -106,7 +106,7 @@ If multiple rules apply, use the **highest** justified rating and explain the ma
 ## Things to never do
 
 - Do not create a root-level `go.mod` or `Makefile`.
-- Do not guess image tags, registry paths, or namespace names — ask or check `params.env`.
+- Do not guess image tags, registry paths, or namespace names — ask or check `params.env` and `params.go`.
 - Do not edit `zz_generated.deepcopy.go` or CRD YAML by hand — always regenerate.
 - Do not create a new doc file without first confirming no existing file covers the same topic.
 

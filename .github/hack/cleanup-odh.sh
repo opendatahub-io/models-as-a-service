@@ -43,19 +43,6 @@ fi
 echo "Connected to cluster. Starting cleanup..."
 echo ""
 
-# Detect operator type to find the right application namespace
-MAAS_APP_NAMESPACE=""
-if kubectl get subscription rhods-operator -n redhat-ods-operator &>/dev/null; then
-    MAAS_APP_NAMESPACE="redhat-ods-applications"
-    echo "Detected RHOAI operator (application namespace: $MAAS_APP_NAMESPACE)"
-elif kubectl get subscription opendatahub-operator -A &>/dev/null; then
-    MAAS_APP_NAMESPACE="opendatahub"
-    echo "Detected ODH operator (application namespace: $MAAS_APP_NAMESPACE)"
-else
-    echo "No operator detected, will clean both namespaces"
-fi
-echo ""
-
 # 1. Delete DataScienceCluster instances
 echo "1. Deleting DataScienceCluster instances..."
 kubectl delete datasciencecluster --all -A --ignore-not-found --timeout=120s 2>/dev/null || true
@@ -94,13 +81,7 @@ kubectl delete operatorgroup odh-operator-group -n odh-operator --ignore-not-fou
 echo "7. Deleting odh-operator namespace..."
 kubectl delete ns odh-operator --ignore-not-found --timeout=120s 2>/dev/null || true
 
-# 8. Delete opendatahub namespace (contains deployed components)
-echo "8. Deleting opendatahub namespace..."
-kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || true
-
-# 8b. Clean MaaS resources from RHOAI application namespace
-# On RHOAI clusters, MaaS resources live in redhat-ods-applications which is
-# operator-managed. We delete MaaS resources individually instead of the namespace.
+# 8a. Clean MaaS resources from application namespaces
 cleanup_maas_resources() {
     local ns=$1
     if ! kubectl get namespace "$ns" &>/dev/null; then
@@ -109,6 +90,10 @@ cleanup_maas_resources() {
     fi
 
     echo "   Cleaning MaaS resources from $ns..."
+    if kubectl get deployment maas-controller -n "$ns" &>/dev/null; then
+        kubectl patch deployment maas-controller -n "$ns" --type=json \
+            -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+    fi
     kubectl delete deployment maas-api maas-controller postgres -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete service maas-api postgres -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete secret maas-db-config postgres-creds -n "$ns" --ignore-not-found 2>/dev/null || true
@@ -123,15 +108,13 @@ cleanup_maas_resources() {
     echo "   ✅ MaaS resources cleaned from $ns"
 }
 
-if [[ "$MAAS_APP_NAMESPACE" == "redhat-ods-applications" ]]; then
-    echo "8b. Cleaning MaaS resources from RHOAI namespace..."
-    cleanup_maas_resources "redhat-ods-applications"
-elif [[ -z "$MAAS_APP_NAMESPACE" ]]; then
-    # No operator detected, clean both just in case
-    echo "8b. Cleaning MaaS resources from both possible namespaces..."
-    cleanup_maas_resources "redhat-ods-applications"
-    cleanup_maas_resources "opendatahub"
-fi
+echo "8a. Cleaning MaaS resources from application namespaces..."
+cleanup_maas_resources "redhat-ods-applications"
+cleanup_maas_resources "opendatahub"
+
+# 8b. Delete opendatahub namespace
+echo "8b. Deleting opendatahub namespace..."
+kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || true
 
 force_delete_namespace() {
     local ns=$1
