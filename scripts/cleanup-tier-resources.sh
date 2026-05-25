@@ -125,75 +125,81 @@ echo ""
 
 cleanup_failed=false
 
-# 1. Delete gateway-auth-policy AuthPolicy
-if kubectl get authpolicy gateway-auth-policy -n openshift-ingress >/dev/null 2>&1; then
+# delete_resource: delete a resource using kubectl delete --ignore-not-found.
+# Avoids get-then-delete TOCTOU and surfaces real errors (RBAC, network).
+# Usage: delete_resource <kind> <name> <namespace>
+delete_resource() {
+    local kind="$1" name="$2" namespace="$3"
+
     if [[ "$DRY_RUN" == "true" ]]; then
-        log_warn "[dry-run] Would delete AuthPolicy gateway-auth-policy in openshift-ingress"
-    else
-        if kubectl delete authpolicy gateway-auth-policy -n openshift-ingress 2>/dev/null; then
-            log_success "Deleted AuthPolicy gateway-auth-policy in openshift-ingress"
+        local output
+        if output=$(kubectl get "$kind" "$name" -n "$namespace" 2>&1); then
+            log_warn "[dry-run] Would delete $kind $name in $namespace"
+        elif [[ "$output" == *"NotFound"* ]] || [[ "$output" == *"not found"* ]]; then
+            log_verbose "$kind $name not found in $namespace (already clean)"
         else
-            log_error "Failed to delete AuthPolicy gateway-auth-policy in openshift-ingress"
+            log_error "Failed to check $kind $name in $namespace: $(echo "$output" | grep '^error:' | tail -1)"
+            cleanup_failed=true
+        fi
+    else
+        local output
+        if output=$(kubectl delete "$kind" "$name" -n "$namespace" --ignore-not-found 2>&1); then
+            if [[ -n "$output" ]]; then
+                log_success "Deleted $kind $name in $namespace"
+            else
+                log_verbose "$kind $name not found in $namespace (already clean)"
+            fi
+        else
+            log_error "Failed to delete $kind $name in $namespace: $(echo "$output" | grep '^error:' | tail -1)"
             cleanup_failed=true
         fi
     fi
-else
-    log_verbose "AuthPolicy gateway-auth-policy not found in openshift-ingress (already clean)"
-fi
+}
+
+# 1. Delete gateway-auth-policy AuthPolicy
+delete_resource authpolicy gateway-auth-policy openshift-ingress
 
 # 2. Delete gateway-tier-rate-limits TokenRateLimitPolicy
-if kubectl get tokenratelimitpolicy gateway-tier-rate-limits -n openshift-ingress >/dev/null 2>&1; then
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_warn "[dry-run] Would delete TokenRateLimitPolicy gateway-tier-rate-limits in openshift-ingress"
-    else
-        if kubectl delete tokenratelimitpolicy gateway-tier-rate-limits -n openshift-ingress 2>/dev/null; then
-            log_success "Deleted TokenRateLimitPolicy gateway-tier-rate-limits in openshift-ingress"
-        else
-            log_error "Failed to delete TokenRateLimitPolicy gateway-tier-rate-limits in openshift-ingress"
-            cleanup_failed=true
-        fi
-    fi
-else
-    log_verbose "TokenRateLimitPolicy gateway-tier-rate-limits not found in openshift-ingress (already clean)"
-fi
+delete_resource tokenratelimitpolicy gateway-tier-rate-limits openshift-ingress
 
 # 3. Delete tier-to-group-mapping ConfigMap
-if kubectl get configmap tier-to-group-mapping -n maas-api >/dev/null 2>&1; then
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log_warn "[dry-run] Would delete ConfigMap tier-to-group-mapping in maas-api"
-    else
-        if kubectl delete configmap tier-to-group-mapping -n maas-api 2>/dev/null; then
-            log_success "Deleted ConfigMap tier-to-group-mapping in maas-api"
-        else
-            log_error "Failed to delete ConfigMap tier-to-group-mapping in maas-api"
-            cleanup_failed=true
-        fi
-    fi
-else
-    log_verbose "ConfigMap tier-to-group-mapping not found in maas-api (already clean)"
-fi
+delete_resource configmap tier-to-group-mapping maas-api
 
 # 4. Remove alpha.maas.opendatahub.io/tiers annotation from LLMInferenceServices
 log_info "Removing tier annotations from LLMInferenceServices in $MODEL_NAMESPACE..."
-models=$(kubectl get llminferenceservice -n "$MODEL_NAMESPACE" -o name 2>/dev/null) || true
+local_models_output=$(kubectl get llminferenceservice -n "$MODEL_NAMESPACE" -o name 2>&1) || true
+models=""
 
-if [[ -z "$models" ]]; then
+if [[ "$local_models_output" == *"NotFound"* ]] || [[ "$local_models_output" == *"the server doesn't have a resource type"* ]] || [[ -z "$local_models_output" ]]; then
     log_verbose "No LLMInferenceServices found in $MODEL_NAMESPACE (nothing to clean)"
+elif [[ "$local_models_output" == *"error"* ]] || [[ "$local_models_output" == *"Error"* ]]; then
+    log_error "Failed to list LLMInferenceServices in $MODEL_NAMESPACE: $(echo "$local_models_output" | grep '^error:' | tail -1)"
+    cleanup_failed=true
 else
+    models="$local_models_output"
+fi
+
+if [[ -n "$models" ]]; then
     while IFS= read -r model; do
         [[ -z "$model" ]] && continue
         if [[ "$DRY_RUN" == "true" ]]; then
-            has_annotation=$(kubectl get "$model" -n "$MODEL_NAMESPACE" -o jsonpath='{.metadata.annotations.alpha\.maas\.opendatahub\.io/tiers}' 2>/dev/null) || true
-            if [[ -n "$has_annotation" ]]; then
-                log_warn "[dry-run] Would remove tier annotation from $model"
+            local has_annotation
+            if has_annotation=$(kubectl get "$model" -n "$MODEL_NAMESPACE" -o jsonpath='{.metadata.annotations.alpha\.maas\.opendatahub\.io/tiers}' 2>&1); then
+                if [[ -n "$has_annotation" ]]; then
+                    log_warn "[dry-run] Would remove tier annotation from $model"
+                else
+                    log_verbose "$model has no tier annotation (already clean)"
+                fi
             else
-                log_verbose "$model has no tier annotation (already clean)"
+                log_error "Failed to check annotation on $model: $(echo "$has_annotation" | grep '^error:' | tail -1)"
+                cleanup_failed=true
             fi
         else
-            if kubectl annotate "$model" -n "$MODEL_NAMESPACE" alpha.maas.opendatahub.io/tiers- --ignore-not-found 2>/dev/null; then
+            local annotate_output
+            if annotate_output=$(kubectl annotate "$model" -n "$MODEL_NAMESPACE" alpha.maas.opendatahub.io/tiers- --ignore-not-found 2>&1); then
                 log_verbose "Removed tier annotation from $model"
             else
-                log_error "Failed to remove tier annotation from $model"
+                log_error "Failed to remove tier annotation from $model: $(echo "$annotate_output" | grep '^error:' | tail -1)"
                 cleanup_failed=true
             fi
         fi

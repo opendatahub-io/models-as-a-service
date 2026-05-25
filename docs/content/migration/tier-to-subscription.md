@@ -423,9 +423,10 @@ kubectl delete tokenratelimitpolicy gateway-tier-rate-limits -n openshift-ingres
 # Delete tier-to-group-mapping ConfigMap
 kubectl delete configmap tier-to-group-mapping -n maas-api --ignore-not-found
 
-# Remove tier annotations from all models
-for model in $(kubectl get llminferenceservice -n llm -o name); do
-  kubectl annotate "$model" -n llm alpha.maas.opendatahub.io/tiers- --ignore-not-found
+# Remove tier annotations from all models (adjust namespace if not using 'llm')
+MODEL_NS=llm
+for model in $(kubectl get llminferenceservice -n "$MODEL_NS" -o name); do
+  kubectl annotate "$model" -n "$MODEL_NS" alpha.maas.opendatahub.io/tiers- --ignore-not-found
 done
 ```
 
