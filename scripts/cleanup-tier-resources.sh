@@ -144,7 +144,7 @@ delete_resource() {
     else
         local output
         if output=$(kubectl delete "$kind" "$name" -n "$namespace" --ignore-not-found 2>&1); then
-            if [[ -n "$output" ]]; then
+            if [[ "$output" == *" deleted"* ]]; then
                 log_success "Deleted $kind $name in $namespace"
             else
                 log_verbose "$kind $name not found in $namespace (already clean)"
@@ -183,7 +183,7 @@ if [[ -n "$models" ]]; then
     while IFS= read -r model; do
         [[ -z "$model" ]] && continue
         if [[ "$DRY_RUN" == "true" ]]; then
-            local has_annotation
+            has_annotation=""
             if has_annotation=$(kubectl get "$model" -n "$MODEL_NAMESPACE" -o jsonpath='{.metadata.annotations.alpha\.maas\.opendatahub\.io/tiers}' 2>&1); then
                 if [[ -n "$has_annotation" ]]; then
                     log_warn "[dry-run] Would remove tier annotation from $model"
@@ -195,7 +195,7 @@ if [[ -n "$models" ]]; then
                 cleanup_failed=true
             fi
         else
-            local annotate_output
+            annotate_output=""
             if annotate_output=$(kubectl annotate "$model" -n "$MODEL_NAMESPACE" alpha.maas.opendatahub.io/tiers- --ignore-not-found 2>&1); then
                 log_verbose "Removed tier annotation from $model"
             else
