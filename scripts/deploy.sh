@@ -330,6 +330,10 @@ parse_arguments() {
         POSTGRES_CONNECTION="$2"
         shift 2
         ;;
+      --dev)
+        DEV_MODE="true"
+        shift
+        ;;
       --help|-h)
         show_help
         exit 0
@@ -524,8 +528,10 @@ main() {
     # Ensure maas-parameters ConfigMap exists with image defaults before the
     # controller starts; maas-controller reads these via configMapKeyRef
     # (RELATED_IMAGE_* env vars).
-    local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
-    local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
+    local default_tag="odh-stable"
+    [[ "${DEV_MODE:-false}" == "true" ]] && default_tag="latest"
+    local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${default_tag}}"
+    local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${default_tag}}"
     local cm_payload_processing_image="quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
     local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
 
