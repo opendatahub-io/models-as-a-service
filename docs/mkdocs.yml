@@ -89,6 +89,7 @@ nav:
     - Advanced Administration:
       - External OIDC Configuration: advanced-administration/external-oidc.md
       - Subscription Cardinality: advanced-administration/subscription-cardinality.md
+      - Telemetry Defaults and Cardinality: advanced-administration/telemetry-defaults-and-cardinality.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
       - Authorino Caching: configuration-and-management/authorino-caching.md
   - Observability:
