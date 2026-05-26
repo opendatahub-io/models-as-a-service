@@ -46,6 +46,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--operator-catalog <image>` - Custom operator catalog image for PR testing
 - `--operator-image <image>` - Custom operator image for PR testing
 - `--channel <channel>` - Operator channel override (default: fast-3 for ODH, stable-3.x for RHOAI)
+- `--postgres-connection <connection-string>` - External PostgreSQL URL (also reads `POSTGRES_CONNECTION` env var). Avoid putting credentials on the command line; export the variable and pass `"$POSTGRES_CONNECTION"` instead.
 
 **Requirements:**
 - OpenShift cluster (4.19.9+)
@@ -193,6 +194,48 @@ AUTHORINO_NAMESPACE=rh-connectivity-link ./scripts/setup-authorino-tls.sh
 ```
 
 **Note:** This script patches Authorino's service, CR, and deployment. Use `--disable-tls-backend` with `deploy.sh` to skip if you manage Authorino TLS separately.
+
+---
+
+### `setup-gateway.sh`
+Creates `maas-default-gateway` Gateway API resource for MaaS.
+
+**Usage:**
+```bash
+# Route mode (ROSA, OSD, cloud clusters - default)
+./scripts/setup-gateway.sh
+
+# ClusterIP mode (on-prem, disconnected, bare-metal)
+INGRESS_MODE=clusterip ./scripts/setup-gateway.sh
+
+# Disconnected environment (no GitHub fallback)
+DISCONNECTED=true INGRESS_MODE=clusterip ./scripts/setup-gateway.sh
+
+# Preview changes without applying
+DRY_RUN=true ./scripts/setup-gateway.sh
+```
+
+**What it does:**
+- Creates GatewayClass (`openshift-default`)
+- **Route mode:** Creates Gateway with LoadBalancer Service and auto-detected TLS certificate
+- **ClusterIP mode:** Creates ConfigMap/gw-options, Gateway with ClusterIP Service, OpenShift Route with reencrypt termination
+- Auto-detects cluster domain and TLS certificate (four-level fallback in route mode)
+- Waits for Gateway to be Programmed
+
+**Environment Variables:**
+- `INGRESS_MODE` - Deployment mode: `route` (default) or `clusterip`
+- `CLUSTER_DOMAIN` - Override cluster domain auto-detection
+- `CERT_NAME` - Override TLS certificate secret name (route mode only)
+- `DISCONNECTED` - Disable GitHub manifest fallback (`true`/`false`, default: false)
+- `DRY_RUN` - Preview changes without applying (`true`/`false`, default: false)
+- `MAAS_MANIFEST_REF` - Git tag or commit SHA for remote kustomize fallback (defaults to current repo `HEAD` when run from a clone; required when fetching without a local tree)
+
+**TLS Auto-Detection (Route Mode):**
+The script automatically detects TLS certificates using this priority:
+1. IngressController certificate
+2. Router deployment certificate
+3. Known certificate secrets
+4. Self-signed certificate (fallback)
 
 ---
 
