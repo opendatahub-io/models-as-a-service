@@ -687,6 +687,16 @@ func (s subscription) hasModel(modelID string) bool {
 	return false
 }
 
+// modelNamespace returns the namespace for the given model name, or empty string if not found.
+func (s subscription) modelNamespace(modelID string) string {
+	for _, ref := range s.ModelRefs {
+		if ref.Name == modelID {
+			return ref.Namespace
+		}
+	}
+	return ""
+}
+
 // sortSubscriptionsByPriority sorts in-place by priority desc, then maxLimit desc, then name asc.
 func sortSubscriptionsByPriority(subs []subscription) {
 	sort.SliceStable(subs, func(i, j int) bool {
@@ -710,9 +720,15 @@ func (s *Selector) ListAccessibleForModel(username string, groups []string, mode
 
 	result := []SubscriptionInfo{}
 	for _, sub := range subscriptions {
-		if userHasAccess(&sub, username, groups) && sub.hasModel(modelID) {
-			result = append(result, toSubscriptionInfo(&sub))
+		if !userHasAccess(&sub, username, groups) || !sub.hasModel(modelID) {
+			continue
 		}
+
+		if s.accessChecker != nil && !s.accessChecker.IsModelAccessible(groups, username, modelID, sub.modelNamespace(modelID)) {
+			continue
+		}
+
+		result = append(result, toSubscriptionInfo(&sub))
 	}
 
 	// Sort for deterministic ordering

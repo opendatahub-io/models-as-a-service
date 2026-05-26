@@ -444,3 +444,57 @@ class TestSubscriptionModelAccessFiltering:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
+
+    def test_omits_subscription_with_no_authorized_models(self):
+        """Subscription is omitted when user has access to none of its models."""
+        sa_name = "e2e-no-access-sa"
+        sa_ns = "default"
+        maas_ns = _ns()
+        subscription_name = "e2e-no-access-sub"
+        auth_policy_name = "e2e-no-access-auth"
+
+        try:
+            sa_token = _create_sa_token(sa_name, namespace=sa_ns)
+            sa_user = _sa_to_user(sa_name, namespace=sa_ns)
+
+            # Subscription with MODEL_REF and DISTINCT_MODEL_REF
+            _create_test_subscription(
+                subscription_name,
+                [MODEL_REF, DISTINCT_MODEL_REF],
+                users=[sa_user],
+                namespace=maas_ns,
+            )
+
+            # Auth policy grants access to DISTINCT_MODEL_2_REF — NOT in the subscription
+            _create_test_auth_policy(
+                auth_policy_name,
+                DISTINCT_MODEL_2_REF,
+                users=[sa_user],
+                namespace=maas_ns,
+            )
+
+            _wait_reconcile()
+
+            api_key = _create_api_key(sa_token, subscription=subscription_name)
+
+            url = f"{_maas_api_url()}/v1/subscriptions"
+            r = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            assert r.status_code == 200
+            data = r.json()
+
+            sub_ids = [s["subscription_id_header"] for s in data]
+            assert subscription_name not in sub_ids, \
+                f"Subscription '{subscription_name}' should be omitted when user has no authorized models, got {sub_ids}"
+
+            log.info(f"Zero authorized models omission works: subscription '{subscription_name}' not in {sub_ids}")
+
+        finally:
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
+            _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
+            _delete_sa(sa_name, namespace=sa_ns)
