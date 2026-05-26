@@ -24,12 +24,20 @@ func NewChecker(log *logger.Logger, lister Lister) *Checker {
 	if log == nil {
 		log = logger.Production()
 	}
+	if lister == nil {
+		log.Error("MaaSAuthPolicy lister is nil; all model access checks will be denied")
+	}
 	return &Checker{lister: lister, logger: log}
 }
 
 // IsModelAccessible returns true if any MaaSAuthPolicy grants the user or
 // any of their groups access to the specified model (name + namespace).
 func (c *Checker) IsModelAccessible(groups []string, username string, modelName, modelNamespace string) bool {
+	if c.lister == nil {
+		c.logger.Error("MaaSAuthPolicy lister is nil; denying model access check")
+		return false
+	}
+
 	policies, err := c.lister.List()
 	if err != nil {
 		c.logger.Error("Failed to list MaaSAuthPolicy CRs for model access check", "error", err)
