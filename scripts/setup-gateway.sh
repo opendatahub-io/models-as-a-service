@@ -518,15 +518,23 @@ create_gateway_route() {
   log_info "    Host: maas.$CLUSTER_DOMAIN"
   log_info "    Target Service: $GATEWAY_SERVICE_NAME"
 
+  # Fetch the service CA bundle so the router can verify the backend certificate
+  local service_ca_bundle
+  service_ca_bundle=$(kubectl get configmap signing-cabundle -n openshift-service-ca \
+    -o jsonpath='{.data.ca-bundle\.crt}' 2>/dev/null || echo "")
+
+  if [[ -z "$service_ca_bundle" ]]; then
+    log_error "Failed to retrieve service CA bundle from openshift-service-ca/signing-cabundle"
+    log_error "The Route reencrypt termination requires this CA to verify the backend certificate"
+    exit 1
+  fi
+
   kubectl apply -f - <<EOF
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: ${GATEWAY_ROUTE_NAME}
   namespace: ${GATEWAY_NAMESPACE}
-  annotations:
-    # Tells the OpenShift Router to trust the service-ca certificate on the backend.
-    router.openshift.io/service-ca-certificate: "true"
 spec:
   host: maas.${CLUSTER_DOMAIN}
   to:
@@ -542,6 +550,11 @@ spec:
     # TLS connection to the Gateway Service using the service-ca certificate.
     termination: reencrypt
     insecureEdgeTerminationPolicy: Redirect
+    # Provide the service CA bundle so the router can verify the backend certificate.
+    # Without this, reencrypt handshake will fail on clusters where the router
+    # doesn't implicitly trust service-ca (e.g., bare-metal, disconnected).
+    destinationCACertificate: |
+$(echo "$service_ca_bundle" | sed 's/^/      /')
 EOF
 
   # Wait briefly for Route to be Admitted

@@ -46,7 +46,6 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--operator-catalog <image>` - Custom operator catalog image for PR testing
 - `--operator-image <image>` - Custom operator image for PR testing
 - `--channel <channel>` - Operator channel override (default: fast-3 for ODH, stable-3.x for RHOAI)
-- `--postgres-connection <connection-string>` - External PostgreSQL URL (also reads `POSTGRES_CONNECTION` env var). Avoid putting credentials on the command line; export the variable and pass `"$POSTGRES_CONNECTION"` instead.
 
 **Requirements:**
 - OpenShift cluster (4.19.9+)
@@ -230,12 +229,7 @@ DRY_RUN=true ./scripts/setup-gateway.sh
 - `DRY_RUN` - Preview changes without applying (`true`/`false`, default: false)
 - `MAAS_MANIFEST_REF` - Git tag or commit SHA for remote kustomize fallback (defaults to current repo `HEAD` when run from a clone; required when fetching without a local tree)
 
-**TLS Auto-Detection (Route Mode):**
-The script automatically detects TLS certificates using this priority:
-1. IngressController certificate
-2. Router deployment certificate
-3. Known certificate secrets
-4. Self-signed certificate (fallback)
+**Note:** Route mode auto-detects cluster TLS certificates. Override with `CERT_NAME` if needed.
 
 ---
 

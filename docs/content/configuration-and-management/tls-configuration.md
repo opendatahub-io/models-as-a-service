@@ -131,7 +131,7 @@ Pre-configured overlays are available for common scenarios:
 | Overlay | Description |
 |---------|-------------|
 | `deployment/base/maas-api/overlays/tls` | Base TLS overlay for maas-api (deployment patch, service annotation, DestinationRule) |
-| `maas-api/deploy/overlays/odh` | Tenant reconciler overlay (TLS, gateway policies, shared-patches) |
+| `maas-api/deploy/overlays/odh` | Tenant reconciler overlay (TLS, gateway policies) |
 
 The `tls` base overlay includes:
 

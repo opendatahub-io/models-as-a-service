@@ -14,17 +14,12 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 
 `maas-api` uses PostgreSQL as its persistence layer for API key metadata: hashed tokens, subscription bindings, expiration dates, and revocation state. The database must be reachable before `maas-api` starts; the pod will crash-loop until the connection succeeds and the schema migration completes.
 
-Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI).
-
-!!! warning "Protect database credentials"
-    Avoid putting passwords on the command line (visible in shell history and process listings). Prefer an environment variable and unset it after use:
+Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI):
 
 ```bash
-export DB_CONNECTION_URL='postgresql://username:password@hostname:5432/database?sslmode=require'
 kubectl create secret generic maas-db-config \
   -n opendatahub \
-  --from-literal=DB_CONNECTION_URL="$DB_CONNECTION_URL"
-unset DB_CONNECTION_URL
+  --from-literal=DB_CONNECTION_URL='postgresql://username:password@hostname:5432/database?sslmode=require'
 ```
 
 **Connection string format:**
@@ -52,14 +47,10 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
     The full `scripts/deploy.sh` script also creates PostgreSQL automatically when deploying MaaS.
 
 !!! note "Using deploy.sh with an external database"
-    If you use `scripts/deploy.sh`, you can supply your own PostgreSQL connection string with the `--postgres-connection` flag (or set `POSTGRES_CONNECTION` in the environment). This skips the built-in POC PostgreSQL deployment and creates the `maas-db-config` Secret automatically.
-
-    Avoid embedding credentials in the command line; export the connection string, pass it to the flag, then unset it:
+    If you use `scripts/deploy.sh`, you can supply your own PostgreSQL connection string with the `--postgres-connection` flag. This skips the built-in POC PostgreSQL deployment and creates the `maas-db-config` Secret automatically:
 
     ```bash
-    export POSTGRES_CONNECTION='postgresql://username:password@hostname:5432/database?sslmode=require'
-    ./scripts/deploy.sh --postgres-connection "$POSTGRES_CONNECTION"
-    unset POSTGRES_CONNECTION
+    ./scripts/deploy.sh --postgres-connection 'postgresql://username:password@hostname:5432/database?sslmode=require'
     ```
 
 !!! note "Restarting maas-api"
@@ -89,8 +80,22 @@ Common overrides: `CLUSTER_DOMAIN`, `CERT_NAME` (route mode only), `DRY_RUN`, `M
 
 ```bash
 kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=120s
-# ClusterIP mode only:
+```
+
+Expected output:
+```
+gateway.gateway.networking.k8s.io/maas-default-gateway condition met
+```
+
+For ClusterIP mode, also verify the Route:
+```bash
 kubectl get route maas-gateway-route -n openshift-ingress
+```
+
+Expected output:
+```
+NAME                  HOST/PORT                           PATH   SERVICES                           PORT   TERMINATION   WILDCARD
+maas-gateway-route    maas.apps.example.cluster.com              maas-default-gateway-openshift-default   443    reencrypt     None
 ```
 
 For ClusterIP architecture and troubleshooting, see [Gateway patterns — ClusterIP + Route](../configuration-and-management/gateway-patterns.md#clusterip-gateway-with-openshift-route-re-encrypt).
