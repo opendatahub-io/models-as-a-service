@@ -291,6 +291,8 @@ spec:
         x-kubernetes-validations:
         - message: spec.tenantNamespace.name is immutable
           rule: self.spec.tenantNamespace.name == oldSelf.spec.tenantNamespace.name
+        - message: spec.tls requires spec.domain to be set
+          rule: '!has(self.spec.tls) || self.spec.domain != '''''
     served: true
     storage: true
     subresources:
