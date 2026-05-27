@@ -1,12 +1,9 @@
 package tenantreconcile
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -20,100 +17,6 @@ import (
 )
 
 const ssaFieldOwner = "maas-controller"
-
-func parseParams(fileName string) (map[string]string, error) {
-	paramsEnv, err := os.Open(fileName)
-	if err != nil {
-		return nil, err
-	}
-	defer paramsEnv.Close()
-
-	paramsEnvMap := make(map[string]string)
-	scanner := bufio.NewScanner(paramsEnv)
-	for scanner.Scan() {
-		line := scanner.Text()
-		key, value, found := strings.Cut(line, "=")
-		if found {
-			paramsEnvMap[key] = value
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return paramsEnvMap, nil
-}
-
-func writeParamsToTmp(params map[string]string, tmpDir string) (string, error) {
-	tmp, err := os.CreateTemp(tmpDir, "params.env-")
-	if err != nil {
-		return "", err
-	}
-	defer tmp.Close()
-
-	writer := bufio.NewWriter(tmp)
-	for key, value := range params {
-		if _, err := fmt.Fprintf(writer, "%s=%s\n", key, value); err != nil {
-			return "", err
-		}
-	}
-	if err := writer.Flush(); err != nil {
-		return "", fmt.Errorf("failed to write to file: %w", err)
-	}
-
-	return tmp.Name(), nil
-}
-
-func updateMap(m *map[string]string, key, val string) int {
-	old := (*m)[key]
-	if old == val {
-		return 0
-	}
-	(*m)[key] = val
-	return 1
-}
-
-// ApplyParams mirrors opendatahub-operator/pkg/deploy.ApplyParams for params.env substitution.
-func ApplyParams(componentPath, file string, imageParamsMap map[string]string, extraParamsMaps ...map[string]string) error {
-	paramsFile := filepath.Join(componentPath, file)
-
-	paramsEnvMap, err := parseParams(paramsFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	updated := 0
-	for i := range paramsEnvMap {
-		relatedImageValue := os.Getenv(imageParamsMap[i])
-		if relatedImageValue != "" {
-			updated |= updateMap(&paramsEnvMap, i, relatedImageValue)
-		}
-	}
-	for _, extraParamsMap := range extraParamsMaps {
-		for eKey, eValue := range extraParamsMap {
-			updated |= updateMap(&paramsEnvMap, eKey, eValue)
-		}
-	}
-
-	if updated == 0 {
-		return nil
-	}
-
-	tmp, err := writeParamsToTmp(paramsEnvMap, componentPath)
-	if err != nil {
-		return err
-	}
-
-	if err = os.Rename(tmp, paramsFile); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("failed rename %s to %s: %w", tmp, paramsFile, err)
-	}
-
-	return nil
-}
 
 // ApplyRendered server-side-applies rendered objects with Config as controller owner.
 //
@@ -176,12 +79,6 @@ type configOwnerRefSkip func(u *unstructured.Unstructured, appNs string) bool
 // configOwnerRefSkips is evaluated in order; add new predicates here for additional exceptions.
 var configOwnerRefSkips = []configOwnerRefSkip{
 	isMaaSControllerDeployment,
-	func(u *unstructured.Unstructured, appNs string) bool {
-		if appNs == "" || u.GetNamespace() != appNs {
-			return false
-		}
-		return strings.EqualFold(u.GetKind(), "ConfigMap") && u.GetName() == MaaSParametersConfigMapName
-	},
 }
 
 func skipConfigControllerOwnerRef(u *unstructured.Unstructured, appNs string) bool {

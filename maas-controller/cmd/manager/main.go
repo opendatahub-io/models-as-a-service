@@ -586,6 +586,7 @@ func main() {
 		TenantNamespace:  maasSubscriptionNamespace,
 		GatewayName:      gatewayName,
 		GatewayNamespace: gatewayNamespace,
+		ClusterAudience:  clusterAudience,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
 		os.Exit(1)

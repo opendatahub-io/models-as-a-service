@@ -112,7 +112,6 @@ OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-false}"
-EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 POSTGRES_CONNECTION="${POSTGRES_CONNECTION:-}"
 
 #──────────────────────────────────────────────────────────────
@@ -193,11 +192,6 @@ ADVANCED OPTIONS (PR Testing):
       Operator channel override
       Default: fast-3 (ODH), stable-3.x (RHOAI)
 
-  --external-oidc
-      Enable external OIDC on the maas-api AuthPolicy.
-      Requires OIDC_ISSUER_URL or deployment/overlays/odh/params.env to provide
-      a real oidc-issuer-url value.
-
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
@@ -206,8 +200,6 @@ ENVIRONMENT VARIABLES:
   OPERATOR_STARTING_CSV     ODH Subscription startingCSV (default: opendatahub-operator.v3.4.0-ea.1; "-" to omit)
   OPERATOR_INSTALL_PLAN_APPROVAL  ODH Subscription OLM approval (default: Manual — no auto-upgrades; first InstallPlan is auto-approved by the script)
   OPERATOR_TYPE             Operator type (rhoai/odh)
-  EXTERNAL_OIDC            Enable external OIDC on maas-api (true/false)
-  OIDC_ISSUER_URL          External OIDC issuer URL for maas-api AuthPolicy patching
   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
   FORCE_OVERWRITE           When true, re-apply manifests even if the resource already exists (default: false)
   POSTGRES_CONNECTION       External PostgreSQL connection string (same as --postgres-connection)
@@ -337,10 +329,6 @@ parse_arguments() {
         require_flag_value "$1" "${2:-}"
         POSTGRES_CONNECTION="$2"
         shift 2
-        ;;
-      --external-oidc)
-        EXTERNAL_OIDC="true"
-        shift
         ;;
       --dev)
         DEV_MODE="true"
@@ -489,11 +477,6 @@ main() {
   log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
-  log_info "  External OIDC: $EXTERNAL_OIDC"
-  if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
-    log_warn "  --external-oidc is ignored in operator mode. Configure external OIDC via"
-    log_warn "  the ModelsAsService CR: spec.externalOIDC.issuerUrl / clientId instead."
-  fi
   if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
     log_info "  MaaS API image: $MAAS_API_IMAGE"
   fi
@@ -540,35 +523,63 @@ main() {
   if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
+    # Direct-install path used when maas-controller is absent, or when
+    # FORCE_OVERWRITE=true requests a full local re-apply and restart.
+    # Ensure maas-parameters ConfigMap exists with image defaults before the
+    # controller starts; maas-controller reads these via configMapKeyRef
+    # (RELATED_IMAGE_* env vars).
+    local default_tag="odh-stable"
+    [[ "${DEV_MODE:-false}" == "true" ]] && default_tag="latest"
+    local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${default_tag}}"
+    local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${default_tag}}"
+    local cm_payload_processing_image="quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+    local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
+
+    log_info "  Ensuring maas-parameters ConfigMap..."
+    kubectl create configmap maas-parameters -n "$NAMESPACE" \
+      --from-literal="maas-api-image=${cm_maas_api_image}" \
+      --from-literal="maas-controller-image=${cm_maas_controller_image}" \
+      --from-literal="payload-processing-image=${cm_payload_processing_image}" \
+      --from-literal="maas-api-key-cleanup-image=${cm_cleanup_image}" \
+      --dry-run=client -o yaml | kubectl apply -f - || {
+      log_error "Failed to create/update maas-parameters ConfigMap"
+      return 1
+    }
+
     log_info "  Phase 1: Applying MaaS CRDs and waiting until Established (controller creates Config after CRD is ready)..."
     if ! install_maas_controller_crds_and_wait "${project_root}/deployment/base/maas-controller/crd"; then
       log_error "MaaS CRD install or Established wait failed"
       return 1
     fi
     log_info "  Phase 2: Applying full controller kustomize (same as operator: deployment/base/maas-controller/default)..."
-    if [[ "$NAMESPACE" != "opendatahub" ]]; then
-      (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
-        sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
-        log_error "Failed to apply maas-controller manifests"
-        return 1
-      }
-    else
-      kubectl apply -k "$config_dir" || {
-        log_error "Failed to apply maas-controller manifests"
-        return 1
-      }
-    fi
-  fi
-
-  if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
-    log_info "  Custom MaaS controller image: $MAAS_CONTROLLER_IMAGE"
-    kubectl set image deployment/maas-controller manager="${MAAS_CONTROLLER_IMAGE}" -n "$NAMESPACE" || {
-      log_error "Failed to set maas-controller container image"
+    local controller_overlay_dir
+    controller_overlay_dir="$(mktemp -d "${project_root}/.deploy-controller-overlay.XXXXXX")" || {
+      log_error "Failed to create temporary maas-controller overlay directory"
       return 1
     }
-    kubectl set env deployment/maas-controller -n "$NAMESPACE" \
-      "RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE}" || {
-      log_error "Failed to set RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE on maas-controller"
+    cat > "${controller_overlay_dir}/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${NAMESPACE}
+resources:
+  - ../deployment/base/maas-controller/default
+EOF
+    (
+      cd "${controller_overlay_dir}" && \
+      kustomize edit set image "quay.io/opendatahub/maas-controller=${cm_maas_controller_image}" && \
+      kustomize build .
+    ) | kubectl apply -f - || {
+      rm -rf "${controller_overlay_dir}"
+      log_error "Failed to apply maas-controller manifests"
+      return 1
+    }
+    rm -rf "${controller_overlay_dir}"
+
+    # Force pod recreation so imagePullPolicy=Always can pick up newly published
+    # image content even when the maas-controller image tag itself is unchanged.
+    log_info "  Restarting maas-controller to pick up manifest and ConfigMap changes"
+    kubectl rollout restart deployment/maas-controller -n "$NAMESPACE" || {
+      log_error "Failed to restart maas-controller deployment"
       return 1
     }
   fi
@@ -579,22 +590,6 @@ main() {
     return 1
   fi
   log_info "  Controller ready."
-
-  # Pass custom maas-api image to the Tenant reconciler via RELATED_IMAGE env var.
-  # The reconciler reads this when building params.env for kustomize (ApplyParams).
-  local env_patches=()
-  if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
-    log_info "  Configuring custom MaaS API image: $MAAS_API_IMAGE"
-    env_patches+=("RELATED_IMAGE_ODH_MAAS_API_IMAGE=$MAAS_API_IMAGE")
-  fi
-
-  if [[ ${#env_patches[@]} -gt 0 ]]; then
-    log_info "  Patching maas-controller env vars: ${env_patches[*]}"
-    kubectl set env deployment/maas-controller -n "$NAMESPACE" "${env_patches[@]}"
-    if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
-      log_warn "maas-controller rollout after env patch did not complete in time (timeout: ${ROLLOUT_TIMEOUT}s)"
-    fi
-  fi
 
   # Wait for the Tenant reconciler to deploy maas-api.
   # The controller creates a default-tenant CR on startup, and the Tenant
@@ -675,9 +670,9 @@ deploy_via_operator() {
     configure_tls_backend
   fi
 
-  # Custom maas-api image injection is now handled by the Tenant reconciler
+  # Custom maas-api image injection is handled by the Tenant reconciler
   # in maas-controller (common block in main). The controller receives
-  # RELATED_IMAGE_ODH_MAAS_API_IMAGE env var and applies it during kustomize render.
+  # RELATED_IMAGE_ODH_MAAS_API_IMAGE env var and applies it during PostRender.
 
   log_info "Operator deployment completed"
 }
@@ -1218,133 +1213,6 @@ apply_dsc() {
 }
 
 #──────────────────────────────────────────────────────────────
-# GATEWAY API SETUP
-#──────────────────────────────────────────────────────────────
-
-# setup_gateway_api
-#   Sets up the Gateway API infrastructure (GatewayClass).
-#   This is general Gateway API setup that can be used by any Gateway resources.
-setup_gateway_api() {
-  log_info "Setting up Gateway API infrastructure..."
-
-  local data_dir="${SCRIPT_DIR}/data"
-
-  # Create GatewayClass for OpenShift Gateway API controller
-  # This enables the built-in Gateway API implementation (OpenShift 4.14+)
-  if kubectl get gatewayclass openshift-default &>/dev/null; then
-    log_debug "GatewayClass openshift-default already exists, skipping creation"
-  else
-    log_info "Creating GatewayClass openshift-default..."
-    kubectl apply -f "${data_dir}/gatewayclass.yaml"
-  fi
-}
-
-# setup_maas_gateway
-#   Creates the Gateway resource required by ModelsAsService component.
-#   ModelsAsService expects a gateway named "maas-default-gateway" in namespace "openshift-ingress".
-#
-#   This function:
-#   1. Detects or uses the router's TLS certificate
-#   2. Creates the Gateway resource with both HTTP and HTTPS listeners
-#   3. Uses the kustomize manifest from deployment/base/networking/maas/
-#
-#   The Gateway includes:
-#   - HTTP listener (port 80) - required for model discovery URLs
-#   - HTTPS listener (port 443) - for secure API access
-#   - Annotations for operator management and TLS bootstrap
-#   - Labels for app identification
-setup_maas_gateway() {
-  log_info "Setting up ModelsAsService gateway..."
-
-  # Get cluster domain for Gateway hostname
-  local cluster_domain
-  cluster_domain=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
-  if [[ -z "$cluster_domain" ]]; then
-    log_error "Could not determine cluster domain - required for Gateway hostname"
-    return 1
-  fi
-  
-  export CLUSTER_DOMAIN="$cluster_domain"
-  log_info "  Cluster domain: ${CLUSTER_DOMAIN}"
-
-  # Detect TLS certificate if not explicitly set (matches upstream deploy-rhoai-stable.sh logic)
-  local cert_name="${CERT_NAME:-}"
-  if [[ -z "$cert_name" ]]; then
-    log_info "  Detecting TLS certificate secret..."
-
-    # Primary: Get certificate from IngressController (most reliable source of truth)
-    cert_name=$(kubectl get ingresscontroller default -n openshift-ingress-operator \
-      -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null || echo "")
-    if [[ -n "$cert_name" ]] && kubectl get secret -n openshift-ingress "$cert_name" &>/dev/null; then
-      log_info "  * Found certificate from IngressController: ${cert_name}"
-    else
-      [[ -n "$cert_name" ]] && log_debug "  * IngressController cert '${cert_name}' not found, trying alternatives..."
-      cert_name=""
-    fi
-
-    # Fallback 1: Get certificate from router deployment
-    if [[ -z "$cert_name" ]]; then
-      cert_name=$(kubectl get deployment router-default -n openshift-ingress \
-        -o jsonpath='{.spec.template.spec.volumes[?(@.name=="default-certificate")].secret.secretName}' 2>/dev/null || echo "")
-      if [[ -n "$cert_name" ]] && kubectl get secret -n openshift-ingress "$cert_name" &>/dev/null; then
-        log_info "  * Found certificate from router deployment: ${cert_name}"
-      else
-        cert_name=""
-      fi
-    fi
-
-    # Fallback 2: Check known certificate secret names
-    if [[ -z "$cert_name" ]]; then
-      local cert_candidates=("default-gateway-cert" "router-certs-default")
-      for cert in "${cert_candidates[@]}"; do
-        if kubectl get secret -n openshift-ingress "$cert" &>/dev/null; then
-          cert_name="$cert"
-          log_info "  * Found TLS certificate secret: ${cert}"
-          break
-        fi
-      done
-    fi
-
-    # Warning if no certificate found
-    if [[ -z "$cert_name" ]]; then
-      log_warn "  No TLS certificate found. Creating self-signed certificate..."
-      local gateway_hostname="maas.${cluster_domain}"
-      if create_tls_secret "maas-gateway-tls" "openshift-ingress" "${gateway_hostname}"; then
-        cert_name="maas-gateway-tls"
-        log_info "  * Created self-signed certificate: ${cert_name}"
-      else
-        log_error "Failed to create TLS certificate for gateway"
-        return 1
-      fi
-    fi
-  fi
-
-  export CERT_NAME="$cert_name"
-  log_info "  TLS certificate secret: ${CERT_NAME}"
-
-  # Create the Gateway resource using the kustomize manifest
-  # This includes both HTTP and HTTPS listeners, required annotations and labels
-  if kubectl get gateway maas-default-gateway -n openshift-ingress &>/dev/null; then
-    log_info "Gateway maas-default-gateway already exists in openshift-ingress"
-    log_debug "  Updating Gateway configuration if needed..."
-  else
-    log_info "Creating maas-default-gateway resource (allowing routes from all namespaces)..."
-  fi
-
-  local maas_networking_dir="${SCRIPT_DIR}/../deployment/base/networking/maas"
-  if [[ -d "$maas_networking_dir" ]]; then
-    # Use local kustomize manifest with envsubst for variable substitution
-    kustomize build "$maas_networking_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME' | kubectl apply --server-side=true -f -
-  else
-    # Fallback: fetch from GitHub (for standalone script usage)
-    log_debug "  Local manifest not found, fetching from GitHub..."
-    kubectl apply --server-side=true \
-      -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/networking/maas?ref=main" | \
-           envsubst '$CLUSTER_DOMAIN $CERT_NAME')
-  fi
-}
-
-#──────────────────────────────────────────────────────────────
 # KUADRANT SETUP
 #──────────────────────────────────────────────────────────────
 
@@ -1353,18 +1221,19 @@ apply_kuadrant_cr() {
 
   log_info "Initializing Gateway API and ModelsAsService gateway..."
 
-  # Setup Gateway API infrastructure (can be used by any Gateway resources)
-  setup_gateway_api
-
-  # Setup ModelsAsService-specific gateway (required by ModelsAsService component)
-  setup_maas_gateway
-
-  # Wait for Gateway to be Programmed (required before Kuadrant can become ready)
-  # This ensures Service Mesh is installed and Gateway API provider is operational
-  log_info "Waiting for Gateway to be Programmed (Service Mesh initialization)..."
-  if ! kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout="${CUSTOM_CHECK_TIMEOUT}s" 2>/dev/null; then
-    log_warn "Gateway not yet Programmed after ${CUSTOM_CHECK_TIMEOUT}s - Kuadrant may take longer to become ready"
-  fi
+  # Setup Gateway using standalone script (replaces inline setup_gateway_api + setup_maas_gateway)
+  # The script handles GatewayClass creation, Gateway creation with TLS cert detection,
+  # and waits for Gateway to be Programmed before returning.
+  INGRESS_MODE="${INGRESS_MODE:-route}" \
+  DISCONNECTED="${DISCONNECTED:-false}" \
+  CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" \
+  CERT_NAME="${CERT_NAME:-}" \
+  DRY_RUN="${DRY_RUN:-false}" \
+  MAAS_MANIFEST_REF="${MAAS_MANIFEST_REF:-}" \
+  "${SCRIPT_DIR}/setup-gateway.sh" || {
+    log_error "Gateway setup failed"
+    return 1
+  }
 
   log_info "Applying Kuadrant custom resource in $namespace..."
 
@@ -1442,133 +1311,6 @@ patch_operator_csv() {
   ]"
 
   log_info "CSV $csv_name patched with image $operator_image"
-}
-
-#──────────────────────────────────────────────────────────────
-# AUDIENCE CONFIGURATION FOR HYPERSHIFT/ROSA CLUSTERS
-#──────────────────────────────────────────────────────────────
-
-# get_odh_overlay_param
-#   Reads a value from the active overlay's params.env.
-get_odh_overlay_param() {
-  local key="$1"
-  local project_root
-  project_root="$(find_project_root)" || return 1
-
-  local overlay="odh"
-  [[ "${DEV_MODE:-false}" == "true" ]] && overlay="dev"
-  local params_file="$project_root/deployment/overlays/$overlay/params.env"
-  [[ -f "$params_file" ]] || return 1
-
-  awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$params_file"
-}
-
-resolve_external_oidc_issuer() {
-  local oidc_issuer_url="${OIDC_ISSUER_URL:-}"
-  if [[ -z "$oidc_issuer_url" ]]; then
-    oidc_issuer_url=$(get_odh_overlay_param "oidc-issuer-url" 2>/dev/null || echo "")
-  fi
-
-  if [[ -z "$oidc_issuer_url" || "$oidc_issuer_url" == "https://oidc.example.invalid/realms/maas" ]]; then
-    return 1
-  fi
-
-  printf '%s\n' "$oidc_issuer_url"
-}
-
-resolve_external_oidc_client_id() {
-  local oidc_client_id="${OIDC_CLIENT_ID:-}"
-  if [[ -z "$oidc_client_id" ]]; then
-    oidc_client_id=$(get_odh_overlay_param "oidc-client-id" 2>/dev/null || echo "")
-  fi
-
-  if [[ -z "$oidc_client_id" ]]; then
-    return 1
-  fi
-
-  printf '%s\n' "$oidc_client_id"
-}
-
-patch_authpolicy_from_template() {
-  local authpolicy_name="$1"
-  local template_file="$2"
-  local maas_namespace="$3"
-  local oidc_issuer_url="${4:-}"
-  local oidc_client_id="${5:-}"
-
-  local rendered_patch
-  rendered_patch="$(mktemp)"
-
-  sed \
-    -e "s|__MAAS_NAMESPACE__|${maas_namespace}|g" \
-    -e "s|__OIDC_ISSUER_URL__|${oidc_issuer_url}|g" \
-    -e "s|__OIDC_CLIENT_ID__|${oidc_client_id}|g" \
-    "$template_file" > "$rendered_patch"
-
-  kubectl patch authpolicy "$authpolicy_name" -n "$NAMESPACE" --type=merge --patch-file "$rendered_patch"
-  rm -f "$rendered_patch"
-}
-
-# configure_maas_api_authpolicy
-#   Ensures the live maas-api AuthPolicy keeps API key support and, when
-#   enabled, layers external OIDC JWT validation on top.
-configure_maas_api_authpolicy() {
-  log_info "Configuring MaaS API AuthPolicy..."
-
-  local project_root
-  project_root="$(find_project_root)" || {
-    log_error "Could not determine project root for AuthPolicy patching"
-    return 1
-  }
-
-  local authpolicy_name="maas-api-auth-policy"
-  local wait_timeout=120
-  local elapsed=0
-
-  log_info "  Waiting for AuthPolicy '$authpolicy_name' to be created (timeout: ${wait_timeout}s)..."
-  while [[ $elapsed -lt $wait_timeout ]]; do
-    if kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
-      log_info "  Found AuthPolicy '$authpolicy_name'"
-      break
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-
-  if ! kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
-    log_warn "AuthPolicy '$authpolicy_name' not found after ${wait_timeout}s, skipping auth configuration"
-    return 0
-  fi
-
-  log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
-  kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
-    opendatahub.io/managed="false" --overwrite 2>/dev/null || true
-
-  if [[ "$EXTERNAL_OIDC" != "true" ]]; then
-    log_info "  External OIDC not enabled, leaving OpenShift auth as the only identity-token path"
-    return 0
-  fi
-
-  local oidc_issuer_url
-  oidc_issuer_url="$(resolve_external_oidc_issuer)" || {
-    log_error "External OIDC requested but no real oidc-issuer-url was configured"
-    return 1
-  }
-
-  local oidc_client_id
-  oidc_client_id="$(resolve_external_oidc_client_id)" || {
-    log_error "External OIDC requested but no oidc-client-id or OIDC_CLIENT_ID was configured"
-    return 1
-  }
-
-  local oidc_patch="$project_root/scripts/data/maas-api-authpolicy-external-oidc-patch.yaml"
-  log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url, clientId: $oidc_client_id"
-  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$NAMESPACE" "$oidc_issuer_url" "$oidc_client_id"; then
-    log_error "  Failed to patch AuthPolicy with external OIDC configuration"
-    return 1
-  fi
-
-  log_info "  AuthPolicy patched successfully"
 }
 
 #──────────────────────────────────────────────────────────────
