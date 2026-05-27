@@ -220,7 +220,9 @@ if kubectl get ns rh-connectivity-link &>/dev/null && kubectl get deploy -n rh-c
 fi
 
 METADATA_RULE_FILE="$BASE_OBSERVABILITY_DIR/authorino-maas-metadata-evaluator-prometheusrule.yaml"
-if [ -f "$METADATA_RULE_FILE" ]; then
+if ! kubectl get deploy -n "$AUTHORINO_NAMESPACE" authorino &>/dev/null 2>&1; then
+    echo "   ⚠️  Authorino deployment not found in $AUTHORINO_NAMESPACE - skipping metadata evaluator PrometheusRule"
+elif [ -f "$METADATA_RULE_FILE" ]; then
     yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" "$METADATA_RULE_FILE" | kubectl apply -f -
     echo "   ✅ Metadata evaluator PrometheusRule deployed (namespace: $AUTHORINO_NAMESPACE)"
 else
