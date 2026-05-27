@@ -196,6 +196,43 @@ AUTHORINO_NAMESPACE=rh-connectivity-link ./scripts/setup-authorino-tls.sh
 
 ---
 
+### `setup-gateway.sh`
+Creates `maas-default-gateway` Gateway API resource for MaaS.
+
+**Usage:**
+```bash
+# Route mode (ROSA, OSD, cloud clusters - default)
+./scripts/setup-gateway.sh
+
+# ClusterIP mode (on-prem, disconnected, bare-metal)
+INGRESS_MODE=clusterip ./scripts/setup-gateway.sh
+
+# Disconnected environment (no GitHub fallback)
+DISCONNECTED=true INGRESS_MODE=clusterip ./scripts/setup-gateway.sh
+
+# Preview changes without applying
+DRY_RUN=true ./scripts/setup-gateway.sh
+```
+
+**What it does:**
+- Creates GatewayClass (`openshift-default`)
+- **Route mode:** Creates Gateway with LoadBalancer Service and auto-detected TLS certificate
+- **ClusterIP mode:** Creates ConfigMap/gw-options, Gateway with ClusterIP Service, OpenShift Route with reencrypt termination
+- Auto-detects cluster domain and TLS certificate (four-level fallback in route mode)
+- Waits for Gateway to be Programmed
+
+**Environment Variables:**
+- `INGRESS_MODE` - Deployment mode: `route` (default) or `clusterip`
+- `CLUSTER_DOMAIN` - Override cluster domain auto-detection
+- `CERT_NAME` - Override TLS certificate secret name (route mode only)
+- `DISCONNECTED` - Disable GitHub manifest fallback (`true`/`false`, default: false)
+- `DRY_RUN` - Preview changes without applying (`true`/`false`, default: false)
+- `MAAS_MANIFEST_REF` - Git tag or commit SHA for remote kustomize fallback (defaults to current repo `HEAD` when run from a clone; required when fetching without a local tree)
+
+**Note:** Route mode auto-detects cluster TLS certificates. Override with `CERT_NAME` if needed.
+
+---
+
 ### `install-dependencies.sh`
 Installs individual dependencies (Kuadrant, ODH, etc.).
 
