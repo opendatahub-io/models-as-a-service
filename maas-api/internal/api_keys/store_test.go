@@ -216,3 +216,36 @@ func TestInvalidateAll(t *testing.T) {
 	})
 }
 
+func TestAddKeyWithTenant(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	t.Run("TenantRoundTripsViaGet", func(t *testing.T) {
+		err := store.AddKey(ctx, "user1", "tenant-key-1", "thash1", "tenant-key", "", nil, "sub-1", "acme-corp", nil, false)
+		require.NoError(t, err)
+
+		key, err := store.Get(ctx, "tenant-key-1")
+		require.NoError(t, err)
+		assert.Equal(t, "acme-corp", key.Tenant)
+	})
+
+	t.Run("EmptyTenantSentinel", func(t *testing.T) {
+		err := store.AddKey(ctx, "user1", "tenant-key-2", "thash2", "no-tenant-key", "", nil, "sub-1", "", nil, false)
+		require.NoError(t, err)
+
+		key, err := store.Get(ctx, "tenant-key-2")
+		require.NoError(t, err)
+		assert.Equal(t, "", key.Tenant)
+	})
+
+	t.Run("TenantRoundTripsViaGetByHash", func(t *testing.T) {
+		err := store.AddKey(ctx, "user1", "tenant-key-3", "thash3", "hash-tenant-key", "", nil, "sub-1", "tenant-xyz", nil, false)
+		require.NoError(t, err)
+
+		key, err := store.GetByHash(ctx, "thash3")
+		require.NoError(t, err)
+		assert.Equal(t, "tenant-xyz", key.Tenant)
+	})
+}
+
