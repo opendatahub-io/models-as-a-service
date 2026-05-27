@@ -58,7 +58,16 @@ echo "Gateway Service: ${GW_SVC}"
 
 # 4. Create the OpenShift Route with the service CA bundle for reencrypt termination
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+if [[ -z "$CLUSTER_DOMAIN" ]]; then
+  echo "Error: Failed to fetch cluster domain. Ensure you have access to cluster ingress configuration."
+  exit 1
+fi
+
 SERVICE_CA=$(kubectl get configmap signing-cabundle -n openshift-service-ca -o jsonpath='{.data.ca-bundle\.crt}')
+if [[ -z "$SERVICE_CA" ]]; then
+  echo "Error: Failed to fetch service CA bundle from openshift-service-ca namespace. Verify namespace exists and you have read permissions."
+  exit 1
+fi
 
 kubectl apply -f - <<EOF
 apiVersion: route.openshift.io/v1
