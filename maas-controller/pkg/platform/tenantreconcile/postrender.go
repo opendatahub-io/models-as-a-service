@@ -2,24 +2,18 @@ package tenantreconcile
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/go-logr/logr"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
-// PostRender mutates rendered resources after kustomize (gateway targeting, OIDC, telemetry, config hash).
-func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) ([]unstructured.Unstructured, error) {
+// PostRender mutates rendered resources after kustomize build. It patches all
+// dynamic values (images, gateway config, namespace, audience, env vars) and
+// applies OIDC, telemetry, and managed-annotation customizations.
+func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured, params PlatformParams) ([]unstructured.Unstructured, error) {
 	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
 	gatewayName := tenant.Spec.GatewayRef.Name
 
@@ -64,7 +58,7 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 	if err := configureIstioTelemetryResources(log, tenant, &filteredResources); err != nil {
 		return nil, err
 	}
-	if err := configureConfigHashAnnotation(log, filteredResources); err != nil {
+	if err := applyPlatformParams(log, filteredResources, params); err != nil {
 		return nil, err
 	}
 	_ = ctx
@@ -331,93 +325,4 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 		labels["model"] = "responseBodyJSON(\"/model\")"
 	}
 	return labels
-}
-
-func configureConfigHashAnnotation(log logr.Logger, resources []unstructured.Unstructured) error {
-	var configMap *corev1.ConfigMap
-	for idx := range resources {
-		resource := &resources[idx]
-		if resource.GroupVersionKind() == GVKConfigMap && resource.GetName() == MaaSParametersConfigMapName {
-			cm := &corev1.ConfigMap{}
-			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(resource.Object, cm); err != nil {
-				return fmt.Errorf("failed to convert ConfigMap: %w", err)
-			}
-			configMap = cm
-			break
-		}
-	}
-	if configMap == nil {
-		log.V(1).Info("ConfigMap not found in rendered resources, skipping config hash annotation", "expectedName", MaaSParametersConfigMapName)
-		return nil
-	}
-
-	configHash := hashConfigMapData(configMap.Data)
-	log.V(4).Info("Computed ConfigMap hash", "hash", configHash, "configMap", configMap.Name)
-
-	var deployment *appsv1.Deployment
-	depIdx := -1
-	for idx := range resources {
-		resource := &resources[idx]
-		if resource.GroupVersionKind() == GVKDeployment && resource.GetName() == MaaSAPIDeploymentName {
-			dep := &appsv1.Deployment{}
-			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(resource.Object, dep); err != nil {
-				return fmt.Errorf("failed to convert Deployment: %w", err)
-			}
-			deployment = dep
-			depIdx = idx
-			break
-		}
-	}
-	if deployment == nil {
-		log.V(1).Info("Deployment not found in rendered resources, skipping config hash annotation", "expectedName", MaaSAPIDeploymentName)
-		return nil
-	}
-
-	if deployment.Spec.Template.Annotations == nil {
-		deployment.Spec.Template.Annotations = make(map[string]string)
-	}
-	annotationKey := LabelODHAppPrefix + "/maas-config-hash"
-	deployment.Spec.Template.Annotations[annotationKey] = configHash
-
-	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(deployment)
-	if err != nil {
-		return fmt.Errorf("failed to convert Deployment back to unstructured: %w", err)
-	}
-	resources[depIdx].Object = u
-
-	return nil
-}
-
-func hashConfigMapData(data map[string]string) string {
-	keys := make([]string, 0, len(data))
-	for k := range data {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var sb strings.Builder
-	for _, k := range keys {
-		sb.WriteString(k)
-		sb.WriteString("=")
-		sb.WriteString(data[k])
-		sb.WriteString("\n")
-	}
-	hash := sha256.Sum256([]byte(sb.String()))
-	return hex.EncodeToString(hash[:])
-}
-
-// CustomizeParams writes gateway/app-namespace/cluster-audience and optional API key days into overlay params.env.
-// Images use RELATED_IMAGE_* env vars via ApplyParams.
-func CustomizeParams(manifestDir string, tenant *maasv1alpha1.Tenant, appNamespace string, clusterAudience string) error {
-	params := map[string]string{
-		"gateway-namespace": tenant.Spec.GatewayRef.Namespace,
-		"gateway-name":      tenant.Spec.GatewayRef.Name,
-		"app-namespace":     appNamespace,
-	}
-	if tenant.Spec.APIKeys != nil && tenant.Spec.APIKeys.MaxExpirationDays != nil {
-		params["api-key-max-expiration-days"] = strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
-	}
-	if clusterAudience != "" {
-		params["cluster-audience"] = clusterAudience
-	}
-	return ApplyParams(manifestDir, "params.env", ImageParamKeys, params)
 }

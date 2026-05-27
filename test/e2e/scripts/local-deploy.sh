@@ -1030,9 +1030,9 @@ EOF
   ok "Istio networking configured"
 fi
 
-# ─── Step 9: MaaS controller + API ─────────────────────────────────────────
+# ─── Step 9: MaaS controller reconciles platform ───────────────────────────
 
-step "Deploying MaaS controller + API"
+step "Deploying MaaS controller"
 
 # Handle arm64: check if images need local build
 if [[ "$ARCH" == "arm64" ]]; then
@@ -1084,32 +1084,24 @@ fi
 # Create subscription namespace
 kubectl create namespace "$SUBSCRIPTION_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-# Build kustomize manifests with TLS backend (matching OpenShift's TLS deployment).
-# We create a temp overlay directory with symlinks to the real deployment dirs,
-# because kustomize does not allow absolute paths in resources/components.
+# Build a small local kustomize wrapper for maas-controller only.
+# The controller then reconciles maas-api and payload-processing via Tenant.
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-# Symlink deployment dirs so kustomize can reference them with relative paths
+# Symlink deployment dir so kustomize can reference it with relative paths.
 ln -s "$PROJECT_ROOT/deployment" "$TEMP_DIR/deployment"
 
 # Create Kind-specific params.env
 cat > "$TEMP_DIR/params.env" <<EOF
 maas-api-image=${MAAS_API_IMAGE}
 maas-controller-image=${MAAS_CONTROLLER_IMAGE}
-payload-processing-image=quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable
+payload-processing-image=${BBR_IMAGE}
 maas-api-key-cleanup-image=docker.io/curlimages/curl:latest
-payload-processing-replicas=1
-gateway-namespace=${GATEWAY_NAMESPACE}
-gateway-name=maas-default-gateway
-app-namespace=${MAAS_NAMESPACE}
-api-key-max-expiration-days=90
-metadata-cache-ttl=60
-authz-cache-ttl=60
-cluster-audience=https://kubernetes.default.svc
 EOF
 
-# Create wrapping kustomization that uses TLS backend with Kind-specific params
+# Create a live maas-parameters ConfigMap with image values consumed by
+# RELATED_IMAGE_* env vars on the controller Deployment.
 cat > "$TEMP_DIR/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -1124,142 +1116,26 @@ generatorOptions:
   disableNameSuffixHash: true
 
 resources:
-  - deployment/base/maas-api/overlays/tls
   - deployment/base/maas-controller/default
-  - deployment/base/payload-processing/default
-
-components:
-  - deployment/components/shared-patches
 
 patches:
   - target:
-      kind: NetworkPolicy
-      name: maas-authorino-allow
+      kind: Deployment
+      name: maas-controller
     patch: |
-      - op: replace
-        path: /spec/ingress/0/from/0/podSelector/matchLabels
-        value:
-          authorino-resource: authorino
-  # Fix EnvoyFilter subFilter name for Kind (istio-system instead of openshift-ingress)
-  - target:
-      kind: EnvoyFilter
-      name: payload-processing
-    patch: |
-      - op: replace
-        path: /spec/configPatches/0/match/listener/filterChain/filter/subFilter/name
-        value: "extensions.istio.io/wasmplugin/${GATEWAY_NAMESPACE}.kuadrant-maas-default-gateway"
-
-# Payload-processing resources must be in the gateway namespace (same as ODH overlay)
-replacements:
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.payload-processing-image
-  targets:
-  - select:
+      apiVersion: apps/v1
       kind: Deployment
-      name: payload-processing
-    fieldPaths:
-    - spec.template.spec.containers.[name=payload-processing].image
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.payload-processing-replicas
-  targets:
-  - select:
-      kind: Deployment
-      name: payload-processing
-    fieldPaths:
-    - spec.replicas
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-namespace
-  targets:
-  - select:
-      kind: Deployment
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: Service
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: ServiceAccount
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: EnvoyFilter
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: DestinationRule
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: ConfigMap
-      name: payload-processing-plugins
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: ClusterRoleBinding
-      name: payload-processing-reader
-    fieldPaths:
-    - subjects.0.namespace
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-name
-  targets:
-  - select:
-      kind: EnvoyFilter
-      name: payload-processing
-    fieldPaths:
-    - spec.targetRefs.0.name
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-namespace
-  targets:
-  - select:
-      kind: DestinationRule
-      name: payload-processing
-    fieldPaths:
-    - spec.host
-    options:
-      delimiter: "."
-      index: 1
-  - select:
-      kind: EnvoyFilter
-      name: payload-processing
-    fieldPaths:
-    - spec.configPatches.0.patch.value.typed_config.grpc_service.envoy_grpc.cluster_name
-    options:
-      delimiter: "."
-      index: 1
-# Replace gateway namespace in maas-api-backend-tls DestinationRule
-# (host replacement is handled by shared-patches component)
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-namespace
-  targets:
-  - select:
-      kind: DestinationRule
-      name: maas-api-backend-tls
-    fieldPaths:
-    - metadata.namespace
+      metadata:
+        name: maas-controller
+      spec:
+        template:
+          spec:
+            containers:
+            - name: manager
+              image: ${MAAS_CONTROLLER_IMAGE}
+              env:
+              - name: GATEWAY_NAMESPACE
+                value: ${GATEWAY_NAMESPACE}
 EOF
 
 echo "  Building kustomize manifests..."
@@ -1284,29 +1160,42 @@ print('\n---\n'.join(filtered))
 " > "$TEMP_DIR/filtered.yaml"
 
 if ! kubectl apply --server-side=true --force-conflicts -f "$TEMP_DIR/filtered.yaml" 2>&1 | tail -15; then
-  fail "Failed to apply MaaS manifests"
+  fail "Failed to apply MaaS controller manifests"
   exit 1
-fi
-
-echo "  Waiting for MaaS API..."
-kubectl rollout status deployment/maas-api -n "$MAAS_NAMESPACE" --timeout=180s 2>/dev/null || \
-  warn "maas-api not ready yet"
-
-# Disable sidecar injection on payload-processing (BBR uses self-signed TLS for ext-proc)
-kubectl patch deployment payload-processing -n "$GATEWAY_NAMESPACE" --type=merge \
-  -p='{"spec":{"template":{"metadata":{"annotations":{"sidecar.istio.io/inject":"false"}}}}}' 2>/dev/null || true
-
-# Fix controller's GATEWAY_NAMESPACE — base manifest hardcodes openshift-ingress
-CURRENT_GW_NS=$(kubectl get deployment maas-controller -n "$MAAS_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="GATEWAY_NAMESPACE")].value}' 2>/dev/null)
-if [[ "$CURRENT_GW_NS" != "$GATEWAY_NAMESPACE" ]]; then
-  kubectl set env deployment/maas-controller -n "$MAAS_NAMESPACE" GATEWAY_NAMESPACE="$GATEWAY_NAMESPACE"
 fi
 
 echo "  Waiting for MaaS controller..."
 kubectl rollout status deployment/maas-controller -n "$MAAS_NAMESPACE" --timeout=180s 2>/dev/null || \
   warn "maas-controller not ready yet"
 
-ok "MaaS controller + API deployed"
+echo "  Waiting for controller to reconcile maas-api..."
+for _i in $(seq 1 36); do
+  kubectl get deployment maas-api -n "$MAAS_NAMESPACE" &>/dev/null && break
+  sleep 5
+done
+if kubectl get deployment maas-api -n "$MAAS_NAMESPACE" &>/dev/null; then
+  kubectl rollout status deployment/maas-api -n "$MAAS_NAMESPACE" --timeout=180s 2>/dev/null || \
+    warn "maas-api not ready yet"
+else
+  warn "maas-api deployment was not created by maas-controller"
+fi
+
+echo "  Waiting for controller to reconcile payload-processing..."
+for _i in $(seq 1 36); do
+  kubectl get deployment payload-processing -n "$GATEWAY_NAMESPACE" &>/dev/null && break
+  sleep 5
+done
+if kubectl get deployment payload-processing -n "$GATEWAY_NAMESPACE" &>/dev/null; then
+  # Disable sidecar injection on payload-processing (BBR uses self-signed TLS for ext-proc).
+  kubectl patch deployment payload-processing -n "$GATEWAY_NAMESPACE" --type=merge \
+    -p='{"spec":{"template":{"metadata":{"annotations":{"sidecar.istio.io/inject":"false"}}}}}' 2>/dev/null || true
+  kubectl rollout status deployment/payload-processing -n "$GATEWAY_NAMESPACE" --timeout=180s 2>/dev/null || \
+    warn "payload-processing not ready yet"
+else
+  warn "payload-processing deployment was not created by maas-controller"
+fi
+
+ok "MaaS controller deployed and reconciled platform resources"
 
 # ─── Step 10b: Test fixtures ────────────────────────────────────────────────
 

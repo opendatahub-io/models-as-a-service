@@ -32,18 +32,9 @@ if [ -f "$DEV_KUSTOMIZATION" ]; then
     sed -i "s/\(newTag: \).*/\1${TAG}/" "$DEV_KUSTOMIZATION"
 fi
 
-# Update ODH overlay params.env if it exists
-ODH_PARAMS="${PROJECT_ROOT}/maas-api/deploy/overlays/odh/params.env"
-if [ -f "$ODH_PARAMS" ]; then
-    echo "  - Updating ${ODH_PARAMS}"
-    # Update the image tag in params.env (format: quay.io/opendatahub/maas-api:tag)
-    sed -i "s|\(maas-api-image=quay.io/opendatahub/maas-api:\).*|\1${TAG}|" "$ODH_PARAMS"
-fi
-
 echo "Tag update complete!"
 echo ""
 echo "Updated files:"
 echo "  - ${BASE_KUSTOMIZATION}"
 [ -f "$DEV_KUSTOMIZATION" ] && echo "  - ${DEV_KUSTOMIZATION}"
-[ -f "$ODH_PARAMS" ] && echo "  - ${ODH_PARAMS}"
 
