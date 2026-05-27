@@ -55,6 +55,10 @@ type TenantNamespaceValidator struct {
 //   - Multi-tenancy: ai-tenant-default and other tenant namespaces work (via label)
 //   - Security: random namespaces without the label are rejected
 func (v *TenantNamespaceValidator) ValidateNamespace(ctx context.Context, namespace string) (bool, string) {
+	if v == nil || v.Client == nil {
+		return false, "namespace validator not configured"
+	}
+
 	// Always allow the default tenant namespace for backward compatibility.
 	// This handles both single-tenant deployments and the default tenant in multi-tenant mode.
 	if namespace == DefaultTenantNamespace {

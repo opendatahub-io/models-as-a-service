@@ -51,6 +51,10 @@ func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, obj runt
 		return nil, fmt.Errorf("expected MaaSSubscription object, got %T", obj)
 	}
 
+	if v.Validator == nil {
+		return nil, fmt.Errorf("webhook validator not configured")
+	}
+
 	allowed, message := v.Validator.ValidateNamespace(ctx, sub.Namespace)
 	if !allowed {
 		return nil, fmt.Errorf("%s", message)

@@ -51,6 +51,10 @@ func (v *MaaSAuthPolicyValidator) ValidateCreate(ctx context.Context, obj runtim
 		return nil, fmt.Errorf("expected MaaSAuthPolicy object, got %T", obj)
 	}
 
+	if v.Validator == nil {
+		return nil, fmt.Errorf("webhook validator not configured")
+	}
+
 	allowed, message := v.Validator.ValidateNamespace(ctx, policy.Namespace)
 	if !allowed {
 		return nil, fmt.Errorf("%s", message)
