@@ -38,16 +38,16 @@ type MetadataStore interface {
 	//   - ephemeral: marks the key as short-lived for programmatic use
 	//
 	// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-	AddKey(ctx context.Context, 
-		username string, 
-		keyID, 
-		keyHash, 
-		name, 
+	AddKey(ctx context.Context,
+		username string,
+		keyID,
+		keyHash,
+		name,
 		description string,
-		userGroups []string, 
-		subscription, 
-		tenant string, 
-		expiresAt *time.Time, 
+		userGroups []string,
+		subscription,
+		tenant string,
+		expiresAt *time.Time,
 		ephemeral bool) error
 
 	// Search returns API keys matching the search criteria.
