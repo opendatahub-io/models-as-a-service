@@ -56,11 +56,30 @@ kubectl wait --for=condition=Programmed gateway/maas-default-gateway \
 GW_SVC=$(kubectl get svc -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].metadata.name}')
 echo "Gateway Service: ${GW_SVC}"
 
-# 4. Create the OpenShift Route (edit openshift-route.yaml first to set your hostname and Service name)
-# Replace <cluster-domain> with your cluster's apps domain:
-#   CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-# Replace the Service name if it differs from maas-default-gateway-openshift-default.
-kubectl apply -f docs/samples/gateway-patterns/clusterip-route-reencrypt/openshift-route.yaml
+# 4. Create the OpenShift Route with the service CA bundle for reencrypt termination
+CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+SERVICE_CA=$(kubectl get configmap signing-cabundle -n openshift-service-ca -o jsonpath='{.data.ca-bundle\.crt}')
+
+kubectl apply -f - <<EOF
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: maas-gateway-route
+  namespace: openshift-ingress
+spec:
+  host: maas.${CLUSTER_DOMAIN}
+  to:
+    kind: Service
+    name: ${GW_SVC}
+    weight: 100
+  port:
+    targetPort: 443
+  tls:
+    termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect
+    destinationCACertificate: |
+$(echo "$SERVICE_CA" | sed 's/^/      /')
+EOF
 
 # 5. Apply HTTPRoute (edit httproute.yaml to set your application namespace)
 kubectl apply -f docs/samples/gateway-patterns/clusterip-route-reencrypt/httproute.yaml
@@ -88,8 +107,8 @@ kubectl get secret maas-gw-service-tls -n openshift-ingress
 |---------|-------------|-----|
 | Gateway stays `NotProgrammed` | GatewayClass not accepted, or ConfigMap `gw-options` missing | Check `kubectl get gatewayclass`; verify ConfigMap exists in `openshift-ingress` |
 | Route shows `HostAlreadyClaimed` | Another Route uses the same hostname | Change `spec.host` to a unique FQDN |
-| `503` from the Route | Gateway Service not ready or certificate not yet provisioned | Wait for service-ca to provision `maas-gw-service-tls`; check `kubectl get secret -n openshift-ingress` |
-| TLS handshake failure (re-encrypt) | Service CA cert not trusted by Router | Ensure `router.openshift.io/service-ca-certificate: "true"` is set on the Route |
+| `503` from the Route | Gateway Service not ready, certificate not yet provisioned, or `destinationCACertificate` missing on Route | Wait for service-ca to provision `maas-gw-service-tls`; verify Route has `tls.destinationCACertificate` set (see Apply step 4) |
+| TLS handshake failure (re-encrypt) | Service CA cert not trusted by Router | Ensure `tls.destinationCACertificate` contains the service CA bundle from `signing-cabundle` ConfigMap in `openshift-service-ca` namespace |
 | `certificateRefs` name mismatch | Secret name in Gateway does not match ConfigMap annotation | Verify both reference the same Secret name |
 
 ## Customization
