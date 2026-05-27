@@ -875,6 +875,97 @@ func TestAIGatewayReconcile_NoOIDCSetsTenantOIDCNil(t *testing.T) {
 	g.Expect(tenant.Spec.ExternalOIDC).To(BeNil())
 }
 
+func TestAIGatewayReconcile_DomainCreatesHTTPListenerWithHostname(t *testing.T) {
+	g := NewWithT(t)
+	s := aigatewayTestScheme(t)
+
+	aigw := &maasv1alpha1.AIGateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-domain",
+			Namespace: "ai-gateway-system",
+		},
+		Spec: maasv1alpha1.AIGatewaySpec{
+			TenantNamespace: maasv1alpha1.AIGatewayTenantNamespace{Name: "team-domain-maas"},
+			Gateway:         &maasv1alpha1.AIGatewayGatewayTemplate{Namespace: "openshift-ingress"},
+			Domain:          "team-domain.ai-gateway.apps.example.com",
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AIGateway{}).
+		WithObjects(aigw).
+		Build()
+	r := &AIGatewayReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aigw.Name, Namespace: aigw.Namespace}
+	reconcileAIGatewayTwice(t, r, key)
+
+	var gateway gatewayapiv1.Gateway
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "team-domain", Namespace: "openshift-ingress"}, &gateway)).To(Succeed())
+	g.Expect(gateway.Spec.Listeners).To(HaveLen(1))
+	g.Expect(gateway.Spec.Listeners[0].Name).To(Equal(gatewayapiv1.SectionName("http")))
+	g.Expect(gateway.Spec.Listeners[0].Port).To(Equal(gatewayapiv1.PortNumber(80)))
+	g.Expect(gateway.Spec.Listeners[0].Protocol).To(Equal(gatewayapiv1.HTTPProtocolType))
+	g.Expect(gateway.Spec.Listeners[0].Hostname).NotTo(BeNil())
+	g.Expect(string(*gateway.Spec.Listeners[0].Hostname)).To(Equal("team-domain.ai-gateway.apps.example.com"))
+	g.Expect(gateway.Spec.Listeners[0].TLS).To(BeNil())
+}
+
+func TestAIGatewayReconcile_DomainWithTLSCreatesHTTPSListener(t *testing.T) {
+	g := NewWithT(t)
+	s := aigatewayTestScheme(t)
+
+	aigw := &maasv1alpha1.AIGateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-tls",
+			Namespace: "ai-gateway-system",
+		},
+		Spec: maasv1alpha1.AIGatewaySpec{
+			TenantNamespace: maasv1alpha1.AIGatewayTenantNamespace{Name: "team-tls-maas"},
+			Gateway:         &maasv1alpha1.AIGatewayGatewayTemplate{Namespace: "openshift-ingress"},
+			Domain:          "team-tls.ai-gateway.apps.example.com",
+			TLS: &maasv1alpha1.AIGatewayTLS{
+				CertificateRef: maasv1alpha1.AIGatewayCertificateRef{Name: "team-tls-cert"},
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AIGateway{}).
+		WithObjects(aigw).
+		Build()
+	r := &AIGatewayReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aigw.Name, Namespace: aigw.Namespace}
+	reconcileAIGatewayTwice(t, r, key)
+
+	var gateway gatewayapiv1.Gateway
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "team-tls", Namespace: "openshift-ingress"}, &gateway)).To(Succeed())
+	g.Expect(gateway.Spec.Listeners).To(HaveLen(1))
+	g.Expect(gateway.Spec.Listeners[0].Name).To(Equal(gatewayapiv1.SectionName("https")))
+	g.Expect(gateway.Spec.Listeners[0].Port).To(Equal(gatewayapiv1.PortNumber(443)))
+	g.Expect(gateway.Spec.Listeners[0].Protocol).To(Equal(gatewayapiv1.HTTPSProtocolType))
+	g.Expect(gateway.Spec.Listeners[0].Hostname).NotTo(BeNil())
+	g.Expect(string(*gateway.Spec.Listeners[0].Hostname)).To(Equal("team-tls.ai-gateway.apps.example.com"))
+	g.Expect(gateway.Spec.Listeners[0].TLS).NotTo(BeNil())
+	g.Expect(gateway.Spec.Listeners[0].TLS.CertificateRefs).To(HaveLen(1))
+	g.Expect(gateway.Spec.Listeners[0].TLS.CertificateRefs[0].Name).To(Equal(gatewayapiv1.ObjectName("team-tls-cert")))
+}
+
 func TestAIGatewayChildName_Truncation(t *testing.T) {
 	g := NewWithT(t)
 

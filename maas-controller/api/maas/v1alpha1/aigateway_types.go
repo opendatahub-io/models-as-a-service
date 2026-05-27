@@ -56,6 +56,19 @@ type AIGatewaySpec struct {
 	// +kubebuilder:validation:Optional
 	Gateway *AIGatewayGatewayTemplate `json:"gateway,omitempty"`
 
+	// Domain is the tenant hostname used for data-plane routing.
+	// When set together with TLS, the controller creates an HTTPS listener on port 443.
+	// When set without TLS, the controller creates an HTTP listener on port 80.
+	// When omitted, the controller creates a default HTTP listener on port 80 without a hostname.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=253
+	Domain string `json:"domain,omitempty"`
+
+	// TLS configures the TLS certificate for the tenant Gateway HTTPS listener.
+	// Only effective when Domain is also set.
+	// +kubebuilder:validation:Optional
+	TLS *AIGatewayTLS `json:"tls,omitempty"`
+
 	// OIDC contains non-MaaS-specific OIDC settings for this AI Gateway.
 	// The current controller mirrors this into the temporary Tenant config object
 	// until the MaaS config CR rename lands.
@@ -107,57 +120,12 @@ type AIGatewayGatewayTemplate struct {
 	// +kubebuilder:default="openshift-default"
 	// +kubebuilder:validation:MaxLength=253
 	GatewayClassName string `json:"gatewayClassName,omitempty"`
-
-	// Listeners is the set of Gateway listeners. If omitted, a single HTTP listener is created.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=64
-	Listeners []AIGatewayListener `json:"listeners,omitempty"`
 }
 
-// AIGatewayListener is the supported listener subset for the tenant Gateway template.
-type AIGatewayListener struct {
-	// Name is the Gateway listener name.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	Name string `json:"name"`
-
-	// Hostname is the optional hostname for HTTP, HTTPS, and TLS listeners.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxLength=253
-	Hostname string `json:"hostname,omitempty"`
-
-	// Port is the listener port.
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=65535
-	Port int32 `json:"port"`
-
-	// Protocol is the listener protocol.
-	// +kubebuilder:validation:Enum=HTTP;HTTPS;TLS;TCP;UDP
-	Protocol string `json:"protocol"`
-
-	// TLS configures certificate references for HTTPS or TLS listeners.
-	// +kubebuilder:validation:Optional
-	TLS *AIGatewayListenerTLS `json:"tls,omitempty"`
-
-	// AllowedRoutes controls which route namespaces may bind to the listener.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:default=All
-	// +kubebuilder:validation:Enum=All;Same
-	AllowedRoutesFrom string `json:"allowedRoutesFrom,omitempty"`
-}
-
-// AIGatewayListenerTLS contains the supported Gateway TLS fields.
-type AIGatewayListenerTLS struct {
-	// Mode controls TLS termination behavior.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:default=Terminate
-	// +kubebuilder:validation:Enum=Terminate;Passthrough
-	Mode string `json:"mode,omitempty"`
-
-	// CertificateRefs names Secret certificates for terminating TLS.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=16
-	CertificateRefs []AIGatewayCertificateRef `json:"certificateRefs,omitempty"`
+// AIGatewayTLS configures the TLS certificate for the tenant Gateway.
+type AIGatewayTLS struct {
+	// CertificateRef names a Secret containing the TLS certificate.
+	CertificateRef AIGatewayCertificateRef `json:"certificateRef"`
 }
 
 // AIGatewayCertificateRef references a TLS Secret.

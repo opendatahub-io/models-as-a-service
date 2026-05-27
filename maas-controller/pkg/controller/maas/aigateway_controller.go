@@ -290,12 +290,8 @@ func (r *AIGatewayReconciler) mutateGateway(gw *gatewayapiv1.Gateway, aigw *maas
 	if aigw.Spec.Gateway != nil && aigw.Spec.Gateway.GatewayClassName != "" {
 		className = aigw.Spec.Gateway.GatewayClassName
 	}
-	listeners, err := gatewayListenersFor(aigw)
-	if err != nil {
-		return err
-	}
 	gw.Spec.GatewayClassName = gatewayapiv1.ObjectName(className)
-	gw.Spec.Listeners = listeners
+	gw.Spec.Listeners = gatewayListenersFor(aigw)
 	return nil
 }
 
@@ -315,61 +311,47 @@ func (r *AIGatewayReconciler) gatewayRefFor(aigw *maasv1alpha1.AIGateway) maasv1
 	return ref
 }
 
-func gatewayListenersFor(aigw *maasv1alpha1.AIGateway) ([]gatewayapiv1.Listener, error) {
-	if aigw.Spec.Gateway == nil || len(aigw.Spec.Gateway.Listeners) == 0 {
-		fromAll := gatewayapiv1.NamespacesFromAll
-		return []gatewayapiv1.Listener{{
-			Name:     gatewayapiv1.SectionName("http"),
-			Port:     gatewayapiv1.PortNumber(80),
-			Protocol: gatewayapiv1.HTTPProtocolType,
-			AllowedRoutes: &gatewayapiv1.AllowedRoutes{
-				Namespaces: &gatewayapiv1.RouteNamespaces{From: &fromAll},
-			},
-		}}, nil
+func gatewayListenersFor(aigw *maasv1alpha1.AIGateway) []gatewayapiv1.Listener {
+	fromAll := gatewayapiv1.NamespacesFromAll
+	routes := &gatewayapiv1.AllowedRoutes{
+		Namespaces: &gatewayapiv1.RouteNamespaces{From: &fromAll},
 	}
 
-	listeners := make([]gatewayapiv1.Listener, 0, len(aigw.Spec.Gateway.Listeners))
-	for _, in := range aigw.Spec.Gateway.Listeners {
-		if in.Name == "" {
-			return nil, errors.New("spec.gateway.listeners[].name is required")
-		}
-		if in.Port < 1 || in.Port > 65535 {
-			return nil, fmt.Errorf("spec.gateway.listeners[%s].port must be between 1 and 65535", in.Name)
-		}
-		if in.Protocol == "" {
-			return nil, fmt.Errorf("spec.gateway.listeners[%s].protocol is required", in.Name)
-		}
-		from := gatewayapiv1.NamespacesFromAll
-		if in.AllowedRoutesFrom == "Same" {
-			from = gatewayapiv1.NamespacesFromSame
-		}
-		listener := gatewayapiv1.Listener{
-			Name:     gatewayapiv1.SectionName(in.Name),
-			Port:     gatewayapiv1.PortNumber(in.Port),
-			Protocol: gatewayapiv1.ProtocolType(in.Protocol),
-			AllowedRoutes: &gatewayapiv1.AllowedRoutes{
-				Namespaces: &gatewayapiv1.RouteNamespaces{From: &from},
-			},
-		}
-		if in.Hostname != "" {
-			hostname := gatewayapiv1.Hostname(in.Hostname)
-			listener.Hostname = &hostname
-		}
-		if in.TLS != nil {
-			tlsMode := gatewayapiv1.TLSModeTerminate
-			if in.TLS.Mode == "Passthrough" {
-				tlsMode = gatewayapiv1.TLSModePassthrough
-			}
-			listener.TLS = &gatewayapiv1.GatewayTLSConfig{Mode: &tlsMode}
-			for _, cert := range in.TLS.CertificateRefs {
-				listener.TLS.CertificateRefs = append(listener.TLS.CertificateRefs, gatewayapiv1.SecretObjectReference{
-					Name: gatewayapiv1.ObjectName(cert.Name),
-				})
-			}
-		}
-		listeners = append(listeners, listener)
+	if aigw.Spec.Domain == "" {
+		return []gatewayapiv1.Listener{{
+			Name:          "http",
+			Port:          80,
+			Protocol:      gatewayapiv1.HTTPProtocolType,
+			AllowedRoutes: routes,
+		}}
 	}
-	return listeners, nil
+
+	hostname := gatewayapiv1.Hostname(aigw.Spec.Domain)
+
+	if aigw.Spec.TLS != nil {
+		tlsMode := gatewayapiv1.TLSModeTerminate
+		return []gatewayapiv1.Listener{{
+			Name:          "https",
+			Port:          443,
+			Protocol:      gatewayapiv1.HTTPSProtocolType,
+			Hostname:      &hostname,
+			AllowedRoutes: routes,
+			TLS: &gatewayapiv1.GatewayTLSConfig{
+				Mode: &tlsMode,
+				CertificateRefs: []gatewayapiv1.SecretObjectReference{{
+					Name: gatewayapiv1.ObjectName(aigw.Spec.TLS.CertificateRef.Name),
+				}},
+			},
+		}}
+	}
+
+	return []gatewayapiv1.Listener{{
+		Name:          "http",
+		Port:          80,
+		Protocol:      gatewayapiv1.HTTPProtocolType,
+		Hostname:      &hostname,
+		AllowedRoutes: routes,
+	}}
 }
 
 func (r *AIGatewayReconciler) ensureTenantConfig(ctx context.Context, aigw *maasv1alpha1.AIGateway, gatewayRef maasv1alpha1.TenantGatewayRef) error {

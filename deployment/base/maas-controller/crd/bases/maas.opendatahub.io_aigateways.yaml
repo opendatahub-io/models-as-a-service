@@ -59,6 +59,14 @@ spec:
           spec:
             description: AIGatewaySpec defines the tenant bootstrap contract.
             properties:
+              domain:
+                description: |-
+                  Domain is the tenant hostname used for data-plane routing.
+                  When set together with TLS, the controller creates an HTTPS listener on port 443.
+                  When set without TLS, the controller creates an HTTP listener on port 80.
+                  When omitted, the controller creates a default HTTP listener on port 80 without a hostname.
+                maxLength: 253
+                type: string
               gateway:
                 description: Gateway is the Gateway API template reconciled for this
                   tenant.
@@ -69,82 +77,6 @@ spec:
                       tenant Gateway.
                     maxLength: 253
                     type: string
-                  listeners:
-                    description: Listeners is the set of Gateway listeners. If omitted,
-                      a single HTTP listener is created.
-                    items:
-                      description: AIGatewayListener is the supported listener subset
-                        for the tenant Gateway template.
-                      properties:
-                        allowedRoutesFrom:
-                          default: All
-                          description: AllowedRoutes controls which route namespaces
-                            may bind to the listener.
-                          enum:
-                          - All
-                          - Same
-                          type: string
-                        hostname:
-                          description: Hostname is the optional hostname for HTTP,
-                            HTTPS, and TLS listeners.
-                          maxLength: 253
-                          type: string
-                        name:
-                          description: Name is the Gateway listener name.
-                          maxLength: 253
-                          minLength: 1
-                          type: string
-                        port:
-                          description: Port is the listener port.
-                          format: int32
-                          maximum: 65535
-                          minimum: 1
-                          type: integer
-                        protocol:
-                          description: Protocol is the listener protocol.
-                          enum:
-                          - HTTP
-                          - HTTPS
-                          - TLS
-                          - TCP
-                          - UDP
-                          type: string
-                        tls:
-                          description: TLS configures certificate references for HTTPS
-                            or TLS listeners.
-                          properties:
-                            certificateRefs:
-                              description: CertificateRefs names Secret certificates
-                                for terminating TLS.
-                              items:
-                                description: AIGatewayCertificateRef references a
-                                  TLS Secret.
-                                properties:
-                                  name:
-                                    description: Name is the Secret name.
-                                    maxLength: 253
-                                    minLength: 1
-                                    type: string
-                                required:
-                                - name
-                                type: object
-                              maxItems: 16
-                              type: array
-                            mode:
-                              default: Terminate
-                              description: Mode controls TLS termination behavior.
-                              enum:
-                              - Terminate
-                              - Passthrough
-                              type: string
-                          type: object
-                      required:
-                      - name
-                      - port
-                      - protocol
-                      type: object
-                    maxItems: 64
-                    type: array
                   name:
                     description: Name is the Gateway name. If omitted, the AIGateway
                       name is used.
@@ -244,6 +176,26 @@ spec:
                     type: string
                 required:
                 - name
+                type: object
+              tls:
+                description: |-
+                  TLS configures the TLS certificate for the tenant Gateway HTTPS listener.
+                  Only effective when Domain is also set.
+                properties:
+                  certificateRef:
+                    description: CertificateRef names a Secret containing the TLS
+                      certificate.
+                    properties:
+                      name:
+                        description: Name is the Secret name.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - certificateRef
                 type: object
             required:
             - tenantNamespace

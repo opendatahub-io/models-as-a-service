@@ -18,7 +18,8 @@ Each tenant gets a dedicated Gateway API `Gateway`. Model sharing across tenants
 `AIGateway` owns infrastructure and cross-service identity configuration:
 
 - tenant namespace reference and namespace creation policy
-- Gateway template: name, namespace, class, listeners, TLS certificate references
+- Gateway template: name, namespace, class
+- tenant domain (hostname for data-plane routing) and TLS certificate
 - OIDC issuer/client settings
 - tenant-admin RBAC subjects
 
@@ -40,7 +41,13 @@ When an `AIGateway` is reconciled, `maas-controller` creates or updates:
 4. tenant-admin RBAC in the tenant namespace
 5. per-object RBAC for the specific `AIGateway` in the infra namespace
 
-`spec.tenantNamespace.name` is immutable in the CRD schema. `spec.gateway.namespace` is intended to be immutable; CRD-level enforcement is deferred to a validating webhook because nested listener arrays make CEL cost prohibitive. The controller also rejects `AIGateway` objects in the protected ODH application namespace and in the legacy tenant namespace so bootstrap objects stay in a separate infra namespace.
+`spec.tenantNamespace.name` is immutable in the CRD schema. `spec.gateway.namespace` is intended to be immutable; CRD-level enforcement is deferred to a validating webhook. The controller rejects `AIGateway` objects in the protected ODH application namespace and in the legacy tenant namespace so bootstrap objects stay in a separate infra namespace.
+
+The Gateway listener is derived automatically from `spec.domain` and `spec.tls`:
+
+- `domain` + `tls`: HTTPS listener on port 443 with TLS termination and the referenced certificate
+- `domain` only: HTTP listener on port 80 with the domain as hostname
+- neither: default HTTP listener on port 80 without a hostname
 
 ## Lifecycle
 
@@ -63,4 +70,6 @@ The following items remain explicitly deferred to follow-on stories or the ODH A
 - final name and migration mechanics for the renamed `Tenant` config CR
 - mutation webhook behavior for preserving existing default-tenant data during rename
 - dynamic cache/watch expansion for MaaSSubscription and MaaSAuthPolicy across all AIGateway tenant namespaces
+- per-tenant maas-api deployment (ADR Option 2)
+- resource quotas (maxModels, maxSubscriptions, maxApiKeys)
 - long-term migration of `AIGateway` ownership from `maas-controller` to a platform-level controller
