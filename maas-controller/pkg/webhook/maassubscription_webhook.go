@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -52,7 +53,7 @@ func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, obj runt
 	}
 
 	if v.Validator == nil {
-		return nil, fmt.Errorf("webhook validator not configured")
+		return nil, errors.New("webhook validator not configured")
 	}
 
 	allowed, message := v.Validator.ValidateNamespace(ctx, sub.Namespace)
