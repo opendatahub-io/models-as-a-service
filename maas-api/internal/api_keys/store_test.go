@@ -236,7 +236,7 @@ func TestAddKeyWithTenant(t *testing.T) {
 
 		key, err := store.Get(ctx, "tenant-key-2")
 		require.NoError(t, err)
-		assert.Equal(t, "", key.Tenant)
+		assert.Empty(t, key.Tenant)
 	})
 
 	t.Run("TenantRoundTripsViaGetByHash", func(t *testing.T) {
