@@ -25,6 +25,7 @@ type ApiKey struct {
 	Description    string   `json:"description,omitempty"`
 	Username       string   `json:"username,omitempty"`
 	Subscription   string   `json:"subscription,omitempty"`   // MaaSSubscription name bound at mint time
+	Tenant         string   `json:"tenant,omitempty"`
 	Groups         []string `json:"groups,omitempty"`         // User's groups at creation (immutable snapshot for authorization)
 	CreationDate   string   `json:"creationDate"`
 	ExpirationDate string   `json:"expirationDate,omitempty"` // Empty for permanent keys

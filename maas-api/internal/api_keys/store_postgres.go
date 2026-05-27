@@ -46,7 +46,7 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger) *PostgresStore {
 //
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 func (s *PostgresStore) AddKey(
-	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool,
+	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, tenant string, expiresAt *time.Time, ephemeral bool,
 ) error {
 	if keyID == "" {
 		return ErrEmptyJTI
@@ -68,11 +68,11 @@ func (s *PostgresStore) AddKey(
 	}
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, subscription, status, created_at, expires_at, ephemeral)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10)
+		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, subscription, tenant, status, created_at, expires_at, ephemeral)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11)
 	`
 	// Use pq.Array to handle PostgreSQL TEXT[] type
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), subscription, time.Now().UTC(), expiresAt, ephemeral)
+	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), subscription, tenant, time.Now().UTC(), expiresAt, ephemeral)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
