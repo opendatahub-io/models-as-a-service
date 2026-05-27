@@ -212,6 +212,21 @@ else
     echo "   ⚠️  llm namespace not found - skipping LLM metrics"
 fi
 
+# Deploy metadata evaluator PrometheusRule (alerts on maas-api metadata failures)
+# Detect Authorino namespace: rh-connectivity-link (RHOAI) or kuadrant-system (ODH)
+AUTHORINO_NAMESPACE="kuadrant-system"
+if kubectl get ns rh-connectivity-link &>/dev/null && kubectl get deploy -n rh-connectivity-link authorino &>/dev/null 2>&1; then
+    AUTHORINO_NAMESPACE="rh-connectivity-link"
+fi
+
+METADATA_RULE_FILE="$BASE_OBSERVABILITY_DIR/authorino-maas-metadata-evaluator-prometheusrule.yaml"
+if [ -f "$METADATA_RULE_FILE" ]; then
+    yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" "$METADATA_RULE_FILE" | kubectl apply -f -
+    echo "   ✅ Metadata evaluator PrometheusRule deployed (namespace: $AUTHORINO_NAMESPACE)"
+else
+    echo "   ⚠️  Metadata evaluator PrometheusRule not found - skipping alert"
+fi
+
 # ==========================================
 # Summary
 # ==========================================

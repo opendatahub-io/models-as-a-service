@@ -26,12 +26,12 @@ spec:
               and subscription/API-key validation paths.
           expr: |
             (
-              sum(rate(auth_server_evaluator_cancelled{evaluator_type="METADATA_GENERIC_HTTP",evaluator_name=~"apiKeyValidation|subscription-info"}[5m]))
+              sum(rate(auth_server_evaluator_cancelled{namespace=~"rh-connectivity-link|kuadrant-system",evaluator_type="METADATA_GENERIC_HTTP",evaluator_name=~"apiKeyValidation|subscription-info"}[5m]))
               /
-              sum(rate(auth_server_evaluator_total{evaluator_type="METADATA_GENERIC_HTTP",evaluator_name=~"apiKeyValidation|subscription-info"}[5m]))
+              sum(rate(auth_server_evaluator_total{namespace=~"rh-connectivity-link|kuadrant-system",evaluator_type="METADATA_GENERIC_HTTP",evaluator_name=~"apiKeyValidation|subscription-info"}[5m]))
             ) > 0.1
             and
-            sum(rate(auth_server_evaluator_total{evaluator_type="METADATA_GENERIC_HTTP",evaluator_name=~"apiKeyValidation|subscription-info"}[5m])) > 0.001
+            sum(rate(auth_server_evaluator_total{namespace=~"rh-connectivity-link|kuadrant-system",evaluator_type="METADATA_GENERIC_HTTP",evaluator_name=~"apiKeyValidation|subscription-info"}[5m])) > 0.001
           for: 5m
           labels:
             severity: warning
