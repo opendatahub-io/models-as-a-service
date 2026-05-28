@@ -447,7 +447,7 @@ class TestWebhookValidation:
             # Create namespace without tenant label
             result = subprocess.run(
                 ["oc", "create", "namespace", test_ns],
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=30
             )
             assert result.returncode == 0, f"Failed to create namespace: {result.stderr}"
 
@@ -467,7 +467,7 @@ class TestWebhookValidation:
                         }],
                     },
                 }),
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=30
             )
 
             # Verify webhook rejection
@@ -486,7 +486,7 @@ class TestWebhookValidation:
             # Clean up namespace
             subprocess.run(
                 ["oc", "delete", "namespace", test_ns, "--ignore-not-found"],
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=30
             )
 
     def test_authpolicy_rejected_in_unlabeled_namespace(self):
@@ -497,7 +497,7 @@ class TestWebhookValidation:
             # Create namespace without tenant label
             result = subprocess.run(
                 ["oc", "create", "namespace", test_ns],
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=30
             )
             assert result.returncode == 0, f"Failed to create namespace: {result.stderr}"
 
@@ -513,7 +513,7 @@ class TestWebhookValidation:
                         "subjects": {"groups": [{"name": "system:authenticated"}]},
                     },
                 }),
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=30
             )
 
             # Verify webhook rejection
@@ -529,5 +529,5 @@ class TestWebhookValidation:
             # Clean up namespace
             subprocess.run(
                 ["oc", "delete", "namespace", test_ns, "--ignore-not-found"],
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=30
             )

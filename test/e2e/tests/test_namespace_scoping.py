@@ -121,11 +121,15 @@ def _create_namespace(name: str, tenant_enabled: bool = False):
         raise RuntimeError(f"Failed to create namespace {name}: {result.stderr}")
 
     if tenant_enabled:
-        subprocess.run(
+        result = subprocess.run(
             ["oc", "label", "namespace", name, "ai-gateway.opendatahub.io/tenant=", "--overwrite"],
             capture_output=True,
             text=True,
         )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to label namespace {name} as tenant-enabled: {result.stderr}"
+            )
 
 
 def _delete_namespace(name: str):
