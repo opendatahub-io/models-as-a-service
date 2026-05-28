@@ -1,0 +1,9 @@
+# Acknowledged breaking changes — document reason and PR link for each entry.
+#
+# Format: each line must contain the HTTP method, path, and change description.
+# See https://github.com/oasdiff/oasdiff/blob/main/docs/BREAKING-CHANGES.md
+
+# PR #915: Remove namespace from model refs in GET /subscriptions response.
+# The namespace field exposed internal cluster topology not relevant to API consumers.
+GET /v1/subscriptions removed the optional property `items/model_refs/items/namespace` from the response with the `200` status
+GET /v1/model/{model-id}/subscriptions removed the optional property `items/model_refs/items/namespace` from the response with the `200` status
