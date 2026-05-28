@@ -1378,28 +1378,33 @@ class TestAPIKeySubscriptionPhases:
                     capture_output=True, text=True
                 )
                 if result.returncode != 0:
-                    log.error(f"Failed to get webhook configuration for restoration: {result.stderr}")
-                else:
-                    webhook_config = json.loads(result.stdout)
-                    patch_ops = []
-                    for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
-                        if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
-                            patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Fail"})
+                    raise RuntimeError(
+                        f"Failed to get webhook configuration {webhook_name} for restoration: {result.stderr}"
+                    )
 
-                    if patch_ops:
-                        restore_result = subprocess.run(
-                            ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
-                             "--type=json", "-p", json.dumps(patch_ops)],
-                            capture_output=True, text=True
-                        )
-                        if restore_result.returncode != 0:
-                            webhook_restore_error = RuntimeError(
-                                f"Webhook left in Ignore state! Failed to restore webhook {webhook_name} "
-                                f"with patch_ops {patch_ops}: {restore_result.stderr}"
-                            )
-                            log.error(str(webhook_restore_error))
-                    else:
-                        log.warning(f"No matching webhooks found to restore in {webhook_name}")
+                webhook_config = json.loads(result.stdout)
+                patch_ops = []
+                for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
+                    if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
+                        patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Fail"})
+
+                if not patch_ops:
+                    raise RuntimeError(
+                        f"No matching webhooks found to restore in {webhook_name}. "
+                        f"Expected vmaassubscription.kb.io and vmaasauthpolicy.kb.io. "
+                        f"Found: {[w.get('name') for w in webhook_config.get('webhooks', [])]}"
+                    )
+
+                restore_result = subprocess.run(
+                    ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                     "--type=json", "-p", json.dumps(patch_ops)],
+                    capture_output=True, text=True
+                )
+                if restore_result.returncode != 0:
+                    raise RuntimeError(
+                        f"Webhook left in Ignore state! Failed to restore webhook {webhook_name} "
+                        f"with patch_ops {patch_ops}: {restore_result.stderr}"
+                    )
             except Exception as e:
                 webhook_restore_error = e
                 log.error(f"Exception during webhook restoration: {e}")
