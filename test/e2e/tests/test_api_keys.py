@@ -1370,34 +1370,51 @@ class TestAPIKeySubscriptionPhases:
 
         finally:
             # Restore webhook failurePolicy to Fail
-            # Find webhook indices dynamically and fail loudly if restore fails
-            result = subprocess.run(
-                ["oc", "get", "validatingwebhookconfiguration", webhook_name, "-o", "json"],
-                capture_output=True, text=True
-            )
-            if result.returncode == 0:
-                webhook_config = json.loads(result.stdout)
-                patch_ops = []
-                for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
-                    if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
-                        patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Fail"})
-
-                restore_result = subprocess.run(
-                    ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
-                     "--type=json", "-p", json.dumps(patch_ops)],
+            # Wrap in try/except to guarantee controller scale-up and cleanup happen
+            webhook_restore_error = None
+            try:
+                result = subprocess.run(
+                    ["oc", "get", "validatingwebhookconfiguration", webhook_name, "-o", "json"],
                     capture_output=True, text=True
                 )
-                if restore_result.returncode != 0:
-                    log.error(f"Failed to restore webhook failurePolicy to Fail: {restore_result.stderr}")
-                    raise RuntimeError(f"Webhook left in Ignore state! Failed to restore: {restore_result.stderr}")
+                if result.returncode != 0:
+                    log.error(f"Failed to get webhook configuration for restoration: {result.stderr}")
+                else:
+                    webhook_config = json.loads(result.stdout)
+                    patch_ops = []
+                    for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
+                        if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
+                            patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Fail"})
 
-            # Scale controller back up
+                    if patch_ops:
+                        restore_result = subprocess.run(
+                            ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                             "--type=json", "-p", json.dumps(patch_ops)],
+                            capture_output=True, text=True
+                        )
+                        if restore_result.returncode != 0:
+                            webhook_restore_error = RuntimeError(
+                                f"Webhook left in Ignore state! Failed to restore webhook {webhook_name} "
+                                f"with patch_ops {patch_ops}: {restore_result.stderr}"
+                            )
+                            log.error(str(webhook_restore_error))
+                    else:
+                        log.warning(f"No matching webhooks found to restore in {webhook_name}")
+            except Exception as e:
+                webhook_restore_error = e
+                log.error(f"Exception during webhook restoration: {e}")
+
+            # Always scale controller back up and cleanup, even if webhook restore failed
             _scale_controller_up()
 
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_reconcile()
+
+            # Only raise webhook restore error after cleanup is complete
+            if webhook_restore_error:
+                raise webhook_restore_error
 
 
 class TestAPIKeySubscriptionFilter:
