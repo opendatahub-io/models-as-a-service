@@ -46,6 +46,7 @@ from test_helper import (
     MODEL_REF,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
+    _apply_cr,
     _create_api_key,
     _create_api_key_raw,
     _create_sa_token,
@@ -1299,40 +1300,42 @@ class TestAPIKeySubscriptionPhases:
         """
         API key creation is rejected for unreconciled subscription (empty phase).
 
-        Note: Resources must be created before scaling down the controller because
-        admission webhooks become unavailable when the controller is down. We simulate
-        an unreconciled state by clearing the subscription status after creation.
+        Note: Temporarily sets webhook failurePolicy to Ignore to allow creating
+        resources while controller is down, then restores to Fail.
         """
         ns = _ns()
         subscription_name = "e2e-apikey-unreconciled-sub"
         auth_name = "e2e-apikey-unreconciled-auth"
         sa_name = "e2e-apikey-unreconciled-sa"
+        webhook_name = "maas-validating-webhook-configuration"
 
         try:
             # Create service account and get token
             oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
             sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
-            # Create resources while controller is up (webhooks are available)
-            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
-            _wait_reconcile()
-
-            # Scale down controller to prevent re-reconciliation
-            _scale_controller_down()
-
-            # Clear subscription status to simulate unreconciled state
+            # Temporarily set webhook failurePolicy to Ignore
+            # This allows creates to succeed when controller/webhook is unavailable
             subprocess.run(
-                ["oc", "patch", "maassubscription", subscription_name, "-n", ns,
-                 "--type=json", "-p", '[{"op": "remove", "path": "/status"}]'],
+                ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                 "--type=json", "-p",
+                 '[{"op": "replace", "path": "/webhooks/0/failurePolicy", "value": "Ignore"},'
+                 ' {"op": "replace", "path": "/webhooks/1/failurePolicy", "value": "Ignore"}]'],
                 capture_output=True, text=True, check=True
             )
 
-            # Verify subscription status is cleared (empty phase)
+            # Scale down controller to prevent reconciliation
+            _scale_controller_down()
+
+            # Create resources (webhook unavailable but Ignore policy allows creates)
+            _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
+
+            # Verify subscription is unreconciled (empty phase)
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             phase = cr.get("status", {}).get("phase", "")
             assert phase == "", f"Expected empty phase, got: {phase}"
-            log.info("✅ Subscription has empty phase (simulating unreconciled state)")
+            log.info("✅ Subscription is unreconciled (empty phase)")
 
             # Try to create API key (should fail with 400)
             response = requests.post(
@@ -1357,8 +1360,18 @@ class TestAPIKeySubscriptionPhases:
             log.info("✅ API key creation rejected for unreconciled subscription")
 
         finally:
+            # Restore webhook failurePolicy to Fail
+            subprocess.run(
+                ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                 "--type=json", "-p",
+                 '[{"op": "replace", "path": "/webhooks/0/failurePolicy", "value": "Fail"},'
+                 ' {"op": "replace", "path": "/webhooks/1/failurePolicy", "value": "Fail"}]'],
+                capture_output=True, text=True
+            )
+
             # Scale controller back up
             _scale_controller_up()
+
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)

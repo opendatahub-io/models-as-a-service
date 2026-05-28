@@ -460,7 +460,11 @@ class TestWebhookValidation:
                     "metadata": {"name": "test-sub", "namespace": test_ns},
                     "spec": {
                         "owner": {"groups": [{"name": "system:authenticated"}]},
-                        "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
+                        "modelRefs": [{
+                            "name": MODEL_REF,
+                            "namespace": MODEL_NAMESPACE,
+                            "tokenRateLimits": [{"limit": 100, "window": "1m"}]
+                        }],
                     },
                 }),
                 capture_output=True, text=True
