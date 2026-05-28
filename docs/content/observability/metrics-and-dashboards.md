@@ -64,29 +64,40 @@ Exposed on `/server-metrics` (port 8080):
 | `auth_server_authconfig_duration_seconds` | Histogram | `namespace`, `authconfig` | Auth evaluation latency |
 | `auth_server_authconfig_response_status` | Counter | `namespace`, `authconfig`, `status` | Auth response status (OK, denied) |
 | `auth_server_response_status` | Counter | `status` | Aggregate auth response status |
+| `auth_server_evaluator_total` | Counter | `namespace`, `authconfig`, `evaluator_type`, `evaluator_name` | Per-evaluator runs (MaaS enables `metrics` on **`apiKeyValidation`** / **`subscription-info`**) |
+| `auth_server_evaluator_cancelled` | Counter | same | Failures/cancellations (metadata alert below) |
 
 !!! note "Two endpoints"
     Kuadrant `authorino-operator-monitor` scrapes `/metrics` (controller-runtime). MaaS `authorino-server-metrics` ServiceMonitor scrapes `/server-metrics` (auth evaluation).
 
-#### OIDC Authentication Alerts
+!!! note "Metadata evaluator metrics"
+    Query `evaluator_type="METADATA_GENERIC_HTTP"` and `evaluator_name=~"apiKeyValidation|subscription-info"`. Series appear after traffic hits each evaluator.
 
-When external OIDC is configured (`Tenant.spec.externalOIDC`), MaaS deploys PrometheusRules to alert operators when authentication issues occur.
+#### Authorino Alerts
+
+**MaaSAuthorinoMetadataEvaluatorHighFailureRate**
+
+Fires when more than 10% of metadata evaluator calls (apiKeyValidation or subscription-info to maas-api) fail for 5 consecutive minutes.
+
+- **Severity:** Warning
+- **Indicates:** maas-api unhealthy, network policies blocking Authorino → maas-api, or TLS certificate issues
+- **Remediate:** Check maas-api health, Authorino → maas-api TLS/NetworkPolicy, confirm `/server-metrics` is scraped
 
 **MaaSAuthorinoOIDCAuthenticationHighFailureRate**
 
-Fires when more than 10% of authentication attempts fail for 5 consecutive minutes.
+Fires when more than 10% of OIDC authentication attempts fail for 5 consecutive minutes (when external OIDC is configured via `Tenant.spec.externalOIDC`).
 
 - **Severity:** Warning
 - **Indicates:** IdP unavailable, JWKS unreachable, or token validation failures
 
 **MaaSAuthorinoOIDCAuthenticationHighLatency**
 
-Fires when P95 authentication latency exceeds 2 seconds for 5 consecutive minutes.
+Fires when P95 OIDC authentication latency exceeds 2 seconds for 5 consecutive minutes.
 
 - **Severity:** Warning
 - **Indicates:** Slow IdP response, network latency, or excessive JWKS fetches
 
-Access alerts in **Observe → Alerting** (User workload monitoring). For behavior during IdP outages and detailed troubleshooting, see [External OIDC Configuration](../advanced-administration/external-oidc.md).
+Access alerts in **Observe → Alerting** (User workload monitoring). For OIDC behavior during IdP outages and detailed troubleshooting, see [External OIDC Configuration](../advanced-administration/external-oidc.md).
 
 ### vLLM Metrics
 
