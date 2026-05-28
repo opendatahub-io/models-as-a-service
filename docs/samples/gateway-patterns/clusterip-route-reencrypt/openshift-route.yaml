@@ -3,9 +3,6 @@ kind: Route
 metadata:
   name: maas-gateway-route
   namespace: openshift-ingress
-  annotations:
-    # Tells the OpenShift Router to trust the service-ca certificate on the backend.
-    router.openshift.io/service-ca-certificate: "true"
 spec:
   # Replace with your actual hostname.
   host: maas.<cluster-domain>
@@ -23,3 +20,12 @@ spec:
     # TLS connection to the Gateway Service using the service-ca certificate.
     termination: reencrypt
     insecureEdgeTerminationPolicy: Redirect
+    # Provide the service CA bundle so the router can verify the backend certificate.
+    # Fetch the CA bundle with:
+    #   kubectl get configmap signing-cabundle -n openshift-service-ca -o jsonpath='{.data.ca-bundle\.crt}'
+    # Without this, reencrypt handshake will fail on clusters where the router
+    # doesn't implicitly trust service-ca (e.g., bare-metal, disconnected).
+    destinationCACertificate: |
+      -----BEGIN CERTIFICATE-----
+      ... (paste the service CA bundle here) ...
+      -----END CERTIFICATE-----

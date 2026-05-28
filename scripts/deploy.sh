@@ -1213,133 +1213,6 @@ apply_dsc() {
 }
 
 #──────────────────────────────────────────────────────────────
-# GATEWAY API SETUP
-#──────────────────────────────────────────────────────────────
-
-# setup_gateway_api
-#   Sets up the Gateway API infrastructure (GatewayClass).
-#   This is general Gateway API setup that can be used by any Gateway resources.
-setup_gateway_api() {
-  log_info "Setting up Gateway API infrastructure..."
-
-  local data_dir="${SCRIPT_DIR}/data"
-
-  # Create GatewayClass for OpenShift Gateway API controller
-  # This enables the built-in Gateway API implementation (OpenShift 4.14+)
-  if kubectl get gatewayclass openshift-default &>/dev/null; then
-    log_debug "GatewayClass openshift-default already exists, skipping creation"
-  else
-    log_info "Creating GatewayClass openshift-default..."
-    kubectl apply -f "${data_dir}/gatewayclass.yaml"
-  fi
-}
-
-# setup_maas_gateway
-#   Creates the Gateway resource required by ModelsAsService component.
-#   ModelsAsService expects a gateway named "maas-default-gateway" in namespace "openshift-ingress".
-#
-#   This function:
-#   1. Detects or uses the router's TLS certificate
-#   2. Creates the Gateway resource with both HTTP and HTTPS listeners
-#   3. Uses the kustomize manifest from deployment/base/networking/maas/
-#
-#   The Gateway includes:
-#   - HTTP listener (port 80) - required for model discovery URLs
-#   - HTTPS listener (port 443) - for secure API access
-#   - Annotations for operator management and TLS bootstrap
-#   - Labels for app identification
-setup_maas_gateway() {
-  log_info "Setting up ModelsAsService gateway..."
-
-  # Get cluster domain for Gateway hostname
-  local cluster_domain
-  cluster_domain=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
-  if [[ -z "$cluster_domain" ]]; then
-    log_error "Could not determine cluster domain - required for Gateway hostname"
-    return 1
-  fi
-  
-  export CLUSTER_DOMAIN="$cluster_domain"
-  log_info "  Cluster domain: ${CLUSTER_DOMAIN}"
-
-  # Detect TLS certificate if not explicitly set (matches upstream deploy-rhoai-stable.sh logic)
-  local cert_name="${CERT_NAME:-}"
-  if [[ -z "$cert_name" ]]; then
-    log_info "  Detecting TLS certificate secret..."
-
-    # Primary: Get certificate from IngressController (most reliable source of truth)
-    cert_name=$(kubectl get ingresscontroller default -n openshift-ingress-operator \
-      -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null || echo "")
-    if [[ -n "$cert_name" ]] && kubectl get secret -n openshift-ingress "$cert_name" &>/dev/null; then
-      log_info "  * Found certificate from IngressController: ${cert_name}"
-    else
-      [[ -n "$cert_name" ]] && log_debug "  * IngressController cert '${cert_name}' not found, trying alternatives..."
-      cert_name=""
-    fi
-
-    # Fallback 1: Get certificate from router deployment
-    if [[ -z "$cert_name" ]]; then
-      cert_name=$(kubectl get deployment router-default -n openshift-ingress \
-        -o jsonpath='{.spec.template.spec.volumes[?(@.name=="default-certificate")].secret.secretName}' 2>/dev/null || echo "")
-      if [[ -n "$cert_name" ]] && kubectl get secret -n openshift-ingress "$cert_name" &>/dev/null; then
-        log_info "  * Found certificate from router deployment: ${cert_name}"
-      else
-        cert_name=""
-      fi
-    fi
-
-    # Fallback 2: Check known certificate secret names
-    if [[ -z "$cert_name" ]]; then
-      local cert_candidates=("default-gateway-cert" "router-certs-default")
-      for cert in "${cert_candidates[@]}"; do
-        if kubectl get secret -n openshift-ingress "$cert" &>/dev/null; then
-          cert_name="$cert"
-          log_info "  * Found TLS certificate secret: ${cert}"
-          break
-        fi
-      done
-    fi
-
-    # Warning if no certificate found
-    if [[ -z "$cert_name" ]]; then
-      log_warn "  No TLS certificate found. Creating self-signed certificate..."
-      local gateway_hostname="maas.${cluster_domain}"
-      if create_tls_secret "maas-gateway-tls" "openshift-ingress" "${gateway_hostname}"; then
-        cert_name="maas-gateway-tls"
-        log_info "  * Created self-signed certificate: ${cert_name}"
-      else
-        log_error "Failed to create TLS certificate for gateway"
-        return 1
-      fi
-    fi
-  fi
-
-  export CERT_NAME="$cert_name"
-  log_info "  TLS certificate secret: ${CERT_NAME}"
-
-  # Create the Gateway resource using the kustomize manifest
-  # This includes both HTTP and HTTPS listeners, required annotations and labels
-  if kubectl get gateway maas-default-gateway -n openshift-ingress &>/dev/null; then
-    log_info "Gateway maas-default-gateway already exists in openshift-ingress"
-    log_debug "  Updating Gateway configuration if needed..."
-  else
-    log_info "Creating maas-default-gateway resource (allowing routes from all namespaces)..."
-  fi
-
-  local maas_networking_dir="${SCRIPT_DIR}/../deployment/base/networking/maas"
-  if [[ -d "$maas_networking_dir" ]]; then
-    # Use local kustomize manifest with envsubst for variable substitution
-    kustomize build "$maas_networking_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME' | kubectl apply --server-side=true -f -
-  else
-    # Fallback: fetch from GitHub (for standalone script usage)
-    log_debug "  Local manifest not found, fetching from GitHub..."
-    kubectl apply --server-side=true \
-      -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/base/networking/maas?ref=main" | \
-           envsubst '$CLUSTER_DOMAIN $CERT_NAME')
-  fi
-}
-
-#──────────────────────────────────────────────────────────────
 # KUADRANT SETUP
 #──────────────────────────────────────────────────────────────
 
@@ -1348,18 +1221,19 @@ apply_kuadrant_cr() {
 
   log_info "Initializing Gateway API and ModelsAsService gateway..."
 
-  # Setup Gateway API infrastructure (can be used by any Gateway resources)
-  setup_gateway_api
-
-  # Setup ModelsAsService-specific gateway (required by ModelsAsService component)
-  setup_maas_gateway
-
-  # Wait for Gateway to be Programmed (required before Kuadrant can become ready)
-  # This ensures Service Mesh is installed and Gateway API provider is operational
-  log_info "Waiting for Gateway to be Programmed (Service Mesh initialization)..."
-  if ! kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout="${CUSTOM_CHECK_TIMEOUT}s" 2>/dev/null; then
-    log_warn "Gateway not yet Programmed after ${CUSTOM_CHECK_TIMEOUT}s - Kuadrant may take longer to become ready"
-  fi
+  # Setup Gateway using standalone script (replaces inline setup_gateway_api + setup_maas_gateway)
+  # The script handles GatewayClass creation, Gateway creation with TLS cert detection,
+  # and waits for Gateway to be Programmed before returning.
+  INGRESS_MODE="${INGRESS_MODE:-route}" \
+  DISCONNECTED="${DISCONNECTED:-false}" \
+  CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" \
+  CERT_NAME="${CERT_NAME:-}" \
+  DRY_RUN="${DRY_RUN:-false}" \
+  MAAS_MANIFEST_REF="${MAAS_MANIFEST_REF:-}" \
+  "${SCRIPT_DIR}/setup-gateway.sh" || {
+    log_error "Gateway setup failed"
+    return 1
+  }
 
   log_info "Applying Kuadrant custom resource in $namespace..."
 

@@ -64,78 +64,47 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
 
 ## Create Gateway
 
-The Gateway must exist before enabling modelsAsService in your DataScienceCluster. Create the MaaS Gateway:
+Create `maas-default-gateway` in `openshift-ingress` **before** enabling `modelsAsService` in your DataScienceCluster.
 
-!!! warning "Example Gateway Configuration"
-    The Gateway configuration below is an example. You may need TLS certificates, specific listener settings, or custom infrastructure labels depending on your cluster. For TLS setup, see [TLS Configuration](../configuration-and-management/tls-configuration.md). To quickly apply Authorino TLS for maas-api communication, run:
+`scripts/deploy.sh` runs this step automatically in **route** mode. Run the script yourself when installing via DataScienceCluster first, using **clusterip** mode, or on disconnected clusters.
 
-    ```bash
-    ./scripts/setup-authorino-tls.sh
-    ```
+| Environment | Command |
+|-------------|---------|
+| ROSA, OSD, cloud (default) | `./scripts/setup-gateway.sh` |
+| On-prem, bare-metal, disconnected | `INGRESS_MODE=clusterip ./scripts/setup-gateway.sh` |
+| Air-gapped (no GitHub fetch) | `DISCONNECTED=true INGRESS_MODE=clusterip ./scripts/setup-gateway.sh` |
 
-    **Setting the namespace:** The script defaults to `kuadrant-system` (ODH with Kuadrant). Set `AUTHORINO_NAMESPACE` for RHOAI, which uses RHCL:
+Common overrides: `CLUSTER_DOMAIN`, `CERT_NAME` (route mode only), `DRY_RUN`, `MAAS_MANIFEST_REF` (pinned git ref for remote kustomize fallback). For the full variable list, TLS auto-detection order, and examples, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#setup-gatewaysh).
 
-    ```bash
-    AUTHORINO_NAMESPACE=rh-connectivity-link ./scripts/setup-authorino-tls.sh
-    ```
+**Verify:**
+
+```bash
+kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=120s
+```
+
+Expected output:
+```
+gateway.gateway.networking.k8s.io/maas-default-gateway condition met
+```
+
+For ClusterIP mode, also verify the Route:
+```bash
+kubectl get route maas-gateway-route -n openshift-ingress
+```
+
+Expected output:
+```
+NAME                  HOST/PORT                           PATH   SERVICES                           PORT   TERMINATION   WILDCARD
+maas-gateway-route    maas.apps.example.cluster.com              maas-default-gateway-openshift-default   443    reencrypt     None
+```
+
+For ClusterIP architecture and troubleshooting, see [Gateway patterns — ClusterIP + Route](../configuration-and-management/gateway-patterns.md#clusterip-gateway-with-openshift-route-re-encrypt).
 
 !!! note "Required annotations"
-    The Gateway **must** include these annotations to trust Authorino's certificates:
+    The script applies `opendatahub.io/managed: "false"` and `security.opendatahub.io/authorino-tls-bootstrap: "true"` on the Gateway. See [TLS Configuration](../configuration-and-management/tls-configuration.md) for custom certificates and Authorino integration. The `authorino-tls-bootstrap` annotation is interim until [CONNLINK-528](https://issues.redhat.com/browse/CONNLINK-528).
 
-    | Annotation | Purpose |
-    |------------|---------|
-    | `opendatahub.io/managed: "false"` | Read by **maas-controller**: allows it to manage AuthPolicies and related resources; prevents the ODH Model Controller from overwriting them. |
-    | `security.opendatahub.io/authorino-tls-bootstrap: "true"` | Used by the ODH platform (not maas-controller) to create the EnvoyFilter for Gateway → Authorino TLS when Authorino uses a TLS listener. Required when Authorino TLS is enabled. |
-
-    The `authorino-tls-bootstrap` annotation is an interim solution until [CONNLINK-528](https://issues.redhat.com/browse/CONNLINK-528) ships native support for configuring TLS between the Gateway and Authorino without mesh sidecars. It decouples TLS configuration from AuthPolicy management, allowing TLS even when `opendatahub.io/managed` is `"false"`.
-
-```yaml
-CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-# Use default ingress cert for HTTPS, or set CERT_NAME to your TLS secret name
-CERT_NAME=${CERT_NAME:-$(kubectl get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)}
-[[ -z "$CERT_NAME" ]] && CERT_NAME="router-certs-default"
-
-kubectl apply -f - <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: maas-default-gateway
-  namespace: openshift-ingress
-  annotations:
-    opendatahub.io/managed: "false"
-    security.opendatahub.io/authorino-tls-bootstrap: "true"
-spec:
-  gatewayClassName: openshift-default
-  listeners:
-   - name: http
-     hostname: maas.${CLUSTER_DOMAIN}
-     port: 80
-     protocol: HTTP
-     allowedRoutes:
-       namespaces:
-         from: All
-   - name: https
-     hostname: maas.${CLUSTER_DOMAIN}
-     port: 443
-     protocol: HTTPS
-     allowedRoutes:
-       namespaces:
-         from: All
-     tls:
-       certificateRefs:
-       - group: ""
-         kind: Secret
-         name: ${CERT_NAME}
-       mode: Terminate
-EOF
-```
-
-!!! note "TLS certificate"
-    The HTTPS listener uses a Secret in `openshift-ingress`. The script auto-detects the default ingress cert; if that fails, it uses `router-certs-default`. If the Gateway fails to program, ensure the Secret exists: `kubectl get secret -n openshift-ingress`. See [TLS Configuration](../configuration-and-management/tls-configuration.md) for custom certs.
-
-```shell
-kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=60s
-```
+!!! tip "Authorino TLS"
+    After the Gateway exists, run `./scripts/setup-authorino-tls.sh`. For RHOAI/RHCL, set `AUTHORINO_NAMESPACE=rh-connectivity-link`.
 
 ## Configure DataScienceCluster
 
