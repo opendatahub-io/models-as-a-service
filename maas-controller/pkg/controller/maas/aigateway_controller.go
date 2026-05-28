@@ -1,5 +1,5 @@
 /*
-Copyright 2025.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -185,6 +185,9 @@ func (r *AIGatewayReconciler) validateAIGatewayPlacement(aigw *maasv1alpha1.AIGa
 	}
 	if r.AppNamespace != "" && aigw.Spec.TenantNamespace.Name == r.AppNamespace {
 		return fmt.Errorf("spec.tenantNamespace.name must not be the protected application namespace %q", r.AppNamespace)
+	}
+	if r.TenantNamespace != "" && aigw.Spec.TenantNamespace.Name == r.TenantNamespace {
+		return fmt.Errorf("spec.tenantNamespace.name must not be the legacy tenant namespace %q", r.TenantNamespace)
 	}
 	return nil
 }
@@ -459,7 +462,7 @@ func (r *AIGatewayReconciler) ensureAIGatewayObjectRole(ctx context.Context, aig
 				APIGroups:     []string{maasv1alpha1.GroupVersion.Group},
 				Resources:     []string{"aigateways"},
 				ResourceNames: []string{aigw.Name},
-				Verbs:         []string{"get", "update", "patch"},
+				Verbs:         []string{"get"},
 			},
 		}
 		return nil
