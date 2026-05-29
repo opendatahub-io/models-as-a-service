@@ -62,21 +62,31 @@ def _get_token():
 def _create_ns_api_key(name: str = None) -> tuple[str, str]:
     """Create an API key and return (key_id, plaintext_key).
 
-    Note: This differs from test_helper._create_api_key which takes an oc_token
-    and returns only the key string. This version manages its own token and
-    returns (key_id, plaintext_key) tuple for namespace scoping tests.
+    Retries on empty 403 from gateway propagation delay (Envoy may not have
+    loaded the AuthPolicy yet).
     """
     token = _get_token()
     url = f"{_maas_api_url()}/v1/api-keys"
     key_name = name or f"e2e-ns-test-{uuid.uuid4().hex[:8]}"
 
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={"name": key_name},
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
-    )
+    retries = 6
+    delay = 5
+    for attempt in range(1, retries + 1):
+        r = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"name": key_name},
+            timeout=TIMEOUT,
+            verify=TLS_VERIFY,
+        )
+        if r.status_code == 403 and not r.text.strip():
+            if attempt < retries:
+                log.info("Gateway returned empty 403 (attempt %d/%d), retrying in %ds...",
+                         attempt, retries, delay)
+                time.sleep(delay)
+                continue
+        break
+
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Failed to create API key: {r.status_code} {r.text}")
 

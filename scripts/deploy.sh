@@ -112,6 +112,7 @@ OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-false}"
+EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 POSTGRES_CONNECTION="${POSTGRES_CONNECTION:-}"
 
 #──────────────────────────────────────────────────────────────
@@ -192,14 +193,21 @@ ADVANCED OPTIONS (PR Testing):
       Operator channel override
       Default: fast-3 (ODH), stable-3.x (RHOAI)
 
+  --external-oidc
+      Enable external OIDC on the maas-api AuthPolicy.
+      Requires OIDC_ISSUER_URL or deployment/overlays/odh/params.env to provide
+      a real oidc-issuer-url value.
+
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
-  OPERATOR_STARTING_CSV     ODH Subscription startingCSV (default: opendatahub-operator.v3.4.0-ea.1; "-" to omit)
+  OPERATOR_STARTING_CSV     ODH Subscription startingCSV (optional; when unset, follows the channel head)
   OPERATOR_INSTALL_PLAN_APPROVAL  ODH Subscription OLM approval (default: Manual — no auto-upgrades; first InstallPlan is auto-approved by the script)
   OPERATOR_TYPE             Operator type (rhoai/odh)
+  EXTERNAL_OIDC            Enable external OIDC on maas-api (true/false)
+  OIDC_ISSUER_URL          External OIDC issuer URL for maas-api AuthPolicy patching
   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
   FORCE_OVERWRITE           When true, re-apply manifests even if the resource already exists (default: false)
   POSTGRES_CONNECTION       External PostgreSQL connection string (same as --postgres-connection)
@@ -283,6 +291,10 @@ parse_arguments() {
         ;;
       --enable-keycloak)
         ENABLE_KEYCLOAK="true"
+        shift
+        ;;
+      --external-oidc)
+        EXTERNAL_OIDC="true"
         shift
         ;;
       --namespace)
@@ -477,6 +489,11 @@ main() {
   log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
+  log_info "  External OIDC: $EXTERNAL_OIDC"
+  if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+    log_warn "  --external-oidc is ignored in operator mode. Configure external OIDC via"
+    log_warn "  the ModelsAsService CR: spec.externalOIDC.issuerUrl / clientId instead."
+  fi
   if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
     log_info "  MaaS API image: $MAAS_API_IMAGE"
   fi
@@ -617,6 +634,16 @@ EOF
     log_error "maas-api deployment not created by Tenant reconciler after ${maas_api_timeout}s"
     log_error "Check maas-controller logs: kubectl logs -l app.kubernetes.io/name=maas-controller -n $NAMESPACE"
     return 1
+  fi
+
+  # External OIDC: merge-patch maas-api-auth-policy with Keycloak (or other IdP) JWT rules.
+  # The Tenant reconciler creates the base AuthPolicy; this must run after it exists.
+  # Operator mode uses ModelsAsService.spec.externalOIDC instead (see parse_arguments warning).
+  if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
+    if ! configure_maas_api_authpolicy; then
+      log_error "configure_maas_api_authpolicy failed — set OIDC_ISSUER_URL / OIDC_CLIENT_ID (or overlay params) and retry"
+      return 1
+    fi
   fi
 
   log_info ""
@@ -1018,9 +1045,9 @@ install_primary_operator() {
         channel="${OPERATOR_CHANNEL:-fast-3}"
       fi
 
-      # Pin to ODH 3.4 EA1 unless overridden (omit with OPERATOR_STARTING_CSV=-)
-      local odh_starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.4.0-ea.1}"
-      [[ "$odh_starting_csv" == "-" ]] && odh_starting_csv=""
+      # Follow the configured channel head by default unless OPERATOR_STARTING_CSV
+      # explicitly pins a CSV.
+      local odh_starting_csv="${OPERATOR_STARTING_CSV:-}"
 
       # Manual = no auto-upgrades; install_olm_operator auto-approves the first InstallPlan only
       local odh_plan_approval="${OPERATOR_INSTALL_PLAN_APPROVAL:-Manual}"
@@ -1311,6 +1338,173 @@ patch_operator_csv() {
   ]"
 
   log_info "CSV $csv_name patched with image $operator_image"
+}
+
+#──────────────────────────────────────────────────────────────
+# AUDIENCE CONFIGURATION FOR HYPERSHIFT/ROSA CLUSTERS
+#──────────────────────────────────────────────────────────────
+
+# get_odh_overlay_param
+#   Reads a value from the active overlay's params.env.
+get_odh_overlay_param() {
+  local key="$1"
+  local project_root
+  project_root="$(find_project_root)" || return 1
+
+  local overlay="odh"
+  [[ "${DEV_MODE:-false}" == "true" ]] && overlay="dev"
+  local params_file="$project_root/deployment/overlays/$overlay/params.env"
+  [[ -f "$params_file" ]] || return 1
+
+  awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$params_file"
+}
+
+resolve_external_oidc_issuer() {
+  local oidc_issuer_url="${OIDC_ISSUER_URL:-}"
+  if [[ -z "$oidc_issuer_url" ]]; then
+    oidc_issuer_url=$(get_odh_overlay_param "oidc-issuer-url" 2>/dev/null || echo "")
+  fi
+
+  if [[ -z "$oidc_issuer_url" || "$oidc_issuer_url" == "https://oidc.example.invalid/realms/maas" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$oidc_issuer_url"
+}
+
+resolve_external_oidc_client_id() {
+  local oidc_client_id="${OIDC_CLIENT_ID:-}"
+  if [[ -z "$oidc_client_id" ]]; then
+    oidc_client_id=$(get_odh_overlay_param "oidc-client-id" 2>/dev/null || echo "")
+  fi
+
+  if [[ -z "$oidc_client_id" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$oidc_client_id"
+}
+
+patch_authpolicy_from_template() {
+  local authpolicy_name="$1"
+  local template_file="$2"
+  local maas_namespace="$3"
+  local oidc_issuer_url="${4:-}"
+  local oidc_client_id="${5:-}"
+  local cluster_audience="${6:-https://kubernetes.default.svc}"
+
+  # Render placeholders in the YAML template.
+  local rendered_rules
+  rendered_rules=$(sed \
+    -e "s|__MAAS_NAMESPACE__|${maas_namespace}|g" \
+    -e "s|__OIDC_ISSUER_URL__|${oidc_issuer_url}|g" \
+    -e "s|__OIDC_CLIENT_ID__|${oidc_client_id}|g" \
+    -e "s|__CLUSTER_AUDIENCE__|${cluster_audience}|g" \
+    "$template_file")
+
+  # Use kubectl replace with a full manifest instead of merge patch.
+  # Merge patch cannot reliably delete "when" arrays or replace "selector"
+  # with "expression" inside CRD objects, causing stale fields to persist.
+  local resource_version
+  resource_version=$(kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+    -o jsonpath='{.metadata.resourceVersion}')
+
+  local when_predicate
+  when_predicate=$(kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.when[0].predicate}')
+
+  local manifest
+  manifest="$(mktemp)"
+  cat > "$manifest" <<MANIFEST_EOF
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: ${authpolicy_name}
+  namespace: ${NAMESPACE}
+  resourceVersion: "${resource_version}"
+  annotations:
+    opendatahub.io/managed: "false"
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: maas-api-route
+  when:
+    - predicate: '${when_predicate}'
+$(echo "$rendered_rules" | sed -n '/^  rules:/,$p')
+MANIFEST_EOF
+
+  kubectl replace -f "$manifest"
+  local rc=$?
+  rm -f "$manifest"
+  return $rc
+}
+
+# configure_maas_api_authpolicy
+#   Ensures the live maas-api AuthPolicy keeps API key support and, when
+#   enabled, layers external OIDC JWT validation on top.
+configure_maas_api_authpolicy() {
+  log_info "Configuring MaaS API AuthPolicy..."
+
+  local project_root
+  project_root="$(find_project_root)" || {
+    log_error "Could not determine project root for AuthPolicy patching"
+    return 1
+  }
+
+  local authpolicy_name="maas-api-auth-policy"
+  local wait_timeout=120
+  local elapsed=0
+
+  log_info "  Waiting for AuthPolicy '$authpolicy_name' to be created (timeout: ${wait_timeout}s)..."
+  while [[ $elapsed -lt $wait_timeout ]]; do
+    if kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
+      log_info "  Found AuthPolicy '$authpolicy_name'"
+      break
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+
+  if ! kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
+    log_warn "AuthPolicy '$authpolicy_name' not found after ${wait_timeout}s, skipping auth configuration"
+    return 0
+  fi
+
+  log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
+  kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+    opendatahub.io/managed="false" --overwrite 2>/dev/null || true
+
+  if [[ "$EXTERNAL_OIDC" != "true" ]]; then
+    log_info "  External OIDC not enabled, leaving OpenShift auth as the only identity-token path"
+    return 0
+  fi
+
+  local oidc_issuer_url
+  oidc_issuer_url="$(resolve_external_oidc_issuer)" || {
+    log_error "External OIDC requested but no real oidc-issuer-url was configured"
+    return 1
+  }
+
+  local oidc_client_id
+  oidc_client_id="$(resolve_external_oidc_client_id)" || {
+    log_error "External OIDC requested but no oidc-client-id or OIDC_CLIENT_ID was configured"
+    return 1
+  }
+
+  # Resolve cluster audience for TokenReview (HyperShift/ROSA use non-standard audiences).
+  local cluster_aud
+  cluster_aud=$(get_cluster_audience 2>/dev/null || echo "https://kubernetes.default.svc")
+  log_info "  Cluster audience: $cluster_aud"
+
+  local oidc_patch="$project_root/scripts/data/maas-api-authpolicy-external-oidc-patch.yaml"
+  log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url, clientId: $oidc_client_id"
+  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$NAMESPACE" "$oidc_issuer_url" "$oidc_client_id" "$cluster_aud"; then
+    log_error "  Failed to patch AuthPolicy with external OIDC configuration"
+    return 1
+  fi
+
+  log_info "  AuthPolicy patched successfully"
 }
 
 #──────────────────────────────────────────────────────────────

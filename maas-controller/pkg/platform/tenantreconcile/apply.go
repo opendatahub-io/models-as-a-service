@@ -9,9 +9,9 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -35,13 +35,21 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 	for i := range objs {
 		u := objs[i].DeepCopy()
 
+		// Skip resources whose live cluster copy has opendatahub.io/managed=false,
+		// allowing operators to opt specific resources out of reconciliation.
+		if isLiveResourceUnmanaged(ctx, c, u) {
+			ctrl.LoggerFrom(ctx).V(1).Info("Skipping SSA for resource with opendatahub.io/managed=false on cluster",
+				"kind", u.GetKind(), "name", u.GetName(), "namespace", u.GetNamespace())
+			continue
+		}
+
 		if skipConfigControllerOwnerRef(u, appNs) {
 			setTenantTrackingLabels(u, tenant)
 		} else {
 			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
 				var already *controllerutil.AlreadyOwnedError
 				if errors.As(err, &already) {
-					log.FromContext(ctx).Info("skipping Config controller reference: object already owned by another controller",
+					ctrl.LoggerFrom(ctx).Info("skipping Config controller reference: object already owned by another controller",
 						"kind", u.GetKind(), "namespace", u.GetNamespace(), "name", u.GetName(),
 						"existingOwner", already)
 				} else {
@@ -61,7 +69,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 				// installed by COO which may not be present yet). Skip so the rest of the
 				// platform manifests are applied and Tenant reconcile does not fail.
 				// The CRD watch will re-trigger reconcile once the CRDs appear.
-				log.FromContext(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
+				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", u.GroupVersionKind().Group, "kind", u.GetKind(),
 					"name", u.GetName(), "namespace", u.GetNamespace())
 				continue
@@ -95,6 +103,20 @@ func isMaaSControllerDeployment(u *unstructured.Unstructured, appNs string) bool
 		return false
 	}
 	return strings.EqualFold(u.GetKind(), "Deployment") && u.GetName() == MaaSControllerDeploymentName
+}
+
+func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *unstructured.Unstructured) bool {
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(rendered.GroupVersionKind())
+	key := client.ObjectKeyFromObject(rendered)
+	if key.Name == "" {
+		return false
+	}
+	if err := c.Get(ctx, key, live); err != nil {
+		return false
+	}
+	ann := live.GetAnnotations()
+	return ann != nil && ann[AnnotationManaged] == "false"
 }
 
 func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant *maasv1alpha1.Tenant) {
