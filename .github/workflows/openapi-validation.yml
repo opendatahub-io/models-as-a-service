@@ -112,8 +112,9 @@ jobs:
           git fetch origin "$BASE_REF"
           git show "origin/$BASE_REF:maas-api/openapi3.yaml" > base-spec.yaml
 
-          # Run breaking change detection
-          oasdiff breaking base-spec.yaml maas-api/openapi3.yaml > breaking-changes.txt || true
+          # Run breaking change detection (--warn-ignore suppresses acknowledged warnings)
+          oasdiff breaking base-spec.yaml maas-api/openapi3.yaml \
+            --warn-ignore maas-api/oasdiff-warn-ignore.txt > breaking-changes.txt || true
 
           # Check if actual breaking changes were detected.
           # oasdiff outputs "No changes detected" when specs are identical, and

@@ -64,9 +64,16 @@ Exposed on `/server-metrics` (port 8080):
 | `auth_server_authconfig_duration_seconds` | Histogram | `namespace`, `authconfig` | Auth evaluation latency |
 | `auth_server_authconfig_response_status` | Counter | `namespace`, `authconfig`, `status` | Auth response status (OK, denied) |
 | `auth_server_response_status` | Counter | `status` | Aggregate auth response status |
+| `auth_server_evaluator_total` | Counter | `namespace`, `authconfig`, `evaluator_type`, `evaluator_name` | Per-evaluator runs (MaaS enables `metrics` on **`apiKeyValidation`** / **`subscription-info`**) |
+| `auth_server_evaluator_cancelled` | Counter | same | Failures/cancellations (metadata alert below) |
 
 !!! note "Two endpoints"
     Kuadrant `authorino-operator-monitor` scrapes `/metrics` (controller-runtime). MaaS `authorino-server-metrics` ServiceMonitor scrapes `/server-metrics` (auth evaluation).
+
+!!! note "Metadata evaluator metrics"
+    Query `evaluator_type="METADATA_GENERIC_HTTP"` and `evaluator_name=~"apiKeyValidation|subscription-info"`. Series appear after traffic hits each evaluator.
+
+**Alert:** `authorino-maas-metadata-evaluator-prometheusrule.yaml` — **`MaaSAuthorinoMetadataEvaluatorHighFailureRate`** (`cancelled`/`total` > 10% over 5m, traffic guard, **`for: 5m`**). **Remediate:** maas-api health; Authorino → maas-api TLS/NetworkPolicy; confirm **`/server-metrics`** is scraped.
 
 ### vLLM Metrics
 

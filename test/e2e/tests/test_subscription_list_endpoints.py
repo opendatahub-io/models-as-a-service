@@ -67,6 +67,7 @@ def _validate_subscription_info_schema(sub):
     for ref in sub["model_refs"]:
         assert "name" in ref, f"model_ref missing name: {ref}"
         assert isinstance(ref["name"], str), "model_ref name must be string"
+        assert "namespace" not in ref, f"model_ref should not expose namespace: {ref}"
         # display_name and description are optional (omitempty) but must be strings when present
         if "display_name" in ref:
             assert isinstance(ref["display_name"], str), \
