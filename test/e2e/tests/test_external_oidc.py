@@ -404,8 +404,8 @@ class TestOIDCModelAccess:
             verify=TLS_VERIFY,
         )
         # 401/403 = gateway rejects the revoked key directly
-        # 500 = apiKeyValidation metadata callback fails for revoked key,
-        #       Authorino returns 500 (depends on AuthPolicy error handling)
+        # 500 = Authorino returns AUTH_FAILURE when the apiKeyValidation metadata
+        #   callback reports valid:false for a revoked key (upstream Authorino issue)
         assert response.status_code in (401, 403, 500), (
             f"Expected 401/403/500 for revoked API key, got {response.status_code}: {response.text}"
         )
