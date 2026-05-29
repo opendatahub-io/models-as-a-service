@@ -13,11 +13,6 @@ Prerequisites:
 
 Environment Variables:
   EXTERNAL_OIDC          Enable these tests (default: skip)
-  OIDC_READINESS_FAILED  Set to true by prow_run_smoke_test.sh when the OIDC readiness gate
-                         still gets HTTP 401 after its timeout. This module is then skipped so
-                         the rest of E2E can pass while Authorino/Keycloak is fixed.
-  FORCE_EXTERNAL_OIDC_E2E When true, run these tests anyway (local debugging; expect failures
-                         if the gateway still rejects OIDC tokens).
   OIDC_ISSUER_URL        Keycloak realm issuer URL (e.g. https://keycloak.example.com/realms/tenant-a)
   OIDC_TOKEN_URL         Token endpoint for password grant
   OIDC_CLIENT_ID         Public client ID (default: test-client)
@@ -53,26 +48,9 @@ from conftest import TLS_VERIFY
 log = logging.getLogger(__name__)
 
 
-def _external_oidc_module_skip() -> tuple[bool, str]:
-    """Return (skip_module, reason). Honours prow OIDC readiness without failing the whole job."""
-    if os.environ.get("EXTERNAL_OIDC", "").lower() != "true":
-        return True, "EXTERNAL_OIDC is not true"
-    if os.environ.get("FORCE_EXTERNAL_OIDC_E2E", "").lower() in ("1", "true", "yes"):
-        return False, ""
-    if os.environ.get("OIDC_READINESS_FAILED", "").lower() in ("1", "true", "yes"):
-        return True, (
-            "OIDC_READINESS_FAILED: gateway did not accept OIDC tokens in the readiness window "
-            "(fix Authorino/Keycloak/JWKS). Unset OIDC_READINESS_FAILED or set "
-            "FORCE_EXTERNAL_OIDC_E2E=true to run these tests."
-        )
-    return False, ""
-
-
-_SHOULD_SKIP_EXT_OIDC, _EXT_OIDC_SKIP_REASON = _external_oidc_module_skip()
-
 pytestmark = pytest.mark.skipif(
-    _SHOULD_SKIP_EXT_OIDC,
-    reason=_EXT_OIDC_SKIP_REASON,
+    os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
+    reason="EXTERNAL_OIDC is not true",
 )
 
 # ---------------------------------------------------------------------------

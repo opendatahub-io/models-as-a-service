@@ -48,10 +48,7 @@
 #   OIDC_PASSWORD - Defaults to letmein (test realm; dev/test only)
 #   OIDC_READINESS_STRICT - When true, exit if OIDC gateway readiness fails (default: false).
 #                           If false, log a warning and continue to pytest.
-#   OIDC_READINESS_FAILED - Set by this script to true when the OIDC readiness loop times out
-#                           (still HTTP 401). Exported for pytest: test_external_oidc.py skips
-#                           unless FORCE_EXTERNAL_OIDC_E2E=true.
-#   FORCE_EXTERNAL_OIDC_E2E - When true, run external OIDC pytest module even if readiness failed.
+#   OIDC_READINESS_STRICT - When true, exit before pytest if the OIDC readiness probe times out.
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and Tenant CR (default: models-as-a-service)
 #   GATEWAY_NAMESPACE - Namespace for payload-processing deployment checks (default: openshift-ingress)
@@ -680,14 +677,12 @@ run_e2e_tests() {
                     "${api_base}/v1/api-keys" 2>/dev/null || echo "000")
                 if [[ "$oidc_code" =~ ^(200|201)$ ]]; then
                     echo "✅ OIDC token authentication working (HTTP $oidc_code)"
-                    unset OIDC_READINESS_FAILED 2>/dev/null || true
                     break
                 fi
                 echo "  OIDC auth check returned HTTP $oidc_code, retrying..."
                 sleep 5
             done
             if [[ $SECONDS -ge $oidc_deadline ]]; then
-                export OIDC_READINESS_FAILED=true
                 echo "⚠️  WARNING: OIDC gateway readiness failed after ${oidc_timeout}s (still HTTP 401)."
                 echo "   Issuer check already passed; suspect JWKS/network from kuadrant-system to Keycloak or token signature."
                 echo "   kubectl get authpolicy maas-api-auth-policy -n ${DEPLOYMENT_NAMESPACE} -o yaml | grep -A30 oidc"
@@ -696,8 +691,7 @@ run_e2e_tests() {
                     echo "❌ ERROR: OIDC_READINESS_STRICT=true — exiting before pytest."
                     exit 1
                 fi
-                echo "   Continuing to pytest (set OIDC_READINESS_STRICT=true to fail fast on this gate)."
-                echo "   External OIDC tests in test_external_oidc.py will be skipped unless FORCE_EXTERNAL_OIDC_E2E=true."
+                echo "   Continuing to pytest — OIDC tests will run and fail naturally if the gateway still rejects tokens."
             fi
         else
             echo "❌ ERROR: Could not obtain OIDC token from ${OIDC_TOKEN_URL}"
