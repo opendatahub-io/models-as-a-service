@@ -1,5 +1,7 @@
 # ODH - Models as a Service with Policy Management
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/opendatahub-io/models-as-a-service)
+
 Our goal is to create a comprehensive platform for **Models as a Service** with real-time policy management.
 
 > [!IMPORTANT]
