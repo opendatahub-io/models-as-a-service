@@ -680,7 +680,7 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 }
 
 // findModel returns the namespace and true if the subscription includes the given model name.
-func (s subscription) findModel(modelID string) (namespace string, found bool) {
+func (s subscription) findModel(modelID string) (string, bool) {
 	for _, ref := range s.ModelRefs {
 		if ref.Name == modelID {
 			return ref.Namespace, true
