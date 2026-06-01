@@ -553,6 +553,17 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
 		os.Exit(1)
 	}
+	if err := (&maas.AIGatewayReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		APIReader:        mgr.GetAPIReader(),
+		AppNamespace:     maasAPINamespace,
+		TenantNamespace:  maasSubscriptionNamespace,
+		GatewayNamespace: gatewayNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AIGateway")
+		os.Exit(1)
+	}
 
 	if err := (&externalmodel.Reconciler{
 		Client:           mgr.GetClient(),
