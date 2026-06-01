@@ -9,6 +9,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
@@ -30,7 +31,7 @@ type Lister interface {
 
 // ModelAccessChecker determines whether a user has access to a specific model.
 type ModelAccessChecker interface {
-	IsModelAccessible(groups []string, username string, modelName, modelNamespace string) bool
+	AuthorizedModels(groups []string, username string) map[authpolicy.ModelKey]bool
 }
 
 // Selector handles subscription selection logic.
@@ -128,9 +129,10 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 	}
 
 	if s.accessChecker != nil {
+		authorizedSet := s.accessChecker.AuthorizedModels(groups, username)
 		filtered := accessible[:0]
 		for _, sub := range accessible {
-			sub.ModelRefs = filterAuthorizedModels(sub.ModelRefs, groups, username, s.accessChecker)
+			sub.ModelRefs = filterAuthorizedModels(sub.ModelRefs, authorizedSet)
 			if len(sub.ModelRefs) > 0 {
 				filtered = append(filtered, sub)
 			}
@@ -146,10 +148,10 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 	return accessible, nil
 }
 
-func filterAuthorizedModels(refs []ModelRefInfo, groups []string, username string, checker ModelAccessChecker) []ModelRefInfo {
+func filterAuthorizedModels(refs []ModelRefInfo, authorizedSet map[authpolicy.ModelKey]bool) []ModelRefInfo {
 	out := make([]ModelRefInfo, 0, len(refs))
 	for _, ref := range refs {
-		if checker.IsModelAccessible(groups, username, ref.Name, ref.Namespace) {
+		if authorizedSet[authpolicy.ModelKey{Namespace: ref.Namespace, Name: ref.Name}] {
 			out = append(out, ref)
 		}
 	}
@@ -677,24 +679,14 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 	}
 }
 
-// hasModel returns true if the subscription includes the given model name.
-func (s subscription) hasModel(modelID string) bool {
+// findModel returns the namespace and true if the subscription includes the given model name.
+func (s subscription) findModel(modelID string) (namespace string, found bool) {
 	for _, ref := range s.ModelRefs {
 		if ref.Name == modelID {
-			return true
+			return ref.Namespace, true
 		}
 	}
-	return false
-}
-
-// modelNamespace returns the namespace for the given model name, or empty string if not found.
-func (s subscription) modelNamespace(modelID string) string {
-	for _, ref := range s.ModelRefs {
-		if ref.Name == modelID {
-			return ref.Namespace
-		}
-	}
-	return ""
+	return "", false
 }
 
 // sortSubscriptionsByPriority sorts in-place by priority desc, then maxLimit desc, then name asc.
@@ -718,13 +710,19 @@ func (s *Selector) ListAccessibleForModel(username string, groups []string, mode
 		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
 	}
 
+	var authorizedSet map[authpolicy.ModelKey]bool
+	if s.accessChecker != nil {
+		authorizedSet = s.accessChecker.AuthorizedModels(groups, username)
+	}
+
 	result := []SubscriptionInfo{}
 	for _, sub := range subscriptions {
-		if !userHasAccess(&sub, username, groups) || !sub.hasModel(modelID) {
+		modelNS, hasModel := sub.findModel(modelID)
+		if !userHasAccess(&sub, username, groups) || !hasModel {
 			continue
 		}
 
-		if s.accessChecker != nil && !s.accessChecker.IsModelAccessible(groups, username, modelID, sub.modelNamespace(modelID)) {
+		if authorizedSet != nil && !authorizedSet[authpolicy.ModelKey{Namespace: modelNS, Name: modelID}] {
 			continue
 		}
 
