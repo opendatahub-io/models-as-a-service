@@ -109,7 +109,7 @@ func policyMatchesSubject(spec map[string]any, groups []string, username string)
 	if username != "" {
 		if users, ok := subjects["users"].([]any); ok {
 			for _, u := range users {
-				if s, ok := u.(string); ok && strings.TrimSpace(s) == username {
+				if s, ok := u.(string); ok && strings.TrimSpace(s) == strings.TrimSpace(username) {
 					return true
 				}
 			}
