@@ -44,66 +44,24 @@ type ClusterConfig struct {
 	startFuncs      []func(<-chan struct{})
 }
 
-// maasModelRefLister implements models.MaaSModelRefLister from a cache.GenericLister (informer-backed).
-type maasModelRefLister struct {
+// unstructuredLister wraps a cache.GenericLister and implements the List() method
+// shared by models.MaaSModelRefLister, subscription.Lister, and authpolicy.Lister.
+type unstructuredLister struct {
 	lister cache.GenericLister
 }
 
-func (m *maasModelRefLister) List() ([]*unstructured.Unstructured, error) {
-	objs, err := m.lister.List(labels.Everything())
+func (u *unstructuredLister) List() ([]*unstructured.Unstructured, error) {
+	objs, err := u.lister.List(labels.Everything())
 	if err != nil {
 		return nil, err
 	}
 	out := make([]*unstructured.Unstructured, 0, len(objs))
 	for _, o := range objs {
-		u, ok := o.(*unstructured.Unstructured)
+		item, ok := o.(*unstructured.Unstructured)
 		if !ok {
 			continue
 		}
-		// Return all MaaSModelRefs from all namespaces (no filtering)
-		out = append(out, u)
-	}
-	return out, nil
-}
-
-// subscriptionLister implements subscription.Lister from a cache.GenericLister (informer-backed).
-type subscriptionLister struct {
-	lister cache.GenericLister
-}
-
-func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
-	objs, err := s.lister.List(labels.Everything())
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*unstructured.Unstructured, 0, len(objs))
-	for _, o := range objs {
-		u, ok := o.(*unstructured.Unstructured)
-		if !ok {
-			continue
-		}
-		out = append(out, u)
-	}
-	return out, nil
-}
-
-// authPolicyLister implements authpolicy.Lister from a cache.GenericLister (informer-backed).
-type authPolicyLister struct {
-	lister cache.GenericLister
-}
-
-func (a *authPolicyLister) List() ([]*unstructured.Unstructured, error) {
-	objs, err := a.lister.List(labels.Everything())
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*unstructured.Unstructured, 0, len(objs))
-	for _, o := range objs {
-		u, ok := o.(*unstructured.Unstructured)
-		if !ok {
-			continue
-		}
-		out = append(out, u)
+		out = append(out, item)
 	}
 	return out, nil
 }
@@ -128,19 +86,19 @@ func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.
 	maasDynamicFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, resyncPeriod)
 	maasGVR := models.GVR()
 	maasInformer := maasDynamicFactory.ForResource(maasGVR)
-	maasModelRefListerVal := &maasModelRefLister{lister: maasInformer.Lister()}
+	maasModelRefListerVal := &unstructuredLister{lister: maasInformer.Lister()}
 
 	// MaaSSubscription informer (cached); watches only the configured namespace for subscription selection.
 	subscriptionDynamicFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, resyncPeriod, subscriptionNamespace, nil)
 	subscriptionGVR := subscription.GVR()
 	subscriptionInformer := subscriptionDynamicFactory.ForResource(subscriptionGVR)
-	maasSubscriptionListerVal := &subscriptionLister{lister: subscriptionInformer.Lister()}
+	maasSubscriptionListerVal := &unstructuredLister{lister: subscriptionInformer.Lister()}
 
 	// MaaSAuthPolicy informer (cached); watches the subscription namespace for model access checks.
 	authPolicyDynamicFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, resyncPeriod, subscriptionNamespace, nil)
 	authPolicyGVR := authpolicy.GVR()
 	authPolicyInformer := authPolicyDynamicFactory.ForResource(authPolicyGVR)
-	authPolicyListerVal := &authPolicyLister{lister: authPolicyInformer.Lister()}
+	authPolicyListerVal := &unstructuredLister{lister: authPolicyInformer.Lister()}
 
 	// SAR-based admin checker: uses SubjectAccessReview to check RBAC permissions.
 	// Admin is determined by: can user create maasauthpolicies in the MaaS namespace?

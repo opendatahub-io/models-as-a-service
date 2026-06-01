@@ -4,9 +4,21 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
+
+var authPolicyGVR = schema.GroupVersionResource{
+	Group:    "maas.opendatahub.io",
+	Version:  "v1alpha1",
+	Resource: "maasauthpolicies",
+}
+
+// GVR returns the GroupVersionResource for MaaSAuthPolicy CRs.
+func GVR() schema.GroupVersionResource {
+	return authPolicyGVR
+}
 
 // Lister lists MaaSAuthPolicy CRs from the informer cache.
 type Lister interface {
@@ -30,58 +42,62 @@ func NewChecker(log *logger.Logger, lister Lister) *Checker {
 	return &Checker{lister: lister, logger: log}
 }
 
-// IsModelAccessible returns true if any MaaSAuthPolicy grants the user or
-// any of their groups access to the specified model (name + namespace).
-func (c *Checker) IsModelAccessible(groups []string, username string, modelName, modelNamespace string) bool {
+// ModelKey uniquely identifies a model by namespace and name.
+type ModelKey struct {
+	Namespace string
+	Name      string
+}
+
+// AuthorizedModels returns the set of models the user is authorized to access.
+// Callers should build this set once per request and test membership via map lookup.
+func (c *Checker) AuthorizedModels(groups []string, username string) map[ModelKey]bool {
 	if c.lister == nil {
 		c.logger.Error("MaaSAuthPolicy lister is nil; denying model access check")
-		return false
+		return nil
 	}
 
 	policies, err := c.lister.List()
 	if err != nil {
 		c.logger.Error("Failed to list MaaSAuthPolicy CRs for model access check", "error", err)
-		return false
+		return nil
 	}
 
+	authorized := make(map[ModelKey]bool)
 	for _, policy := range policies {
-		if c.policyGrantsAccess(policy, groups, username, modelName, modelNamespace) {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *Checker) policyGrantsAccess(policy *unstructured.Unstructured, groups []string, username, modelName, modelNamespace string) bool {
-	spec, ok := policy.Object["spec"].(map[string]any)
-	if !ok {
-		return false
-	}
-
-	if !policyReferencesModel(spec, modelName, modelNamespace) {
-		return false
-	}
-
-	return policyMatchesSubject(spec, groups, username)
-}
-
-func policyReferencesModel(spec map[string]any, modelName, modelNamespace string) bool {
-	modelRefs, ok := spec["modelRefs"].([]any)
-	if !ok {
-		return false
-	}
-	for _, ref := range modelRefs {
-		refMap, ok := ref.(map[string]any)
+		spec, ok := policy.Object["spec"].(map[string]any)
 		if !ok {
 			continue
 		}
-		name, _ := refMap["name"].(string)
-		ns, _ := refMap["namespace"].(string)
-		if name == modelName && ns == modelNamespace {
-			return true
+		if !policyMatchesSubject(spec, groups, username) {
+			continue
+		}
+		modelRefs, ok := spec["modelRefs"].([]any)
+		if !ok {
+			continue
+		}
+		for _, ref := range modelRefs {
+			refMap, ok := ref.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := refMap["name"].(string)
+			ns, _ := refMap["namespace"].(string)
+			if name != "" {
+				authorized[ModelKey{Namespace: ns, Name: name}] = true
+			}
 		}
 	}
-	return false
+	return authorized
+}
+
+// IsModelAccessible returns true if any MaaSAuthPolicy grants the user or
+// any of their groups access to the specified model (name + namespace).
+func (c *Checker) IsModelAccessible(groups []string, username string, modelName, modelNamespace string) bool {
+	authorized := c.AuthorizedModels(groups, username)
+	if authorized == nil {
+		return false
+	}
+	return authorized[ModelKey{Namespace: modelNamespace, Name: modelName}]
 }
 
 func policyMatchesSubject(spec map[string]any, groups []string, username string) bool {
