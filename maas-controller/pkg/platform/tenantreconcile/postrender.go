@@ -17,12 +17,10 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
 	gatewayName := tenant.Spec.GatewayRef.Name
 
-	// Filter out resources with opendatahub.io/managed: false annotation
 	var filteredResources []unstructured.Unstructured
 	for i := range resources {
 		resource := &resources[i]
 
-		// Skip resources with opendatahub.io/managed: false annotation
 		annotations := resource.GetAnnotations()
 		if annotations != nil && annotations[AnnotationManaged] == "false" {
 			log.V(2).Info("Skipping resource due to opendatahub.io/managed=false annotation",

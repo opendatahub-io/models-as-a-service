@@ -1,6 +1,34 @@
+# Merge patch applied when EXTERNAL_OIDC=true (see configure_maas_api_authpolicy in deploy.sh).
+#
+# Authentication order (lower priority number = earlier block; Authorino tries the next
+# block when the previous identity method does not validate the token):
+# - api-keys: 0 (base auth-policy.yaml; Bearer sk-oai-* only)
+# - oidc-identities: 1 — validate JWT against the external IdP (Keycloak) issuer first.
+#   Keycloak access tokens succeed here; cluster/oc OAuth tokens fail issuer check and
+#   fall through to openshift-identities.
+# - openshift-identities: 2 — kubernetesTokenReview for OpenShift API server tokens.
+#
+# Do NOT put openshift before oidc: TokenReview runs first on every Bearer eyJ... token,
+# fails for Keycloak JWTs, and some pipelines then never reach OIDC validation — E2E
+# sees HTTP 401 on Keycloak-only flows.
+#
+# Authorization: oidc-client-bound must apply only to identities that came from OIDC
+# (auth.identity.azp set). OpenShift TokenReview identities do not have azp; without
+# this guard the rule still matched JWT-shaped Bearer tokens and denied with 403.
 spec:
   rules:
     authentication:
+      # API key authentication — must be preserved from the base policy.
+      # Merge patch replaces the entire authentication block, so we must
+      # re-declare api-keys here or it gets dropped.
+      api-keys:
+        when:
+          - selector: request.headers.authorization
+            operator: matches
+            value: "^Bearer sk-oai-.*"
+        plain:
+          selector: request.headers.authorization
+        priority: 0
       oidc-identities:
         when:
           - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
@@ -10,11 +38,31 @@ spec:
       openshift-identities:
         when:
           - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
+        kubernetesTokenReview:
+          audiences:
+            - __CLUSTER_AUDIENCE__
+            - maas-default-gateway-sa
         priority: 2
+    metadata:
+      # Preserve API key validation callback from the base policy.
+      # Merge patch replaces the entire rules block; without this the
+      # metadata section is dropped and API key requests get 500.
+      apiKeyValidation:
+        when:
+          - selector: request.headers.authorization
+            operator: matches
+            value: "^Bearer sk-oai-.*"
+        http:
+          url: https://maas-api.__MAAS_NAMESPACE__.svc.cluster.local:8443/internal/v1/api-keys/validate
+          method: POST
+          contentType: application/json
+          body:
+            expression: '{"key": request.headers.authorization.replace("Bearer ", "")}'
+        priority: 0
     authorization:
       oidc-client-bound:
         when:
-          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")'
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$") && has(auth.identity.azp)'
         patternMatching:
           patterns:
             - selector: auth.identity.azp
@@ -24,19 +72,37 @@ spec:
     response:
       success:
         headers:
-          X-MaaS-Username-OC:
+          # Three-way CEL expressions handle API keys, OIDC JWT, and OpenShift
+          # TokenReview without any "when" clause. kubectl replace applies the
+          # entire manifest so base policy fields are not inherited.
+          X-MaaS-Username:
             plain:
-              selector: null
               expression: >-
-                has(auth.identity.preferred_username) ?
+                (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ?
+                auth.metadata.apiKeyValidation.username :
+                (has(auth.identity.preferred_username) ?
                 auth.identity.preferred_username :
-                (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)
-          X-MaaS-Group-OC:
+                (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))
+          X-MaaS-Group:
             plain:
-              selector: null
               expression: >-
-                has(auth.identity.groups) ?
-                (size(auth.identity.groups) > 0 ?
-                '["system:authenticated","' + auth.identity.groups.join('","') + '"]' :
+                (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ?
+                (size(auth.metadata.apiKeyValidation.groups) > 0 ?
+                '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' :
                 '["system:authenticated"]') :
-                '["' + auth.identity.user.groups.join('","') + '"]'
+                (has(auth.identity.groups) && size(auth.identity.groups) > 0 ?
+                '["system:authenticated","' + auth.identity.groups.join('","') + '"]' :
+                (has(auth.identity.user) && has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ?
+                '["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' :
+                '["system:authenticated"]'))
+          X-MaaS-Subscription:
+            when:
+              - selector: request.headers.authorization
+                operator: matches
+                value: "^Bearer sk-oai-.*"
+              - selector: auth.metadata.apiKeyValidation.subscription
+                operator: neq
+                value: ""
+            plain:
+              selector: auth.metadata.apiKeyValidation.subscription
+            priority: 0
