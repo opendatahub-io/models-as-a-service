@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // deletionTimestampSet returns true when an object's DeletionTimestamp transitions
@@ -89,4 +93,134 @@ func findAnyAuthPolicyForModel(ctx context.Context, c client.Reader, modelNamesp
 		return nil
 	}
 	return &policies[0]
+}
+
+// isTenantNamespace returns true when ns is either the legacy default namespace
+// or, when tenant namespace discovery is enabled, a namespace labeled by the
+// AIGateway reconciler. Objects in unlabeled namespaces are ignored by the MaaS
+// reconcilers. An empty default namespace keeps older unit-test construction
+// behavior, but production startup always sets the default namespace flag.
+func isTenantNamespace(ctx context.Context, c client.Reader, ns, defaultTenantNamespace string, discoveryEnabled bool) bool {
+	if defaultTenantNamespace == "" || ns == defaultTenantNamespace {
+		return true
+	}
+	if !discoveryEnabled {
+		return false
+	}
+	var namespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: ns}, &namespace); err != nil {
+		return false
+	}
+	return namespace.Labels[tenantreconcile.LabelManagedByAIGateway] == "true"
+}
+
+// fetchTenantForNamespace returns the Tenant CR co-located in the given namespace.
+// For multi-tenancy each tenant namespace has its own Tenant/default-tenant.
+func fetchTenantForNamespace(ctx context.Context, c client.Reader, namespace string) (*maasv1alpha1.Tenant, error) {
+	tenant := &maasv1alpha1.Tenant{}
+	key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: namespace}
+	if err := c.Get(ctx, key, tenant); err != nil {
+		return nil, err
+	}
+	return tenant, nil
+}
+
+func filterSubscriptionsByTenantNamespace(ctx context.Context, c client.Reader, subscriptions []maasv1alpha1.MaaSSubscription, defaultTenantNamespace string, discoveryEnabled bool) []maasv1alpha1.MaaSSubscription {
+	allowed := make(map[string]bool)
+	result := make([]maasv1alpha1.MaaSSubscription, 0, len(subscriptions))
+	for _, sub := range subscriptions {
+		ok, found := allowed[sub.Namespace]
+		if !found {
+			ok = isTenantNamespace(ctx, c, sub.Namespace, defaultTenantNamespace, discoveryEnabled)
+			allowed[sub.Namespace] = ok
+		}
+		if ok {
+			result = append(result, sub)
+		}
+	}
+	return result
+}
+
+func filterAuthPoliciesByTenantNamespace(ctx context.Context, c client.Reader, policies []maasv1alpha1.MaaSAuthPolicy, defaultTenantNamespace string, discoveryEnabled bool) []maasv1alpha1.MaaSAuthPolicy {
+	allowed := make(map[string]bool)
+	result := make([]maasv1alpha1.MaaSAuthPolicy, 0, len(policies))
+	for _, policy := range policies {
+		ok, found := allowed[policy.Namespace]
+		if !found {
+			ok = isTenantNamespace(ctx, c, policy.Namespace, defaultTenantNamespace, discoveryEnabled)
+			allowed[policy.Namespace] = ok
+		}
+		if ok {
+			result = append(result, policy)
+		}
+	}
+	return result
+}
+
+func qualifiedName(namespace, name string) string {
+	if namespace == "" {
+		return name
+	}
+	return namespace + "/" + name
+}
+
+func annotationListContains(value, want string) bool {
+	for _, item := range strings.Split(value, ",") {
+		if strings.TrimSpace(item) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func tenantGatewayRefForNamespace(ctx context.Context, c client.Reader, tenantNamespace, defaultTenantNamespace, fallbackGatewayName, fallbackGatewayNamespace string, discoveryEnabled bool) (maasv1alpha1.TenantGatewayRef, error) {
+	tenant, err := fetchTenantForNamespace(ctx, c, tenantNamespace)
+	if err == nil {
+		ref := tenant.Spec.GatewayRef
+		if ref.Name != "" && ref.Namespace != "" {
+			return ref, nil
+		}
+		if ref.Name == "" && ref.Namespace == "" && (tenantNamespace == defaultTenantNamespace || !discoveryEnabled) {
+			return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
+		}
+		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("Tenant %s/%s spec.gatewayRef must set both name and namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
+	}
+	if apierrors.IsNotFound(err) && (tenantNamespace == defaultTenantNamespace || !discoveryEnabled) {
+		return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
+	}
+	if apierrors.IsNotFound(err) {
+		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("Tenant %s/%s not found for discovered tenant namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
+	}
+	return maasv1alpha1.TenantGatewayRef{}, err
+}
+
+func fallbackTenantGatewayRef(name, namespace string) maasv1alpha1.TenantGatewayRef {
+	if name == "" || namespace == "" {
+		return maasv1alpha1.TenantGatewayRef{}
+	}
+	return maasv1alpha1.TenantGatewayRef{Name: name, Namespace: namespace}
+}
+
+func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, routeName, routeNamespace string, gatewayRef maasv1alpha1.TenantGatewayRef) error {
+	if gatewayRef.Name == "" && gatewayRef.Namespace == "" {
+		return nil
+	}
+	if gatewayRef.Name == "" || gatewayRef.Namespace == "" {
+		return fmt.Errorf("gatewayRef must set both name and namespace")
+	}
+
+	route := &gatewayapiv1.HTTPRoute{}
+	if err := c.Get(ctx, client.ObjectKey{Name: routeName, Namespace: routeNamespace}, route); err != nil {
+		return fmt.Errorf("failed to get HTTPRoute %s/%s for gateway validation: %w", routeNamespace, routeName, err)
+	}
+	for _, parentRef := range route.Spec.ParentRefs {
+		parentNamespace := routeNamespace
+		if parentRef.Namespace != nil {
+			parentNamespace = string(*parentRef.Namespace)
+		}
+		if string(parentRef.Name) == gatewayRef.Name && parentNamespace == gatewayRef.Namespace {
+			return nil
+		}
+	}
+	return fmt.Errorf("HTTPRoute %s/%s does not reference tenant Gateway %s/%s", routeNamespace, routeName, gatewayRef.Namespace, gatewayRef.Name)
 }

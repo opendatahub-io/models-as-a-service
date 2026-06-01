@@ -38,6 +38,11 @@ const (
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
 
+	// LabelManagedByAIGateway is set to "true" on namespaces created/adopted
+	// by the AIGateway reconciler (S11). The subscription/auth-policy controllers
+	// use this label to discover tenant namespaces dynamically.
+	LabelManagedByAIGateway = "maas.opendatahub.io/managed-by-aigateway"
+
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"

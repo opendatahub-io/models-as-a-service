@@ -581,6 +581,53 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 	}
 }
 
+// TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation verifies that
+// same-named MaaSAuthPolicies in different namespaces are tracked with
+// namespace-qualified names on the generated AuthPolicy.
+func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T) {
+	const (
+		modelName      = "llm"
+		modelNamespace = "models"
+		policyName     = "access"
+		namespaceA     = "tenant-a"
+		namespaceB     = "tenant-b"
+	)
+
+	model := newMaaSModelRef(modelName, modelNamespace, "ExternalModel", modelName)
+	route := newHTTPRoute(modelName, modelNamespace)
+	policyA := newMaaSAuthPolicy(policyName, namespaceA, "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: modelNamespace})
+	policyB := newMaaSAuthPolicy(policyName, namespaceB, "team-b",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: modelNamespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, policyA, policyB).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "opendatahub"}
+	for _, ns := range []string{namespaceA, namespaceB} {
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: ns}}
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("Reconcile MaaSAuthPolicy %s/%s: %v", ns, policyName, err)
+		}
+	}
+
+	authPolicy := &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + modelName, Namespace: modelNamespace}, authPolicy); err != nil {
+		t.Fatalf("Get generated AuthPolicy: %v", err)
+	}
+
+	got := authPolicy.GetAnnotations()["maas.opendatahub.io/auth-policies"]
+	want := namespaceA + "/" + policyName + "," + namespaceB + "/" + policyName
+	if got != want {
+		t.Errorf("generated AuthPolicy annotation = %q, want %q", got, want)
+	}
+}
+
 // Helper function for test
 func getMapKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))

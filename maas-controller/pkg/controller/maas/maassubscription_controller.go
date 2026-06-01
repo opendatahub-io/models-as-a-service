@@ -22,12 +22,12 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -48,12 +48,24 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // MaaSSubscriptionReconciler reconciles a MaaSSubscription object
 type MaaSSubscriptionReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// DefaultTenantNamespace is the legacy single-tenant namespace (default
+	// "models-as-a-service"). Used together with the AIGateway label to decide
+	// whether a namespace is a valid tenant namespace.
+	DefaultTenantNamespace string
+	// TenantNamespaceDiscoveryEnabled enables AIGateway-labeled tenant namespaces.
+	TenantNamespaceDiscoveryEnabled bool
+	// GatewayName and GatewayNamespace are used as the legacy fallback when a
+	// Tenant does not yet carry spec.gatewayRef.
+	GatewayName      string
+	GatewayNamespace string
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch;create;update;patch;delete
@@ -335,6 +347,11 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	if !isTenantNamespace(ctx, r.Client, req.Namespace, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled) {
+		log.V(1).Info("ignoring MaaSSubscription in non-tenant namespace", "namespace", req.Namespace)
+		return ctrl.Result{}, nil
+	}
+
 	// Handle deletion
 	if !subscription.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, log, subscription)
@@ -455,6 +472,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	if err != nil {
 		return fmt.Errorf("failed to list subscriptions for model %s/%s: %w", modelNamespace, modelName, err)
 	}
+	allSubs = filterSubscriptionsByTenantNamespace(ctx, r.Client, allSubs, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
 
 	// Resolve HTTPRoute early to check if model/route exist
 	httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, modelNamespace, modelName)
@@ -474,6 +492,32 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 			return nil
 		}
 		return fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", modelNamespace, modelName, err)
+	}
+	// Every effective subscription for this model must come from a tenant whose
+	// Gateway matches the model HTTPRoute. This preserves the existing one
+	// TRLP-per-route behavior while preventing a tenant namespace from attaching
+	// policy to another tenant's Gateway.
+	validatedTenantNamespaces := make(map[string]struct{})
+	validatedGateways := make(map[string]struct{})
+	for _, sub := range allSubs {
+		if _, ok := validatedTenantNamespaces[sub.Namespace]; ok {
+			continue
+		}
+		validatedTenantNamespaces[sub.Namespace] = struct{}{}
+
+		gatewayRef, gwErr := tenantGatewayRefForNamespace(ctx, r.Client, sub.Namespace, r.DefaultTenantNamespace, r.GatewayName, r.GatewayNamespace, r.TenantNamespaceDiscoveryEnabled)
+		if gwErr != nil {
+			return gwErr
+		}
+		gatewayKey := qualifiedName(gatewayRef.Namespace, gatewayRef.Name)
+		if _, ok := validatedGateways[gatewayKey]; ok {
+			continue
+		}
+		validatedGateways[gatewayKey] = struct{}{}
+
+		if gwErr := validateHTTPRouteReferencesGateway(ctx, r.Client, httpRouteName, httpRouteNS, gatewayRef); gwErr != nil {
+			return fmt.Errorf("model %s/%s is not attached to tenant gateway for subscription %s: %w", modelNamespace, modelName, qualifiedName(sub.Namespace, sub.Name), gwErr)
+		}
 	}
 
 	// Check if existing TRLP is opted-out before doing any expensive work
@@ -567,7 +611,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	// The selected_subscription_key format is: {subNamespace}/{subName}@{modelNamespace}/{modelName}
 	// This ensures proper isolation between subscriptions in different namespaces and across models.
 	for _, si := range subs {
-		subNames = append(subNames, si.sub.Name)
+		subNames = append(subNames, qualifiedName(si.sub.Namespace, si.sub.Name))
 
 		// Build subscription reference: namespace/name
 		subRef := fmt.Sprintf("%s/%s", si.sub.Namespace, si.sub.Name)
@@ -716,15 +760,21 @@ func (r *MaaSSubscriptionReconciler) cleanupStaleTRLPs(ctx context.Context, log 
 		if modelName == "" {
 			continue
 		}
-		modelKey := trlp.GetNamespace() + "/" + modelName
+		modelNamespace := trlp.GetLabels()["maas.opendatahub.io/model-namespace"]
+		if modelNamespace == "" {
+			modelNamespace = trlp.GetNamespace()
+		}
+		modelKey := modelNamespace + "/" + modelName
 		if currentModels[modelKey] {
 			continue
 		}
-		if !slices.Contains(strings.Split(trlp.GetAnnotations()["maas.opendatahub.io/subscriptions"], ","), subscription.Name) {
+		owners := trlp.GetAnnotations()["maas.opendatahub.io/subscriptions"]
+		if !annotationListContains(owners, qualifiedName(subscription.Namespace, subscription.Name)) &&
+			!annotationListContains(owners, subscription.Name) {
 			continue
 		}
 		log.Info("Cleaning up stale TokenRateLimitPolicy for removed modelRef", "model", modelKey, "trlp", trlp.GetName())
-		if err := r.deleteModelTRLP(ctx, log, trlp.GetNamespace(), modelName); err != nil {
+		if err := r.deleteModelTRLP(ctx, log, modelNamespace, modelName); err != nil {
 			return fmt.Errorf("failed to clean up stale TokenRateLimitPolicy for removed model %s: %w", modelKey, err)
 		}
 	}
@@ -858,6 +908,7 @@ func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Contex
 		log.Error(err, "failed to list MaaSSubscriptions for duplicate priority scan")
 		return
 	}
+	list.Items = filterSubscriptionsByTenantNamespace(ctx, r.Client, list.Items, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
 
 	liveIdx := make([]int, 0, len(list.Items))
 	for i := range list.Items {
@@ -979,7 +1030,7 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	generatedTRLP := &unstructured.Unstructured{}
 	generatedTRLP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaaSSubscription{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
 			predicate.Funcs{UpdateFunc: deletionTimestampSet},
@@ -1003,8 +1054,17 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch generated TokenRateLimitPolicies so manual edits get overwritten by the controller.
 		Watches(generatedTRLP, handler.EnqueueRequestsFromMapFunc(
 			r.mapGeneratedTRLPToParent,
-		)).
-		Complete(r)
+		))
+
+	if r.TenantNamespaceDiscoveryEnabled {
+		// Watch Namespaces so that subscriptions in newly labeled tenant
+		// namespaces are discovered without a controller restart.
+		b = b.Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapNamespaceToMaaSSubscriptions,
+		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
+	}
+
+	return b.Complete(r)
 }
 
 // duplicatePriorityScanHandler runs a full duplicate-priority scan without enqueuing reconciles.
@@ -1038,6 +1098,25 @@ func duplicatePriorityScanPredicate() predicate.Predicate {
 	}
 }
 
+// mapNamespaceToMaaSSubscriptions enqueues all MaaSSubscription resources in a
+// namespace when that namespace's labels change (e.g. AIGateway label added).
+func (r *MaaSSubscriptionReconciler) mapNamespaceToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {
+	ns := obj.GetName()
+	if ns != r.DefaultTenantNamespace && (!r.TenantNamespaceDiscoveryEnabled || obj.GetLabels()[tenantreconcile.LabelManagedByAIGateway] != "true") {
+		return nil
+	}
+	subList := &maasv1alpha1.MaaSSubscriptionList{}
+	if err := r.List(ctx, subList, client.InNamespace(ns)); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSSubscription for namespace label change", "namespace", ns)
+		return nil
+	}
+	requests := make([]reconcile.Request, len(subList.Items))
+	for i, s := range subList.Items {
+		requests[i] = reconcile.Request{NamespacedName: types.NamespacedName{Name: s.Name, Namespace: s.Namespace}}
+	}
+	return requests
+}
+
 // mapGeneratedTRLPToParent maps a generated TokenRateLimitPolicy back to any
 // MaaSSubscription that references the same model. The TokenRateLimitPolicy is per-model (aggregated),
 // so we use the model label to find a subscription to trigger reconciliation.
@@ -1050,8 +1129,11 @@ func (r *MaaSSubscriptionReconciler) mapGeneratedTRLPToParent(ctx context.Contex
 	if modelName == "" {
 		return nil
 	}
-	modelNamespace := obj.GetNamespace()
-	sub := findAnySubscriptionForModel(ctx, r.Client, modelNamespace, modelName)
+	modelNamespace := labels["maas.opendatahub.io/model-namespace"]
+	if modelNamespace == "" {
+		modelNamespace = obj.GetNamespace()
+	}
+	sub := r.findAnySubscriptionForModel(ctx, modelNamespace, modelName)
 	if sub == nil {
 		return nil
 	}
@@ -1073,6 +1155,7 @@ func (r *MaaSSubscriptionReconciler) mapMaaSModelRefToMaaSSubscriptions(ctx cont
 	if err := r.List(ctx, &subscriptions, client.MatchingFields{modelRefIndexKey: modelKey}); err != nil {
 		return nil
 	}
+	subscriptions.Items = filterSubscriptionsByTenantNamespace(ctx, r.Client, subscriptions.Items, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
 	// Deduplicate requests (same subscription shouldn't be queued multiple times)
 	seen := make(map[types.NamespacedName]struct{}, len(subscriptions.Items))
 	var requests []reconcile.Request
@@ -1111,6 +1194,7 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 		if err := r.List(ctx, &subscriptions, client.MatchingFields{modelRefIndexKey: modelKey}); err != nil {
 			continue // skip this model on error, don't fail entire mapping
 		}
+		subscriptions.Items = filterSubscriptionsByTenantNamespace(ctx, r.Client, subscriptions.Items, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
 		for _, s := range subscriptions.Items {
 			key := types.NamespacedName{Name: s.Name, Namespace: s.Namespace}
 			if _, exists := seen[key]; exists {
@@ -1121,4 +1205,16 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 		}
 	}
 	return requests
+}
+
+func (r *MaaSSubscriptionReconciler) findAnySubscriptionForModel(ctx context.Context, modelNamespace, modelName string) *maasv1alpha1.MaaSSubscription {
+	subs, err := findAllSubscriptionsForModel(ctx, r.Client, modelNamespace, modelName)
+	if err != nil {
+		return nil
+	}
+	subs = filterSubscriptionsByTenantNamespace(ctx, r.Client, subs, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+	if len(subs) == 0 {
+		return nil
+	}
+	return &subs[0]
 }

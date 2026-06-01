@@ -428,6 +428,7 @@ func main() {
 	var metadataCacheTTL int64
 	var authzCacheTTL int64
 	var subscriptionNamespaceMaintainInterval time.Duration
+	var enableTenantNamespaceDiscovery bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -442,6 +443,8 @@ func main() {
 	flag.DurationVar(&subscriptionNamespaceMaintainInterval, "subscription-namespace-maintain-interval", 30*time.Second,
 		"How often to re-check the subscription namespace while the manager is running (recreate if deleted). "+
 			"Larger values reduce apiserver load; smaller values detect external deletions sooner.")
+	flag.BoolVar(&enableTenantNamespaceDiscovery, "enable-tenant-namespace-discovery", false,
+		"Discover AIGateway-managed tenant namespaces labeled maas.opendatahub.io/managed-by-aigateway=true and reconcile MaaS tenant CRs from them.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -467,7 +470,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
 	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
@@ -475,6 +477,20 @@ func main() {
 			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
 			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
 		},
+	}
+	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
+	if enableTenantNamespaceDiscovery {
+		allNamespacesCfg := map[string]cache.Config{cache.AllNamespaces: {}}
+		cacheOpts = cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&maasv1alpha1.Tenant{}:           {Namespaces: allNamespacesCfg},
+				&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: allNamespacesCfg},
+				&maasv1alpha1.MaaSSubscription{}: {Namespaces: allNamespacesCfg},
+			},
+		}
+		setupLog.Info("watching MaaS CRs across all namespaces for tenant discovery",
+			"defaultNamespace", maasSubscriptionNamespace,
+			"tenantNamespaceLabel", tenantreconcile.LabelManagedByAIGateway)
 	}
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
@@ -501,30 +517,38 @@ func main() {
 	}
 
 	if err := (&maas.MaaSModelRefReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		GatewayName:      gatewayName,
-		GatewayNamespace: gatewayNamespace,
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		GatewayName:                     gatewayName,
+		GatewayNamespace:                gatewayNamespace,
+		DefaultTenantNamespace:          maasSubscriptionNamespace,
+		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSModelRef")
 		os.Exit(1)
 	}
 	if err := (&maas.MaaSAuthPolicyReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		MaaSAPINamespace: maasAPINamespace,
-		TenantNamespace:  maasSubscriptionNamespace,
-		GatewayName:      gatewayName,
-		ClusterAudience:  clusterAudience,
-		MetadataCacheTTL: metadataCacheTTL,
-		AuthzCacheTTL:    authzCacheTTL,
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		MaaSAPINamespace:                maasAPINamespace,
+		TenantNamespace:                 maasSubscriptionNamespace,
+		GatewayName:                     gatewayName,
+		GatewayNamespace:                gatewayNamespace,
+		ClusterAudience:                 clusterAudience,
+		MetadataCacheTTL:                metadataCacheTTL,
+		AuthzCacheTTL:                   authzCacheTTL,
+		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
 		os.Exit(1)
 	}
 	if err := (&maas.MaaSSubscriptionReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		DefaultTenantNamespace:          maasSubscriptionNamespace,
+		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
+		GatewayName:                     gatewayName,
+		GatewayNamespace:                gatewayNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
 		os.Exit(1)

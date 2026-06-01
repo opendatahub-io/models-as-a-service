@@ -203,7 +203,7 @@ ENVIRONMENT VARIABLES:
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
-  OPERATOR_STARTING_CSV     ODH Subscription startingCSV (default: opendatahub-operator.v3.4.0-ea.1; "-" to omit)
+  OPERATOR_STARTING_CSV     ODH Subscription startingCSV (optional; when unset, follows the channel head)
   OPERATOR_INSTALL_PLAN_APPROVAL  ODH Subscription OLM approval (default: Manual — no auto-upgrades; first InstallPlan is auto-approved by the script)
   OPERATOR_TYPE             Operator type (rhoai/odh)
   EXTERNAL_OIDC            Enable external OIDC on maas-api (true/false)
@@ -1045,9 +1045,9 @@ install_primary_operator() {
         channel="${OPERATOR_CHANNEL:-fast-3}"
       fi
 
-      # Pin to ODH 3.4 EA1 unless overridden (omit with OPERATOR_STARTING_CSV=-)
-      local odh_starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.4.0-ea.1}"
-      [[ "$odh_starting_csv" == "-" ]] && odh_starting_csv=""
+      # Follow the configured channel head by default unless OPERATOR_STARTING_CSV
+      # explicitly pins a CSV.
+      local odh_starting_csv="${OPERATOR_STARTING_CSV:-}"
 
       # Manual = no auto-upgrades; install_olm_operator auto-approves the first InstallPlan only
       local odh_plan_approval="${OPERATOR_INSTALL_PLAN_APPROVAL:-Manual}"
