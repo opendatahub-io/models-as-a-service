@@ -2,9 +2,6 @@ name: MaaS Controller
 
 on:
   pull_request:
-    paths:
-      - 'maas-controller/**'
-      - '.github/workflows/maas-controller-ci.yml'
 
 permissions:
   actions: read
