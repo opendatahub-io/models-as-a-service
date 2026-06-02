@@ -2,8 +2,6 @@ name: MaaS Controller
 
 on:
   pull_request:
-    paths:
-      - 'maas-controller/**'
 
 permissions:
   actions: read

@@ -230,7 +230,7 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys" \
   -d '{"ephemeral": true, "expiresIn": "30m"}' | jq .
 ```
 
-Expired ephemeral keys are automatically cleaned up by a CronJob. See [API Key Administration](../configuration-and-management/api-key-administration.md#ephemeral-key-cleanup) for details.
+Expired ephemeral keys are automatically cleaned up by a background process in maas-api. See [API Key Administration](../configuration-and-management/api-key-administration.md#ephemeral-key-cleanup) for details.
 
 ---
 
