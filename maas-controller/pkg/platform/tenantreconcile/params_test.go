@@ -19,7 +19,6 @@ func TestBuildPlatformParams(t *testing.T) {
 	t.Run("if values are not set for optional fields, fall back to defaults", func(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
 		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
-		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
 
 		tenant := &maasv1alpha1.Tenant{
 			Spec: maasv1alpha1.TenantSpec{
@@ -39,14 +38,12 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "https://kubernetes.default.svc", got.ClusterAudience)
 		assert.Equal(t, DefaultMaaSAPIImage, got.MaaSAPIImage)
 		assert.Equal(t, DefaultPayloadProcessingImage, got.PayloadProcessingImage)
-		assert.Equal(t, DefaultMaaSAPIKeyCleanupImage, got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, DefaultAPIKeyMaxExpirationDays, got.APIKeyMaxExpirationDays)
 	})
 
 	t.Run("if values are set for optional fields, they should prevail", func(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "quay.io/example/maas-api:test")
 		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "quay.io/example/payload:test")
-		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "quay.io/example/cleanup:test")
 
 		maxExpirationDays := int32(45)
 		tenant := &maasv1alpha1.Tenant{
@@ -70,7 +67,6 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "cluster-audience", got.ClusterAudience)
 		assert.Equal(t, "quay.io/example/maas-api:test", got.MaaSAPIImage)
 		assert.Equal(t, "quay.io/example/payload:test", got.PayloadProcessingImage)
-		assert.Equal(t, "quay.io/example/cleanup:test", got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, "45", got.APIKeyMaxExpirationDays)
 	})
 }
@@ -84,7 +80,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		ClusterAudience:         "openshift-custom",
 		MaaSAPIImage:            "quay.io/example/maas-api:test",
 		PayloadProcessingImage:  "quay.io/example/payload:test",
-		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays: "45",
 	}
 
@@ -107,10 +102,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	payloadDeployment := requireResource(t, resources, GVKDeployment, PayloadProcessingName)
 	assert.Equal(t, params.GatewayNamespace, payloadDeployment.GetNamespace())
 	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadDeployment, "spec", "template", "spec", "containers"))
-
-	if cleanupCronJob := findResource(resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(tenantID)); cleanupCronJob != nil {
-		assert.Equal(t, params.MaaSAPIKeyCleanupImage, requireContainerImage(t, cleanupCronJob, "spec", "jobTemplate", "spec", "template", "spec", "containers"))
-	}
 
 	httpRoute := requireResource(t, resources, GVKHTTPRoute, MaaSAPIRouteName(tenantID))
 	parentRefs, found, err := unstructured.NestedSlice(httpRoute.Object, "spec", "parentRefs")
