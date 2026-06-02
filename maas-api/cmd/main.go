@@ -332,7 +332,7 @@ func registerHandlers(
 		auth.TenantAuthMiddleware(log, cluster.ClientSet), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		tenantHandler.GetTenantInfo)
 
-	// Internal routes (no auth required - called by Authorino / CronJob)
+	// Internal routes (no auth required - called by Authorino / in-process cleanup)
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
 	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys) // TODO: consider remove endpoint if not public access
