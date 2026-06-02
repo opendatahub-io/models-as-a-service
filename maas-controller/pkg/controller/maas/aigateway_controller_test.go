@@ -21,6 +21,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 
 	. "github.com/onsi/gomega"
 )
@@ -43,6 +44,21 @@ func reconcileAIGatewayTwice(t *testing.T, r *AIGatewayReconciler, key types.Nam
 	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	NewWithT(t).Expect(err).NotTo(HaveOccurred())
 	NewWithT(t).Expect(res).To(Equal(ctrl.Result{}))
+}
+
+func expectTenantRouteSelector(t *testing.T, listener gatewayapiv1.Listener, tenantName, tenantNamespace string) {
+	t.Helper()
+	g := NewWithT(t)
+	g.Expect(listener.AllowedRoutes).NotTo(BeNil())
+	g.Expect(listener.AllowedRoutes.Namespaces).NotTo(BeNil())
+	g.Expect(listener.AllowedRoutes.Namespaces.From).NotTo(BeNil())
+	g.Expect(*listener.AllowedRoutes.Namespaces.From).To(Equal(gatewayapiv1.NamespacesFromSelector))
+	g.Expect(listener.AllowedRoutes.Namespaces.Selector).NotTo(BeNil())
+	g.Expect(listener.AllowedRoutes.Namespaces.Selector.MatchLabels).To(Equal(map[string]string{
+		tenantreconcile.LabelManagedByAIGateway: "true",
+		tenantreconcile.LabelTenantName:         tenantName,
+		tenantreconcile.LabelTenantNamespace:    tenantNamespace,
+	}))
 }
 
 func TestAIGatewayReconcile_CreatesBootstrapResources(t *testing.T) {
@@ -102,6 +118,7 @@ func TestAIGatewayReconcile_CreatesBootstrapResources(t *testing.T) {
 	g.Expect(gateway.Spec.GatewayClassName).To(Equal(gatewayapiv1.ObjectName("openshift-default")))
 	g.Expect(gateway.Spec.Listeners).To(HaveLen(1))
 	g.Expect(gateway.Spec.Listeners[0].Protocol).To(Equal(gatewayapiv1.HTTPProtocolType))
+	expectTenantRouteSelector(t, gateway.Spec.Listeners[0], "team-a", "team-a-maas")
 	g.Expect(gateway.Labels).To(HaveKeyWithValue("maas.opendatahub.io/tenant-name", "team-a"))
 
 	var tenant maasv1alpha1.Tenant
@@ -916,6 +933,7 @@ func TestAIGatewayReconcile_DomainCreatesHTTPListenerWithHostname(t *testing.T) 
 	g.Expect(gateway.Spec.Listeners[0].Hostname).NotTo(BeNil())
 	g.Expect(string(*gateway.Spec.Listeners[0].Hostname)).To(Equal("team-domain.ai-gateway.apps.example.com"))
 	g.Expect(gateway.Spec.Listeners[0].TLS).To(BeNil())
+	expectTenantRouteSelector(t, gateway.Spec.Listeners[0], "team-domain", "team-domain-maas")
 }
 
 func TestAIGatewayReconcile_DomainWithTLSCreatesHTTPSListener(t *testing.T) {
@@ -964,6 +982,7 @@ func TestAIGatewayReconcile_DomainWithTLSCreatesHTTPSListener(t *testing.T) {
 	g.Expect(gateway.Spec.Listeners[0].TLS).NotTo(BeNil())
 	g.Expect(gateway.Spec.Listeners[0].TLS.CertificateRefs).To(HaveLen(1))
 	g.Expect(gateway.Spec.Listeners[0].TLS.CertificateRefs[0].Name).To(Equal(gatewayapiv1.ObjectName("team-tls-cert")))
+	expectTenantRouteSelector(t, gateway.Spec.Listeners[0], "team-tls", "team-tls-maas")
 }
 
 func TestAIGatewayChildName_Truncation(t *testing.T) {

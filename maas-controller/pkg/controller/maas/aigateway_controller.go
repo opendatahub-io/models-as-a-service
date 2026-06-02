@@ -315,10 +315,7 @@ func (r *AIGatewayReconciler) gatewayRefFor(aigw *maasv1alpha1.AIGateway) maasv1
 }
 
 func gatewayListenersFor(aigw *maasv1alpha1.AIGateway) []gatewayapiv1.Listener {
-	fromAll := gatewayapiv1.NamespacesFromAll
-	routes := &gatewayapiv1.AllowedRoutes{
-		Namespaces: &gatewayapiv1.RouteNamespaces{From: &fromAll},
-	}
+	routes := tenantAllowedRoutesFor(aigw)
 
 	if aigw.Spec.Domain == "" {
 		return []gatewayapiv1.Listener{{
@@ -355,6 +352,22 @@ func gatewayListenersFor(aigw *maasv1alpha1.AIGateway) []gatewayapiv1.Listener {
 		Hostname:      &hostname,
 		AllowedRoutes: routes,
 	}}
+}
+
+func tenantAllowedRoutesFor(aigw *maasv1alpha1.AIGateway) *gatewayapiv1.AllowedRoutes {
+	fromSelector := gatewayapiv1.NamespacesFromSelector
+	return &gatewayapiv1.AllowedRoutes{
+		Namespaces: &gatewayapiv1.RouteNamespaces{
+			From: &fromSelector,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					tenantreconcile.LabelManagedByAIGateway: "true",
+					tenantreconcile.LabelTenantName:         aigw.Name,
+					tenantreconcile.LabelTenantNamespace:    aigw.Spec.TenantNamespace.Name,
+				},
+			},
+		},
+	}
 }
 
 func (r *AIGatewayReconciler) ensureTenantConfig(ctx context.Context, aigw *maasv1alpha1.AIGateway, gatewayRef maasv1alpha1.TenantGatewayRef) error {
