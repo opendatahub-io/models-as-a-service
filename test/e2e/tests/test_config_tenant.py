@@ -1,4 +1,8 @@
-"""Read-only E2E for cluster Config/default (anchor + owner refs on Tenant and maas-controller).
+"""Read-only E2E for cluster Config/default anchor.
+
+Verifies that the Config singleton exists and is healthy. Lifecycle coordination between Config
+and namespace-scoped resources (Tenant, Deployment) happens through controller watches rather
+than owner references (cross-scope owner refs are invalid in Kubernetes).
 
 Does not delete Config; destructive GC checks belong in operator or dedicated jobs.
 """
@@ -132,50 +136,3 @@ class TestConfigAnchorPresence:
         assert not doc.get("metadata", {}).get(
             "deletionTimestamp"
         ), "Config anchor is deleting; platform GC may be in progress."
-
-
-class TestConfigTenantOwnership:
-    def test_tenant_lists_config_owner_reference(self):
-        try:
-            doc = _tenant_doc()
-        except subprocess.CalledProcessError as exc:
-            if _oc_not_found(exc):
-                pytest.skip(
-                    f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found; run after Tenant bootstrap."
-                )
-            raise
-        ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))
-        assert ref is not None, (
-            f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} should reference Config/{CONFIG_NAME} "
-            "(LifecycleReconciler links the anchor for GC)."
-        )
-
-    def test_maas_controller_deployment_lists_config_owner_reference(self):
-        result = _oc_run(
-            [
-                "get",
-                "deployment",
-                CONTROLLER_DEPLOYMENT,
-                "-n",
-                CONTROLLER_DEPLOY_NS,
-                "-o",
-                "json",
-            ]
-        )
-        if result.returncode != 0:
-            if _oc_output_not_found(result):
-                pytest.skip(
-                    f"deployment/{CONTROLLER_DEPLOYMENT} not found in {CONTROLLER_DEPLOY_NS!r}; "
-                    "skipping Config→Deployment owner check."
-                )
-            combined = (result.stderr or "") + (result.stdout or "")
-            pytest.fail(
-                f"`oc get deployment {CONTROLLER_DEPLOYMENT} -n {CONTROLLER_DEPLOY_NS}` failed: "
-                f"{combined.strip()}"
-            )
-        doc = json.loads(result.stdout)
-        ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))
-        assert ref is not None, (
-            f"Deployment {CONTROLLER_DEPLOYMENT}/{CONTROLLER_DEPLOY_NS} should list an owner "
-            f"reference to Config/{CONFIG_NAME}."
-        )
