@@ -1105,7 +1105,6 @@ cat > "$TEMP_DIR/params.env" <<EOF
 maas-api-image=${MAAS_API_IMAGE}
 maas-controller-image=${MAAS_CONTROLLER_IMAGE}
 payload-processing-image=${BBR_IMAGE}
-maas-api-key-cleanup-image=docker.io/curlimages/curl:latest
 EOF
 
 # Create a live maas-parameters ConfigMap with image values consumed by

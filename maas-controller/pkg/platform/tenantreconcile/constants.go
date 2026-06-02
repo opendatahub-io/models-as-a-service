@@ -61,7 +61,6 @@ const (
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:ed049f48739fc4c52f30080c4337073595fd95b6"
-	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays = "90"
 
 	// Resource name base constants for multi-tenant resources.
@@ -71,13 +70,11 @@ const (
 	baseGatewayTokenRateLimitDefaultDenyPolicyName = "gateway-default-deny"
 	baseMaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
 	baseMaaSAPIRouteName                           = "maas-api-route"
-	baseMaaSAPIKeyCleanupCronJobName               = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
 	baseGatewayDestinationRuleName                 = "maas-api-backend-tls"
 	baseTelemetryPolicyName                        = "maas-telemetry"
 	baseIstioTelemetryName                         = "latency-per-subscription"
 	baseMaaSAPIDeploymentName                      = "maas-api"
 	baseMaaSAPIServiceName                         = "maas-api"
-	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 
 	// Non-tenant-specific resource names (shared infrastructure)
 	PayloadProcessingName                         = "payload-processing"
@@ -104,7 +101,6 @@ const (
 var (
 	GVKDeployment           = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
 	GVKHTTPRoute            = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
-	GVKCronJob              = schema.GroupVersionKind{Group: "batch", Version: "v1", Kind: "CronJob"}
 	GVKAuthPolicy           = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}
 	GVKTokenRateLimitPolicy = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}
 	GVKDestinationRule      = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"}
@@ -161,10 +157,6 @@ func MaaSAPIAuthPolicyName(tenantID string) string {
 
 func MaaSAPIRouteName(tenantID string) string {
 	return resourceNameForTenant(baseMaaSAPIRouteName, tenantID)
-}
-
-func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
-	return resourceNameForTenant(baseMaaSAPIKeyCleanupCronJobName, tenantID)
 }
 
 func GatewayDestinationRuleName(tenantID string) string {
