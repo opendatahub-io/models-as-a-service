@@ -712,6 +712,7 @@ run_e2e_tests() {
         "$test_dir/tests/test_models_endpoint.py" \
         "$test_dir/tests/test_external_models.py" \
         "$test_dir/tests/test_tenant.py" \
+        "$test_dir/tests/test_aitenant_lifecycle.py" \
         "$test_dir/tests/test_config_tenant.py" \
         "$test_dir/tests/test_external_oidc.py" ; then
         echo "❌ ERROR: E2E tests failed"
