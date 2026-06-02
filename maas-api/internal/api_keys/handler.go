@@ -465,6 +465,8 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+
+// TODO: cleanup unless we wanna keep /cleanup endpoint
 // CleanupExpiredEphemeralKeys handles POST /internal/v1/api-keys/cleanup
 // Deletes expired ephemeral API keys. Called by CronJob.
 // Access is restricted at the network level via NetworkPolicy.

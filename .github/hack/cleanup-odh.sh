@@ -100,8 +100,7 @@ cleanup_maas_resources() {
     kubectl delete authpolicy maas-api-auth-policy -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete httproute maas-api-route -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete destinationrule maas-api-backend-tls -n "$ns" --ignore-not-found 2>/dev/null || true
-    kubectl delete networkpolicy maas-api-cleanup-restrict maas-authorino-allow -n "$ns" --ignore-not-found 2>/dev/null || true
-    kubectl delete cronjob maas-api-key-cleanup -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete networkpolicy maas-authorino-allow -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete role maas-api-db-secret maas-controller-leader-election-role -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete rolebinding maas-api-db-secret maas-controller-leader-election-rolebinding -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete serviceaccount maas-api maas-controller -n "$ns" --ignore-not-found 2>/dev/null || true
