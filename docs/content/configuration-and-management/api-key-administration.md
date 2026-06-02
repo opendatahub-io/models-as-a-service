@@ -50,6 +50,8 @@ Use the bulk revoke endpoint to revoke all keys for the affected user, then noti
 
 Expired ephemeral keys are automatically deleted from the database by a **background cleanup loop** inside the maas-api process. By default it runs every 15 minutes (`CLEANUP_INTERVAL_MINUTES=15`). This prevents unbounded accumulation of expired short-lived credentials.
 
+When upgrading from releases that used the external `maas-api-key-cleanup` CronJob, the Tenant reconciler automatically removes that CronJob and its `maas-api-cleanup-restrict` NetworkPolicy on the next platform reconcile.
+
 ### How It Works
 
 1. On startup, maas-api starts a goroutine that periodically invokes the cleanup logic
