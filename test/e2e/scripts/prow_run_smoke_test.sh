@@ -99,6 +99,14 @@ AUTHORINO_NAMESPACE="kuadrant-system"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
+# Use clusterip gateway mode by default in e2e to avoid cloud LB provisioning delays/failures.
+# Can be overridden by setting INGRESS_MODE=route explicitly.
+INGRESS_MODE="${INGRESS_MODE:-clusterip}"
+export INGRESS_MODE
+# Gateway programming can lag during fresh cluster bring-up; allow a generous timeout.
+GATEWAY_PROGRAMMED_TIMEOUT="${GATEWAY_PROGRAMMED_TIMEOUT:-600}"
 # OIDC readiness gate: by default do not block pytest if Keycloak/Authorino still returns 401
 OIDC_READINESS_STRICT="${OIDC_READINESS_STRICT:-false}"
 
@@ -115,6 +123,25 @@ print_header() {
     echo "$1"
     echo "----------------------------------------"
     echo ""
+}
+
+wait_for_gateway_programmed() {
+    local gateway_name="${1:-$GATEWAY_NAME}"
+    local gateway_ns="${2:-$GATEWAY_NAMESPACE}"
+    local timeout="${3:-$GATEWAY_PROGRAMMED_TIMEOUT}"
+
+    echo "Waiting for Gateway ${gateway_ns}/${gateway_name} to be Programmed=True (timeout: ${timeout}s)..."
+
+    if oc wait "gateway/${gateway_name}" -n "${gateway_ns}" --for=condition=Programmed --timeout="${timeout}s"; then
+        echo "✅ Gateway ${gateway_ns}/${gateway_name} is Programmed"
+        return 0
+    fi
+
+    echo "❌ ERROR: Gateway ${gateway_ns}/${gateway_name} did not reach Programmed=True within ${timeout}s"
+    echo "Gateway diagnostics:"
+    oc get "gateway/${gateway_name}" -n "${gateway_ns}" -o wide || true
+    oc describe "gateway/${gateway_name}" -n "${gateway_ns}" || true
+    return 1
 }
 
 # When EXTERNAL_OIDC=true and OIDC_* are not set, use Keycloak test realm (tenant-a) on this cluster.
@@ -181,6 +208,7 @@ check_prerequisites() {
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform via ODH operator..."
+    echo "Gateway ingress mode for deploy.sh: ${INGRESS_MODE}"
     if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
         echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
     fi
@@ -308,6 +336,12 @@ deploy_maas_platform() {
 
 deploy_models() {
     echo "Deploying MaaS system (free + premium: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)"
+    # LLMInferenceService readiness depends on Gateway Programmed=True. On fresh clusters this can
+    # lag behind deploy.sh completion, causing deterministic model readiness failures.
+    if ! wait_for_gateway_programmed "$GATEWAY_NAME" "$GATEWAY_NAMESPACE" "$GATEWAY_PROGRAMMED_TIMEOUT"; then
+        exit 1
+    fi
+
     # Create llm namespace if it does not exist
     if ! kubectl get namespace llm >/dev/null 2>&1; then
         echo "Creating 'llm' namespace..."

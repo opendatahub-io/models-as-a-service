@@ -811,7 +811,7 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
 
 
 def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=None, timeout=60,
-                                require_auth_policies=True, require_enforced=True):
+                                require_auth_policies=False, require_enforced=True):
     """Wait for MaaSAuthPolicy to reach a specific phase.
 
     Args:
@@ -819,8 +819,8 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
         expected_phase: Phase to wait for (default: "Active")
         namespace: Namespace (defaults to _ns())
         timeout: Maximum wait time in seconds (default: 60)
-        require_auth_policies: If True, requires authPolicies to be populated (default: True).
-                               Set to False for Failed phase with missing models.
+        require_auth_policies: If True, requires authPolicies to be populated (default: False).
+                               Keep False for gateway-only AuthPolicy reconciliation.
         require_enforced: If True, requires all authPolicies to have ready=True
                           (default: True). Only applies when require_auth_policies is True.
 

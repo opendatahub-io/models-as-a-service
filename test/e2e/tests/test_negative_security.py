@@ -245,12 +245,12 @@ class TestAuthPolicyRemoval:
     """
 
     def test_authpolicy_deletion_revokes_access(self):
-        """Create auth policy, delete it, verify Kuadrant AuthPolicy is removed.
+        """Create auth policy, delete it, verify legacy per-model AuthPolicy is absent.
 
         Uses the unconfigured model to avoid interfering with other tests.
-        Creates a MaaSAuthPolicy, waits for the generated Kuadrant AuthPolicy
-        to appear, then deletes the MaaSAuthPolicy and verifies the controller
-        removes the downstream Kuadrant AuthPolicy.
+        In gateway-only mode, the controller should not create per-model
+        Kuadrant AuthPolicies. This verifies the legacy per-model AuthPolicy
+        remains absent before and after MaaSAuthPolicy deletion.
 
         This tests the controller's cleanup logic. Gateway enforcement of
         AuthPolicy is already covered by other tests (e.g. test_wrong_group_gets_403).
@@ -270,18 +270,18 @@ class TestAuthPolicyRemoval:
 
             _wait_for_maas_auth_policy_phase(policy_name)
 
-            # Verify Kuadrant AuthPolicy was generated
+            # Gateway-only mode should not generate per-model AuthPolicies.
             ap = _get_cr("authpolicy", kuadrant_auth_name, namespace=MODEL_NAMESPACE)
-            assert ap is not None, (
-                f"Kuadrant AuthPolicy '{kuadrant_auth_name}' should exist after MaaSAuthPolicy creation"
+            assert ap is None, (
+                f"Legacy per-model AuthPolicy '{kuadrant_auth_name}' should not exist in gateway-only mode"
             )
-            log.info("Kuadrant AuthPolicy %s exists in %s", kuadrant_auth_name, MODEL_NAMESPACE)
+            log.info("Legacy per-model AuthPolicy %s absent as expected", kuadrant_auth_name)
 
             # Delete the MaaSAuthPolicy
             log.info("Deleting MaaSAuthPolicy %s", policy_name)
             _delete_cr("maasauthpolicy", policy_name)
 
-            # Poll until the Kuadrant AuthPolicy is removed by the controller
+            # Poll to confirm legacy per-model AuthPolicy remains absent.
             deadline = time.time() + 60
             while time.time() < deadline:
                 ap = _get_cr("authpolicy", kuadrant_auth_name, namespace=MODEL_NAMESPACE)
@@ -289,11 +289,8 @@ class TestAuthPolicyRemoval:
                     break
                 time.sleep(2)
 
-            assert ap is None, (
-                f"Kuadrant AuthPolicy '{kuadrant_auth_name}' should be removed "
-                f"after MaaSAuthPolicy deletion"
-            )
-            log.info("Kuadrant AuthPolicy %s removed after MaaSAuthPolicy deletion", kuadrant_auth_name)
+            assert ap is None, f"Legacy per-model AuthPolicy '{kuadrant_auth_name}' should remain absent"
+            log.info("Legacy per-model AuthPolicy %s remained absent after deletion", kuadrant_auth_name)
 
         finally:
             _delete_cr("maasauthpolicy", policy_name)
@@ -359,11 +356,11 @@ class TestMissingModelRef:
             _delete_cr("maasauthpolicy", auth_name)
 
     def test_authpolicy_with_nonexistent_model_ref(self):
-        """MaaSAuthPolicy generates AuthPolicy only for valid model, not ghost model.
+        """MaaSAuthPolicy does not generate per-model AuthPolicies in gateway-only mode.
 
         Creates an auth policy referencing one valid model and one ghost model,
-        waits for Degraded phase, then asserts that a Kuadrant AuthPolicy exists
-        for the valid model but not for the ghost model.
+        waits for Degraded phase, then asserts that no legacy per-model
+        AuthPolicies exist for either model.
         """
         suffix = uuid.uuid4().hex[:8]
         policy_name = f"e2e-neg-ghost-policy-{suffix}"
@@ -386,12 +383,12 @@ class TestMissingModelRef:
                 f"AuthPolicy '{ghost_auth_name}' should not exist for non-existent model"
             )
 
-            # AuthPolicy should exist for the valid model
+            # Gateway-only mode should not create a per-model AuthPolicy for valid model either.
             valid_auth_name = f"maas-auth-{MODEL_REF}"
             valid_ap = _get_cr("authpolicy", valid_auth_name, namespace=MODEL_NAMESPACE)
             log.info("Valid model AuthPolicy exists: %s", valid_ap is not None)
-            assert valid_ap is not None, (
-                f"AuthPolicy '{valid_auth_name}' should exist for valid model"
+            assert valid_ap is None, (
+                f"AuthPolicy '{valid_auth_name}' should not exist in gateway-only mode"
             )
 
         finally:

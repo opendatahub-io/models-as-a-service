@@ -69,24 +69,24 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 	)
 
 	tests := []struct {
-		name            string
-		annotations     map[string]string
-		wantSpecChanged bool // true → controller should overwrite spec; false → must leave it alone
+		name        string
+		annotations map[string]string
+		wantDeleted bool // true → controller should remove legacy per-model policy
 	}{
 		{
-			name:            "annotation absent: controller overwrites spec",
-			annotations:     map[string]string{},
-			wantSpecChanged: true,
+			name:        "annotation absent: controller deletes legacy per-model policy",
+			annotations: map[string]string{},
+			wantDeleted: true,
 		},
 		{
-			name:            "opendatahub.io/managed=false: controller skips update (opt-out)",
-			annotations:     map[string]string{ManagedByODHOperator: "false"},
-			wantSpecChanged: false,
+			name:        "opendatahub.io/managed=false: controller preserves opt-out policy",
+			annotations: map[string]string{ManagedByODHOperator: "false"},
+			wantDeleted: false,
 		},
 		{
-			name:            "opendatahub.io/managed=true: controller overwrites spec",
-			annotations:     map[string]string{ManagedByODHOperator: "true"},
-			wantSpecChanged: true,
+			name:        "opendatahub.io/managed=true: controller deletes legacy per-model policy",
+			annotations: map[string]string{ManagedByODHOperator: "true"},
+			wantDeleted: true,
 		},
 	}
 
@@ -114,21 +114,23 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 
 			got := &unstructured.Unstructured{}
 			got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-			if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got); err != nil {
-				t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
-			}
+			getErr := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, got)
 
-			// The controller sets spec.targetRef.name to the HTTPRoute name on update.
-			// A sentinel value means no update occurred.
-			targetRefName, found, err := unstructured.NestedString(got.Object, "spec", "targetRef", "name")
-			if err != nil || !found {
-				t.Fatalf("spec.targetRef.name missing or invalid: found=%v err=%v", found, err)
-			}
-			if tc.wantSpecChanged {
-				if targetRefName != httpRouteName {
-					t.Errorf("spec.targetRef.name = %q: expected %q", targetRefName, httpRouteName)
+			if tc.wantDeleted {
+				if !apierrors.IsNotFound(getErr) {
+					t.Fatalf("expected legacy per-model AuthPolicy to be deleted, got: %v", getErr)
 				}
-			} else if targetRefName != "sentinel-route" {
+				return
+			}
+			if getErr != nil {
+				t.Fatalf("expected opt-out AuthPolicy to survive reconciliation, got: %v", getErr)
+			}
+			// Managed=false still opts out from cleanup; sentinel confirms untouched spec.
+			targetRefName, found, nestedErr := unstructured.NestedString(got.Object, "spec", "targetRef", "name")
+			if nestedErr != nil || !found {
+				t.Fatalf("spec.targetRef.name missing or invalid: found=%v err=%v", found, nestedErr)
+			}
+			if targetRefName != "sentinel-route" {
 				t.Errorf("spec.targetRef.name = %q: expected sentinel %q (managed=false opt-out)", targetRefName, "sentinel-route")
 			}
 		})
@@ -144,10 +146,10 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 // cascades into O(N²) reconciliations.
 func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
 	const (
-		modelName      = "llm"
-		namespace      = "default"
-		httpRouteName  = modelName
-		authPolicyName = "maas-auth-" + modelName
+		modelName     = "llm"
+		namespace     = "default"
+		httpRouteName = modelName
+		gatewayNS     = "gateway-ns"
 	)
 
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
@@ -162,7 +164,13 @@ func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
+	}
 	ctx := context.Background()
 
 	// Reconcile policy-a: creates the aggregated AuthPolicy (covering both policy-a and policy-b).
@@ -171,11 +179,11 @@ func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
 		t.Fatalf("Reconcile policy-a: %v", err)
 	}
 
-	// Capture AuthPolicy ResourceVersion after first reconciliation.
+	// Capture gateway AuthPolicy ResourceVersion after first reconciliation.
 	ap := &unstructured.Unstructured{}
 	ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, ap); err != nil {
-		t.Fatalf("Get AuthPolicy after policy-a reconcile: %v", err)
+	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, ap); err != nil {
+		t.Fatalf("Get gateway AuthPolicy after policy-a reconcile: %v", err)
 	}
 	rvAfterA := ap.GetResourceVersion()
 
@@ -186,8 +194,8 @@ func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
 		t.Fatalf("Reconcile policy-b: %v", err)
 	}
 
-	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, ap); err != nil {
-		t.Fatalf("Get AuthPolicy after policy-b reconcile: %v", err)
+	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, ap); err != nil {
+		t.Fatalf("Get gateway AuthPolicy after policy-b reconcile: %v", err)
 	}
 	rvAfterB := ap.GetResourceVersion()
 
@@ -287,6 +295,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef(t *testing.T) {
 		authPolicyA    = "maas-auth-" + modelA
 		authPolicyB    = "maas-auth-" + modelB
 		maasPolicyName = "policy-1"
+		gatewayNS      = "gateway-ns"
 	)
 
 	modelRefA := newMaaSModelRef(modelA, namespace, "ExternalModel", modelA)
@@ -306,7 +315,13 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
+	}
 	ctx := context.Background()
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 
@@ -314,12 +329,12 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef(t *testing.T) {
 		t.Fatalf("Initial reconcile: %v", err)
 	}
 
-	// Both AuthPolicies should exist
+	// Legacy per-model AuthPolicies should not exist in gateway-only mode.
 	for _, name := range []string{authPolicyA, authPolicyB} {
 		ap := &unstructured.Unstructured{}
 		ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ap); err != nil {
-			t.Fatalf("AuthPolicy %q not found after initial reconcile: %v", name, err)
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ap); !apierrors.IsNotFound(err) {
+			t.Fatalf("legacy per-model AuthPolicy %q should be absent, got: %v", name, err)
 		}
 	}
 
@@ -337,19 +352,31 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef(t *testing.T) {
 		t.Fatalf("Reconcile after removing modelRef: %v", err)
 	}
 
-	// AuthPolicy for model A should still exist
-	apA := &unstructured.Unstructured{}
-	apA.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyA, Namespace: namespace}, apA); err != nil {
-		t.Errorf("AuthPolicy for model A should still exist: %v", err)
+	// Legacy per-model AuthPolicies should remain absent.
+	for _, name := range []string{authPolicyA, authPolicyB} {
+		ap := &unstructured.Unstructured{}
+		ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, ap)
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("legacy per-model AuthPolicy %q should be absent, got: %v", name, err)
+		}
 	}
 
-	// AuthPolicy for model B should be DELETED
-	apB := &unstructured.Unstructured{}
-	apB.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	err := c.Get(ctx, types.NamespacedName{Name: authPolicyB, Namespace: namespace}, apB)
-	if !apierrors.IsNotFound(err) {
-		t.Errorf("AuthPolicy for model B should be deleted after removing modelRef, but got: %v", err)
+	// Gateway policy should only carry model A after model B is removed.
+	gw := &unstructured.Unstructured{}
+	gw.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gw); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+	rego, found, err := unstructured.NestedString(gw.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+	if err != nil || !found {
+		t.Fatalf("gateway require-group-membership rego missing: found=%v err=%v", found, err)
+	}
+	if !contains(rego, namespace+"/"+modelA) {
+		t.Errorf("gateway rego should include %q", namespace+"/"+modelA)
+	}
+	if contains(rego, namespace+"/"+modelB) {
+		t.Errorf("gateway rego should not include removed model %q", namespace+"/"+modelB)
 	}
 }
 
@@ -358,12 +385,12 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef(t *testing.T) {
 // (forcing a rebuild by the remaining policy) without affecting unrelated models.
 func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 	const (
-		modelA      = "model-a"
-		modelB      = "model-b"
-		namespace   = "default"
-		httpRouteA  = modelA
-		httpRouteB  = modelB
-		authPolicyB = "maas-auth-" + modelB
+		modelA     = "model-a"
+		modelB     = "model-b"
+		namespace  = "default"
+		httpRouteA = modelA
+		httpRouteB = modelB
+		gatewayNS  = "gateway-ns"
 	)
 
 	modelRefA := newMaaSModelRef(modelA, namespace, "ExternalModel", modelA)
@@ -387,7 +414,13 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
+	}
 	ctx := context.Background()
 
 	// Reconcile both policies to create aggregated AuthPolicies
@@ -400,13 +433,6 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 		t.Fatalf("Reconcile ap2: %v", err)
 	}
 
-	// AuthPolicy for model B should exist with both policies contributing
-	apB := &unstructured.Unstructured{}
-	apB.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyB, Namespace: namespace}, apB); err != nil {
-		t.Fatalf("AuthPolicy for model B not found: %v", err)
-	}
-
 	// Remove model B from ap1 (ap2 still references it)
 	freshAP1 := &maasv1alpha1.MaaSAuthPolicy{}
 	if err := c.Get(ctx, types.NamespacedName{Name: "ap1", Namespace: namespace}, freshAP1); err != nil {
@@ -417,34 +443,51 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 		t.Fatalf("Update ap1: %v", err)
 	}
 
-	// Reconcile ap1 → should delete stale AuthPolicy for model B
+	// Reconcile ap1 and verify model B is still aggregated via ap2.
 	if _, err := r.Reconcile(ctx, req1); err != nil {
 		t.Fatalf("Reconcile ap1 after removing modelRef: %v", err)
 	}
-
-	// AuthPolicy for model B should be deleted (stale from ap1's perspective)
-	apB = &unstructured.Unstructured{}
-	apB.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	err := c.Get(ctx, types.NamespacedName{Name: authPolicyB, Namespace: namespace}, apB)
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("AuthPolicy for model B should be deleted after ap1 drops it, but got: %v", err)
+	gw := &unstructured.Unstructured{}
+	gw.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gw); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+	rego, found, err := unstructured.NestedString(gw.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+	if err != nil || !found {
+		t.Fatalf("gateway require-group-membership rego missing: found=%v err=%v", found, err)
+	}
+	if !contains(rego, namespace+"/"+modelB) {
+		t.Fatalf("model B should remain aggregated while ap2 still references it")
 	}
 
-	// Reconcile ap2 → should recreate AuthPolicy for model B with only ap2's subjects
+	// Delete ap2 and reconcile deletion; model B should then disappear from aggregate.
+	freshAP2 := &maasv1alpha1.MaaSAuthPolicy{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "ap2", Namespace: namespace}, freshAP2); err != nil {
+		t.Fatalf("Get ap2: %v", err)
+	}
+	if err := c.Delete(ctx, freshAP2); err != nil {
+		t.Fatalf("Delete ap2: %v", err)
+	}
 	if _, err := r.Reconcile(ctx, req2); err != nil {
-		t.Fatalf("Reconcile ap2 after ap1 drop: %v", err)
+		t.Fatalf("Reconcile ap2 deletion: %v", err)
 	}
-
-	apB = &unstructured.Unstructured{}
-	apB.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyB, Namespace: namespace}, apB); err != nil {
-		t.Errorf("AuthPolicy for model B should be rebuilt by ap2: %v", err)
+	// Deletion reconcile does cleanup/finalizer handling; run ap1 reconcile to
+	// rebuild the gateway aggregate from surviving policies.
+	if _, err := r.Reconcile(ctx, req1); err != nil {
+		t.Fatalf("Reconcile ap1 after ap2 deletion: %v", err)
 	}
-
-	// Verify only ap2 is in the annotation (ap1 no longer contributes)
-	ann := apB.GetAnnotations()["maas.opendatahub.io/auth-policies"]
-	if ann != "ap2" {
-		t.Errorf("AuthPolicy annotation = %q, want %q (only ap2 should contribute)", ann, "ap2")
+	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gw); err != nil {
+		t.Fatalf("Get gateway AuthPolicy after ap2 deletion: %v", err)
+	}
+	rego, found, err = unstructured.NestedString(gw.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+	if err != nil || !found {
+		t.Fatalf("gateway require-group-membership rego missing after ap2 deletion: found=%v err=%v", found, err)
+	}
+	if contains(rego, namespace+"/"+modelB) {
+		t.Errorf("model B should be removed from aggregate after deleting ap2")
+	}
+	if !contains(rego, namespace+"/"+modelA) {
+		t.Errorf("model A should still be present after deleting ap2")
 	}
 }
 
@@ -456,10 +499,10 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		modelName      = "shared-model"
 		modelNamespace = "llm"
 		httpRouteName  = modelName
-		authPolicyName = "maas-auth-" + modelName
 		policy1Name    = "policy-1"
 		policy2Name    = "policy-2"
 		policyNS       = "opendatahub"
+		gatewayNS      = "gateway-ns"
 	)
 
 	// Create model and HTTPRoute
@@ -504,7 +547,13 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
+	}
 
 	// Reconcile both policies to create the aggregated AuthPolicy
 	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: policy1Name, Namespace: policyNS}}
@@ -516,32 +565,23 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		t.Fatalf("Reconcile policy2: %v", err)
 	}
 
-	// Verify aggregated AuthPolicy was created
+	// Verify gateway AuthPolicy was created
 	authPolicy := &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, authPolicy); err != nil {
-		t.Fatalf("AuthPolicy not found before deletion: %v", err)
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, authPolicy); err != nil {
+		t.Fatalf("gateway AuthPolicy not found before deletion: %v", err)
 	}
 
 	// Delete policy1 (but policy2 still exists)
 	if err := c.Delete(context.Background(), policy1); err != nil {
 		t.Fatalf("Delete policy1: %v", err)
 	}
-	// Reconcile policy1 deletion - this will delete the aggregated AuthPolicy
+	// Reconcile policy1 deletion; gateway policy should still exist due to policy2.
 	if _, err := r.Reconcile(context.Background(), req1); err != nil {
 		t.Fatalf("Reconcile policy1 deletion: %v", err)
 	}
-
-	// Reconcile policy2 so it recreates the AuthPolicy without policy1's subjects
-	if _, err := r.Reconcile(context.Background(), req2); err != nil {
-		t.Fatalf("Reconcile policy2 after policy1 deletion: %v", err)
-	}
-
-	// Aggregated AuthPolicy should exist again (rebuilt by policy2)
-	authPolicy = &unstructured.Unstructured{}
-	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, authPolicy); err != nil {
-		t.Errorf("AuthPolicy should be rebuilt by policy2 after policy1 deletion: %v", err)
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, authPolicy); err != nil {
+		t.Fatalf("gateway AuthPolicy should persist while policy2 exists: %v", err)
 	}
 
 	// Now delete policy2 (the last one)
@@ -552,28 +592,26 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		t.Fatalf("Reconcile policy2 deletion: %v", err)
 	}
 
-	// Aggregated AuthPolicy should NOW BE DELETED (no remaining parents)
+	// Gateway AuthPolicy should NOW BE DELETED (no remaining parents).
 	authPolicy = &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, authPolicy)
+	err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, authPolicy)
 	if !apierrors.IsNotFound(err) {
-		t.Errorf("AuthPolicy should be deleted after deleting last parent policy, but got error: %v", err)
+		t.Errorf("gateway AuthPolicy should be deleted after deleting last parent policy, but got: %v", err)
 	}
 }
 
 // TestMaaSAuthPolicyReconciler_CachingConfiguration verifies that the controller
 // generates cache blocks on metadata and authorization evaluators with configurable TTLs.
 //
-// After the gateway-level AuthPolicy refactor, caching is split across two resources:
-//   - Gateway policy (maas-gateway-auth): holds metadata + auth-valid + subscription-valid
-//   - Group policy (maas-auth-<model>): holds require-group-membership
+// In gateway-only mode all authorization evaluators, including require-group-membership,
+// live in the singleton gateway AuthPolicy.
 func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
 		gatewayNS      = "gateway-ns"
 		httpRouteName  = modelName
-		authPolicyName = "maas-auth-" + modelName
 		maasPolicyName = "policy-a"
 	)
 
@@ -656,13 +694,6 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				t.Fatalf("Get gateway AuthPolicy %q: %v", maasGatewayAuthPolicyName, err)
 			}
 
-			// Group policy holds require-group-membership
-			groupPolicy := &unstructured.Unstructured{}
-			groupPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-			if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, groupPolicy); err != nil {
-				t.Fatalf("Get group AuthPolicy %q: %v", authPolicyName, err)
-			}
-
 			// Verify apiKeyValidation metadata has cache with correct TTL (on gateway policy)
 			apiKeyValTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "ttl")
 			if err != nil || !found {
@@ -703,8 +734,8 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				t.Errorf("subscription-valid cache.ttl = %d, want %d", subValidTTL, tc.wantAuthzTTL)
 			}
 
-			// Verify require-group-membership authorization has cache with correct TTL (on group policy)
-			groupMembershipTTL, found, err := unstructured.NestedInt64(groupPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "ttl")
+			// Verify require-group-membership authorization has cache with correct TTL (on gateway policy)
+			groupMembershipTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "ttl")
 			if err != nil || !found {
 				t.Errorf("require-group-membership cache.ttl missing or invalid: found=%v err=%v", found, err)
 			} else if groupMembershipTTL != tc.wantAuthzTTL {
@@ -726,7 +757,7 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				t.Errorf("subscription-valid cache.key.selector is empty")
 			}
 
-			groupMembershipCacheKey, found, err := unstructured.NestedString(groupPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector")
+			groupMembershipCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector")
 			if err != nil || !found {
 				t.Errorf("require-group-membership cache.key.selector missing: found=%v err=%v", found, err)
 			} else if groupMembershipCacheKey == "" {
@@ -816,7 +847,6 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		namespace      = "default"
 		gatewayNS      = "gateway-ns"
 		httpRouteName  = modelName
-		authPolicyName = "maas-auth-" + modelName
 		maasPolicyName = "policy-a"
 	)
 
@@ -851,13 +881,6 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
-	}
-
-	// Group policy holds require-group-membership
-	groupPolicy := &unstructured.Unstructured{}
-	groupPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: namespace}, groupPolicy); err != nil {
-		t.Fatalf("Get group AuthPolicy %q: %v", authPolicyName, err)
 	}
 
 	// Test 1: apiKeyValidation cache key must include API key material (gateway policy)
@@ -915,15 +938,14 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		}
 	})
 
-	// Test 5: require-group-membership cache key must include username, groups, and static model (group policy)
-	t.Run("require-group-membership includes username, groups, model", func(t *testing.T) {
-		key := assertCacheKeyContains(t, groupPolicy,
+	// Test 5: require-group-membership cache key must include username, groups, and dynamic model identity.
+	t.Run("require-group-membership includes username, groups, dynamic model", func(t *testing.T) {
+		key := assertCacheKeyContains(t, gwPolicy,
 			[]string{"username", "groups", "join"},
 			"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector",
 		)
-		// Group policy bakes in static namespace/name for per-model isolation.
-		if !contains(key, namespace) || !contains(key, modelName) {
-			t.Errorf("require-group-membership cache key must include model namespace/name, got: %s", key)
+		if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
+			t.Errorf("require-group-membership cache key must include dynamic model identity (header or path), got: %s", key)
 		}
 	})
 }
@@ -1011,36 +1033,17 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 		})
 	}
 
-	// Per-model group policies still have static namespace/name in require-group-membership keys
-	ap1 := &unstructured.Unstructured{}
-	ap1.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + model1Name, Namespace: namespace}, ap1); err != nil {
-		t.Fatalf("Get group AuthPolicy for model-1: %v", err)
-	}
-	ap2 := &unstructured.Unstructured{}
-	ap2.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + model2Name, Namespace: namespace}, ap2); err != nil {
-		t.Fatalf("Get group AuthPolicy for model-2: %v", err)
-	}
-
 	t.Run("require-group-membership isolates models", func(t *testing.T) {
 		path := []string{"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector"}
-		key1, found, err := unstructured.NestedString(ap1.Object, path...)
+		key, found, err := unstructured.NestedString(gwPolicy.Object, path...)
 		if err != nil || !found {
-			t.Fatalf("model-1 require-group-membership cache key missing: found=%v err=%v", found, err)
+			t.Fatalf("gateway require-group-membership cache key missing: found=%v err=%v", found, err)
 		}
-		key2, found, err := unstructured.NestedString(ap2.Object, path...)
-		if err != nil || !found {
-			t.Fatalf("model-2 require-group-membership cache key missing: found=%v err=%v", found, err)
+		if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
+			t.Errorf("require-group-membership cache key must include dynamic model identity for runtime isolation, got: %s", key)
 		}
-		if key1 == key2 {
-			t.Errorf("require-group-membership cache keys must differ between models, but both are: %s", key1)
-		}
-		if !contains(key1, model1Name) {
-			t.Errorf("model-1 require-group-membership cache key must contain model name %q, got: %s", model1Name, key1)
-		}
-		if !contains(key2, model2Name) {
-			t.Errorf("model-2 require-group-membership cache key must contain model name %q, got: %s", model2Name, key2)
+		if !contains(key, "username") || !contains(key, "groups") {
+			t.Errorf("require-group-membership cache key must include caller identity dimensions, got: %s", key)
 		}
 	})
 }
@@ -1390,19 +1393,9 @@ func TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
 		t.Errorf("expected Ready=True, got %v", readyCond.Status)
 	}
 
-	// Verify authPolicies status is populated with Ready=true
-	if len(policy.Status.AuthPolicies) != 1 {
-		t.Fatalf("expected 1 authPolicy status, got %d", len(policy.Status.AuthPolicies))
-	}
-	apStatus := policy.Status.AuthPolicies[0]
-	if apStatus.Model != modelName {
-		t.Errorf("expected model %q, got %q", modelName, apStatus.Model)
-	}
-	if !apStatus.Ready {
-		t.Error("expected authPolicies[0].Ready=true")
-	}
-	if apStatus.Reason != maasv1alpha1.ReasonAcceptedEnforced {
-		t.Errorf("expected reason %q, got %q", maasv1alpha1.ReasonAcceptedEnforced, apStatus.Reason)
+	// Gateway-only mode no longer populates per-model authPolicies status entries.
+	if len(policy.Status.AuthPolicies) != 0 {
+		t.Fatalf("expected no per-model authPolicy status entries, got %d", len(policy.Status.AuthPolicies))
 	}
 }
 
