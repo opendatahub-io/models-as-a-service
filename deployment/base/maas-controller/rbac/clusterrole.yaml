@@ -166,7 +166,7 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
-  - aigateways
+  - aitenants
   - maasauthpolicies
   - maasmodelrefs
   - maassubscriptions
@@ -182,7 +182,7 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
-  - aigateways/finalizers
+  - aitenants/finalizers
   - externalmodels/finalizers
   - maasauthpolicies/finalizers
   - maasmodelrefs/finalizers
@@ -192,7 +192,7 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
-  - aigateways/status
+  - aitenants/status
   - maasauthpolicies/status
   - maasmodelrefs/status
   - maassubscriptions/status

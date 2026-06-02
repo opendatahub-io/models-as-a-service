@@ -4,16 +4,16 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: aigateways.maas.opendatahub.io
+  name: aitenants.maas.opendatahub.io
 spec:
   group: maas.opendatahub.io
   names:
-    kind: AIGateway
-    listKind: AIGatewayList
-    plural: aigateways
+    kind: AITenant
+    listKind: AITenantList
+    plural: aitenants
     shortNames:
-    - aigw
-    singular: aigateway
+    - ait
+    singular: aitenant
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -36,7 +36,7 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          AIGateway bootstraps one tenant slice: a dedicated Gateway, a tenant namespace,
+          AITenant bootstraps one tenant slice: a dedicated Gateway, a tenant namespace,
           the MaaS tenant config object, and tenant-admin RBAC.
         properties:
           apiVersion:
@@ -57,7 +57,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: AIGatewaySpec defines the tenant bootstrap contract.
+            description: AITenantSpec defines the tenant bootstrap contract.
             properties:
               domain:
                 description: |-
@@ -78,20 +78,15 @@ spec:
                     maxLength: 253
                     type: string
                   name:
-                    description: Name is the Gateway name. If omitted, the AIGateway
+                    description: Name is the Gateway name. If omitted, the AITenant
                       name is used.
-                    maxLength: 63
-                    pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
-                    type: string
-                  namespace:
-                    description: Namespace is the namespace where the Gateway is created.
                     maxLength: 63
                     pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
                     type: string
                 type: object
               oidc:
                 description: |-
-                  OIDC contains non-MaaS-specific OIDC settings for this AI Gateway.
+                  OIDC contains non-MaaS-specific OIDC settings for this AI Gateway tenant.
                   The current controller mirrors this into the temporary Tenant config object
                   until the MaaS config CR rename lands.
                 properties:
@@ -118,13 +113,13 @@ spec:
                 type: object
               rbac:
                 description: RBAC configures tenant-admin access to the tenant namespace
-                  and this AIGateway object.
+                  and this AITenant object.
                 properties:
                   admins:
-                    description: Admins are bound to tenant-admin roles for this AIGateway
+                    description: Admins are bound to tenant-admin roles for this AITenant
                       and tenant namespace.
                     items:
-                      description: AIGatewayRBACSubject mirrors RBAC Subject for the
+                      description: AITenantRBACSubject mirrors RBAC Subject for the
                         supported tenant-admin cases.
                       properties:
                         kind:
@@ -158,8 +153,8 @@ spec:
                   cleanupOnDelete:
                     default: false
                     description: |-
-                      CleanupOnDelete deletes the namespace during AIGateway deletion only when
-                      the namespace is controller-created and still labeled for this AIGateway.
+                      CleanupOnDelete deletes the namespace during AITenant deletion only when
+                      the namespace is controller-created and still labeled for this AITenant.
                       Defaults to false to avoid deleting tenant data by surprise.
                     type: boolean
                   create:
@@ -201,7 +196,7 @@ spec:
             - tenantNamespace
             type: object
           status:
-            description: AIGatewayStatus defines the observed tenant bootstrap state.
+            description: AITenantStatus defines the observed tenant bootstrap state.
             properties:
               conditions:
                 description: Conditions represent the latest available observations.

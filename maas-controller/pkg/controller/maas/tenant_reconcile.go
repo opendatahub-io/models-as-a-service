@@ -150,7 +150,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	setDependenciesCondition(&tenant, true, "")
 
-	appNs := r.AppNamespace
+	appNs := r.appNamespaceForTenant(&tenant)
 	rep := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs)
 	setPrerequisiteConditionsFromReport(&tenant, rep)
 	if len(rep.Blocking) > 0 {
@@ -274,6 +274,27 @@ func (r *TenantReconciler) operatorNamespace() string {
 		return ns
 	}
 	return os.Getenv("WATCH_NAMESPACE")
+}
+
+func (r *TenantReconciler) appNamespaceForTenant(tenant *maasv1alpha1.Tenant) string {
+	if tenantManagedByAITenant(tenant) {
+		return tenant.Namespace
+	}
+	if r.AppNamespace != "" {
+		return r.AppNamespace
+	}
+	return tenant.Namespace
+}
+
+func tenantManagedByAITenant(tenant *maasv1alpha1.Tenant) bool {
+	labels := tenant.GetLabels()
+	if labels != nil {
+		if labels[aitenantManagedLabel] == "true" || labels[legacyAIGatewayManagedLabel] == "true" || labels[aiGatewayTenantLabel] != "" {
+			return true
+		}
+	}
+	annotations := tenant.GetAnnotations()
+	return annotations != nil && annotations[aitenantNameAnnotation] != ""
 }
 
 func (r *TenantReconciler) applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {

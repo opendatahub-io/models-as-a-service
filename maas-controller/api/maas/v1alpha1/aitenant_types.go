@@ -21,16 +21,16 @@ import (
 )
 
 const (
-	// AIGatewayKind is the API kind for tenant bootstrap.
-	AIGatewayKind = "AIGateway"
+	// AITenantKind is the API kind for tenant bootstrap.
+	AITenantKind = "AITenant"
 
-	// AIGatewayConditionReady indicates whether the tenant bootstrap resources are reconciled.
-	AIGatewayConditionReady = "Ready"
+	// AITenantConditionReady indicates whether the tenant bootstrap resources are reconciled.
+	AITenantConditionReady = "Ready"
 )
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=aigw
+// +kubebuilder:resource:scope=Namespaced,shortName=ait
 // +kubebuilder:validation:XValidation:rule="self.spec.tenantNamespace.name == oldSelf.spec.tenantNamespace.name",message="spec.tenantNamespace.name is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.tls) || self.spec.domain != ''",message="spec.tls requires spec.domain to be set"
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Ready"
@@ -38,24 +38,24 @@ const (
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.status.gatewayRef.name`,description="Gateway name"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// AIGateway bootstraps one tenant slice: a dedicated Gateway, a tenant namespace,
+// AITenant bootstraps one tenant slice: a dedicated Gateway, a tenant namespace,
 // the MaaS tenant config object, and tenant-admin RBAC.
-type AIGateway struct {
+type AITenant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   AIGatewaySpec   `json:"spec,omitempty"`
-	Status AIGatewayStatus `json:"status,omitempty"`
+	Spec   AITenantSpec   `json:"spec,omitempty"`
+	Status AITenantStatus `json:"status,omitempty"`
 }
 
-// AIGatewaySpec defines the tenant bootstrap contract.
-type AIGatewaySpec struct {
+// AITenantSpec defines the tenant bootstrap contract.
+type AITenantSpec struct {
 	// TenantNamespace identifies the namespace where tenant administrators manage MaaS objects.
-	TenantNamespace AIGatewayTenantNamespace `json:"tenantNamespace"`
+	TenantNamespace AITenantTenantNamespace `json:"tenantNamespace"`
 
 	// Gateway is the Gateway API template reconciled for this tenant.
 	// +kubebuilder:validation:Optional
-	Gateway *AIGatewayGatewayTemplate `json:"gateway,omitempty"`
+	Gateway *AITenantGatewayTemplate `json:"gateway,omitempty"`
 
 	// Domain is the tenant hostname used for data-plane routing.
 	// When set together with TLS, the controller creates an HTTPS listener on port 443.
@@ -68,21 +68,21 @@ type AIGatewaySpec struct {
 	// TLS configures the TLS certificate for the tenant Gateway HTTPS listener.
 	// Only effective when Domain is also set.
 	// +kubebuilder:validation:Optional
-	TLS *AIGatewayTLS `json:"tls,omitempty"`
+	TLS *AITenantTLS `json:"tls,omitempty"`
 
-	// OIDC contains non-MaaS-specific OIDC settings for this AI Gateway.
+	// OIDC contains non-MaaS-specific OIDC settings for this AI Gateway tenant.
 	// The current controller mirrors this into the temporary Tenant config object
 	// until the MaaS config CR rename lands.
 	// +kubebuilder:validation:Optional
 	OIDC *TenantExternalOIDCConfig `json:"oidc,omitempty"`
 
-	// RBAC configures tenant-admin access to the tenant namespace and this AIGateway object.
+	// RBAC configures tenant-admin access to the tenant namespace and this AITenant object.
 	// +kubebuilder:validation:Optional
-	RBAC *AIGatewayRBACConfig `json:"rbac,omitempty"`
+	RBAC *AITenantRBACConfig `json:"rbac,omitempty"`
 }
 
-// AIGatewayTenantNamespace defines how the tenant namespace is handled.
-type AIGatewayTenantNamespace struct {
+// AITenantTenantNamespace defines how the tenant namespace is handled.
+type AITenantTenantNamespace struct {
 	// Name is the namespace where tenant-scoped MaaS objects are created.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -94,27 +94,21 @@ type AIGatewayTenantNamespace struct {
 	// +kubebuilder:default=true
 	Create *bool `json:"create,omitempty"`
 
-	// CleanupOnDelete deletes the namespace during AIGateway deletion only when
-	// the namespace is controller-created and still labeled for this AIGateway.
+	// CleanupOnDelete deletes the namespace during AITenant deletion only when
+	// the namespace is controller-created and still labeled for this AITenant.
 	// Defaults to false to avoid deleting tenant data by surprise.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=false
 	CleanupOnDelete *bool `json:"cleanupOnDelete,omitempty"`
 }
 
-// AIGatewayGatewayTemplate describes the Gateway API resource to create.
-type AIGatewayGatewayTemplate struct {
-	// Name is the Gateway name. If omitted, the AIGateway name is used.
+// AITenantGatewayTemplate describes the Gateway API resource to create.
+type AITenantGatewayTemplate struct {
+	// Name is the Gateway name. If omitted, the AITenant name is used.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
 	Name string `json:"name,omitempty"`
-
-	// Namespace is the namespace where the Gateway is created.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
-	Namespace string `json:"namespace,omitempty"`
 
 	// GatewayClassName is the GatewayClass used by the tenant Gateway.
 	// +kubebuilder:validation:Optional
@@ -123,30 +117,30 @@ type AIGatewayGatewayTemplate struct {
 	GatewayClassName string `json:"gatewayClassName,omitempty"`
 }
 
-// AIGatewayTLS configures the TLS certificate for the tenant Gateway.
-type AIGatewayTLS struct {
+// AITenantTLS configures the TLS certificate for the tenant Gateway.
+type AITenantTLS struct {
 	// CertificateRef names a Secret containing the TLS certificate.
-	CertificateRef AIGatewayCertificateRef `json:"certificateRef"`
+	CertificateRef AITenantCertificateRef `json:"certificateRef"`
 }
 
-// AIGatewayCertificateRef references a TLS Secret.
-type AIGatewayCertificateRef struct {
+// AITenantCertificateRef references a TLS Secret.
+type AITenantCertificateRef struct {
 	// Name is the Secret name.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 }
 
-// AIGatewayRBACConfig defines tenant-admin subjects.
-type AIGatewayRBACConfig struct {
-	// Admins are bound to tenant-admin roles for this AIGateway and tenant namespace.
+// AITenantRBACConfig defines tenant-admin subjects.
+type AITenantRBACConfig struct {
+	// Admins are bound to tenant-admin roles for this AITenant and tenant namespace.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=128
-	Admins []AIGatewayRBACSubject `json:"admins,omitempty"`
+	Admins []AITenantRBACSubject `json:"admins,omitempty"`
 }
 
-// AIGatewayRBACSubject mirrors RBAC Subject for the supported tenant-admin cases.
-type AIGatewayRBACSubject struct {
+// AITenantRBACSubject mirrors RBAC Subject for the supported tenant-admin cases.
+type AITenantRBACSubject struct {
 	// Kind is the RBAC subject kind.
 	// +kubebuilder:validation:Enum=User;Group;ServiceAccount
 	Kind string `json:"kind"`
@@ -162,8 +156,8 @@ type AIGatewayRBACSubject struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// AIGatewayStatus defines the observed tenant bootstrap state.
-type AIGatewayStatus struct {
+// AITenantStatus defines the observed tenant bootstrap state.
+type AITenantStatus struct {
 	// Phase is a high-level lifecycle phase for the tenant bootstrap.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=Pending;Active;Degraded;Failed
@@ -184,13 +178,13 @@ type AIGatewayStatus struct {
 
 // +kubebuilder:object:root=true
 
-// AIGatewayList contains a list of AIGateway.
-type AIGatewayList struct {
+// AITenantList contains a list of AITenant.
+type AITenantList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []AIGateway `json:"items"`
+	Items           []AITenant `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&AIGateway{}, &AIGatewayList{})
+	SchemeBuilder.Register(&AITenant{}, &AITenantList{})
 }
