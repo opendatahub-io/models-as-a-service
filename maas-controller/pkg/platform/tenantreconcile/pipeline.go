@@ -83,6 +83,10 @@ func RunPlatform(
 		return nil, fmt.Errorf("apply: %w", err)
 	}
 
+	if err := PruneLegacyCleanupResources(ctx, log, c, appNs); err != nil {
+		return nil, fmt.Errorf("prune legacy cleanup resources: %w", err)
+	}
+
 	ready, detail, err := MaasAPIDeploymentReady(ctx, c, appNs)
 	if err != nil {
 		return nil, fmt.Errorf("deployment status: %w", err)
