@@ -347,7 +347,12 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	if !isTenantNamespace(ctx, r.Client, req.Namespace, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled) {
+	isTenantNS, err := tenantNamespaceAllowed(ctx, r.Client, req.Namespace, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+	if err != nil {
+		log.Error(err, "failed to check tenant namespace")
+		return ctrl.Result{}, err
+	}
+	if !isTenantNS {
 		log.V(1).Info("ignoring MaaSSubscription in non-tenant namespace", "namespace", req.Namespace)
 		return ctrl.Result{}, nil
 	}
@@ -493,31 +498,8 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		}
 		return fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", modelNamespace, modelName, err)
 	}
-	// Every effective subscription for this model must come from a tenant whose
-	// Gateway matches the model HTTPRoute. This preserves the existing one
-	// TRLP-per-route behavior while preventing a tenant namespace from attaching
-	// policy to another tenant's Gateway.
-	validatedTenantNamespaces := make(map[string]struct{})
-	validatedGateways := make(map[string]struct{})
-	for _, sub := range allSubs {
-		if _, ok := validatedTenantNamespaces[sub.Namespace]; ok {
-			continue
-		}
-		validatedTenantNamespaces[sub.Namespace] = struct{}{}
-
-		gatewayRef, gwErr := tenantGatewayRefForNamespace(ctx, r.Client, sub.Namespace, r.DefaultTenantNamespace, r.GatewayName, r.GatewayNamespace, r.TenantNamespaceDiscoveryEnabled)
-		if gwErr != nil {
-			return gwErr
-		}
-		gatewayKey := qualifiedName(gatewayRef.Namespace, gatewayRef.Name)
-		if _, ok := validatedGateways[gatewayKey]; ok {
-			continue
-		}
-		validatedGateways[gatewayKey] = struct{}{}
-
-		if gwErr := validateHTTPRouteReferencesGateway(ctx, r.Client, httpRouteName, httpRouteNS, gatewayRef); gwErr != nil {
-			return fmt.Errorf("model %s/%s is not attached to tenant gateway for subscription %s: %w", modelNamespace, modelName, qualifiedName(sub.Namespace, sub.Name), gwErr)
-		}
+	if err := r.validateSubscriptionTenantGatewaysForRoute(ctx, allSubs, httpRouteName, httpRouteNS, modelNamespace, modelName); err != nil {
+		return err
 	}
 
 	// Check if existing TRLP is opted-out before doing any expensive work
@@ -727,6 +709,52 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 				}
 				log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelNamespace+"/"+modelName, "subscriptionCount", len(subNames), "subscriptions", subNames)
 			}
+		}
+	}
+	return nil
+}
+
+func (r *MaaSSubscriptionReconciler) validateSubscriptionTenantGatewaysForRoute(
+	ctx context.Context,
+	subscriptions []maasv1alpha1.MaaSSubscription,
+	httpRouteName string,
+	httpRouteNS string,
+	modelNamespace string,
+	modelName string,
+) error {
+	// Every effective subscription for this model must come from a tenant whose
+	// Gateway matches the model HTTPRoute. This preserves the existing one
+	// TRLP-per-route behavior while preventing a tenant namespace from attaching
+	// policy to another tenant's Gateway.
+	validatedTenantNamespaces := make(map[string]struct{})
+	validatedGateways := make(map[string]struct{})
+	for _, sub := range subscriptions {
+		if _, ok := validatedTenantNamespaces[sub.Namespace]; ok {
+			continue
+		}
+		validatedTenantNamespaces[sub.Namespace] = struct{}{}
+
+		gatewayRef, err := tenantGatewayRefForNamespace(
+			ctx,
+			r.Client,
+			sub.Namespace,
+			r.DefaultTenantNamespace,
+			r.GatewayName,
+			r.GatewayNamespace,
+			r.TenantNamespaceDiscoveryEnabled,
+		)
+		if err != nil {
+			return err
+		}
+		gatewayKey := qualifiedName(gatewayRef.Namespace, gatewayRef.Name)
+		if _, ok := validatedGateways[gatewayKey]; ok {
+			continue
+		}
+		validatedGateways[gatewayKey] = struct{}{}
+
+		if err := validateHTTPRouteReferencesGateway(ctx, r.Client, httpRouteName, httpRouteNS, gatewayRef); err != nil {
+			return fmt.Errorf("model %s/%s is not attached to tenant gateway for subscription %s: %w",
+				modelNamespace, modelName, qualifiedName(sub.Namespace, sub.Name), err)
 		}
 	}
 	return nil

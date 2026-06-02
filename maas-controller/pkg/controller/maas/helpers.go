@@ -2,11 +2,13 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -101,17 +103,30 @@ func findAnyAuthPolicyForModel(ctx context.Context, c client.Reader, modelNamesp
 // reconcilers. An empty default namespace keeps older unit-test construction
 // behavior, but production startup always sets the default namespace flag.
 func isTenantNamespace(ctx context.Context, c client.Reader, ns, defaultTenantNamespace string, discoveryEnabled bool) bool {
+	ok, err := tenantNamespaceAllowed(ctx, c, ns, defaultTenantNamespace, discoveryEnabled)
+	if err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to check tenant namespace; treating namespace as non-tenant", "namespace", ns)
+		return false
+	}
+	return ok
+}
+
+func tenantNamespaceAllowed(ctx context.Context, c client.Reader, ns, defaultTenantNamespace string, discoveryEnabled bool) (bool, error) {
 	if defaultTenantNamespace == "" || ns == defaultTenantNamespace {
-		return true
+		return true, nil
 	}
 	if !discoveryEnabled {
-		return false
+		return false, nil
 	}
 	var namespace corev1.Namespace
 	if err := c.Get(ctx, client.ObjectKey{Name: ns}, &namespace); err != nil {
-		return false
+		if apierrors.IsNotFound(err) {
+			ctrl.LoggerFrom(ctx).V(1).Info("namespace not found while checking tenant discovery label", "namespace", ns)
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to read namespace %s for tenant discovery: %w", ns, err)
 	}
-	return namespace.Labels[tenantreconcile.LabelManagedByAIGateway] == "true"
+	return namespace.Labels[tenantreconcile.LabelManagedByAIGateway] == "true", nil
 }
 
 // fetchTenantForNamespace returns the Tenant CR co-located in the given namespace.
@@ -165,7 +180,10 @@ func qualifiedName(namespace, name string) string {
 }
 
 func annotationListContains(value, want string) bool {
-	for _, item := range strings.Split(value, ",") {
+	if value == "" || want == "" {
+		return false
+	}
+	for item := range strings.SplitSeq(value, ",") {
 		if strings.TrimSpace(item) == want {
 			return true
 		}
@@ -173,7 +191,15 @@ func annotationListContains(value, want string) bool {
 	return false
 }
 
-func tenantGatewayRefForNamespace(ctx context.Context, c client.Reader, tenantNamespace, defaultTenantNamespace, fallbackGatewayName, fallbackGatewayNamespace string, discoveryEnabled bool) (maasv1alpha1.TenantGatewayRef, error) {
+func tenantGatewayRefForNamespace(
+	ctx context.Context,
+	c client.Reader,
+	tenantNamespace string,
+	defaultTenantNamespace string,
+	fallbackGatewayName string,
+	fallbackGatewayNamespace string,
+	discoveryEnabled bool,
+) (maasv1alpha1.TenantGatewayRef, error) {
 	tenant, err := fetchTenantForNamespace(ctx, c, tenantNamespace)
 	if err == nil {
 		ref := tenant.Spec.GatewayRef
@@ -183,13 +209,13 @@ func tenantGatewayRefForNamespace(ctx context.Context, c client.Reader, tenantNa
 		if ref.Name == "" && ref.Namespace == "" && (tenantNamespace == defaultTenantNamespace || !discoveryEnabled) {
 			return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
 		}
-		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("Tenant %s/%s spec.gatewayRef must set both name and namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
+		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("tenant %s/%s spec.gatewayRef must set both name and namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
 	}
 	if apierrors.IsNotFound(err) && (tenantNamespace == defaultTenantNamespace || !discoveryEnabled) {
 		return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
 	}
 	if apierrors.IsNotFound(err) {
-		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("Tenant %s/%s not found for discovered tenant namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
+		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("tenant %s/%s not found for discovered tenant namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
 	}
 	return maasv1alpha1.TenantGatewayRef{}, err
 }
@@ -206,12 +232,16 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 		return nil
 	}
 	if gatewayRef.Name == "" || gatewayRef.Namespace == "" {
-		return fmt.Errorf("gatewayRef must set both name and namespace")
+		return errors.New("gatewayRef must set both name and namespace")
 	}
 
 	route := &gatewayapiv1.HTTPRoute{}
 	if err := c.Get(ctx, client.ObjectKey{Name: routeName, Namespace: routeNamespace}, route); err != nil {
 		return fmt.Errorf("failed to get HTTPRoute %s/%s for gateway validation: %w", routeNamespace, routeName, err)
+	}
+	if len(route.Spec.ParentRefs) > maxHTTPRouteParentRefs {
+		return fmt.Errorf("HTTPRoute %s/%s has %d parentRefs, exceeding supported maximum %d",
+			routeNamespace, routeName, len(route.Spec.ParentRefs), maxHTTPRouteParentRefs)
 	}
 	for _, parentRef := range route.Spec.ParentRefs {
 		parentNamespace := routeNamespace
@@ -224,3 +254,5 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 	}
 	return fmt.Errorf("HTTPRoute %s/%s does not reference tenant Gateway %s/%s", routeNamespace, routeName, gatewayRef.Namespace, gatewayRef.Name)
 }
+
+const maxHTTPRouteParentRefs = 32

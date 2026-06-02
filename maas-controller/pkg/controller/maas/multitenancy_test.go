@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -109,8 +110,8 @@ func TestMaaSAuthPolicyReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 	authPolicy := &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	err = c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + modelName, Namespace: namespace}, authPolicy)
-	if err == nil {
-		t.Error("AuthPolicy should NOT be created for non-tenant namespace")
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("AuthPolicy should NOT be created for non-tenant namespace, got err: %v", err)
 	}
 }
 

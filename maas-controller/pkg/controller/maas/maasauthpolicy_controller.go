@@ -272,7 +272,12 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	if !isTenantNamespace(ctx, r.Client, req.Namespace, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled) {
+	isTenantNS, err := tenantNamespaceAllowed(ctx, r.Client, req.Namespace, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+	if err != nil {
+		log.Error(err, "failed to check tenant namespace")
+		return ctrl.Result{}, err
+	}
+	if !isTenantNS {
 		log.V(1).Info("ignoring MaaSAuthPolicy in non-tenant namespace", "namespace", req.Namespace)
 		return ctrl.Result{}, nil
 	}
@@ -470,27 +475,8 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 			return nil, fmt.Errorf("failed to list auth policies for model %s/%s: %w", ref.Namespace, ref.Name, err)
 		}
 		allPolicies = filterAuthPoliciesByTenantNamespace(ctx, r.Client, allPolicies, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
-		validatedTenantNamespaces := make(map[string]struct{})
-		validatedGateways := make(map[string]struct{})
-		for _, ap := range allPolicies {
-			if _, ok := validatedTenantNamespaces[ap.Namespace]; ok {
-				continue
-			}
-			validatedTenantNamespaces[ap.Namespace] = struct{}{}
-
-			apGatewayRef, gwErr := tenantGatewayRefForNamespace(ctx, r.Client, ap.Namespace, r.TenantNamespace, r.GatewayName, r.GatewayNamespace, r.TenantNamespaceDiscoveryEnabled)
-			if gwErr != nil {
-				return nil, gwErr
-			}
-			gatewayKey := qualifiedName(apGatewayRef.Namespace, apGatewayRef.Name)
-			if _, ok := validatedGateways[gatewayKey]; ok {
-				continue
-			}
-			validatedGateways[gatewayKey] = struct{}{}
-
-			if gwErr := validateHTTPRouteReferencesGateway(ctx, r.Client, httpRouteName, httpRouteNS, apGatewayRef); gwErr != nil {
-				return nil, fmt.Errorf("model %s/%s is not attached to tenant gateway for auth policy %s: %w", ref.Namespace, ref.Name, qualifiedName(ap.Namespace, ap.Name), gwErr)
-			}
+		if err := r.validateAuthPolicyTenantGatewaysForRoute(ctx, allPolicies, httpRouteName, httpRouteNS, ref.Namespace, ref.Name); err != nil {
+			return nil, err
 		}
 
 		// Aggregate allowed groups and users from ALL auth policies
@@ -1004,6 +990,48 @@ allow {
 	}
 
 	return refs, nil
+}
+
+func (r *MaaSAuthPolicyReconciler) validateAuthPolicyTenantGatewaysForRoute(
+	ctx context.Context,
+	policies []maasv1alpha1.MaaSAuthPolicy,
+	httpRouteName string,
+	httpRouteNS string,
+	modelNamespace string,
+	modelName string,
+) error {
+	validatedTenantNamespaces := make(map[string]struct{})
+	validatedGateways := make(map[string]struct{})
+	for _, ap := range policies {
+		if _, ok := validatedTenantNamespaces[ap.Namespace]; ok {
+			continue
+		}
+		validatedTenantNamespaces[ap.Namespace] = struct{}{}
+
+		gatewayRef, err := tenantGatewayRefForNamespace(
+			ctx,
+			r.Client,
+			ap.Namespace,
+			r.TenantNamespace,
+			r.GatewayName,
+			r.GatewayNamespace,
+			r.TenantNamespaceDiscoveryEnabled,
+		)
+		if err != nil {
+			return err
+		}
+		gatewayKey := qualifiedName(gatewayRef.Namespace, gatewayRef.Name)
+		if _, ok := validatedGateways[gatewayKey]; ok {
+			continue
+		}
+		validatedGateways[gatewayKey] = struct{}{}
+
+		if err := validateHTTPRouteReferencesGateway(ctx, r.Client, httpRouteName, httpRouteNS, gatewayRef); err != nil {
+			return fmt.Errorf("model %s/%s is not attached to tenant gateway for auth policy %s: %w",
+				modelNamespace, modelName, qualifiedName(ap.Namespace, ap.Name), err)
+		}
+	}
+	return nil
 }
 
 // cleanupStaleAuthPolicies deletes aggregated AuthPolicies for models that this

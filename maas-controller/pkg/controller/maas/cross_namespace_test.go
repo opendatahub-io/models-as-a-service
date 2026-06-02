@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -622,9 +623,21 @@ func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T)
 	}
 
 	got := authPolicy.GetAnnotations()["maas.opendatahub.io/auth-policies"]
-	want := namespaceA + "/" + policyName + "," + namespaceB + "/" + policyName
-	if got != want {
-		t.Errorf("generated AuthPolicy annotation = %q, want %q", got, want)
+	want := map[string]bool{
+		namespaceA + "/" + policyName: true,
+		namespaceB + "/" + policyName: true,
+	}
+	gotSet := make(map[string]bool)
+	for item := range strings.SplitSeq(got, ",") {
+		gotSet[strings.TrimSpace(item)] = true
+	}
+	if len(gotSet) != len(want) {
+		t.Fatalf("generated AuthPolicy annotation = %q, want %v", got, want)
+	}
+	for item := range want {
+		if !gotSet[item] {
+			t.Errorf("generated AuthPolicy annotation missing %q, got %q", item, got)
+		}
 	}
 }
 
