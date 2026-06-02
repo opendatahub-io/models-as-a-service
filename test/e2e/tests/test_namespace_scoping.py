@@ -119,8 +119,8 @@ def _create_namespace(name: str, tenant_enabled: bool = False):
 
     Args:
         name: Namespace name
-        tenant_enabled: If True, label namespace to allow MaaS tenant resources
-                       (MaaSSubscription, MaaSAuthPolicy). Required for webhook validation.
+        tenant_enabled: If True, label namespace and create Tenant CR to allow MaaS tenant
+                       resources (MaaSSubscription, MaaSAuthPolicy). Required for webhook validation.
     """
     result = subprocess.run(
         ["oc", "create", "namespace", name],
@@ -140,6 +140,14 @@ def _create_namespace(name: str, tenant_enabled: bool = False):
             raise RuntimeError(
                 f"Failed to label namespace {name} as tenant-enabled: {result.stderr}"
             )
+
+        # Create Tenant CR to complete tenant initialization
+        _apply_cr({
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "Tenant",
+            "metadata": {"name": "default-tenant", "namespace": name},
+            "spec": {},
+        })
 
 
 def _delete_namespace(name: str):

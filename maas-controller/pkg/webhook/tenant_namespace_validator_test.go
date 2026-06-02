@@ -24,27 +24,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 func TestTenantNamespaceValidator_ValidateNamespace(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
+	_ = maasv1alpha1.AddToScheme(scheme)
 
 	tests := []struct {
 		name           string
 		namespace      string
 		namespaceObj   *corev1.Namespace
+		tenantObj      *maasv1alpha1.Tenant
 		expectedAllow  bool
 		expectedErrMsg string
 	}{
 		{
-			name:          "allow default tenant namespace",
-			namespace:     DefaultTenantNamespace,
-			namespaceObj:  nil, // Not needed for default namespace check
-			expectedAllow: true,
-		},
-		{
-			name:      "allow namespace with tenant label",
+			name:      "allow namespace with tenant label and Tenant CR",
 			namespace: "ai-tenant-redteam",
 			namespaceObj: &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
@@ -54,10 +52,16 @@ func TestTenantNamespaceValidator_ValidateNamespace(t *testing.T) {
 					},
 				},
 			},
+			tenantObj: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "ai-tenant-redteam",
+				},
+			},
 			expectedAllow: true,
 		},
 		{
-			name:      "allow ai-tenant-default with tenant label",
+			name:      "allow ai-tenant-default with tenant label and Tenant CR",
 			namespace: "ai-tenant-default",
 			namespaceObj: &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
@@ -65,6 +69,12 @@ func TestTenantNamespaceValidator_ValidateNamespace(t *testing.T) {
 					Labels: map[string]string{
 						TenantNamespaceLabel: "",
 					},
+				},
+			},
+			tenantObj: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "ai-tenant-default",
 				},
 			},
 			expectedAllow: true,
@@ -94,14 +104,38 @@ func TestTenantNamespaceValidator_ValidateNamespace(t *testing.T) {
 			expectedAllow:  false,
 			expectedErrMsg: "not enabled for MaaS tenant resources",
 		},
+		{
+			name:      "reject namespace with label but no Tenant CR",
+			namespace: "labeled-but-no-tenant",
+			namespaceObj: &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "labeled-but-no-tenant",
+					Labels: map[string]string{
+						TenantNamespaceLabel: "",
+					},
+				},
+			},
+			expectedAllow:  false,
+			expectedErrMsg: "has the tenant label but no Tenant CR exists",
+		},
+		{
+			name:           "reject non-existent namespace",
+			namespace:      "does-not-exist",
+			namespaceObj:   nil,
+			expectedAllow:  false,
+			expectedErrMsg: "does not exist",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create fake client with the namespace if provided
+			// Create fake client with the namespace and Tenant if provided
 			var objs []runtime.Object
 			if tt.namespaceObj != nil {
 				objs = append(objs, tt.namespaceObj)
+			}
+			if tt.tenantObj != nil {
+				objs = append(objs, tt.tenantObj)
 			}
 			client := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
 
@@ -131,32 +165,50 @@ func TestTenantNamespaceValidator_ValidateNamespace(t *testing.T) {
 func TestTenantNamespaceValidator_ErrorMessageContent(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
+	_ = maasv1alpha1.AddToScheme(scheme)
 
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-namespace",
+	tests := []struct {
+		name           string
+		namespace      *corev1.Namespace
+		expectedPhrase string
+	}{
+		{
+			name: "error message for unlabeled namespace mentions label",
+			namespace: &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-namespace",
+				},
+			},
+			expectedPhrase: TenantNamespaceLabel,
+		},
+		{
+			name: "error message for labeled namespace without Tenant CR mentions creating Tenant",
+			namespace: &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "labeled-namespace",
+					Labels: map[string]string{
+						TenantNamespaceLabel: "",
+					},
+				},
+			},
+			expectedPhrase: "Create a Tenant CR",
 		},
 	}
 
-	client := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(ns).Build()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(tt.namespace).Build()
 
-	validator := &TenantNamespaceValidator{
-		Client: client,
-	}
+			validator := &TenantNamespaceValidator{
+				Client: client,
+			}
 
-	_, errMsg := validator.ValidateNamespace(context.Background(), "test-namespace")
+			_, errMsg := validator.ValidateNamespace(context.Background(), tt.namespace.Name)
 
-	// Verify error message contains helpful information
-	expectedPhrases := []string{
-		TenantNamespaceLabel,                     // Mentions the correct label
-		DefaultTenantNamespace,                   // Mentions the default namespace
-		"kubectl label namespace test-namespace", // Provides kubectl command
-	}
-
-	for _, phrase := range expectedPhrases {
-		if !contains(errMsg, phrase) {
-			t.Errorf("Error message missing expected phrase %q. Full message: %q", phrase, errMsg)
-		}
+			if !contains(errMsg, tt.expectedPhrase) {
+				t.Errorf("Error message missing expected phrase %q. Full message: %q", tt.expectedPhrase, errMsg)
+			}
+		})
 	}
 }
 

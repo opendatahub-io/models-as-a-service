@@ -96,7 +96,7 @@ type TenantReconciler struct {
 // serviceaccounts/token create, tokenreviews, subjectaccessreviews: required by maas-api for bound SA token
 // projection and access checks. maasmodelrefs/maassubscriptions: read-only cross-reconciler references.
 // +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -71,6 +72,16 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// ModelsAsService GC and the lifecycle reconciler; the Tenant reconciler does not delete Config.
 	if !tenant.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
+	}
+
+	// Ensure the namespace is labeled for tenant discovery (webhook validation requires this)
+	if err := r.ensureNamespaceLabeled(ctx, log, tenant.Namespace); err != nil {
+		log.Error(err, "failed to label tenant namespace")
+		if err2 := r.patchStatus(ctx, &tenant, "Failed", metav1.ConditionFalse, "NamespaceLabelFailed",
+			fmt.Sprintf("failed to label namespace: %v", err)); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	ms := managementState(tenant.Annotations)
@@ -298,6 +309,36 @@ func validateGatewayExists(ctx context.Context, c client.Client, namespace, name
 		}
 		return fmt.Errorf("failed to look up gateway %s/%s: %w", namespace, name, err)
 	}
+	return nil
+}
+
+func (r *TenantReconciler) ensureNamespaceLabeled(ctx context.Context, log logr.Logger, namespaceName string) error {
+	const tenantLabel = "ai-gateway.opendatahub.io/tenant"
+
+	var ns corev1.Namespace
+	if err := r.Get(ctx, types.NamespacedName{Name: namespaceName}, &ns); err != nil {
+		return fmt.Errorf("failed to get namespace %s: %w", namespaceName, err)
+	}
+
+	// Check if label already exists
+	if ns.Labels != nil {
+		if _, hasLabel := ns.Labels[tenantLabel]; hasLabel {
+			return nil // Already labeled
+		}
+	}
+
+	// Patch to add label
+	patch := client.MergeFrom(ns.DeepCopy())
+	if ns.Labels == nil {
+		ns.Labels = make(map[string]string)
+	}
+	ns.Labels[tenantLabel] = maasv1alpha1.TenantInstanceName
+
+	if err := r.Patch(ctx, &ns, patch); err != nil {
+		return fmt.Errorf("failed to patch namespace %s with tenant label: %w", namespaceName, err)
+	}
+
+	log.Info("labeled tenant namespace", "namespace", namespaceName, "label", tenantLabel, "value", maasv1alpha1.TenantInstanceName)
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,6 +34,14 @@ func tenantTestScheme(t *testing.T) *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
+}
+
+func tenantTestNamespace(name string) client.Object {
+	return &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
 }
 
 func TestTenantReconcile_DeletionIsNoOp(t *testing.T) {
@@ -127,7 +136,7 @@ func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -173,7 +182,7 @@ func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -229,7 +238,7 @@ func TestTenantReconcile_ManagementStateRemoved_ConfigTerminatingPatchesStatus(t
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -271,7 +280,7 @@ func TestTenantReconcile_ManagementStateUnmanagedSetsIdle(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -313,7 +322,7 @@ func TestTenantReconcile_UnexpectedManagementStateSetsFailedPhase(t *testing.T) 
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -353,7 +362,7 @@ func TestTenantReconcile_ConfigMissingSkipsPlatform(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -398,7 +407,7 @@ func TestTenantReconcile_ConfigEmptyUIDPatchesWaitingForConfigUID(t *testing.T) 
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -446,7 +455,7 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{

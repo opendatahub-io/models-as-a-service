@@ -37,22 +37,12 @@ func TestMaaSAuthPolicyValidator_ValidateCreate(t *testing.T) {
 		name        string
 		policy      *maasv1alpha1.MaaSAuthPolicy
 		namespace   *corev1.Namespace
+		tenant      *maasv1alpha1.Tenant
 		wantErr     bool
 		errContains string
 	}{
 		{
-			name: "allow policy in default tenant namespace",
-			policy: &maasv1alpha1.MaaSAuthPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-policy",
-					Namespace: DefaultTenantNamespace,
-				},
-			},
-			namespace: nil, // Not needed for default namespace
-			wantErr:   false,
-		},
-		{
-			name: "allow policy in labeled namespace",
+			name: "allow policy in labeled namespace with Tenant CR",
 			policy: &maasv1alpha1.MaaSAuthPolicy{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-policy",
@@ -65,6 +55,12 @@ func TestMaaSAuthPolicyValidator_ValidateCreate(t *testing.T) {
 					Labels: map[string]string{
 						TenantNamespaceLabel: "",
 					},
+				},
+			},
+			tenant: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "ai-tenant-blueteam",
 				},
 			},
 			wantErr: false,
@@ -85,6 +81,25 @@ func TestMaaSAuthPolicyValidator_ValidateCreate(t *testing.T) {
 			wantErr:     true,
 			errContains: "not enabled for MaaS tenant resources",
 		},
+		{
+			name: "reject policy in labeled namespace without Tenant CR",
+			policy: &maasv1alpha1.MaaSAuthPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-policy",
+					Namespace: "labeled-only",
+				},
+			},
+			namespace: &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "labeled-only",
+					Labels: map[string]string{
+						TenantNamespaceLabel: "",
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "no Tenant CR exists",
+		},
 	}
 
 	for _, tt := range tests {
@@ -92,6 +107,9 @@ func TestMaaSAuthPolicyValidator_ValidateCreate(t *testing.T) {
 			var objs []runtime.Object
 			if tt.namespace != nil {
 				objs = append(objs, tt.namespace)
+			}
+			if tt.tenant != nil {
+				objs = append(objs, tt.tenant)
 			}
 			client := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
 
@@ -132,14 +150,14 @@ func TestMaaSAuthPolicyValidator_ValidateUpdate(t *testing.T) {
 	oldPolicy := &maasv1alpha1.MaaSAuthPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-policy",
-			Namespace: DefaultTenantNamespace,
+			Namespace: "ai-tenant-test",
 		},
 	}
 
 	newPolicy := &maasv1alpha1.MaaSAuthPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-policy",
-			Namespace: DefaultTenantNamespace,
+			Namespace: "ai-tenant-test",
 		},
 	}
 
@@ -166,7 +184,7 @@ func TestMaaSAuthPolicyValidator_ValidateDelete(t *testing.T) {
 	policy := &maasv1alpha1.MaaSAuthPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-policy",
-			Namespace: DefaultTenantNamespace,
+			Namespace: "ai-tenant-test",
 		},
 	}
 
