@@ -125,7 +125,7 @@ func TestLifecycleReconciler_ConfigTerminatingRequeues(t *testing.T) {
 	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
 }
 
-func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
+func TestLifecycleReconciler_DoesNotLinkTenantToConfig(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
 
@@ -172,11 +172,8 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
+	// Verify that NO owner references are set (cross-scope owner refs are not allowed)
 	var updated maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS}, &updated)).To(Succeed())
-	g.Expect(updated.OwnerReferences).ToNot(BeEmpty())
-	ref := updated.OwnerReferences[0]
-	g.Expect(ref.UID).To(Equal(types.UID("cfg-uid-tenant")))
-	g.Expect(ref.Kind).To(Equal(maasv1alpha1.ConfigKind))
-	g.Expect(ref.Controller).To(BeNil())
+	g.Expect(updated.OwnerReferences).To(BeEmpty(), "Tenant should not have owner references from cluster-scoped Config")
 }

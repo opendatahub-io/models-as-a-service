@@ -75,16 +75,9 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		} else if res != nil {
 			return *res, nil
 		}
-		if res, err := r.ensureDeploymentReferencesConfig(ctx, req.NamespacedName); err != nil {
-			return ctrl.Result{}, err
-		} else if res != nil {
-			return *res, nil
-		}
-		if res, err := r.ensureTenantReferencesConfig(ctx); err != nil {
-			return ctrl.Result{}, err
-		} else if res != nil {
-			return *res, nil
-		}
+		// NOTE: Owner references from cluster-scoped Config to namespace-scoped Deployment/Tenant
+		// are not allowed by Kubernetes GC. Lifecycle management is handled through controller
+		// watches instead (TenantReconciler watches Config, and Config deletion triggers cleanup).
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -160,119 +153,15 @@ func (r *LifecycleReconciler) ensureSingletonConfig(ctx context.Context, dep *ap
 	}
 }
 
-// ensureDeploymentReferencesConfig links the controller Deployment to Config/default
-// via a non-controller ownerReference so the workload participates in the same GC graph as other
-// operands without competing with the ODH operator's controller owner (when present).
+// NOTE: The ensureDeploymentReferencesConfig and ensureTenantReferencesConfig functions have been
+// removed because Kubernetes does not allow owner references from cluster-scoped resources (Config)
+// to namespace-scoped resources (Deployment, Tenant). Such owner references are rejected by the
+// admission controller and cause immediate garbage collection of the dependent resource.
 //
-// Call after ensureSingletonConfig in the same reconcile: Config should exist with a UID and
-// not be terminating. If this function still observes a missing, terminating, or UID-less anchor
-// (cache lag or races), it logs and returns a short requeue instead of succeeding with no work.
-func (r *LifecycleReconciler) ensureDeploymentReferencesConfig(ctx context.Context, key types.NamespacedName) (*ctrl.Result, error) {
-	log := ctrl.LoggerFrom(ctx).WithValues("deployment", key)
-	if r.Scheme == nil {
-		return nil, nil
-	}
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Info("Config anchor not found when linking Deployment; requeueing (singleton reconcile should create it)")
-			res := ctrl.Result{RequeueAfter: 2 * time.Second}
-			return &res, nil
-		}
-		return nil, err
-	}
-	if !cfg.DeletionTimestamp.IsZero() {
-		log.Info("Config anchor is terminating when linking Deployment; requeueing until teardown completes")
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, nil
-	}
-	if cfg.UID == "" {
-		log.Info("Config anchor has no UID yet when linking Deployment; requeueing")
-		res := ctrl.Result{RequeueAfter: 2 * time.Second}
-		return &res, nil
-	}
-	var dep appsv1.Deployment
-	if err := r.Get(ctx, key, &dep); err != nil {
-		return nil, client.IgnoreNotFound(err)
-	}
-	for _, ref := range dep.OwnerReferences {
-		if ref.UID == cfg.UID && ref.Kind == maasv1alpha1.ConfigKind && ref.APIVersion == maasv1alpha1.GroupVersion.String() {
-			return nil, nil
-		}
-	}
-	base := dep.DeepCopy()
-	if err := controllerutil.SetOwnerReference(&cfg, &dep, r.Scheme); err != nil {
-		return nil, fmt.Errorf("set Config owner reference on deployment: %w", err)
-	}
-	if err := r.Patch(ctx, &dep, client.MergeFrom(base)); err != nil {
-		return nil, fmt.Errorf("patch deployment ownerReferences: %w", err)
-	}
-	log.Info("set Config owner reference on maas-controller Deployment")
-	return nil, nil
-}
-
-// ensureTenantReferencesConfig links default-tenant to Config/default via the same non-controller
-// ownerReference pattern as the Deployment. The cluster bootstrap runnable may create the Tenant
-// shell without owner refs; this reconciler converges them once Config has a UID.
-func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) (*ctrl.Result, error) {
-	if r.TenantSubscriptionNamespace == "" {
-		return nil, nil
-	}
-	if r.Scheme == nil {
-		return nil, nil
-	}
-	log := ctrl.LoggerFrom(ctx)
-	cfgKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Info("Config anchor not found when linking Tenant; requeueing")
-			res := ctrl.Result{RequeueAfter: 2 * time.Second}
-			return &res, nil
-		}
-		return nil, err
-	}
-	if !cfg.DeletionTimestamp.IsZero() {
-		log.Info("Config anchor is terminating when linking Tenant; requeueing")
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, nil
-	}
-	if cfg.UID == "" {
-		res := ctrl.Result{RequeueAfter: 2 * time.Second}
-		return &res, nil
-	}
-	tKey := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: r.TenantSubscriptionNamespace}
-	var tenant maasv1alpha1.Tenant
-	if err := r.Get(ctx, tKey, &tenant); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if tenantReferencesConfig(&tenant, &cfg) {
-		return nil, nil
-	}
-	base := tenant.DeepCopy()
-	if err := controllerutil.SetOwnerReference(&cfg, &tenant, r.Scheme); err != nil {
-		return nil, fmt.Errorf("set Config owner reference on tenant: %w", err)
-	}
-	if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
-		return nil, fmt.Errorf("patch tenant ownerReferences: %w", err)
-	}
-	log.Info("set Config owner reference on default-tenant", "namespace", r.TenantSubscriptionNamespace)
-	return nil, nil
-}
-
-func tenantReferencesConfig(tenant *maasv1alpha1.Tenant, ct *maasv1alpha1.Config) bool {
-	for _, ref := range tenant.OwnerReferences {
-		if ref.UID == ct.UID &&
-			ref.Kind == maasv1alpha1.ConfigKind &&
-			ref.APIVersion == maasv1alpha1.GroupVersion.String() {
-			return true
-		}
-	}
-	return false
-}
+// Lifecycle management is instead handled through:
+// 1. TenantReconciler watches Config and suspends platform reconcile when Config is missing/terminating
+// 2. Operator-driven teardown (ODH) deletes Config, which triggers TenantReconciler to stop work
+// 3. Operator then deletes Deployment and Tenant CRs directly (no automatic GC cascade)
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
