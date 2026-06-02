@@ -47,6 +47,8 @@ const (
 	MaaSAPIAuthPolicyName                         = "maas-api-auth-policy"
 	MaaSAPIRouteName                              = "maas-api-route"
 	GatewayDestinationRuleName                    = "maas-api-backend-tls"
+	LegacyMaaSAPIKeyCleanupCronJobName            = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
+	LegacyMaaSAPICleanupNetworkPolicyName         = "maas-api-cleanup-restrict"
 	TelemetryPolicyName                           = "maas-telemetry"
 	IstioTelemetryName                            = "latency-per-subscription"
 	MaaSAPIDeploymentName                         = "maas-api"
@@ -72,6 +74,8 @@ const (
 // GVKs used for post-render and readiness (mirrors opendatahub-operator/pkg/cluster/gvk selections).
 var (
 	GVKDeployment           = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
+	GVKCronJob              = schema.GroupVersionKind{Group: "batch", Version: "v1", Kind: "CronJob"}
+	GVKNetworkPolicy        = schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"}
 	GVKHTTPRoute            = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
 	GVKAuthPolicy           = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}
 	GVKTokenRateLimitPolicy = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}
