@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -141,6 +142,10 @@ func (r *AIGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, err2
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	if err := r.setTenantReady(ctx, &aigw); err != nil {
+		log.FromContext(ctx).Error(err, "failed to set Tenant status in tenant namespace")
 	}
 
 	if err := r.ensureTenantAdminRBAC(ctx, &aigw); err != nil {
@@ -391,6 +396,26 @@ func (r *AIGatewayReconciler) ensureTenantConfig(ctx context.Context, aigw *maas
 		t.Spec.ExternalOIDC = aigw.Spec.OIDC
 		return nil
 	})
+}
+
+// setTenantReady updates the Tenant CR status in the tenant namespace so that
+// consumers (E2E tests, other controllers) can wait for Ready=True.
+func (r *AIGatewayReconciler) setTenantReady(ctx context.Context, aigw *maasv1alpha1.AIGateway) error {
+	var tenant maasv1alpha1.Tenant
+	key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: aigw.Spec.TenantNamespace.Name}
+	if err := r.get(ctx, key, &tenant); err != nil {
+		return err
+	}
+	tenant.Status.Phase = "Active"
+	apimeta.SetStatusCondition(&tenant.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionTrue,
+		Reason:             "AIGatewayReconciled",
+		Message:            "Tenant configured by AIGateway " + aigw.Name,
+		ObservedGeneration: tenant.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
+	return r.Status().Update(ctx, &tenant)
 }
 
 func (r *AIGatewayReconciler) ensureTenantAdminRBAC(ctx context.Context, aigw *maasv1alpha1.AIGateway) error {

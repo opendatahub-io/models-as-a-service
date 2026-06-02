@@ -90,7 +90,7 @@ func TestAIGatewayReconcile_CreatesBootstrapResources(t *testing.T) {
 	}
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
-		WithStatusSubresource(&maasv1alpha1.AIGateway{}).
+		WithStatusSubresource(&maasv1alpha1.AIGateway{}, &maasv1alpha1.Tenant{}).
 		WithObjects(aigw).
 		Build()
 	r := &AIGatewayReconciler{
@@ -130,6 +130,12 @@ func TestAIGatewayReconcile_CreatesBootstrapResources(t *testing.T) {
 	g.Expect(tenant.Spec.ExternalOIDC).NotTo(BeNil())
 	g.Expect(tenant.Spec.ExternalOIDC.IssuerURL).To(Equal("https://issuer.example.com/realms/team-a"))
 	g.Expect(tenant.Spec.ExternalOIDC.ClientID).To(Equal("team-a-client"))
+
+	g.Expect(tenant.Status.Phase).To(Equal("Active"))
+	tenantReady := apimeta.FindStatusCondition(tenant.Status.Conditions, "Ready")
+	g.Expect(tenantReady).NotTo(BeNil())
+	g.Expect(tenantReady.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(tenantReady.Reason).To(Equal("AIGatewayReconciled"))
 
 	var tenantRole rbacv1.Role
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantAdminRoleName(aigw), Namespace: "team-a-maas"}, &tenantRole)).To(Succeed())
