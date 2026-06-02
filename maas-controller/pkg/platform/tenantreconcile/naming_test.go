@@ -185,7 +185,6 @@ func TestResourceNamingFunctions(t *testing.T) {
 			assert.Equal(t, tt.expectedSvc, MaaSAPIServiceName(tt.tenantID))
 			assert.Equal(t, tt.expectedRoute, MaaSAPIRouteName(tt.tenantID))
 			assert.Equal(t, tt.expectedAuth, MaaSAPIAuthPolicyName(tt.tenantID))
-			assert.Equal(t, tt.expectedCron, MaaSAPIKeyCleanupCronJobName(tt.tenantID))
 			assert.Equal(t, tt.expectedDestRule, GatewayDestinationRuleName(tt.tenantID))
 		})
 	}
@@ -205,7 +204,6 @@ func TestResourceNameLength(t *testing.T) {
 		{"Service", MaaSAPIServiceName(maxLengthTenantName), 63},
 		{"HTTPRoute", MaaSAPIRouteName(maxLengthTenantName), 63},
 		{"AuthPolicy", MaaSAPIAuthPolicyName(maxLengthTenantName), 63},
-		{"CronJob", MaaSAPIKeyCleanupCronJobName(maxLengthTenantName), 63},
 		{"DestinationRule", GatewayDestinationRuleName(maxLengthTenantName), 63},
 		{"TelemetryPolicy", TelemetryPolicyName(maxLengthTenantName), 63},
 		{"IstioTelemetry", IstioTelemetryName(maxLengthTenantName), 63},
